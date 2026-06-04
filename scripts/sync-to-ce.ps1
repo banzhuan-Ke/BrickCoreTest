@@ -159,6 +159,7 @@ function Write-CeStubs {
         @("docs-index-ce.md", (Join-Path "docs-site" "index.md")),
         @("docs-highlights-ce.md", (Join-Path "docs-site" (Join-Path "guide" "highlights.md"))),
         @("docs-runner-packaging-ce.md", (Join-Path "docs-site" (Join-Path "guide" "runner-packaging.md"))),
+        @("docs-ui-automation-ce.md", (Join-Path "docs-site" (Join-Path "guide" "ui-automation.md"))),
         @("docs-system-admin-ce.md", (Join-Path "docs-site" (Join-Path "guide" "system-admin.md"))),
         @("runner-client-README.md", (Join-Path "runner_client" "README.md"))
     )

@@ -17,7 +17,7 @@ SOURCES: list[tuple[str, str, str]] = [
     ("highlights", "scripts/ce-stubs/docs-highlights-ce.md", "亮点功能"),
     ("project-setup", "docs-site/guide/project-setup.md", "项目与环境"),
     ("test-catalog", "docs-site/guide/test-catalog.md", "测试目录"),
-    ("ui-automation", "docs-site/guide/ui-automation.md", "UI 自动化"),
+    ("ui-automation", "scripts/ce-stubs/docs-ui-automation-ce.md", "UI 自动化"),
     ("runner-client", "docs-site/guide/runner-client.md", "执行器使用说明"),
     ("runner-packaging", "scripts/ce-stubs/docs-runner-packaging-ce.md", "执行器获取与发布"),
     ("api-automation", "docs-site/guide/api-automation.md", "接口自动化"),

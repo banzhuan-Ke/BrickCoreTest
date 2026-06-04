@@ -1,6 +1,6 @@
 # 执行器获取与发布
 
-社区版（CE）仓库**不包含** Playwright 执行引擎源码，无法在本地从源码打包 `BrickCoreRunner`。请通过 **网盘** 获取 `BrickCoreRunner.zip` 后使用 UI 自动化与录制能力。
+BrickCore 执行器以 **安装包** 形式分发。请下载 `BrickCoreRunner.zip` 并解压安装，即可使用 UI 自动化与录制能力。
 
 ## 网盘获取
 
@@ -30,14 +30,9 @@ zip 约 **800MB**（含 Chromium）。解压后目录需包含 `BrickCoreRunner.
 
 ## Linux 无头执行
 
-社区版 Git **不含** `runner/` 源码，无法按源码方式在 Linux 上 `python main.py` 启动引擎。常见做法：
+推荐使用 **Windows 测试机**：下载 `BrickCoreRunner` 安装包，解压后运行并 **上线** 设备。
 
-- **Windows 测试机**：从网盘安装 `BrickCoreRunner` 并上线设备（推荐）
-- **服务器 CI**：如需 Linux 无头 Runner，请联系项目维护者获取商业版引擎或托管执行节点
-
-## 从源码自行打包（商业版）
-
-若需 Nuitka 加固打包等完整流程，请使用 **商业版 Pro 仓库**（含 `runner/` 与 `scripts/build_runner_client.ps1`），或购买源码授权。
+若需在 Linux 服务器或 CI 环境运行，请联系项目维护者获取对应方案。
 
 ## 相关文档
 
