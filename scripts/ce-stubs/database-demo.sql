@@ -1,6 +1,6 @@
-# 默认管理员 admin / BrickCore123456（仅 CE 演示，部署后请修改）
+# 默认管理员 admin / BrickCore123456（平台演示登录，与中间件密码无关）
 # 演示名称统一为 ASCII「BrickCore」，避免 mysql 导入中文乱码
-# 导入: docker exec -i fastapi_mysql mysql --default-character-set=utf8mb4 -uadmin -pBrickCore123456 fastapi < database.sql
+# 导入: 使用 .env 中 MYSQL_PASSWORD，例如 -uadmin -p"$MYSQL_PASSWORD"
 INSERT INTO `user` (`id`, `username`, `password`, `nickname`, `email`, `mobile`, `is_active`, `is_superuser`, `created_at`) VALUES (1, 'admin', '$2b$12$Mgq235L.gyTq50Vm5vmUf.gxBpWmwJaLb5DqhAMzGnq3dmr4nOlAq', 'BrickCore', 'admin@example.com', '', 1, 1, '2024-10-09 02:51:00.882683');
 INSERT INTO `project` (`id`, `name`, `create_time`, `user_id`, `username`) VALUES (1, 'BrickCore', '2024-09-11 04:56:35.453287', 1, 'admin');
 INSERT INTO `environment` (`id`, `name`, `create_time`, `host`, `global_vars`, `project_id`, `username`) VALUES (1, 'BrickCore', '2024-09-11 06:48:43.295441', 'http://novel.hctestedu.com', '{\"password\": \"123456py\"}', 1, 'admin');

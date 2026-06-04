@@ -37,8 +37,6 @@ README 内嵌大图会被 Gitee 压缩变糊，高清说明与录屏见演示站
 
 👉 **[使用说明（文档）](http://43.142.83.156/showcase/docs/)** — 无需登录，与平台「文档中心」同目录
 
-本地维护：`showcase/index.html`、`showcase/docs/`（`python scripts/build_showcase_docs.py`）、`showcase/demo/`（png / mp4）
-
 | 亮点 | 说明 |
 |------|------|
 | AI 需求 → 功能用例 | 上传 PRD，AI 批量生成，支持禅道 / 导出 XLSX |

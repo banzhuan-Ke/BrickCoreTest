@@ -38,6 +38,7 @@ $ExcludeDirs = @(
     "__pycache__",
     "scripts\.cache",
     "runner_client\dist",
+    "runner_client\build",
     "runner_client\venv",
     "frontend\node_modules",
     "frontend\dist",
@@ -158,7 +159,8 @@ function Write-CeStubs {
         @("docs-index-ce.md", (Join-Path "docs-site" "index.md")),
         @("docs-highlights-ce.md", (Join-Path "docs-site" (Join-Path "guide" "highlights.md"))),
         @("docs-runner-packaging-ce.md", (Join-Path "docs-site" (Join-Path "guide" "runner-packaging.md"))),
-        @("docs-system-admin-ce.md", (Join-Path "docs-site" (Join-Path "guide" "system-admin.md")))
+        @("docs-system-admin-ce.md", (Join-Path "docs-site" (Join-Path "guide" "system-admin.md"))),
+        @("runner-client-README.md", (Join-Path "runner_client" "README.md"))
     )
     foreach ($pair in $demoMaps) {
         $srcName = $pair[0]
@@ -171,6 +173,14 @@ function Write-CeStubs {
         Ensure-Dir ([System.IO.Path]::GetDirectoryName($destPath))
         Copy-Item $srcPath $destPath -Force
         Write-Host "  CE demo: $destRel <- $srcName"
+    }
+
+    $mwEnv = Join-Path $StubsDir "demo-middleware.env"
+    if (Test-Path -LiteralPath $mwEnv) {
+        Copy-Item $mwEnv (Join-Path $CeRoot ".env") -Force
+        Write-Host "  CE demo: .env <- demo-middleware.env (gitignored, do not push)"
+    } else {
+        Write-Warning "Missing $mwEnv — run: python scripts/generate_demo_middleware_env.py"
     }
 }
 

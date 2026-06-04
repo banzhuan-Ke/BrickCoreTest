@@ -6,7 +6,7 @@
 
 | 模块 | 用途 |
 |------|------|
-| UI 自动化 | Web 用例编排、录制回放、计划执行（需 **BrickCoreRunner** 安装包） |
+| UI 自动化 | Web 用例编排、录制回放、计划执行（需网盘下载 **BrickCoreRunner**） |
 | 接口自动化 | 接口管理、用例/套件/计划、Mock、定时执行、数据工厂 |
 | 性能测试 | HTTP 压测、分布式 Worker、报告对比 |
 | AI 测试 | 需求生成功能用例、测试分析、失败分析、平台助手 |
@@ -26,7 +26,7 @@
 
 社区版 Git **不包含** Playwright 引擎源码。请：
 
-1. 从 [Gitee Releases](https://gitee.com/BanZhuanKeOrz/BrickCore/releases) 或平台 **设备管理** 下载 `BrickCoreRunner.zip`
+1. 从 [百度网盘](https://pan.baidu.com/s/1Nx2fkPAUi7htJKZAxp1paw?pwd=ye6b)（提取码 `ye6b`）或演示站 **设备管理 → 网盘下载** 获取 `BrickCoreRunner.zip`
 2. 解压后运行 `BrickCoreRunner.exe`，登录并 **上线** 设备
 3. 详见 [执行器使用说明](guide/runner-client.md)、[执行器获取与发布](guide/runner-packaging.md)
 

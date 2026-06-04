@@ -1,4 +1,5 @@
 # CE 演示环境专用（同步时覆盖 docker-compose.yml）
+# 中间件密码从仓库根目录 .env 读取（由 scripts/ce-stubs/demo-middleware.env 同步生成，勿提交 Git）
 version: '3.8'
 
 services:
@@ -7,12 +8,12 @@ services:
     container_name: fastapi_mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: BrickCore123456
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: fastapi
       MYSQL_USER: admin
-      MYSQL_PASSWORD: BrickCore123456
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./database.sql:/docker-entrypoint-initdb.d/init.sql
@@ -27,10 +28,10 @@ services:
     container_name: fastapi_redis
     restart: always
     ports:
-      - "26379:6379"
-    command: redis-server --requirepass BrickCore123456
+      - "127.0.0.1:26379:6379"
+    command: redis-server --requirepass ${REDIS_PASSWORD}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
       timeout: 10s
       retries: 5
 
@@ -39,11 +40,11 @@ services:
     container_name: fastapi_rabbitmq
     restart: always
     ports:
-      - "25672:5672"
-      - "35672:15672"
+      - "127.0.0.1:25672:5672"
+      - "127.0.0.1:35672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: BrickCore123456
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       timeout: 10s
@@ -61,25 +62,25 @@ services:
       DATABASE_HOST: mysql
       DATABASE_PORT: 3306
       DATABASE_USER: admin
-      DATABASE_PASSWORD: BrickCore123456
+      DATABASE_PASSWORD: ${MYSQL_PASSWORD}
       DATABASE_NAME: fastapi
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: BrickCore123456
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
       REDIS_DB: 15
       SCHEDULER_REDIS_DB: 7
       TZ: Asia/Shanghai
       MQ_HOST: rabbitmq
       MQ_PORT: 5672
       MQ_USERNAME: admin
-      MQ_PASSWORD: BrickCore123456
+      MQ_PASSWORD: ${RABBITMQ_PASSWORD}
       MQ_MANAGEMENT_HOST: rabbitmq
       MQ_MANAGEMENT_PORT: 15672
       RUNNER_MIDDLEWARE_ISOLATION: "1"
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: 43.142.83.156:9200
-      MINIO_ACCESS_KEY: admin
-      MINIO_SECRET_KEY: BrickCore123456
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_BUCKET: test-results
       AI_REQUIREMENT_BUCKET: ai-requirements
       STORAGE_TYPE: minio
@@ -124,11 +125,11 @@ services:
     container_name: fastapi-minio
     restart: always
     ports:
-      - "9200:9000"
-      - "9001:9001"
+      - "127.0.0.1:9200:9000"
+      - "127.0.0.1:9001:9001"
     environment:
-      MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: BrickCore123456
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtWidgets import (
@@ -21,14 +22,28 @@ from runner_client.app.preferences import (
 from runner_client.app.runtime_check import is_packaged_app
 
 
+def _is_community_source_tree() -> bool:
+    """社区版仓库无 runner/WebEngine 与打包脚本。"""
+    here = Path(__file__).resolve()
+    for root in here.parents:
+        if (root / "docs-site").is_dir():
+            return not (root / "runner" / "WebEngine").is_dir()
+    return False
+
+
 def _settings_hint_text() -> str:
     if is_packaged_app():
         return (
             "说明：登录平台后点击「上线」即可连接执行器。\n"
-            "安装包请从平台「系统管理 → 执行器发布」或官方网盘获取。"
+            "安装包请从平台「系统管理 → 执行器发布」或网盘获取。"
+        )
+    if _is_community_source_tree():
+        return (
+            "说明：社区版请从网盘或平台「执行器发布」下载 BrickCoreRunner.zip。\n"
+            "本仓库仅含客户端 GUI 源码，不含 runner 引擎与打包脚本。"
         )
     return (
-        "说明（Pro 开发）：安装包由 scripts\\build_runner_client.ps1 生成，\n"
+        "说明（商业版源码）：安装包由 scripts\\build_runner_client.ps1 生成，\n"
         "输出 runner_client\\dist\\BrickCoreRunner\\，可复制到其他 Windows 电脑。"
     )
 

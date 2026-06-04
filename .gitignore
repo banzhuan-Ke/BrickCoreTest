@@ -6,6 +6,7 @@
 .env
 .env.local
 .env.*.local
+scripts/ce-stubs/demo-middleware.env
 
 # Python
 __pycache__/

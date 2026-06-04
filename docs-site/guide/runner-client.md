@@ -9,7 +9,7 @@
 
 安装包内已包含：**桌面 GUI**（`BrickCoreRunner.exe` + `_internal`）、**Runner 引擎**（`runner\` 子目录，含嵌入式 Python 与 Playwright Chromium）。**无需在本机单独安装 Python**。
 
-## 获取安装包
+## 网盘获取
 
 | 方式 | 说明 |
 |------|------|
