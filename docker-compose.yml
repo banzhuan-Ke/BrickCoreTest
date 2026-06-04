@@ -27,8 +27,9 @@ services:
     image: redis:7-alpine
     container_name: fastapi_redis
     restart: always
+    # Windows 执行器从公网连 Redis，须映射到 0.0.0.0（已设强密码）
     ports:
-      - "127.0.0.1:26379:6379"
+      - "26379:6379"
     command: redis-server --requirepass ${REDIS_PASSWORD}
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
@@ -39,8 +40,9 @@ services:
     image: rabbitmq:3-management
     container_name: fastapi_rabbitmq
     restart: always
+    # 执行器从公网连 MQ；管理台 35672 仅本机
     ports:
-      - "127.0.0.1:25672:5672"
+      - "25672:5672"
       - "127.0.0.1:35672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: admin
@@ -124,8 +126,9 @@ services:
     image: minio/minio:latest
     container_name: fastapi-minio
     restart: always
+    # 9200：执行器/预签名上传（S3 API，用 access key，非网页登录）；9001 控制台仅本机
     ports:
-      - "127.0.0.1:9200:9000"
+      - "9200:9000"
       - "127.0.0.1:9001:9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
