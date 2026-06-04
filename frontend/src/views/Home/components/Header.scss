@@ -1,0 +1,224 @@
+.head_box {
+  height: 100%;
+  min-height: 56px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 5px;
+
+  .left_box {
+    margin-left: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    
+    // 折叠按钮样式优化
+    .el-icon {
+      padding: 8px;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+      
+      &:hover {
+        background: var(--el-color-primary-light-9);
+        color: var(--el-color-primary);
+        transform: scale(1.1);
+      }
+    }
+  }
+
+  // 中间项目名称样式优化
+  .center_box {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+    background: linear-gradient(135deg, var(--el-color-primary-light-9), var(--el-color-primary-light-8));
+    padding: 8px 24px;
+    border-radius: 20px;
+    border: 1px solid var(--el-color-primary-light-7);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+    
+    &::before {
+      content: '📁';
+      font-size: 14px;
+    }
+    
+    &:hover {
+      box-shadow: 0 2px 12px rgba(16, 125, 236, 0.15);
+      transform: translateY(-1px);
+    }
+  }
+
+  .right_box {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    margin-right: 10px;
+
+    // 图标按钮通用样式
+    .icon-btn {
+      padding: 8px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      
+      &:hover {
+        background: var(--el-color-primary-light-9);
+        color: var(--el-color-primary);
+        transform: scale(1.1);
+      }
+    }
+
+    .notice {
+      margin: 0;
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+      
+      &:hover {
+        background: var(--el-color-primary-light-9);
+      }
+    }
+
+    // 时间显示优化
+    .time_info {
+      padding: 6px 12px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--el-text-color-regular);
+      background: var(--el-fill-color-light);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      
+      &::before {
+        content: '🕐';
+        font-size: 12px;
+      }
+    }
+
+    .fullscreen {
+      padding: 8px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      
+      &:hover {
+        background: var(--el-color-primary-light-9);
+        color: var(--el-color-primary);
+        transform: scale(1.1);
+      }
+    }
+
+    // 用户区域优化
+    .box {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 12px 4px 4px;
+      border-radius: 25px;
+      background: var(--el-fill-color-light);
+      transition: all 0.3s ease;
+      cursor: pointer;
+      
+      &:hover {
+        background: var(--el-color-primary-light-9);
+        box-shadow: 0 2px 8px rgba(16, 125, 236, 0.1);
+      }
+
+      .avatar {
+        width: 36px;
+        height: 36px;
+        overflow: hidden;
+        border-radius: 50%;
+        border: 2px solid var(--el-color-primary-light-5);
+        transition: all 0.3s ease;
+
+        img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+      }
+      
+      &:hover .avatar {
+        border-color: var(--el-color-primary);
+        transform: scale(1.05);
+      }
+
+      .username {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--el-text-color-primary);
+        max-width: 100px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+  }
+}
+
+html.theme-pro .head_box {
+  .left_box .el-icon:hover,
+  .icon-btn:hover,
+  .notice:hover,
+  .fullscreen:hover {
+    background: #edf2ff;
+  }
+
+  .center_box {
+    background: rgba(255, 255, 255, .75);
+    border-color: var(--pro-line, #e5e9f5);
+    box-shadow: 0 8px 20px rgba(74, 98, 164, .08);
+  }
+
+  .time_info {
+    background: rgba(255, 255, 255, .7);
+    border: 1px solid var(--pro-line, #e5e9f5);
+  }
+
+  .box {
+    background: rgba(255, 255, 255, .7);
+    border: 1px solid var(--pro-line, #e5e9f5);
+
+    &:hover {
+      box-shadow: 0 8px 20px rgba(74, 98, 164, .1);
+    }
+  }
+}
+
+// 暗黑模式适配
+.dark {
+  .head_box {
+    .center_box {
+      background: linear-gradient(135deg, var(--el-color-primary-dark-2), var(--el-color-primary-dark-1));
+      border-color: var(--el-color-primary);
+    }
+    
+    .time_info {
+      background: var(--el-fill-color-dark);
+    }
+    
+    .box {
+      background: var(--el-fill-color-dark);
+      
+      &:hover {
+        background: var(--el-color-primary-dark-2);
+      }
+      
+      .avatar {
+        border-color: var(--el-color-primary-light-3);
+      }
+    }
+  }
+}

@@ -1,0 +1,143 @@
+# CE 演示环境专用（同步时覆盖 docker-compose.yml）
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: fastapi_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: BrickCore123456
+      MYSQL_DATABASE: fastapi
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: BrickCore123456
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database.sql:/docker-entrypoint-initdb.d/init.sql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: fastapi_redis
+    restart: always
+    ports:
+      - "26379:6379"
+    command: redis-server --requirepass BrickCore123456
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 10s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: fastapi_rabbitmq
+    restart: always
+    ports:
+      - "25672:5672"
+      - "35672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: BrickCore123456
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      timeout: 10s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: fastapi_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+      DATABASE_USER: admin
+      DATABASE_PASSWORD: BrickCore123456
+      DATABASE_NAME: fastapi
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: BrickCore123456
+      REDIS_DB: 15
+      SCHEDULER_REDIS_DB: 7
+      TZ: Asia/Shanghai
+      MQ_HOST: rabbitmq
+      MQ_PORT: 5672
+      MQ_USERNAME: admin
+      MQ_PASSWORD: BrickCore123456
+      MQ_MANAGEMENT_HOST: rabbitmq
+      MQ_MANAGEMENT_PORT: 15672
+      RUNNER_MIDDLEWARE_ISOLATION: "1"
+      MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: 43.142.83.156:9200
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: BrickCore123456
+      MINIO_BUCKET: test-results
+      AI_REQUIREMENT_BUCKET: ai-requirements
+      STORAGE_TYPE: minio
+      DOC_USERNAME: admin
+      DOC_PASSWORD: BrickCore123456
+      INTERNAL_API_KEY: brickcore-internal-demo
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./backend/logs:/app/logs
+      - ./backend/static/avatars:/app/static/avatars
+    command: >
+      sh -c "
+        echo '等待数据库初始化...' &&
+        sleep 10 &&
+        echo '执行数据库迁移...' &&
+        aerich upgrade &&
+        echo '启动后端服务...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-config log_config.json
+      "
+
+  nginx:
+    image: nginx:alpine
+    container_name: fastapi_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html
+      - ./showcase:/usr/share/nginx/showcase:ro
+      - ./nginx-docker.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - backend
+
+  minio:
+    image: minio/minio:latest
+    container_name: fastapi-minio
+    restart: always
+    ports:
+      - "9200:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: BrickCore123456
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+volumes:
+  mysql_data:
+  minio_data:

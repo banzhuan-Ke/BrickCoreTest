@@ -1,0 +1,106 @@
+{
+  "title": "BrickCore 使用说明",
+  "updated": "2026-06-04",
+  "platformUrl": "http://43.142.83.156/",
+  "showcaseUrl": "http://43.142.83.156/showcase/",
+  "groups": [
+    {
+      "id": "group-start",
+      "title": "快速开始",
+      "children": [
+        {
+          "id": "home",
+          "title": "使用说明",
+          "file": "content/home.md"
+        },
+        {
+          "id": "quick-start",
+          "title": "平台概览",
+          "file": "content/quick-start.md"
+        },
+        {
+          "id": "highlights",
+          "title": "亮点功能",
+          "file": "content/highlights.md"
+        },
+        {
+          "id": "project-setup",
+          "title": "项目与环境",
+          "file": "content/project-setup.md"
+        },
+        {
+          "id": "test-catalog",
+          "title": "测试目录",
+          "file": "content/test-catalog.md"
+        }
+      ]
+    },
+    {
+      "id": "group-guide",
+      "title": "功能模块",
+      "children": [
+        {
+          "id": "ui-automation",
+          "title": "UI 自动化",
+          "file": "content/ui-automation.md"
+        },
+        {
+          "id": "runner-client",
+          "title": "执行器使用说明",
+          "file": "content/runner-client.md"
+        },
+        {
+          "id": "runner-packaging",
+          "title": "执行器获取与发布",
+          "file": "content/runner-packaging.md"
+        },
+        {
+          "id": "api-automation",
+          "title": "接口自动化",
+          "file": "content/api-automation.md"
+        },
+        {
+          "id": "data-factory",
+          "title": "数据工厂",
+          "file": "content/data-factory.md"
+        },
+        {
+          "id": "api-auth",
+          "title": "Token 授权",
+          "file": "content/api-auth.md"
+        },
+        {
+          "id": "perf-testing",
+          "title": "性能测试",
+          "file": "content/perf-testing.md"
+        },
+        {
+          "id": "ai-testing",
+          "title": "AI 测试",
+          "file": "content/ai-testing.md"
+        },
+        {
+          "id": "platform-assistant",
+          "title": "平台内 AI 助手",
+          "file": "content/platform-assistant.md"
+        },
+        {
+          "id": "mcp-server",
+          "title": "MCP 外部接入",
+          "file": "content/mcp-server.md"
+        }
+      ]
+    },
+    {
+      "id": "group-system",
+      "title": "系统管理",
+      "children": [
+        {
+          "id": "system-admin",
+          "title": "系统管理",
+          "file": "content/system-admin.md"
+        }
+      ]
+    }
+  ]
+}

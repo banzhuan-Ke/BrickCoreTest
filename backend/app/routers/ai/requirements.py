@@ -1,0 +1,2205 @@
+"""
+AI 需求文档 → 功能测试用例
+"""
+import asyncio
+import json
+import logging
+import os
+import re
+import time
+import uuid
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from app.core.auth import is_authenticated, require_permissions
+from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, PROJECT_EDIT
+from app.core.ai_prompts import PromptManager
+from app.core.case_naming import (
+    apply_naming_to_cases,
+    build_section_context,
+    default_naming_config,
+    format_naming_rules_for_prompt,
+    get_export_columns_for_template,
+    load_naming_config,
+    preview_title,
+    resolve_all_slots,
+    recalc_title_from_stored_slots,
+    render_export_row,
+    resolve_template,
+    save_naming_config,
+)
+from app.core.requirement_storage import (
+    get_storage_summary,
+    load_images_from_meta,
+    load_requirement_source,
+    save_requirement_images,
+    save_requirement_source,
+)
+from app.core.case_steps import align_steps_expects
+from app.core.document_loader import load_document, SUPPORTED_EXTENSIONS
+from app.core.requirement_document import (
+    BLOCK_ESTIMATED_INPUT_TOKENS,
+    attach_section_parents,
+    build_interleaved_content,
+    collect_image_indices,
+    compute_section_coverage,
+    estimate_scope,
+    resolve_sections,
+    section_text,
+    truncate_scope_text,
+    vision_summary_to_text,
+)
+from app.core.zentao_bindings import (
+    apply_bindings_to_case_fields,
+    bindings_for_export,
+    build_requirement_case_extra,
+    get_requirement_bindings,
+    load_project_bindings,
+    merge_bindings,
+    normalize_bindings,
+    save_project_bindings,
+    validate_bindings,
+)
+from app.core.zentao_case_export import (
+    STAGE_OPTIONS,
+    ZENTAO_DEFAULT_COLUMNS,
+    build_xlsx_bytes,
+    case_to_export_row,
+    format_numbered_cell,
+)
+from app.core.encryption import decrypt_value
+from app.core.ai_usage_log import log_ai_usage
+from app.core.llm_client import LLMClientFactory
+from app.models.ai import (
+    AiConfig,
+    AiGenerateRecord,
+    AiRequirement,
+    AiRequirementCase,
+    AiRequirementGenerateJob,
+)
+from app.routers.ai.generate import _call_llm, _extract_json_array, _get_default_ai_config
+from app.schemas.ai import StandardResponse
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/requirements", tags=["AI需求用例"])
+
+# 原文件存储目录（已迁移至 MinIO，见 requirement_storage；保留常量兼容旧引用）
+REQ_FILE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "static",
+    "ai_requirements",
+)
+
+MAX_IMAGES_FOR_VISION = 20
+VISION_CONTEXT_MAX_CHARS = 6000
+
+
+def _resolve_project_id(user_info: dict, project_id: Optional[int] = None) -> int:
+    """从 Query 参数或 JWT 解析项目 ID（与平台其他模块一致，优先 Query）"""
+    pid = project_id or user_info.get("project_id") or user_info.get("current_project_id")
+    if not pid:
+        raise HTTPException(status_code=400, detail="请先在顶部导航栏选择项目")
+    return int(pid)
+
+
+_TP_KEYWORDS_RE = re.compile(r"tp:#?(\d+)", re.I)
+
+
+def _parse_test_point_ids_from_keywords(keywords: str) -> list[int]:
+    if not keywords:
+        return []
+    seen: set[int] = set()
+    out: list[int] = []
+    for m in _TP_KEYWORDS_RE.findall(str(keywords)):
+        tid = int(m)
+        if tid not in seen:
+            seen.add(tid)
+            out.append(tid)
+    return out
+
+
+def _case_test_point_ids(case: AiRequirementCase) -> list[int]:
+    """从 extra 或 keywords 解析关联测试点 ID（兼容历史数据）。"""
+    extra = getattr(case, "extra", None) or {}
+    if isinstance(extra, dict):
+        raw = extra.get("test_point_ids") or []
+        if isinstance(raw, list) and raw:
+            ids: list[int] = []
+            seen: set[int] = set()
+            for x in raw:
+                try:
+                    tid = int(x)
+                except (TypeError, ValueError):
+                    continue
+                if tid not in seen:
+                    seen.add(tid)
+                    ids.append(tid)
+            if ids:
+                return ids
+    return _parse_test_point_ids_from_keywords(getattr(case, "keywords", None) or "")
+
+
+def _merge_test_point_keywords(keywords: str, test_point_ids: list[int]) -> str:
+    kw = (keywords or "").strip()
+    if not test_point_ids:
+        return kw
+    if _TP_KEYWORDS_RE.search(kw):
+        return kw
+    suffix = " ".join(f"tp:#{i}" for i in test_point_ids[:8])
+    return f"{kw} {suffix}".strip() if kw else suffix
+
+
+def _extract_json_object(text: str) -> dict:
+    if not text:
+        return {}
+    text = text.strip()
+    code_block = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text)
+    for block in code_block:
+        try:
+            data = json.loads(block.strip())
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            continue
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            data = json.loads(text[start:end + 1])
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _requirement_to_dict(req: AiRequirement) -> dict:
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    return {
+        "id": req.id,
+        "name": req.name,
+        "source_type": req.source_type,
+        "parse_status": req.parse_status,
+        "parse_error": req.parse_error,
+        "text_length": len(req.original_content or ""),
+        "page_count": meta.get("page_count", 0),
+        "image_count": meta.get("image_count", 0),
+        "file_name": meta.get("file_name", ""),
+        "storage": get_storage_summary(meta),
+        "warnings": meta.get("warnings", []),
+        "section_count": len(meta.get("sections") or []),
+        "last_generate": meta.get("last_generate"),
+        "export_defaults": meta.get("export_defaults") or {},
+        "requirement_type": meta.get("requirement_type") or "default",
+        "naming_template_id": meta.get("naming_template_id"),
+        "zentao_effective": meta.get("zentao_effective"),
+        "create_time": req.create_time.strftime("%Y-%m-%d %H:%M:%S") if req.create_time else "",
+        "update_time": req.update_time.strftime("%Y-%m-%d %H:%M:%S") if req.update_time else "",
+        "create_by": req.create_by,
+    }
+
+
+def _case_to_dict(case: AiRequirementCase) -> dict:
+    tp_ids = _case_test_point_ids(case)
+    extra = getattr(case, "extra", None) or {}
+    if not isinstance(extra, dict):
+        extra = {}
+    return {
+        "id": case.id,
+        "requirement_id": case.requirement_id,
+        "product": getattr(case, "product", None) or "",
+        "module": case.module,
+        "func_module": case.module,
+        "zentao_module": (extra.get("zentao_module") or "").strip(),
+        "related_story": getattr(case, "related_story", None) or "",
+        "title": case.title,
+        "precondition": case.precondition or "",
+        "steps": case.steps or [],
+        "priority": case.priority,
+        "type": case.type,
+        "stage": getattr(case, "stage", None) or "系统测试阶段",
+        "keywords": case.keywords,
+        "status": case.status,
+        "source_ref": case.source_ref,
+        "section_ids": getattr(case, "section_ids", None) or [],
+        "test_point_ids": tp_ids,
+        "extra": extra,
+        "naming_template_id": getattr(case, "naming_template_id", None),
+        "naming_template_version": getattr(case, "naming_template_version", None),
+        "naming_slots": getattr(case, "naming_slots", None) or {},
+        "create_time": case.create_time.strftime("%Y-%m-%d %H:%M:%S") if case.create_time else "",
+    }
+
+
+async def _get_ai_config(config_id: Optional[int]) -> AiConfig:
+    from app.core.ai_scene_config import resolve_config_for_scene
+    return await resolve_config_for_scene("requirement_case", config_id)
+
+
+async def _get_vision_config(config_id: Optional[int]) -> Optional[AiConfig]:
+    from app.core.ai_scene_config import resolve_vision_config
+    return await resolve_vision_config(config_id)
+
+
+def _merge_vision_reports(reports: list[dict]) -> Optional[dict]:
+    """合并多批次 Vision 报告，避免仅展示最后一批（无图批次会误显示已跳过）。"""
+    reports = [r for r in reports if isinstance(r, dict)]
+    if not reports:
+        return None
+    ran = [r for r in reports if not r.get("skipped")]
+    if not ran:
+        out = dict(reports[-1])
+        if len(reports) > 1:
+            out["batch_note"] = f"共 {len(reports)} 批，各批范围内均无图片"
+        return out
+    if len(ran) == 1 and len(reports) == 1:
+        return ran[0]
+
+    merged: dict = {
+        "skipped": False,
+        "partial": False,
+        "config_name": ran[-1].get("config_name"),
+        "model": ran[-1].get("model"),
+        "provider": ran[-1].get("provider"),
+        "image_total": 0,
+        "ok_count": 0,
+        "fail_count": 0,
+        "images": [],
+        "batches_with_vision": len(ran),
+        "batches_skipped_no_images": len(reports) - len(ran),
+    }
+    for r in ran:
+        merged["ok_count"] += int(r.get("ok_count") or 0)
+        merged["fail_count"] += int(r.get("fail_count") or 0)
+        merged["image_total"] += int(
+            r.get("image_total") or len(r.get("images") or [])
+        )
+        merged["images"].extend(r.get("images") or [])
+        if r.get("warning") and not merged.get("warning"):
+            merged["warning"] = r["warning"]
+        if r.get("partial"):
+            merged["partial"] = True
+    merged["success"] = merged["ok_count"] > 0 and merged["fail_count"] == 0
+    if merged["fail_count"] > 0 and merged["ok_count"] > 0:
+        merged["partial"] = True
+    skipped_n = merged["batches_skipped_no_images"]
+    if skipped_n:
+        merged["batch_note"] = (
+            f"共 {len(reports)} 批：{merged['batches_with_vision']} 批已读图，"
+            f"{skipped_n} 批范围内无图片已跳过"
+        )
+    return merged
+
+
+def _find_section_for_image(sections: list[dict], image_index: int) -> Optional[dict]:
+    for sec in sections:
+        if image_index in (sec.get("image_indices") or []):
+            return sec
+    return sections[0] if sections else None
+
+
+async def _analyze_images_with_vision(
+    vision_config: AiConfig,
+    images: list[dict],
+    blocks: list[dict],
+    sections: list[dict],
+    image_indices: Optional[list[int]] = None,
+) -> tuple[dict[int, str], int, dict]:
+    """返回 (image_index -> 读图文本, tokens, 报告)"""
+    report = {
+        "skipped": False,
+        "config_name": vision_config.name,
+        "model": vision_config.model,
+        "provider": vision_config.provider,
+        "image_total": len(images),
+        "images": [],
+        "ok_count": 0,
+        "fail_count": 0,
+    }
+    if not images:
+        report["skipped"] = True
+        report["message"] = "未加载到图片文件（可能解析或存储异常）"
+        return {}, 0, report
+
+    allowed = set(image_indices if image_indices is not None else [img.get("index") for img in images])
+    images = [img for img in images if img.get("index") in allowed]
+
+    if not images:
+        report["skipped"] = True
+        report["message"] = "当前选中章节无图片"
+        return {}, 0, report
+
+    api_key = decrypt_value(vision_config.api_key)
+    client = LLMClientFactory.create(
+        provider=vision_config.provider,
+        api_key=api_key,
+        api_base=vision_config.api_base,
+        model=vision_config.model,
+        timeout=max(vision_config.timeout, 120),
+    )
+    if not hasattr(client, "chat_with_image"):
+        raise HTTPException(status_code=400, detail="Vision 客户端不支持读图")
+
+    system_prompt, user_template_base = await PromptManager.render(
+        "requirement_doc_understand",
+        {"doc_text_excerpt": "（见下方章节上下文）"},
+    )
+
+    vision_text_by_index: dict[int, str] = {}
+    total_tokens = 0
+    for img in images[:MAX_IMAGES_FOR_VISION]:
+        idx = img.get("index", len(report["images"]) + 1)
+        item = {"index": idx, "ok": False, "tokens": 0, "content": "", "error": None, "section_title": ""}
+        sec = _find_section_for_image(sections, idx)
+        if sec:
+            item["section_title"] = sec.get("title") or ""
+        ctx = section_text(blocks, sec) if sec else ""
+        if not ctx.strip():
+            ctx = "（该图附近无提取到正文，请仅根据图片内容分析）"
+        excerpt = ctx[:VISION_CONTEXT_MAX_CHARS]
+        user_text = user_template_base.replace("（见下方章节上下文）", excerpt)
+
+        try:
+            resp = await client.chat_with_image(
+                system_prompt=system_prompt,
+                text=user_text,
+                image_bytes=img["data"],
+                image_mime=img.get("mime", "image/png"),
+                temperature=0.3,
+                max_tokens=min(vision_config.max_tokens, 4096),
+            )
+            item["tokens"] = resp.get("tokens", 0)
+            total_tokens += item["tokens"]
+            raw_content = resp.get("content", "") or ""
+            item["content"] = raw_content[:12000]
+            item["ok"] = True
+            report["ok_count"] += 1
+            parsed = _extract_json_object(raw_content)
+            if parsed:
+                vision_text_by_index[idx] = vision_summary_to_text(parsed)
+            else:
+                vision_text_by_index[idx] = raw_content[:4000]
+        except Exception as e:
+            logger.warning(f"[requirements] Vision 图片分析失败: {e}")
+            err = str(e)
+            item["error"] = err
+            report["fail_count"] += 1
+            vision_text_by_index[idx] = f"（读图失败: {err}）"
+        report["images"].append(item)
+
+    report["success"] = report["ok_count"] > 0 and report["fail_count"] == 0
+    report["partial"] = report["ok_count"] > 0 and report["fail_count"] > 0
+    report["vision_summary_preview"] = build_interleaved_content(
+        blocks, sections, vision_text_by_index
+    )[:12000]
+    return vision_text_by_index, total_tokens, report
+
+
+def _batch_source_ref(batch_name: str) -> str:
+    name = (batch_name or "").strip()
+    return f"batch:{name}" if name else ""
+
+
+async def _load_existing_cases_for_batch(
+    requirement_id: int,
+    batch_name: str,
+) -> list[AiRequirementCase]:
+    ref = _batch_source_ref(batch_name)
+    if not ref or ref == "batch:":
+        return []
+    return await AiRequirementCase.filter(
+        requirement_id=requirement_id,
+        source_ref=ref,
+        is_del=False,
+    ).order_by("id")
+
+
+def _format_existing_cases_for_prompt(
+    cases: list[AiRequirementCase],
+    max_list: int = 50,
+) -> tuple[str, int]:
+    """返回 (prompt 文本, 已有条数)"""
+    n = len(cases)
+    if not n:
+        return "（本批次尚无已入库用例；请根据需求范围设计新用例，但仍会写入同一批次名）", 0
+    lines: list[str] = []
+    for i, c in enumerate(cases[:max_list], 1):
+        steps = c.steps if isinstance(c.steps, list) else []
+        step_parts: list[str] = []
+        for j, st in enumerate(steps[:4]):
+            if isinstance(st, dict):
+                step_parts.append(f"{j + 1}.{(st.get('step') or '')[:50]}")
+        step_brief = " | ".join(step_parts) if step_parts else "（无步骤）"
+        lines.append(
+            f"{i}. 模块:{c.module} | 功能点:{(c.naming_slots or {}).get('feature_point', '-')} | "
+            f"标题:{c.title}\n"
+            f"   描述:{(c.naming_slots or {}).get('case_description', '')[:120]}\n"
+            f"   前置:{(c.precondition or '')[:100]}\n"
+            f"   步骤:{step_brief}"
+        )
+    if n > max_list:
+        lines.append(f"... 另有 {n - max_list} 条未列出，新用例须与全部已有用例区分")
+    return "\n".join(lines), n
+
+
+def _case_count_expectation_note(requested: int, parsed: int) -> str:
+    """生成报告中的条数预期说明（不做截断，仅解释目标与实际差异）"""
+    if parsed <= 0:
+        return "未解析到用例"
+    if parsed == requested:
+        return f"与参考目标 {requested} 条一致"
+    if parsed < requested:
+        return (
+            f"少于参考目标 {requested} 条（实际入库 {parsed} 条），"
+            "可对同范围使用「补充生成」或调高目标后重试"
+        )
+    return (
+        f"多于参考目标 {requested} 条（实际入库 {parsed} 条）："
+        "为模型在需求范围内自行扩展，非系统将多处条数相加；平台按返回结果全部入库，未截断"
+    )
+
+
+def _format_existing_feature_points(cases: list[AiRequirementCase]) -> str:
+    points: list[str] = []
+    for c in cases:
+        slots = c.naming_slots if isinstance(c.naming_slots, dict) else {}
+        fp = (slots.get("feature_point") or "").strip()
+        if fp and fp not in points:
+            points.append(fp)
+    if not points:
+        return "（暂无已记录的功能点名称）"
+    return "、".join(points[:80])
+
+
+def _requirement_naming_meta(req: AiRequirement) -> tuple[str, Optional[str]]:
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    req_type = (meta.get("requirement_type") or "default").strip() or "default"
+    tpl_override = meta.get("naming_template_id") or None
+    return req_type, tpl_override
+
+
+async def _resolve_naming_template(project_id: int, req: Optional[AiRequirement] = None):
+    config = await load_naming_config(project_id)
+    req_type, tpl_override = _requirement_naming_meta(req) if req else ("default", None)
+    template = resolve_template(config, req_type, tpl_override)
+    return config, template
+
+
+def _normalize_cases(raw_cases: list) -> list[dict]:
+    normalized = []
+    for item in raw_cases:
+        if not isinstance(item, dict):
+            continue
+        raw_steps = item.get("steps") or item.get("step_list")
+        if raw_steps is None and (item.get("step") or item.get("expect")):
+            raw_steps = [{"step": item.get("step", ""), "expect": item.get("expect", "")}]
+        if isinstance(raw_steps, list) and item.get("expect_list"):
+            expects = item.get("expect_list") or []
+            if isinstance(expects, list):
+                merged = []
+                for i, st in enumerate(raw_steps):
+                    if isinstance(st, dict):
+                        merged.append(st)
+                    else:
+                        exp = expects[i] if i < len(expects) else ""
+                        merged.append({"step": str(st), "expect": str(exp)})
+                raw_steps = merged
+
+        norm_steps = align_steps_expects(raw_steps, min_steps=2)
+
+        priority = str(item.get("priority", "2"))
+        if priority.upper().startswith("P"):
+            priority = {"P0": "1", "P1": "2", "P2": "3", "P3": "4"}.get(priority.upper(), "2")
+
+        main_module = (item.get("main_module") or item.get("feature_module") or "").strip()
+        sub_module = (item.get("sub_module") or item.get("page_module") or "").strip()
+        feature_point = (item.get("feature_point") or "").strip()
+        case_description = (
+            item.get("case_description") or item.get("description") or ""
+        ).strip()
+        legacy_title = (item.get("title") or item.get("name") or "").strip()
+
+        if not feature_point and not case_description and legacy_title:
+            case_description = legacy_title
+            legacy_title = ""
+
+        if not feature_point and not case_description:
+            continue
+
+        func_module = (
+            item.get("module")
+            or main_module
+            or sub_module
+            or "默认模块"
+        ).strip()
+
+        row = {
+            "module": func_module,
+            "main_module": main_module or func_module,
+            "sub_module": sub_module,
+            "feature_point": feature_point,
+            "case_description": case_description,
+            "title": legacy_title,
+            "precondition": (item.get("precondition") or item.get("pre_condition") or "").strip(),
+            "steps": norm_steps,
+            "priority": priority if priority in ("1", "2", "3", "4") else "2",
+            "type": item.get("type") or "功能测试",
+            "keywords": item.get("keywords") or (",".join(item.get("tags", [])) if item.get("tags") else ""),
+        }
+        raw_tp = item.get("test_point_ids") or item.get("source_test_point_ids")
+        if raw_tp is not None:
+            if isinstance(raw_tp, (int, str)):
+                raw_tp = [raw_tp]
+            tp_ids = [int(x) for x in raw_tp if str(x).isdigit()]
+            if tp_ids:
+                row["test_point_ids"] = tp_ids
+        normalized.append(row)
+    return normalized
+
+
+async def _effective_zentao_bindings(project_id: int, req: Optional[AiRequirement] = None) -> dict:
+    project_b = await load_project_bindings(project_id)
+    req_b = get_requirement_bindings(
+        req.parsed_content if req and isinstance(req.parsed_content, dict) else None
+    )
+    return merge_bindings(project_b, req_b)
+
+
+def _persist_requirement_bindings(req: AiRequirement, bindings: dict, effective: dict) -> None:
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    meta["export_defaults"] = normalize_bindings(bindings)
+    meta["zentao_effective"] = effective
+    req.parsed_content = meta
+
+
+class ZentaoBindingsBody(BaseModel):
+    product: str = Field(default="", description="所属产品")
+    module: str = Field(default="", description="所属模块（禅道路径）")
+    related_story: str = Field(default="", description="相关研发需求")
+
+
+class ExportDefaultsBody(ZentaoBindingsBody):
+    """需求级覆盖（可只填部分字段，其余继承项目配置）"""
+    pass
+
+
+class CaseNamingPreviewBody(BaseModel):
+    template_id: Optional[str] = Field(default=None, description="指定模板ID，默认当前生效")
+    sample_slots: dict = Field(default_factory=dict, description="预览用语义槽位")
+
+
+class CaseNamingConfigBody(BaseModel):
+    active_template_id: str = Field(default="default")
+    templates: list[dict] = Field(default_factory=list)
+
+
+class RequirementNamingMetaBody(BaseModel):
+    requirement_type: str = Field(default="default", description="需求类型，用于匹配模板")
+    naming_template_id: Optional[str] = Field(default=None, description="显式指定模板ID")
+
+
+class RecalcTitlesRequest(BaseModel):
+    case_ids: Optional[list[int]] = Field(default=None, description="指定用例ID，空则全部草稿")
+
+
+class GenerateCasesRequest(BaseModel):
+    vision_config_id: Optional[int] = Field(default=None, description="Vision 模型配置（文档含图时必填）")
+    case_gen_config_id: Optional[int] = Field(default=None, description="用例生成模型配置（DeepSeek 等文本模型）")
+    count: int = Field(default=15, ge=1, le=50, description="目标生成用例数量")
+    replace_existing: bool = Field(default=False, description="是否替换已有用例")
+    supplement_batch_name: Optional[str] = Field(
+        default=None,
+        description="补充生成：按批次名匹配 source_ref=batch:名称 的已有用例并追加，不删旧用例",
+    )
+    export_defaults: Optional[ExportDefaultsBody] = Field(default=None, description="禅道导出默认值")
+    scope_section_ids: Optional[list[str]] = Field(
+        default=None,
+        description="生成范围：章节 ID 列表，空或不传表示全部章节",
+    )
+
+
+class ScopeEstimateRequest(BaseModel):
+    scope_section_ids: Optional[list[str]] = None
+
+
+class GenerateCasesBatchItem(BaseModel):
+    name: str = Field(default="", description="批次名称（展示用）")
+    scope_section_ids: list[str] = Field(..., min_length=1, description="本批章节 ID")
+    count: int = Field(default=10, ge=1, le=50, description="本批目标用例数")
+    supplement: bool = Field(
+        default=False,
+        description="补充生成：按本批名称匹配已有用例发给模型后追加",
+    )
+    export_defaults: Optional[ExportDefaultsBody] = Field(
+        default=None,
+        description="本批禅道覆盖（可选，留空继承项目/需求）",
+    )
+
+
+class GenerateCasesBatchRequest(BaseModel):
+    vision_config_id: Optional[int] = None
+    case_gen_config_id: Optional[int] = None
+    replace_existing: bool = Field(default=False, description="开始前清空已有用例")
+    batches: list[GenerateCasesBatchItem] = Field(..., min_length=1, max_length=30)
+
+
+class UpdateCaseRequest(BaseModel):
+    module: Optional[str] = Field(default=None, description="功能模块（非禅道路径）")
+    title: Optional[str] = None
+    precondition: Optional[str] = None
+    steps: Optional[list] = None
+    priority: Optional[str] = None
+    type: Optional[str] = None
+    keywords: Optional[str] = None
+    status: Optional[str] = None
+
+
+class ImportToLibraryRequest(BaseModel):
+    case_ids: list[int] = Field(..., min_length=1, description="工作区用例 ID 列表")
+
+
+class BatchDeleteCasesRequest(BaseModel):
+    case_ids: list[int] = Field(default_factory=list)
+
+
+@router.post("/upload", summary="上传需求文档", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
+async def upload_requirement(
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(default=None),
+    project_id: int = Form(..., description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+
+    file_name = file.filename or "requirement.pdf"
+    ext = os.path.splitext(file_name)[1].lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"不支持的文件格式，支持: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="文件内容为空")
+
+    try:
+        loaded = load_document(content, file_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[requirements] 文档解析失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"文档解析失败: {str(e)}")
+
+    req_name = (name or os.path.splitext(file_name)[0]).strip() or "未命名需求"
+
+    requirement = await AiRequirement.create(
+        project_id=project_id,
+        name=req_name,
+        source_type=loaded.source_type,
+        original_content=loaded.text,
+        parsed_content={},
+        parse_status="parsed",
+        create_by=user_info.get("username", ""),
+    )
+
+    try:
+        storage_meta = save_requirement_source(requirement.id, file_name, content)
+    except RuntimeError as e:
+        logger.error(f"[requirements] 文档存储失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    _apply_parsed_document(requirement, loaded, file_name, storage_meta)
+    await requirement.save()
+
+    return StandardResponse(
+        message="上传成功",
+        data=_requirement_to_dict(requirement),
+    )
+
+
+def _apply_parsed_document(
+    requirement: AiRequirement,
+    loaded,
+    file_name: str,
+    storage_meta: dict,
+) -> None:
+    """将解析结果写入需求（保留 export_defaults 等用户配置）"""
+    meta = requirement.parsed_content if isinstance(requirement.parsed_content, dict) else {}
+    preserved = {
+        k: meta[k]
+        for k in ("export_defaults", "zentao_effective", "last_generate", "requirement_type", "naming_template_id")
+        if k in meta
+    }
+    image_meta = save_requirement_images(requirement.id, loaded.images)
+    file_path = storage_meta.get("file_path") or ""
+    requirement.source_type = loaded.source_type
+    requirement.original_content = loaded.text
+    requirement.parse_status = "parsed"
+    requirement.parse_error = None
+    requirement.parsed_content = {
+        "file_name": file_name,
+        "file_path": file_path,
+        "storage": storage_meta.get("storage"),
+        "page_count": loaded.page_count,
+        "image_count": len(image_meta),
+        "images": image_meta,
+        "warnings": loaded.warnings,
+        "blocks": loaded.blocks or [],
+        "sections": loaded.sections or [],
+        "source_type": loaded.source_type,
+        **preserved,
+    }
+
+
+@router.post(
+    "/{req_id}/reparse-document",
+    summary="重新解析文档结构",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def reparse_requirement_document(
+    req_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    """从已保存的源文件重新解析章节/块/图片（无需重新上传）"""
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    file_name = meta.get("file_name") or "requirement.docx"
+    try:
+        content, file_name = load_requirement_source(meta)
+    except FileNotFoundError:
+        raise HTTPException(status_code=400, detail="源文件不存在，请重新上传需求文档")
+    if not content:
+        raise HTTPException(status_code=400, detail="源文件为空")
+
+    try:
+        loaded = load_document(content, file_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[requirements] 重新解析失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"重新解析失败: {str(e)}")
+
+    storage_meta = meta.get("storage") if isinstance(meta.get("storage"), dict) else {}
+    storage_payload = {
+        "storage": storage_meta,
+        "file_path": meta.get("file_path") or storage_meta.get("source_key", ""),
+    }
+    _apply_parsed_document(req, loaded, file_name, storage_payload)
+    await req.save()
+
+    data = _requirement_to_dict(req)
+    data["zentao_effective"] = await _effective_zentao_bindings(project_id, req)
+    return StandardResponse(
+        message=f"重新解析成功：{len(loaded.sections or [])} 个章节，{len(loaded.images)} 张图片",
+        data=data,
+    )
+
+
+@router.get("", summary="需求列表", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+async def list_requirements(
+    page: int = 1,
+    size: int = 20,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+
+    query = AiRequirement.filter(project_id=project_id, is_del=False).order_by("-id")
+    total = await query.count()
+    items = await query.offset((page - 1) * size).limit(size)
+
+    case_counts: dict[int, int] = {}
+    if items:
+        req_ids = [r.id for r in items]
+        rid_list = await AiRequirementCase.filter(
+            requirement_id__in=req_ids, is_del=False
+        ).values_list("requirement_id", flat=True)
+        for rid in rid_list:
+            case_counts[rid] = case_counts.get(rid, 0) + 1
+
+    rows = []
+    for req in items:
+        row = _requirement_to_dict(req)
+        row["case_count"] = case_counts.get(req.id, 0)
+        rows.append(row)
+
+    return StandardResponse(data={"list": rows, "total": total, "page": page, "size": size})
+
+
+@router.get("/export-template", summary="禅道用例导出列模板", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+async def get_export_template(user_info: dict = Depends(is_authenticated)):
+    """返回默认禅道导入列（后续可扩展为可配置模板）"""
+    from app.core.zentao_bindings import DEFAULT_BINDINGS
+
+    return StandardResponse(
+        data={
+            "name": "禅道默认模板",
+            "columns": ZENTAO_DEFAULT_COLUMNS,
+            "defaults": DEFAULT_BINDINGS,
+            "stage_options": list(STAGE_OPTIONS),
+            "stage_rule": "优先级 1 → 冒烟测试阶段，其余 → 系统测试阶段（代码自动映射，无需 AI 生成）",
+        }
+    )
+
+
+@router.get("/zentao-bindings", summary="获取禅道绑定配置", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+async def get_zentao_bindings(
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    requirement_id: Optional[int] = Query(None, description="需求ID，传入则返回合并后的有效配置"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    project_b = await load_project_bindings(project_id)
+    req_b = normalize_bindings(None)
+    effective = project_b
+    if requirement_id:
+        req = await AiRequirement.get_or_none(id=requirement_id, project_id=project_id, is_del=False)
+        if req:
+            req_b = get_requirement_bindings(
+                req.parsed_content if isinstance(req.parsed_content, dict) else None
+            )
+            effective = merge_bindings(project_b, req_b)
+    return StandardResponse(
+        data={
+            "project": project_b,
+            "requirement": req_b,
+            "effective": effective,
+            "stage_rule": "priority in [1] → 冒烟测试阶段，否则 → 系统测试阶段",
+        }
+    )
+
+
+@router.put("/zentao-bindings", summary="保存项目级禅道绑定", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
+async def put_project_zentao_bindings(
+    body: ZentaoBindingsBody,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    try:
+        saved = await save_project_bindings(project_id, body.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return StandardResponse(message="项目禅道配置已保存", data=saved)
+
+
+@router.get(
+    "/case-naming",
+    summary="获取项目用例命名配置",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def get_case_naming_config(
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    requirement_id: Optional[int] = Query(None, description="需求ID，传入则返回匹配的生效模板"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    config = await load_naming_config(project_id)
+    req_type, tpl_override = "default", None
+    if requirement_id:
+        req = await AiRequirement.get_or_none(id=requirement_id, project_id=project_id, is_del=False)
+        if req:
+            req_type, tpl_override = _requirement_naming_meta(req)
+    active = resolve_template(config, req_type, tpl_override)
+    return StandardResponse(
+        data={
+            "config": config,
+            "active_template": active,
+            "requirement_type": req_type,
+            "naming_template_id": tpl_override,
+        }
+    )
+
+
+@router.put(
+    "/case-naming",
+    summary="保存项目用例命名配置（项目管理员）",
+    dependencies=[Depends(require_permissions(PROJECT_EDIT))],
+)
+async def put_case_naming_config(
+    body: CaseNamingConfigBody,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    try:
+        saved = await save_naming_config(project_id, body.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    active = resolve_template(saved)
+    return StandardResponse(message="用例命名配置已保存", data={"config": saved, "active_template": active})
+
+
+@router.post(
+    "/case-naming/preview",
+    summary="预览用例标题组装结果",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def preview_case_naming(
+    body: CaseNamingPreviewBody,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    requirement_id: Optional[int] = Query(None, description="需求ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    config = await load_naming_config(project_id)
+    req_type, tpl_override = "default", body.template_id
+    if requirement_id and not tpl_override:
+        req = await AiRequirement.get_or_none(id=requirement_id, project_id=project_id, is_del=False)
+        if req:
+            req_type, tpl_override = _requirement_naming_meta(req)
+    template = resolve_template(config, req_type, tpl_override)
+    result = preview_title(template, body.sample_slots or {})
+    return StandardResponse(data={**result, "template_id": template.get("id"), "template_version": template.get("version")})
+
+
+@router.put(
+    "/{req_id}/naming-meta",
+    summary="设置需求类型与命名模板",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def put_requirement_naming_meta(
+    req_id: int,
+    body: RequirementNamingMetaBody,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    meta["requirement_type"] = (body.requirement_type or "default").strip() or "default"
+    if body.naming_template_id:
+        meta["naming_template_id"] = body.naming_template_id.strip()
+    else:
+        meta.pop("naming_template_id", None)
+    req.parsed_content = meta
+    await req.save()
+    config = await load_naming_config(project_id)
+    active = resolve_template(config, meta["requirement_type"], meta.get("naming_template_id"))
+    return StandardResponse(
+        message="需求命名设置已保存",
+        data={
+            "requirement_type": meta["requirement_type"],
+            "naming_template_id": meta.get("naming_template_id"),
+            "active_template": active,
+        },
+    )
+
+
+@router.put("/{req_id}/zentao-bindings", summary="保存需求级禅道绑定覆盖", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
+async def put_requirement_zentao_bindings(
+    req_id: int,
+    body: ExportDefaultsBody,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    project_b = await load_project_bindings(project_id)
+    req_b = normalize_bindings(body.model_dump())
+    effective = merge_bindings(project_b, req_b)
+    _persist_requirement_bindings(req, req_b, effective)
+    await req.save()
+    return StandardResponse(message="需求禅道配置已保存", data={"effective": effective})
+
+
+@router.post(
+    "/{req_id}/cases/reapply-bindings",
+    summary="按当前绑定刷新全部用例禅道字段与适用阶段",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def reapply_case_bindings(
+    req_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    effective = await _effective_zentao_bindings(project_id, req)
+    missing = validate_bindings(effective)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"禅道配置不完整，缺少：{', '.join(missing)}",
+        )
+    cases = await AiRequirementCase.filter(requirement_id=req_id, is_del=False)
+    updated = 0
+    for case in cases:
+        data = apply_bindings_to_case_fields(
+            {"priority": case.priority},
+            effective,
+        )
+        case.product = data["product"]
+        case.related_story = data["related_story"]
+        case.stage = data["stage"]
+        extra = case.extra if isinstance(case.extra, dict) else {}
+        case.extra = build_requirement_case_extra(effective, existing=extra)
+        await case.save(update_fields=["product", "related_story", "stage", "extra"])
+        updated += 1
+    return StandardResponse(message=f"已刷新 {updated} 条用例的禅道字段与适用阶段", data={"count": updated})
+
+
+@router.get("/{req_id}/document-structure", summary="文档章节结构", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+async def get_document_structure(
+    req_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    sections = meta.get("sections") or []
+    if not sections and req.original_content:
+        sections = [{
+            "id": "sec-1",
+            "title": "全文",
+            "level": 1,
+            "char_count": len(req.original_content or ""),
+            "image_indices": list(range(meta.get("image_count", 0))),
+        }]
+    else:
+        sections = attach_section_parents([dict(s) for s in sections])
+    scoped = resolve_sections(sections, None)
+    blocks = meta.get("blocks") or []
+    est = estimate_scope(
+        build_interleaved_content(blocks, scoped, {}),
+        len(collect_image_indices(scoped, blocks)),
+    )
+    return StandardResponse(
+        data={
+            "sections": sections,
+            "source_type": meta.get("source_type", req.source_type),
+            "image_count": meta.get("image_count", 0),
+            "text_length": len(req.original_content or ""),
+            "estimate_all": est,
+        }
+    )
+
+
+@router.post("/{req_id}/estimate-scope", summary="预估生成范围 Token", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+async def estimate_generate_scope(
+    req_id: int,
+    body: ScopeEstimateRequest,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    sections = meta.get("sections") or []
+    blocks = meta.get("blocks") or []
+    selected = resolve_sections(sections, body.scope_section_ids)
+    if not selected:
+        raise HTTPException(status_code=400, detail="请至少选择一个章节")
+    img_n = len(collect_image_indices(selected, blocks))
+    text = build_interleaved_content(blocks, selected, {})
+    text, _ = truncate_scope_text(text)
+    est = estimate_scope(text, img_n)
+    est["selected_section_count"] = len(selected)
+    est["selected_section_ids"] = [s.get("id") for s in selected]
+    return StandardResponse(data=est)
+
+
+@router.get(
+    "/{req_id}/section-coverage",
+    summary="章节覆盖检查",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def get_section_coverage(
+    req_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    pending_section_ids: Optional[str] = Query(
+        None,
+        description="待生成章节ID，逗号分隔（队列预览）",
+    ),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    sections = meta.get("sections") or []
+    if sections:
+        sections = attach_section_parents([dict(s) for s in sections])
+    cases = await AiRequirementCase.filter(requirement_id=req_id, is_del=False)
+    coverage = compute_section_coverage(sections, [_case_to_dict(c) for c in cases])
+    pending: set[str] = set()
+    if pending_section_ids:
+        pending = {x.strip() for x in pending_section_ids.split(",") if x.strip()}
+    if pending:
+        all_ids = {s.get("id") for s in sections if s.get("id")}
+        projected = set(coverage["covered_section_ids"]) | (pending & all_ids)
+        coverage["pending_section_ids"] = sorted(pending & all_ids)
+        coverage["projected_covered_count"] = len(projected)
+        coverage["projected_uncovered_count"] = len(all_ids) - len(projected)
+    return StandardResponse(data=coverage)
+
+
+@router.get("/{req_id}", summary="需求详情", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+async def get_requirement(
+    req_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    data = _requirement_to_dict(req)
+    data["zentao_effective"] = await _effective_zentao_bindings(project_id, req)
+    data["original_content"] = req.original_content[:5000] + (
+        "..." if len(req.original_content or "") > 5000 else ""
+    )
+    return StandardResponse(data=data)
+
+
+@router.delete("/{req_id}", summary="删除需求", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
+async def delete_requirement(
+    req_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    req.is_del = True
+    await req.save()
+    await AiRequirementCase.filter(requirement_id=req_id).update(is_del=True)
+    return StandardResponse(message="删除成功")
+
+
+async def _execute_generate_cases(
+    req: AiRequirement,
+    project_id: int,
+    user_info: dict,
+    body: GenerateCasesRequest,
+    *,
+    batch_name: str = "",
+    replace_existing: Optional[bool] = None,
+    zentao_effective_override: Optional[dict] = None,
+) -> dict:
+    """单次范围生成用例，返回 cases / generate_report / tokens / duration_ms"""
+    start_time = time.time()
+    supplement_name = (body.supplement_batch_name or "").strip()
+    is_supplement = bool(supplement_name)
+    if body.supplement_batch_name is not None and body.supplement_batch_name.strip() == "":
+        raise HTTPException(status_code=400, detail="补充生成须填写有效的批次名称")
+    do_replace = False if is_supplement else (
+        body.replace_existing if replace_existing is None else replace_existing
+    )
+    if is_supplement and not batch_name:
+        batch_name = supplement_name
+
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    blocks = meta.get("blocks") or []
+    all_sections = meta.get("sections") or []
+    if not all_sections:
+        all_sections = [{
+            "id": "sec-1",
+            "title": "全文",
+            "level": 1,
+            "block_ids": [b.get("id") for b in blocks if b.get("id")],
+            "char_count": len(req.original_content or ""),
+            "image_indices": list(range(meta.get("image_count", 0))),
+        }]
+    selected_sections = resolve_sections(all_sections, body.scope_section_ids)
+    if not selected_sections:
+        raise HTTPException(status_code=400, detail="请至少选择一个章节/范围")
+
+    scoped_image_indices = collect_image_indices(selected_sections)
+    image_count = len(scoped_image_indices)
+
+    project_b = await load_project_bindings(project_id)
+    if body.export_defaults and zentao_effective_override is None:
+        req_b = normalize_bindings(body.export_defaults.model_dump())
+        _persist_requirement_bindings(req, req_b, merge_bindings(project_b, req_b))
+        await req.save()
+        meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+
+    effective = zentao_effective_override or await _effective_zentao_bindings(project_id, req)
+    missing = validate_bindings(effective)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"请先在「禅道导入配置」中填写：{', '.join(missing)}。"
+                "（可在项目级保存默认值，本需求可覆盖）"
+            ),
+        )
+
+    gen_config = await _get_ai_config(body.case_gen_config_id)
+
+    vision_text_by_index: dict[int, str] = {}
+    total_tokens = 0
+    vision_config_id = body.vision_config_id
+    vision_report: dict = {"skipped": True, "message": "当前范围内无图片，已跳过读图"}
+
+    if image_count > 0:
+        if not vision_config_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"选中范围包含 {image_count} 张图片，请选择 Vision 模型配置（如通义 qwen-vl）",
+            )
+        from app.core.ai_scene_config import resolve_vision_config
+        vision_config = await resolve_vision_config(vision_config_id)
+        if not vision_config:
+            raise HTTPException(status_code=400, detail="未配置 Vision 模型，请在场景绑定或模型配置中设置")
+        vision_report = {
+            "skipped": False,
+            "config_name": vision_config.name,
+            "model": vision_config.model,
+            "provider": vision_config.provider,
+            "likely_vision": LLMClientFactory.is_likely_vision_model(vision_config.model),
+        }
+        if not vision_report["likely_vision"]:
+            logger.warning(
+                f"[requirements] 配置 {vision_config.model} 可能不支持 Vision，仍尝试调用"
+            )
+            vision_report["warning"] = (
+                f"模型 {vision_config.model} 可能不支持读图，建议使用 qwen-vl-max 等 VL 模型"
+            )
+        images = load_images_from_meta(meta)
+        vision_report["image_count_doc"] = image_count
+        vision_report["scope_section_ids"] = body.scope_section_ids
+        vision_text_by_index, v_tokens, vision_detail = await _analyze_images_with_vision(
+            vision_config,
+            images,
+            blocks,
+            selected_sections,
+            scoped_image_indices,
+        )
+        vision_report.update(vision_detail)
+        total_tokens += v_tokens
+
+    scoped_content = build_interleaved_content(
+        blocks, selected_sections, vision_text_by_index
+    )
+    if not scoped_content.strip():
+        scoped_content = (req.original_content or "")[:8000]
+    scoped_content, truncated = truncate_scope_text(scoped_content)
+    scope_est = estimate_scope(scoped_content, image_count)
+    if scope_est["level"] == "block":
+        raise HTTPException(
+            status_code=400,
+            detail=scope_est["message"] + "；请减少勾选的章节后重试",
+        )
+
+    if not scoped_content.strip():
+        raise HTTPException(status_code=400, detail="选中范围内无有效文字或图片内容")
+
+    existing_cases_text = ""
+    existing_count = 0
+    existing_cases_text = ""
+    existing_count = 0
+    existing_feature_points = ""
+    if is_supplement:
+        existing_rows = await _load_existing_cases_for_batch(req.id, supplement_name)
+        existing_cases_text, existing_count = _format_existing_cases_for_prompt(existing_rows)
+        existing_feature_points = _format_existing_feature_points(existing_rows)
+
+    naming_config, naming_template = await _resolve_naming_template(project_id, req)
+    naming_rules = format_naming_rules_for_prompt(naming_template)
+    section_ctx = build_section_context(selected_sections, all_sections)
+
+    try:
+        if is_supplement:
+            system_prompt, user_prompt = await PromptManager.render(
+                "requirement_doc_supplement_cases",
+                {
+                    "requirement_name": req.name,
+                    "batch_name": supplement_name,
+                    "scoped_content": scoped_content,
+                    "count": body.count,
+                    "existing_cases": existing_cases_text,
+                    "existing_count": existing_count,
+                    "existing_feature_points": existing_feature_points,
+                    "naming_rules": naming_rules,
+                },
+            )
+        else:
+            system_prompt, user_prompt = await PromptManager.render("requirement_doc_to_cases", {
+                "requirement_name": req.name,
+                "scoped_content": scoped_content,
+                "doc_text": scoped_content,
+                "vision_summary": "（已合并至下方结构化需求内容，请直接阅读 scoped_content）",
+                "count": body.count,
+                "naming_rules": naming_rules,
+            })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    prompt_len = len(user_prompt or "")
+    logger.info(
+        "[requirements] 用例生成 LLM 调用 model=%s batch=%s prompt_len=%s count=%s",
+        gen_config.model,
+        batch_name or supplement_name or "-",
+        prompt_len,
+        body.count,
+    )
+    try:
+        resp = await _call_llm(
+            system_prompt,
+            user_prompt,
+            gen_config,
+            min_timeout=600,
+            max_retries=2,
+        )
+    except Exception as e:
+        duration_ms = int((time.time() - start_time) * 1000)
+        await log_ai_usage(
+            gen_config,
+            "requirement_case",
+            user_info=user_info,
+            project_id=project_id,
+            tokens_used=total_tokens,
+            duration_ms=duration_ms,
+            status="failed",
+            input_summary=f"需求#{req.id} {req.name}"[:500],
+            output_summary=str(e)[:500],
+            requirement_id=req.id,
+            batch_name=batch_name or supplement_name or None,
+        )
+        logger.error(
+            "[requirements] 用例生成 LLM 失败 model=%s prompt_len=%s: %s",
+            gen_config.model,
+            prompt_len,
+            e,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"AI 生成失败: {str(e)}"
+                "（多为模型服务超时；可缩小本批章节、减少参考条数，或在 AI 配置中增大 timeout 后重试该批）"
+            ),
+        )
+
+    raw_response = resp.get("content", "") or ""
+    case_gen_tokens = resp.get("tokens", 0)
+    total_tokens += case_gen_tokens
+    raw_cases = _extract_json_array(raw_response)
+    normalized = _normalize_cases(raw_cases)
+    named_cases, naming_warnings = apply_naming_to_cases(
+        normalized,
+        naming_template,
+        effective,
+        section_ctx,
+        batch_name=batch_name or supplement_name,
+        requirement_name=req.name,
+    )
+    cases_data = [
+        apply_bindings_to_case_fields(c, effective)
+        for c in named_cases
+    ]
+
+    parsed_n = len(cases_data)
+    count_note = _case_count_expectation_note(body.count, parsed_n)
+    if is_supplement:
+        count_note = (
+            f"补充批次「{supplement_name}」：已有 {existing_count} 条，本次新增入库 {parsed_n} 条。"
+            + count_note
+        )
+    case_gen_report = {
+        "success": bool(cases_data),
+        "config_name": gen_config.name,
+        "model": gen_config.model,
+        "provider": gen_config.provider,
+        "tokens": case_gen_tokens,
+        "requested_count": body.count,
+        "parsed_count": parsed_n,
+        "count_note": count_note,
+        "supplement_mode": is_supplement,
+        "supplement_batch_name": supplement_name if is_supplement else None,
+        "existing_cases_count": existing_count if is_supplement else 0,
+        "naming_warnings": naming_warnings[:20],
+        "naming_template_id": naming_template.get("id"),
+        "naming_template_version": naming_template.get("version"),
+        "raw_response": raw_response[:15000],
+    }
+    generate_report = {
+        "vision": vision_report,
+        "case_gen": case_gen_report,
+        "naming_warnings": naming_warnings[:20],
+        "scope": {
+            "section_ids": [s.get("id") for s in selected_sections],
+            "section_titles": [s.get("title") for s in selected_sections],
+            "truncated": truncated,
+            "estimate": scope_est,
+        },
+        "duration_ms": 0,
+        "tokens_used": total_tokens,
+    }
+
+    if not cases_data:
+        duration_ms = int((time.time() - start_time) * 1000)
+        await AiGenerateRecord.create(
+            project_id=project_id,
+            generate_type="requirement_case",
+            input_summary={"requirement_id": req.id, "name": req.name, "batch_name": batch_name or None},
+            output_content={"raw_response": raw_response, "cases": []},
+            status="rejected",
+            ai_config_id=gen_config.id,
+            tokens_used=total_tokens,
+            duration_ms=duration_ms,
+            create_by=user_info.get("username", ""),
+        )
+        await log_ai_usage(
+            gen_config,
+            "requirement_case",
+            user_info=user_info,
+            project_id=project_id,
+            tokens_used=total_tokens,
+            duration_ms=duration_ms,
+            input_summary=f"需求#{req.id} {req.name}"[:500],
+            output_summary="JSON 解析失败",
+            requirement_id=req.id,
+            batch_name=batch_name or supplement_name or None,
+            parse_ok=False,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="AI 返回内容无法解析为用例 JSON，请重试或调整模型/Prompt",
+        )
+
+    if do_replace:
+        await AiRequirementCase.filter(requirement_id=req.id).update(is_del=True)
+
+    created = []
+    username = user_info.get("username", "")
+    source_ref = f"batch:{batch_name}" if batch_name else None
+    batch_section_ids = [s.get("id") for s in selected_sections if s.get("id")]
+    for item in cases_data:
+        case = await AiRequirementCase.create(
+            requirement_id=req.id,
+            project_id=project_id,
+            product=item.get("product", ""),
+            module=item["module"],
+            related_story=item.get("related_story", ""),
+            title=item["title"],
+            naming_template_id=item.get("naming_template_id"),
+            naming_template_version=item.get("naming_template_version"),
+            naming_slots=item.get("naming_slots") or {},
+            precondition=item["precondition"],
+            steps=item["steps"],
+            priority=item["priority"],
+            type=item["type"],
+            stage=item.get("stage", "系统测试阶段"),
+            keywords=item["keywords"],
+            status="draft",
+            source_ref=source_ref,
+            section_ids=batch_section_ids,
+            extra=build_requirement_case_extra(effective),
+            create_by=username,
+        )
+        created.append(_case_to_dict(case))
+
+    duration_ms = int((time.time() - start_time) * 1000)
+    generate_report["duration_ms"] = duration_ms
+    if batch_name:
+        generate_report["batch_name"] = batch_name
+    await AiGenerateRecord.create(
+        project_id=project_id,
+        generate_type="requirement_case",
+        input_summary={
+            "requirement_id": req.id,
+            "name": req.name,
+            "count": body.count,
+            "batch_name": batch_name or None,
+        },
+        output_content={
+            "cases": cases_data,
+            "raw_response": raw_response[:10000],
+            "generate_report": generate_report,
+        },
+        status="imported",
+        ai_config_id=gen_config.id,
+        tokens_used=total_tokens,
+        duration_ms=duration_ms,
+        create_by=username,
+    )
+
+    await log_ai_usage(
+        gen_config,
+        "requirement_case",
+        user_info=user_info,
+        project_id=project_id,
+        tokens_used=total_tokens,
+        duration_ms=duration_ms,
+        input_summary=f"需求#{req.id} {req.name}, count={body.count}"[:500],
+        output_summary=f"生成 {len(created)} 条用例",
+        requirement_id=req.id,
+        batch_name=batch_name or supplement_name or None,
+        vision_used=not vision_report.get("skipped", True),
+    )
+
+    req.parse_status = "parsed"
+    req.parse_error = None
+    meta["last_generate"] = {
+        "case_count": len(created),
+        "tokens_used": total_tokens,
+        "duration_ms": duration_ms,
+        "generate_report": generate_report,
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    meta["zentao_effective"] = effective
+    req.parsed_content = meta
+    await req.save()
+
+    return {
+        "cases": created,
+        "created_count": len(created),
+        "tokens_used": total_tokens,
+        "duration_ms": duration_ms,
+        "generate_report": generate_report,
+    }
+
+
+def _job_to_dict(job: AiRequirementGenerateJob) -> dict:
+    total = job.total_batches or 0
+    done = job.done_batches or 0
+    pct = int(done / total * 100) if total else 0
+    return {
+        "id": job.id,
+        "requirement_id": job.requirement_id,
+        "project_id": job.project_id,
+        "status": job.status,
+        "total_batches": total,
+        "done_batches": done,
+        "current_batch_name": job.current_batch_name or "",
+        "progress_percent": pct,
+        "batch_results": job.batch_results or [],
+        "generate_report": job.generate_report or {},
+        "error": job.error,
+        "tokens_used": job.tokens_used,
+        "duration_ms": job.duration_ms,
+        "create_by": job.create_by,
+        "create_time": job.create_time.isoformat() if job.create_time else None,
+        "finish_time": job.finish_time.isoformat() if job.finish_time else None,
+    }
+
+
+async def _run_batch_generate_core(
+    req: AiRequirement,
+    project_id: int,
+    body: GenerateCasesBatchRequest,
+    username: str,
+    *,
+    job: Optional[AiRequirementGenerateJob] = None,
+) -> dict:
+    """按批次队列生成用例；可选 job 参数用于异步任务进度回写。"""
+    user_info = {"username": username}
+    req_id = req.id
+
+    project_b = await load_project_bindings(project_id)
+    effective = await _effective_zentao_bindings(project_id, req)
+    missing = validate_bindings(effective)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"请先在「禅道导入配置」中填写：{', '.join(missing)}。"
+                "（可在项目级保存默认值，本需求可覆盖）"
+            ),
+        )
+
+    if body.replace_existing:
+        await AiRequirementCase.filter(requirement_id=req_id).update(is_del=True)
+
+    if job:
+        job.status = "running"
+        job.total_batches = len(body.batches)
+        job.done_batches = 0
+        job.current_batch_name = ""
+        job.batch_results = []
+        await job.save()
+
+    batch_start = time.time()
+    batch_results: list[dict] = []
+    total_tokens = 0
+    last_report: dict = {}
+    vision_reports: list[dict] = []
+
+    for idx, item in enumerate(body.batches):
+        batch_name = (item.name or "").strip() or f"批次{idx + 1}"
+        if job:
+            job.current_batch_name = batch_name
+            await job.save(update_fields=["current_batch_name", "update_time"])
+
+        item_effective = effective
+        if item.export_defaults:
+            req_b = normalize_bindings(item.export_defaults.model_dump())
+            item_effective = merge_bindings(project_b, req_b)
+            miss = validate_bindings(item_effective)
+            if miss:
+                batch_results.append({
+                    "index": idx,
+                    "name": batch_name,
+                    "success": False,
+                    "created_count": 0,
+                    "error": f"禅道配置不完整：{', '.join(miss)}",
+                })
+                if job:
+                    job.done_batches = idx + 1
+                    job.batch_results = batch_results
+                    await job.save(update_fields=["done_batches", "batch_results", "update_time"])
+                continue
+
+        use_supplement = bool(item.supplement)
+        if use_supplement:
+            batch_name = (item.name or "").strip() or batch_name
+
+        single_body = GenerateCasesRequest(
+            vision_config_id=body.vision_config_id,
+            case_gen_config_id=body.case_gen_config_id,
+            count=item.count,
+            replace_existing=False,
+            export_defaults=None,
+            scope_section_ids=item.scope_section_ids,
+            supplement_batch_name=batch_name if use_supplement else None,
+        )
+        zentao_override = item_effective if item.export_defaults else None
+        try:
+            data = await _execute_generate_cases(
+                req,
+                project_id,
+                user_info,
+                single_body,
+                batch_name=batch_name,
+                replace_existing=False,
+                zentao_effective_override=zentao_override,
+            )
+            total_tokens += data["tokens_used"]
+            last_report = data["generate_report"]
+            gr = data.get("generate_report") or {}
+            if gr.get("vision"):
+                vision_reports.append(gr["vision"])
+            cg = gr.get("case_gen") or {}
+            batch_results.append({
+                "index": idx,
+                "name": batch_name,
+                "success": True,
+                "supplement": use_supplement,
+                "requested_count": item.count,
+                "created_count": data["created_count"],
+                "parsed_count": cg.get("parsed_count", data["created_count"]),
+                "existing_cases_count": cg.get("existing_cases_count", 0),
+                "count_note": cg.get("count_note"),
+                "tokens_used": data["tokens_used"],
+                "duration_ms": data["duration_ms"],
+                "generate_report": data["generate_report"],
+                "error": None,
+            })
+        except HTTPException as e:
+            detail = e.detail if isinstance(e.detail, str) else str(e.detail)
+            batch_results.append({
+                "index": idx,
+                "name": batch_name,
+                "success": False,
+                "created_count": 0,
+                "error": detail,
+            })
+        except Exception as e:
+            logger.error(f"[requirements] 批次 {batch_name} 失败: {e}", exc_info=True)
+            batch_results.append({
+                "index": idx,
+                "name": batch_name,
+                "success": False,
+                "created_count": 0,
+                "error": str(e),
+            })
+
+        if job:
+            job.done_batches = idx + 1
+            job.batch_results = batch_results
+            job.tokens_used = total_tokens
+            await job.save(update_fields=["done_batches", "batch_results", "tokens_used", "update_time"])
+
+    duration_ms = int((time.time() - batch_start) * 1000)
+    success_count = sum(1 for b in batch_results if b["success"])
+    created_total = sum(b.get("created_count", 0) for b in batch_results)
+
+    cases = await AiRequirementCase.filter(requirement_id=req_id, is_del=False).order_by("id")
+    all_case_dicts = [_case_to_dict(c) for c in cases]
+
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    combined_report = {
+        "batch_mode": True,
+        "batch_results": batch_results,
+        "vision": _merge_vision_reports(vision_reports)
+        if vision_reports
+        else (last_report.get("vision") if last_report else None),
+        "case_gen": last_report.get("case_gen") if last_report else None,
+        "duration_ms": duration_ms,
+        "tokens_used": total_tokens,
+    }
+    meta["last_generate"] = {
+        "case_count": len(all_case_dicts),
+        "tokens_used": total_tokens,
+        "duration_ms": duration_ms,
+        "generate_report": combined_report,
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    req.parsed_content = meta
+    await req.save()
+
+    result = {
+        "cases": all_case_dicts,
+        "created_count": created_total,
+        "tokens_used": total_tokens,
+        "duration_ms": duration_ms,
+        "generate_report": combined_report,
+        "batch_results": batch_results,
+        "success_count": success_count,
+        "total_batches": len(body.batches),
+    }
+
+    if job:
+        job.current_batch_name = ""
+        job.tokens_used = total_tokens
+        job.duration_ms = duration_ms
+        job.generate_report = combined_report
+        job.batch_results = batch_results
+        job.finish_time = datetime.now()
+        if success_count == 0:
+            first_err = next((b["error"] for b in batch_results if b.get("error")), "全部批次失败")
+            job.status = "failed"
+            job.error = first_err
+        else:
+            job.status = "completed"
+            if success_count < len(body.batches):
+                job.error = f"部分批次失败（{success_count}/{len(body.batches)} 批成功）"
+            else:
+                job.error = None
+        await job.save()
+
+    if success_count == 0:
+        first_err = next((b["error"] for b in batch_results if b.get("error")), "全部批次失败")
+        raise HTTPException(status_code=500, detail=first_err)
+
+    return result
+
+
+async def _execute_generate_job(job_id: int) -> None:
+    job = await AiRequirementGenerateJob.get_or_none(id=job_id)
+    if not job:
+        return
+    if job.status not in ("pending", "running"):
+        return
+
+    body = GenerateCasesBatchRequest.model_validate(job.payload)
+    req = await AiRequirement.get_or_none(
+        id=job.requirement_id, project_id=job.project_id, is_del=False
+    )
+    if not req:
+        job.status = "failed"
+        job.error = "需求不存在或已删除"
+        job.finish_time = datetime.now()
+        await job.save()
+        return
+
+    try:
+        await _run_batch_generate_core(req, job.project_id, body, job.create_by, job=job)
+    except HTTPException as e:
+        detail = e.detail if isinstance(e.detail, str) else str(e.detail)
+        if job.status not in ("completed", "failed"):
+            job.status = "failed"
+            job.error = detail
+            job.finish_time = datetime.now()
+            await job.save()
+    except Exception as e:
+        logger.error(f"[requirements] 异步生成任务 {job_id} 失败: {e}", exc_info=True)
+        if job.status not in ("completed", "failed"):
+            job.status = "failed"
+            job.error = str(e)
+            job.finish_time = datetime.now()
+            await job.save()
+
+
+async def _run_generate_job_task(job_id: int) -> None:
+    try:
+        await _execute_generate_job(job_id)
+    except Exception as e:
+        logger.exception(f"[requirements] generate job task {job_id} 异常: {e}")
+        job = await AiRequirementGenerateJob.get_or_none(id=job_id)
+        if job and job.status in ("pending", "running"):
+            job.status = "failed"
+            job.error = str(e)
+            job.finish_time = datetime.now()
+            await job.save()
+
+
+async def _create_generate_job(
+    req_id: int,
+    body: GenerateCasesBatchRequest,
+    project_id: int,
+    user_info: dict,
+) -> StandardResponse:
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+
+    effective = await _effective_zentao_bindings(project_id, req)
+    missing = validate_bindings(effective)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"请先在「禅道导入配置」中填写：{', '.join(missing)}。"
+                "（可在项目级保存默认值，本需求可覆盖）"
+            ),
+        )
+
+    running = await AiRequirementGenerateJob.filter(
+        requirement_id=req_id,
+        project_id=project_id,
+        status__in=["pending", "running"],
+    ).first()
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该需求已有进行中的生成任务（#{running.id}），请等待完成后再试",
+        )
+
+    username = user_info.get("username", "")
+    job = await AiRequirementGenerateJob.create(
+        requirement_id=req_id,
+        project_id=project_id,
+        status="pending",
+        total_batches=len(body.batches),
+        payload=body.model_dump(),
+        create_by=username,
+    )
+    asyncio.create_task(_run_generate_job_task(job.id))
+    return StandardResponse(
+        message=f"生成任务已提交，共 {len(body.batches)} 批",
+        data=_job_to_dict(job),
+    )
+
+
+@router.post("/{req_id}/generate-cases", summary="AI 生成功能测试用例", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
+async def generate_cases(
+    req_id: int,
+    body: GenerateCasesRequest,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    data = await _execute_generate_cases(req, project_id, user_info, body)
+    return StandardResponse(
+        message=f"成功生成 {data['created_count']} 条用例",
+        data=data,
+    )
+
+
+@router.post(
+    "/{req_id}/generate-cases-batch",
+    summary="按批次队列生成功能测试用例（异步任务）",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def generate_cases_batch(
+    req_id: int,
+    body: GenerateCasesBatchRequest,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    return await _create_generate_job(req_id, body, project_id, user_info)
+
+
+@router.post(
+    "/{req_id}/generate-jobs",
+    summary="提交批量生成异步任务",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def create_generate_job(
+    req_id: int,
+    body: GenerateCasesBatchRequest,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    return await _create_generate_job(req_id, body, project_id, user_info)
+
+
+@router.get(
+    "/generate-jobs/{job_id}",
+    summary="查询批量生成任务进度",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def get_generate_job(
+    job_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    job = await AiRequirementGenerateJob.get_or_none(id=job_id, project_id=project_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return StandardResponse(data=_job_to_dict(job))
+
+
+@router.get(
+    "/{req_id}/generate-jobs/latest",
+    summary="查询需求最近一次批量生成任务",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def get_latest_generate_job(
+    req_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    job = await AiRequirementGenerateJob.filter(
+        requirement_id=req_id, project_id=project_id
+    ).order_by("-id").first()
+    if not job:
+        return StandardResponse(data=None, message="暂无生成任务")
+    return StandardResponse(data=_job_to_dict(job))
+
+
+@router.get("/{req_id}/cases", summary="用例列表", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+async def list_cases(
+    req_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+
+    cases = await AiRequirementCase.filter(requirement_id=req_id, is_del=False).order_by("id")
+    return StandardResponse(data={"list": [_case_to_dict(c) for c in cases], "total": len(cases)})
+
+
+@router.put("/{req_id}/cases/{case_id}", summary="编辑用例", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
+async def update_case(
+    req_id: int,
+    case_id: int,
+    body: UpdateCaseRequest,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    case = await AiRequirementCase.get_or_none(
+        id=case_id, requirement_id=req_id, project_id=project_id, is_del=False
+    )
+    if not case:
+        raise HTTPException(status_code=404, detail="用例不存在")
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+
+    updates = body.model_dump(exclude_unset=True)
+    if "steps" in updates and updates["steps"] is not None:
+        updates["steps"] = align_steps_expects(updates["steps"])
+    for k, v in updates.items():
+        setattr(case, k, v)
+
+    effective = await _effective_zentao_bindings(project_id, req)
+    bound = apply_bindings_to_case_fields({"priority": case.priority}, effective)
+    case.product = bound["product"]
+    case.related_story = bound["related_story"]
+    case.stage = bound["stage"]
+
+    await case.save()
+    return StandardResponse(data=_case_to_dict(case))
+
+
+@router.post(
+    "/{req_id}/cases/import-to-library",
+    summary="复制工作区用例到功能用例库",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def import_cases_to_library(
+    req_id: int,
+    body: ImportToLibraryRequest,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    username = user_info.get("username", "")
+    from app.routers.ai.functional_cases import import_requirement_cases_to_library_handler
+
+    data = await import_requirement_cases_to_library_handler(
+        req_id, body.case_ids, project_id, username
+    )
+    return StandardResponse(
+        data=data,
+        message=f"已复制 {data['copied_count']} 条到功能用例库",
+    )
+
+
+@router.delete("/{req_id}/cases", summary="批量删除用例", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
+async def batch_delete_cases(
+    req_id: int,
+    body: BatchDeleteCasesRequest,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    if not body.case_ids:
+        raise HTTPException(status_code=400, detail="请选择要删除的用例")
+    await AiRequirementCase.filter(
+        id__in=body.case_ids,
+        requirement_id=req_id,
+        project_id=project_id,
+    ).update(is_del=True)
+    return StandardResponse(message="删除成功")
+
+
+@router.post(
+    "/{req_id}/cases/recalc-titles",
+    summary="按当前模板重算草稿用例标题",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def recalc_case_titles(
+    req_id: int,
+    body: RecalcTitlesRequest,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+
+    _, template = await _resolve_naming_template(project_id, req)
+    effective = await _effective_zentao_bindings(project_id, req)
+    q = AiRequirementCase.filter(requirement_id=req_id, project_id=project_id, is_del=False, status="draft")
+    if body.case_ids:
+        q = q.filter(id__in=body.case_ids)
+    cases = await q.order_by("id")
+    if not cases:
+        raise HTTPException(status_code=400, detail="没有可重算的草稿用例")
+
+    updated = 0
+    warnings: list[str] = []
+    for case in cases:
+        slots = case.naming_slots if isinstance(case.naming_slots, dict) else {}
+        item = {
+            "module": case.module,
+            "naming_slots": slots,
+            "main_module": slots.get("main_module") or case.module,
+            "sub_module": slots.get("sub_module", ""),
+            "feature_point": slots.get("feature_point", ""),
+            "case_description": slots.get("case_description", ""),
+            "title": case.title,
+        }
+        new_title, ws = recalc_title_from_stored_slots(item, template, effective)
+        if not new_title:
+            continue
+        case.title = new_title
+        case.naming_template_id = template.get("id")
+        case.naming_template_version = template.get("version", 1)
+        llm = {
+            "main_module": item["main_module"],
+            "sub_module": item["sub_module"],
+            "feature_point": item["feature_point"],
+            "case_description": item["case_description"],
+        }
+        section_ctx = {
+            "level1_title": llm["main_module"],
+            "level2_title": llm["sub_module"],
+            "leaf_title": llm["sub_module"],
+            "path_titles": [],
+        }
+        resolved, ws2 = resolve_all_slots(
+            template,
+            {"llm": llm, "bindings": effective, "section": section_ctx, "context": {}},
+        )
+        for k in llm:
+            if llm[k]:
+                resolved[k] = llm[k]
+        case.naming_slots = resolved
+        warnings.extend(ws)
+        warnings.extend(ws2)
+        await case.save()
+        updated += 1
+
+    return StandardResponse(
+        message=f"已重算 {updated} 条草稿用例标题",
+        data={"updated": updated, "warnings": list(dict.fromkeys(warnings))[:30]},
+    )
+
+
+@router.get("/{req_id}/cases/export", summary="导出禅道 XLSX", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+async def export_cases_xlsx(
+    req_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+
+    cases = await AiRequirementCase.filter(requirement_id=req_id, is_del=False).order_by("id")
+    if not cases:
+        raise HTTPException(status_code=400, detail="暂无用例可导出")
+
+    effective = await _effective_zentao_bindings(project_id, req)
+    missing = validate_bindings(effective)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"导出前请完善禅道配置，缺少：{', '.join(missing)}",
+        )
+    export_defaults = bindings_for_export(effective)
+    _, template = await _resolve_naming_template(project_id, req)
+    export_columns = template.get("export_columns") or []
+    columns = get_export_columns_for_template(template) or ZENTAO_DEFAULT_COLUMNS
+
+    from app.core.zentao_bindings import resolve_stage
+
+    rows = []
+    for case in cases:
+        case_dict = _case_to_dict(case)
+        steps = align_steps_expects(case_dict.get("steps") or [])
+        priority = str(case_dict.get("priority") or "2")
+        stage_resolved = (case_dict.get("stage") or "").strip() or resolve_stage(priority, effective)
+        if export_columns:
+            row = render_export_row(
+                case_dict,
+                export_defaults,
+                export_columns,
+                steps_text=format_numbered_cell(steps, "step"),
+                expects_text=format_numbered_cell(steps, "expect"),
+                stage_resolved=stage_resolved,
+            )
+        else:
+            row = case_to_export_row(case_dict, export_defaults)
+        rows.append(row)
+
+    xlsx_bytes = build_xlsx_bytes(rows, columns=columns)
+    filename = f"requirement_{req_id}_zentao_cases.xlsx"
+    return StreamingResponse(
+        iter([xlsx_bytes]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

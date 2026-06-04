@@ -1,0 +1,9 @@
+Apache License 2.0
+
+Copyright (c) 2026 BrickCore Contributors
+
+Licensed under the Apache License, Version 2.0.
+See http://www.apache.org/licenses/LICENSE-2.0
+
+EXCEPTION: The BrickCoreRunner binary distribution is not covered by this
+license. See LICENSE-RUNNER.md.

@@ -1,0 +1,67 @@
+// 页面整体布局：固定视口高度，仅内容区滚动，底栏始终完整可见
+.el-container {
+  height: 100vh;
+  overflow: hidden;
+
+  > .el-container {
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .el-aside {
+    box-shadow: 5px 0 5px -5px rgba(0, 0, 0, 0.1);
+    transition: width 0.3s ease-in-out;
+    flex-shrink: 0;
+  }
+
+  .el-header {
+    box-shadow: 0 5px 5px -5px rgba(0, 0, 0, 0.1);
+    padding: 0;
+    height: 56px;
+    flex-shrink: 0;
+    z-index: 99;
+  }
+
+  .el-footer {
+    height: 40px;
+    padding: 0;
+    flex-shrink: 0;
+    box-shadow: 0 -5px 5px -5px rgba(0, 0, 0, 0.1);
+    z-index: 99;
+  }
+
+  .el-main {
+    flex: 1;
+    min-height: 0;
+    padding: 2px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .main_box {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+}
+
+/* 清新 Pro 布局微调 */
+html.theme-pro .el-container {
+  .el-aside {
+    box-shadow: none;
+  }
+
+  .el-header {
+    height: 56px;
+    box-shadow: none;
+  }
+
+  .el-footer {
+    box-shadow: none;
+  }
+}

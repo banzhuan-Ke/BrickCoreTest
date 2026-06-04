@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BrickCore 功能演示</title>
+  <style>
+    :root {
+      --bg: #f6f8fa;
+      --card: #fff;
+      --text: #1f2328;
+      --muted: #656d76;
+      --border: #d0d7de;
+      --accent: #0969da;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    header {
+      background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+      color: #fff;
+      padding: 48px 24px 40px;
+      text-align: center;
+    }
+    header h1 { margin: 0 0 8px; font-size: 2rem; }
+    header p { margin: 0; color: #8b949e; max-width: 720px; margin-inline: auto; }
+    header a { color: #58a6ff; }
+    main { max-width: 1100px; margin: 0 auto; padding: 32px 20px 64px; }
+    .demo-block {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 28px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+    .demo-block h2 {
+      margin: 0 0 8px;
+      font-size: 1.25rem;
+      color: var(--accent);
+    }
+    .demo-block p.desc { margin: 0 0 16px; color: var(--muted); }
+    .demo-block img,
+    .demo-block video {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #000;
+    }
+    .demo-block .placeholder {
+      padding: 48px 24px;
+      text-align: center;
+      background: #f3f4f6;
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    footer {
+      text-align: center;
+      padding: 24px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .tag {
+      font-size: 12px;
+      padding: 2px 10px;
+      border-radius: 999px;
+      background: #ddf4ff;
+      color: #0969da;
+    }
+    .tag a { color: inherit; text-decoration: none; }
+    .tag a:hover { text-decoration: underline; }
+    nav.toc {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 28px;
+    }
+    nav.toc ul { margin: 0; padding-left: 20px; }
+    nav.toc a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BrickCore 功能演示</h1>
+    <p>
+      一体化 AI 自动化测试平台 · 高清录屏说明<br />
+      在线体验：<a href="http://43.142.83.156/" target="_blank" rel="noopener">43.142.83.156</a>
+      · 账号 admin / BrickCore123456
+      · <a href="docs/">使用说明（文档）</a>
+    </p>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="演示目录">
+      <strong>目录</strong>
+      <ul>
+        <li><a href="docs/">使用说明（文档中心同款目录）</a></li>
+        <li><a href="#ai-cases">AI 需求 → 功能用例</a></li>
+        <li><a href="#ui-record">UI 录制与 AI 优化</a></li>
+        <li><a href="#ui-agent">UI Agent（MCP）生成步骤</a></li>
+        <li><a href="#ui-heal">UI 定位器自愈</a></li>
+        <li><a href="#api-ai">接口用例 AI 生成</a></li>
+      </ul>
+    </nav>
+
+    <section class="demo-block" id="ai-cases">
+      <h2>AI 需求 → 功能用例</h2>
+      <p class="desc">上传 Word / PDF 需求文档，AI 按批次生成功能测试用例，支持禅道配置、批量生成与导出 XLSX。</p>
+      <div class="tag-row">
+        <span class="tag">AI 测试</span>
+        <span class="tag">需求用例生成</span>
+      </div>
+      <video controls playsinline preload="metadata" poster="demo/ai-functional-cases.png" aria-label="AI 需求生成功能用例演示">
+        <source src="demo/ai-functional-cases.mp4" type="video/mp4" />
+        您的浏览器不支持视频播放，请使用 Chrome / Edge 打开。
+      </video>
+    </section>
+
+    <section class="demo-block" id="ui-record">
+      <h2>UI 录制与 AI 优化</h2>
+      <p class="desc">Runner 弹出浏览器手动操作，停止录制后由 AI 精简冗余步骤、补全描述，并可勾选补充断言。适合固定业务流程。</p>
+      <div class="tag-row">
+        <span class="tag">UI 自动化</span>
+        <span class="tag">录制</span>
+        <span class="tag">AI 优化</span>
+        <span class="tag"><a href="demo-ui.html">演示页 →</a></span>
+      </div>
+      <p class="desc">
+        <strong>推荐录制地址：</strong>
+        <a href="http://43.142.83.156/showcase/demo-ui.html" target="_blank" rel="noopener">http://43.142.83.156/showcase/demo-ui.html</a>
+        · 账号 demo / demo123
+      </p>
+      <video controls playsinline preload="metadata" aria-label="UI 录制与 AI 优化演示">
+        <source src="demo/UI录制AI优化加速版.mp4" type="video/mp4" />
+        您的浏览器不支持视频播放，请使用 Chrome / Edge 打开。
+      </video>
+    </section>
+
+    <section class="demo-block" id="ui-agent">
+      <h2>UI Agent（MCP）生成步骤</h2>
+      <p class="desc">按自然语言描述，由 Agent 逐步读取页面无障碍树、规划并执行操作，固化为一组 Playwright 步骤。适合探索性摸底，固定流程更推荐上一节「录制」。</p>
+      <div class="tag-row">
+        <span class="tag">UI 自动化</span>
+        <span class="tag">Agent MCP</span>
+        <span class="tag">生成模式</span>
+      </div>
+      <video controls playsinline preload="metadata" aria-label="UI Agent MCP 生成用例演示">
+        <source src="demo/ui通过mcp生成用例加速版.mp4" type="video/mp4" />
+        您的浏览器不支持视频播放，请使用 Chrome / Edge 打开。
+      </video>
+    </section>
+
+    <section class="demo-block" id="ui-heal">
+      <h2>UI 定位器自愈</h2>
+      <p class="desc">用例执行时定位失败，平台结合页面快照由 AI 推荐新定位器并自动重试；报告内可写回用例。</p>
+      <div class="tag-row">
+        <span class="tag">UI 自动化</span>
+        <span class="tag">定位器自愈</span>
+        <span class="tag">AI 治愈</span>
+      </div>
+      <video controls playsinline preload="metadata" aria-label="UI 定位器自愈演示">
+        <source src="demo/ui执行ai治愈加速版.mp4" type="video/mp4" />
+        您的浏览器不支持视频播放，请使用 Chrome / Edge 打开。
+      </video>
+    </section>
+
+    <section class="demo-block" id="api-ai">
+      <h2>接口用例 AI 生成</h2>
+      <p class="desc">基于 Swagger / 接口定义，AI 生成接口自动化用例，快速补齐回归覆盖。</p>
+      <div class="tag-row">
+        <span class="tag">接口自动化</span>
+        <span class="tag">AI 生成</span>
+      </div>
+      <video controls playsinline preload="metadata" aria-label="接口用例 AI 生成演示">
+        <source src="demo/接口用例ai生成快速版.mp4" type="video/mp4" />
+        您的浏览器不支持视频播放，请使用 Chrome / Edge 打开。
+      </video>
+    </section>
+  </main>
+
+  <footer>
+    BrickCore · <a href="docs/">使用说明</a> · 录屏 <code>showcase/demo/</code> · Nginx <code>/showcase/</code>
+  </footer>
+</body>
+</html>

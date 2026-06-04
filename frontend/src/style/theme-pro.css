@@ -1,0 +1,153 @@
+/* 清新 Pro 主题 — 参考 ChatFile 知识共创原型 */
+html.theme-pro {
+    --primary-color: #4b6fff;
+    --primary-color-line: #4b6fff;
+    --primary-color-background: #f5f7ff;
+    --secondary-color: #586073;
+
+    --el-color-primary: #4b6fff;
+    --el-color-primary-light-1: #5d7dff;
+    --el-color-primary-light-3: #8aa0ff;
+    --el-color-primary-light-5: #b0c0ff;
+    --el-color-primary-light-7: #d0d9ff;
+    --el-color-primary-light-8: #e3e9ff;
+    --el-color-primary-light-9: #eaf0ff;
+    --el-color-primary-dark-1: #3556e8;
+    --el-color-primary-dark-2: #2a47c9;
+
+    --BackgroundColor: #ffffff;
+    --NoBackgroundColor: #1f2533;
+    --BgColor: #f5f7ff;
+
+    --border-radius-small: 6px;
+    --border-radius-base: 10px;
+    --border-radius-large: 14px;
+
+    --pro-bg-gradient: radial-gradient(circle at 16% 0%, rgba(96, 120, 255, .18), transparent 34%),
+        linear-gradient(135deg, #eef3ff 0%, #f8faff 36%, #f7f9ff 100%);
+    --pro-sidebar-bg: linear-gradient(180deg, #edf3ff 0%, #e7efff 100%);
+    --pro-sidebar-border: rgba(207, 217, 241, .78);
+    --pro-topbar-bg: rgba(255, 255, 255, .62);
+    --pro-panel-shadow: 0 22px 60px rgba(46, 64, 117, .13);
+    --pro-card-shadow: 0 12px 36px rgba(68, 87, 150, .06);
+    --pro-line: #e5e9f5;
+    --pro-muted: #7b8498;
+
+    --el-bg-color: #ffffff;
+    --el-bg-color-page: #f5f7ff;
+    --el-fill-color-light: #f7f9fe;
+    --el-fill-color: #f0f3fa;
+    --el-border-color: #e5e9f5;
+    --el-border-color-light: #edf1f8;
+    --el-border-color-lighter: #f0f3fa;
+    --el-text-color-primary: #1f2533;
+    --el-text-color-regular: #586073;
+    --el-text-color-secondary: #7b8498;
+
+    font-family: Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+}
+
+html.theme-pro,
+html.theme-pro body,
+html.theme-pro #app {
+    background: var(--pro-bg-gradient);
+    background-attachment: fixed;
+}
+
+/* 布局：侧边栏 / 顶栏 / 主区域 */
+html.theme-pro .el-container > .el-aside {
+    background: var(--pro-sidebar-bg) !important;
+    border-right: 1px solid var(--pro-sidebar-border);
+    box-shadow: none;
+}
+
+html.theme-pro .el-container > .el-container > .el-header {
+    background: var(--pro-topbar-bg);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border-bottom: 1px solid rgba(223, 229, 244, .84);
+    box-shadow: none;
+}
+
+html.theme-pro .el-container > .el-container > .el-main {
+    background: transparent;
+}
+
+html.theme-pro .el-container > .el-container > .el-footer {
+    background: rgba(255, 255, 255, .55);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--pro-line);
+    box-shadow: none;
+}
+
+/* 全局卡片 / 表格 / 面板 */
+html.theme-pro .el-card {
+    border: 1px solid var(--pro-line);
+    border-radius: var(--border-radius-large);
+    box-shadow: var(--pro-card-shadow);
+    background: rgba(255, 255, 255, .92);
+}
+
+html.theme-pro .el-table {
+    --el-table-border-color: var(--pro-line);
+    --el-table-header-bg-color: #f7f9fe;
+    border-radius: var(--border-radius-large);
+    overflow: hidden;
+}
+
+html.theme-pro .el-table th.el-table__cell {
+    font-weight: 700;
+    color: #3d4454;
+}
+
+html.theme-pro .el-table tr:hover > td.el-table__cell {
+    background-color: #f8faff !important;
+}
+
+html.theme-pro .el-button--primary {
+    box-shadow: 0 10px 24px rgba(75, 111, 255, .22);
+}
+
+html.theme-pro .el-button--primary.is-plain {
+    box-shadow: none;
+}
+
+html.theme-pro .el-input__wrapper,
+html.theme-pro .el-select__wrapper,
+html.theme-pro .el-textarea__inner {
+    border-radius: var(--border-radius-base);
+}
+
+html.theme-pro .el-dialog {
+    border: 1px solid var(--pro-line);
+    box-shadow: var(--pro-panel-shadow);
+    background: var(--el-bg-color);
+}
+
+html.theme-pro .help-dialog .el-dialog__body {
+    min-height: 320px;
+    max-height: min(70vh, 640px);
+    overflow: auto;
+}
+
+html.theme-pro .el-tag {
+    border-radius: 999px;
+}
+
+html.theme-pro ::-webkit-scrollbar-thumb {
+    background-color: #cad3e5 !important;
+}
+
+html.theme-pro ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--el-color-primary-light-3) !important;
+}
+
+/* 主内容区通用页面容器 */
+html.theme-pro .main_box {
+    padding: 4px 8px 8px;
+}
+
+html.theme-pro .page-card,
+html.theme-pro .catalog-list-layout {
+    border-radius: var(--border-radius-large);
+}

@@ -1,0 +1,219 @@
+.el-main {
+  margin: 0;
+  padding: 5px;
+
+  // 卡片整体样式优化
+  :deep(.el-card) {
+    border-radius: 12px;
+    border: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+    
+    &:hover {
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    }
+    
+    .el-card__body {
+      padding: 0;
+    }
+  }
+
+  // 标题区域样式优化
+  .title {
+    height: 50px;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+    border-bottom: 1px solid var(--el-border-color-lighter);
+    background: linear-gradient(90deg, var(--el-fill-color-light), transparent);
+    border-radius: 12px 12px 0 0;
+    
+    // 标题前的装饰线
+    &::before {
+      content: '';
+      width: 4px;
+      height: 18px;
+      background: var(--el-color-primary);
+      border-radius: 2px;
+      margin-right: 10px;
+    }
+    
+    :deep(.el-button) {
+      font-weight: 500;
+      
+      .el-icon {
+        margin-right: 4px;
+      }
+    }
+  }
+
+  // 主体内容区域样式优化
+  .main_box {
+    border-radius: 0;
+    height: calc(100vh - 260px);
+    overflow-y: auto;
+    padding: 15px 20px;
+    background: var(--el-bg-color);
+    
+    // 表格样式优化
+    :deep(.el-table) {
+      border-radius: 8px;
+      overflow: hidden;
+      
+      // 表头样式
+      .el-table__header-wrapper {
+        th.el-table__cell {
+          background: var(--el-fill-color-light);
+          font-weight: 600;
+          color: var(--el-text-color-primary);
+          font-size: 13px;
+          padding: 12px 0;
+        }
+      }
+      
+      // 表格行样式
+      .el-table__body-wrapper {
+        .el-table__row {
+          transition: all 0.2s ease;
+          
+          &:hover {
+            background: var(--el-color-primary-light-9);
+          }
+          
+          td.el-table__cell {
+            padding: 10px 0;
+            font-size: 13px;
+          }
+        }
+      }
+      
+      // 操作按钮组优化
+      .el-button-group {
+        .el-button {
+          padding: 6px 10px;
+          
+          .el-icon {
+            font-size: 14px;
+          }
+        }
+      }
+      
+      // 标签样式优化
+      .el-tag {
+        font-weight: 500;
+        padding: 0 10px;
+        height: 24px;
+        line-height: 22px;
+      }
+    }
+    
+    // 空状态优化 - 使用简洁的图标样式
+    :deep(.el-table__empty-block) {
+      padding: 60px 0;
+    }
+    
+    .table-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      
+      // 图标容器
+      .empty-icon {
+        width: 80px;
+        height: 80px;
+        background: var(--el-fill-color-light);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 16px;
+        
+        // 使用 Element Plus 图标
+        .el-icon {
+          font-size: 40px;
+          color: var(--el-text-color-secondary);
+        }
+      }
+      
+      div {
+        color: var(--el-text-color-secondary);
+        font-size: 14px;
+        font-weight: 400;
+      }
+    }
+  }
+
+  // 按钮区域样式优化
+  .bottom_box {
+    height: 55px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    padding: 0 20px;
+    border-top: 1px solid var(--el-border-color-lighter);
+    background: var(--el-fill-color-light);
+    border-radius: 0 0 12px 12px;
+    
+    // 分页样式优化
+    :deep(.el-pagination) {
+      .el-pagination__total {
+        font-size: 13px;
+        color: var(--el-text-color-regular);
+      }
+      
+      .el-pagination__sizes {
+        .el-select .el-input {
+          font-size: 13px;
+        }
+      }
+      
+      .el-pager li {
+        font-size: 13px;
+        font-weight: 500;
+        
+        &.is-active {
+          font-weight: 600;
+        }
+      }
+    }
+  }
+}
+
+// 暗黑模式适配
+.dark {
+  .el-main {
+    :deep(.el-card) {
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.3);
+      
+      &:hover {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      }
+    }
+    
+    .title {
+      background: linear-gradient(90deg, var(--el-fill-color-dark), transparent);
+      border-bottom-color: var(--el-border-color-darker);
+    }
+    
+    .main_box {
+      background: var(--el-bg-color-page);
+      
+      :deep(.el-table) {
+        .el-table__header-wrapper {
+          th.el-table__cell {
+            background: var(--el-fill-color-dark);
+          }
+        }
+      }
+    }
+    
+    .bottom_box {
+      background: var(--el-fill-color-dark);
+      border-top-color: var(--el-border-color-darker);
+    }
+  }
+}

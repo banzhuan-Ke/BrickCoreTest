@@ -1,0 +1,176 @@
+@use '@/style/login-page-shared.scss';
+
+.mian {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+
+  .login-theme-bar {
+    position: absolute;
+    top: 24px;
+    right: 24px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    backdrop-filter: blur(12px);
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+  }
+
+  .dark-toggle {
+    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    transition: all 0.3s ease;
+
+    &:hover {
+      transform: scale(1.1);
+      background: rgba(255, 255, 255, 0.2);
+    }
+  }
+
+  .login_shell {
+    background: rgba(255, 255, 255, 0.97);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    transition: box-shadow 0.3s ease;
+
+    &:hover {
+      box-shadow:
+        0 32px 80px rgba(15, 23, 42, 0.2),
+        0 0 0 1px rgba(255, 255, 255, 0.65);
+    }
+  }
+
+  .login_box {
+    padding: 40px 36px 36px;
+    background: transparent;
+
+    .login-form {
+      .el-form-item {
+        margin-bottom: 18px;
+
+        &:last-child {
+          margin-bottom: 0;
+        }
+      }
+
+      .el-input {
+        --el-input-border-radius: 10px;
+        
+        :deep(.el-input__wrapper) {
+          padding: 4px 15px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+          transition: all 0.3s ease;
+
+          &:hover, &:focus-within {
+            box-shadow: 0 4px 12px rgba(16, 125, 236, 0.15);
+            transform: translateY(-1px);
+          }
+        }
+
+        :deep(.el-input__inner) {
+          height: 42px;
+        }
+      }
+
+      .remember-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 15px 0;
+      }
+
+      .action-buttons {
+        display: flex;
+        gap: 12px;
+        margin-top: 20px;
+
+        .el-button {
+          flex: 1;
+          height: 44px;
+          font-size: 15px;
+          font-weight: 500;
+          border-radius: 10px;
+          transition: all 0.3s ease;
+
+          &:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(16, 125, 236, 0.3);
+          }
+
+          &:active {
+            transform: translateY(0);
+          }
+        }
+      }
+
+      .register-link {
+        text-align: center;
+        margin-top: 20px;
+        padding-top: 15px;
+        border-top: 1px solid var(--el-border-color-lighter);
+      }
+    }
+  }
+
+  .login-footer {
+    position: absolute;
+    bottom: 20px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 13px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+html.theme-pro .mian.theme-pro-page {
+  .login-theme-bar {
+    background: rgba(255, 255, 255, .75);
+    border-color: #e5e9f5;
+  }
+
+  .login_shell {
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(229, 233, 245, 0.85);
+  }
+
+  .login-footer {
+    color: rgba(88, 96, 115, .85);
+    text-shadow: none;
+  }
+}
+
+// 暗黑模式适配
+.dark {
+  .mian {
+    .login_shell {
+      background: rgba(30, 30, 35, 0.96);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    }
+
+    .dark-toggle {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+  }
+}

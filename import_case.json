@@ -1,0 +1,1488 @@
+{
+    "name": "文档类知识库的业务场景测试用例_副本_副本",
+    "level": "P1",
+    "project_id": 5,
+    "steps": [
+        {
+            "id": "step_1775977557323_2763",
+            "desc": "打开浏览器",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "open_browser",
+            "params": {"browser_type": "chromium"},
+            "keyword": "打开浏览器",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1024",
+            "desc": "访问页面url",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "open_url",
+            "params": {"url": "https://kbs.apps.digiwincloud.com.cn", "timeout": 30000, "wait_until": "load"},
+            "keyword": "访问页面url",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3486",
+            "desc": "输入账号",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "${{username}}", "locator": "input[placeholder='请输入用户帐号或手机号或E-mail']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1883",
+            "desc": "输入密码",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "${{password}}", "locator": "input[placeholder='密码']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8073",
+            "desc": "点击登录按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "button[type='submit']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2566",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 6000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9649",
+            "desc": "断言右上角的租户切换元素可见",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "div[class='tenant-info dw-f-text-link ant-dropdown-trigger'] span[class='show-name']"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_5219",
+            "desc": "点击控制台",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "div[class='dw-f-text-link'] span[class='show-name']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_5024",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6367",
+            "desc": "开始新增文档类知识库，点击新增",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": ".add-btn.ant-btn.ant-btn-primary.ng-star-inserted", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9468",
+            "desc": "输入编号",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "auto_web_doc_${{random_int}}", "locator": "input[placeholder='请输入编号']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3921",
+            "desc": "输入名称",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "web自动化测试文档库_${{random_int}}", "locator": "input[placeholder='请输入名称']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9931",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 500},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9731",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2019",
+            "desc": "点击下一步",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "button[class='ant-btn ng-star-inserted'] span[class='ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_5010",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9971",
+            "desc": "点击确定",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//span[contains(text(),'确定')]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2510",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3284",
+            "desc": "断言是否新增文档知识库成功",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "//div[@id='title']"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3820",
+            "desc": "点击新增按钮创建一个实体文档目录",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": ".ant-btn.ant-btn-primary.ant-btn-icon-only.ng-star-inserted", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3099",
+            "desc": "输入编号",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "web_directory_${{random_int}}", "locator": "input[placeholder='请输入编号']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4364",
+            "desc": "输入名称",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "web实体文档目录", "locator": "input[placeholder='请输入名称']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1150",
+            "desc": "点击下一步按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "button[class='ant-btn ng-star-inserted'] span[class='ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7632",
+            "desc": "点击确定按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "button[class='ant-btn ant-btn-primary ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2621",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3840",
+            "desc": "通过列表是否有目录，断言",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "//div[contains(text(),'web实体文档目录')]"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9543",
+            "desc": "点击新增按钮创建一个智能文档目录",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": ".ant-btn.ant-btn-primary.ant-btn-icon-only.ng-star-inserted", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9151",
+            "desc": "输入编号",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "smart_directory_${{random_int}}", "locator": "input[placeholder='请输入编号']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3770",
+            "desc": "输入名称",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "web智能文档目录", "locator": "input[placeholder='请输入名称']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_5878",
+            "desc": "点击下一步按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "button[class='ant-btn ng-star-inserted'] span[class='ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6635",
+            "desc": "点击确定按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "button[class='ant-btn ant-btn-primary ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4346",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7970",
+            "desc": "通过列表是否有目录，断言",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "//div[contains(text(),'web智能文档目录')]"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6132",
+            "desc": "开始标签相关操作，点击左侧的标签信息模块",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "span[title='标签信息']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6420",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 500},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4772",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3299",
+            "desc": "点击标签类别",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "span[title='标签类别']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6165",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7160",
+            "desc": "点击新增按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "span[class='ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9783",
+            "desc": "输入编号",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "webTagClass${{random_int}}", "locator": "[formcontrolname=\"tag_classification_no\"]", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2713",
+            "desc": "输入名称",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "${{tag_class_name}}", "locator": "[formcontrolname=\"tag_classification_name\"]", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9175",
+            "desc": "点击关联知识库",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//div/div/nz-select/nz-select-top-control", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4540",
+            "desc": "关联文档类知识库",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//nz-option-item[starts-with(@title, \"web自动化测试文档库_\")][1]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3432",
+            "desc": "通过点击编号，关闭下拉框",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "[formcontrolname=\"tag_classification_no\"]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9628",
+            "desc": "输入描述信息",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "这个是描述信息。", "locator": "[formcontrolname=\"tag_description\"]", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6865",
+            "desc": "点击确定按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//span[contains(text(),'确定')]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9825",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 1500},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_5841",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8480",
+            "desc": "断言，通过列表是否有刚刚新增的标签类别",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "//div[contains(text(), \"${{tag_class_name}}\")]"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3187",
+            "desc": "开始新增标签，点击左边的标签模块",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "span[title='标签']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7753",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9275",
+            "desc": "点击新增按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "span[class='ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2484",
+            "desc": "输入名称",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "web标签1", "locator": "input[placeholder='请输入']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2905",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 1000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2471",
+            "desc": "点击下拉框",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "get_by_text=[object Text] 请选择", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9290",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 2000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4586",
+            "desc": "勾选标签类别",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "nz-tree-node-title[title='${{tag_class_name}}'] span[class='ant-tree-title ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6113",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 1000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8275",
+            "desc": "点击名称来关闭下拉框",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "input[placeholder='请输入']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3246",
+            "desc": "点击确定按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//span[contains(text(),'确定')]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6260",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 1000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8860",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1566",
+            "desc": "断言，通过列表中是否有新增的标签",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "div[title='web标签1']"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8620",
+            "desc": "点击新增按钮，新增第二个标签",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "span[class='ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4558",
+            "desc": "输入名称",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "web标签2", "locator": "input[placeholder='请输入']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8913",
+            "desc": "点击下拉框",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "get_by_text=[object Text] 请选择", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3708",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 1000},
+            "keyword": "强制登录等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2096",
+            "desc": "勾选标签类别",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "nz-tree-node-title[title='${{tag_class_name}}'] span[class='ant-tree-title ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8980",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 1000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_5571",
+            "desc": "点击名称来关闭下拉框",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "input[placeholder='请输入']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1253",
+            "desc": "点击确定按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//span[contains(text(),'确定')]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8394",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 2000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3618",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2611",
+            "desc": "断言，通过列表中是否有新增的标签",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "div[title='web标签2']"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2888",
+            "desc": "去实体文档中新增文档，并关联标签，点击场景知识库",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "span[title='场景知识库']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1414",
+            "desc": "进入web实体文档目录",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//span[contains(text(),'web实体文档目录')]"},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8862",
+            "desc": "点击新增按钮，关联标签1",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": ".uploadclass.ant-btn.ant-dropdown-trigger.ant-btn-primary.ng-star-inserted", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4722",
+            "desc": "点击上传本地文件按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "img[src='/assets/images/basic/file/upload-file.svg']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6973",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9357",
+            "desc": "点击标签",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//nz-form-item[3]/nz-form-control/div/div/nz-select/nz-select-top-control", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3474",
+            "desc": "选择标签1",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "nz-option-item[title='web标签1'] div:nth-child(1)", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6751",
+            "desc": "点击弹框，关闭下拉框",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "div[class='ant-modal-title'] div:nth-child(1)", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2832",
+            "desc": "input文件上传-Web自动化pdf.pdf",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "upload_file",
+            "params": {"locator": "//input[@type='file']", "timeout": 20000, "file_path": "${{files_path}}\\Web自动化pdf.pdf"},
+            "keyword": "input文件上传",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6561",
+            "desc": "input文件上传-Web自动化xmind.xmind",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "upload_file",
+            "params": {"locator": "//input[@type='file']", "timeout": 20000, "file_path": "${{files_path}}\\Web自动化xmind.xmind"},
+            "keyword": "input文件上传",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1400",
+            "desc": "input文件上传-Web自动化docx.docx",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "upload_file",
+            "params": {"locator": "//input[@type='file']", "timeout": 20000, "file_path": "${{files_path}}/Web自动化docx.docx"},
+            "keyword": "input文件上传",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_5939",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 5000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1756",
+            "desc": "等待网络请求完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_network",
+            "params": {},
+            "keyword": "等待网络请求完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2970",
+            "desc": "点击确定按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//span[contains(text(),'确定')]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1450",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 3000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3276",
+            "desc": "等待网络请求完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_network",
+            "params": {},
+            "keyword": "等待网络请求完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_5129",
+            "desc": "断言pdf文件是否上传成功",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "div[title='Web自动化pdf.pdf'] div[class='ng-star-inserted'] div"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3332",
+            "desc": "断言xmind文件是否上传成功",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "div[title='Web自动化xmind.xmind'] div[class='ng-star-inserted'] div"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9363",
+            "desc": "点击新增按钮，不关联标签",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": ".uploadclass.ant-btn.ant-dropdown-trigger.ant-btn-primary.ng-star-inserted", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6990",
+            "desc": "点击上传本地文件按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "img[src='/assets/images/basic/file/upload-file.svg']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9578",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 1500},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4837",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3172",
+            "desc": "input文件上传-auto_web_excel模板.xlsx",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "upload_file",
+            "params": {"locator": "//input[@type='file']", "timeout": 20000, "file_path": "${{files_path}}/auto_web_excel模板.xlsx"},
+            "keyword": "input文件上传",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8758",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 5000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3941",
+            "desc": "等待网络请求完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_network",
+            "params": {},
+            "keyword": "等待网络请求完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1790",
+            "desc": "点击确定按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//span[contains(text(),'确定')]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2254",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 5000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3359",
+            "desc": "等待网络请求完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_network",
+            "params": {},
+            "keyword": "等待网络请求完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9868",
+            "desc": "断言xlsx文件是否上传成功",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "div[title='auto_web_excel模板.xlsx'] div[class='ng-star-inserted'] div"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1435",
+            "desc": "预览支持预览的文件，Web自动化docx.docx",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//div[contains(text(),'Web自动化docx.docx')]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8539",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 2000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2924",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7733",
+            "desc": "通过文档标签是否正确绑定",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "[title=\"web标签1\"]"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1439",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 5000},
+            "keyword": "强制登录等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7895",
+            "desc": "通过文件内容进行断言，是否正常预览",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": "1", "locator": "#left iframe||iframe||text=购车安全评估"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6152",
+            "desc": "点击左上角的控制台，去预览不支持预览的文件",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "div[class='ant-tabs-tab ng-star-inserted'] span[class='nav-text']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6719",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7245",
+            "desc": "预览不支持预览的文件，Web自动化xmind.xmind",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//div[contains(text(),'Web自动化xmind.xmind')]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2619",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 2000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1247",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for导入",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1376",
+            "desc": "通过文档标签是否正确绑定",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "[title=\"web标签1\"]"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7528",
+            "desc": "通过缺省图断言，不支持预览",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_enabled",
+            "params": {"index": 1, "locator": "img[src='./assets/images/data-detail/no-preview.png']"},
+            "keyword": "断言元素可用",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2153",
+            "desc": "点击控制台",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "div[class='dw-f-text-link'] span[class='show-name']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9952",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": "[]"
+        },
+        {
+            "id": "step_1775977557323_1859",
+            "desc": "进入智能文档目录",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//span[contains(text(),'web智能文档目录')]"},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3556",
+            "desc": "点击新增按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": ".uploadclass.ant-btn.ant-dropdown-trigger.ant-btn-primary.ng-star-inserted", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3066",
+            "desc": "点击新增智能文档按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//li[@class='electra-menu ant-dropdown-menu-item ng-star-inserted']//span[contains(text(),'智能文档')]"},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9835",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 1500},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8070",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_5664",
+            "desc": "点击控制台",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "div[class='dw-f-text-link'] span[class='show-name']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "有效的等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3713",
+            "desc": "进入智能文档目录",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//span[contains(text(),'web智能文档目录')]"},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3713_duplicate",
+            "desc": "点击新增按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": ".uploadclass.ant-btn.ant-dropdown-trigger.ant-btn-primary.ng-star-inserted", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1617",
+            "desc": "点击新增智能表格按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "(//span[contains(text(),'智能表格')])"},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1261",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 1500},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4735",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_6764",
+            "desc": "点击控制台",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "div[class='dw-f-text-link'] span[class='show-name']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1552",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8627",
+            "desc": "对智能文档进行重命名操作，鼠标悬浮文档",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "hover",
+            "params": {"locator": "(//div[contains(text(),'未命名的文档')])[2]", "timeout": 20000},
+            "keyword": "鼠标悬停到元素上方",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4356",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775996435957_faq1x5q",
+            "desc": "点击智能文档的... 按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"force": true, "index": 1, "locator": "(//img[@draggable='false'])[24]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3327",
+            "desc": "点击重命名按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "div[class='cdk-overlay-container'] li:nth-child(2)", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8819",
+            "desc": "修改智能文档的名称",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "web自动化智能文档", "locator": "input[placeholder='请输入名称']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4514",
+            "desc": "点击确定按钮",
+            "config": {"retry": false, "timeout": 30030},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "button[class='ant-btn ant-btn-primary ng-star-inserted'] span[class='ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2383",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4876",
+            "desc": "对智能表格进行重命名操作",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "hover",
+            "params": {"locator": "(//div[contains(text(),'未命名的文档')])[1]", "timeout": 20000},
+            "keyword": "鼠标悬停到元素上方",
+            "children": []
+        },
+        {
+            "id": "step_1775996511439_dsssfl7",
+            "desc": "点击智能表格的... 按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"force": true, "index": 1, "locator": "(//img[@draggable='false'])[24]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2432",
+            "desc": "点击重命名按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "div[class='cdk-overlay-container'] li:nth-child(2)", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7534",
+            "desc": "修改智能文档的名称",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "web自动化智能表格", "locator": "input[placeholder='请输入名称']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1398",
+            "desc": "点击确定按钮",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "button[class='ant-btn ant-btn-primary ng-star-inserted'] span[class='ng-star-inserted']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7762",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8618",
+            "desc": "去搜索引擎进行查询，点击左上角icon返回首页",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": ".titleIcon", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_2165",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_147",
+            "desc": "条件分支",
+            "method": "condition_branch",
+            "params": {},
+            "keyword": "条件分支",
+            "branches": [
+                {
+                    "id": "branch_1775544603250",
+                    "name": "如果当前为AI搜索，则点击搜索引擎按钮，切为普通搜索",
+                    "steps": [
+                        {
+                            "desc": "点击元素",
+                            "method": "click_ele",
+                            "params": {
+                                "count": 1,
+                                "button": "left",
+                                "locator": "div[class='change-box-search ng-star-inserted'] span[class='show-name']",
+                                "timeout": 20000
+                            },
+                            "keyword": "点击元素"
+                        }
+                    ],
+                    "condition": {
+                        "type": "element_visible",
+                        "locator": "div[class='change-box-search ng-star-inserted'] span[class='show-name']",
+                        "operator": "is_true"
+                    }
+                },
+                {
+                    "id": "else_branch_default",
+                    "name": "默认分支",
+                    "steps": [],
+                    "condition": {
+                        "type": "else"
+                    }
+                }
+            ],
+            "is_container": true
+        },
+        {
+            "id": "step_1775977557323_2563",
+            "desc": "搜索输入框输入内容：web自动化",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "fill_value",
+            "params": {"value": "web自动化", "locator": "input[placeholder='请输入关键词']", "timeout": 20000},
+            "keyword": "元素输入",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3661",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_4689",
+            "desc": "点击搜索图标",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "img[src='./../../../assets/images/basic/search-home.png']", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_7489",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 3000},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_3967",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_5573",
+            "desc": "点击条件【按时间】",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "div[title='按时间'] span", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9654",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 500},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_8717",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9380",
+            "desc": "选择一天内",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "click_ele",
+            "params": {"count": 1, "button": "left", "locator": "//li[contains(text(),'一天内')]", "timeout": 20000},
+            "keyword": "点击元素",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1657",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 1500},
+            "keyword": "强制等待时间",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_9102",
+            "desc": "等待页面加载完成",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_load",
+            "params": {},
+            "keyword": "等待页面加载完成",
+            "children": []
+        },
+        {
+            "id": "step_1775977557323_1087",
+            "desc": "断言元素可见",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "kw_assert_visible",
+            "params": {"index": 1, "locator": "(//span[@class='item-title'][contains(text(),'化docx.docx')])[1]"},
+            "keyword": "断言元素可见",
+            "children": []
+        },
+        {
+            "id": "step_1775977557324_6207",
+            "desc": "强制等待时间",
+            "config": {"retry": false, "timeout": 30000},
+            "method": "wait_for_time",
+            "params": {"timeout": 5000},
+            "keyword": "强制等待时间",
+            "children": []
+        }
+    ],
+    "username": "banzhuanke",
+    "is_del": false
+}

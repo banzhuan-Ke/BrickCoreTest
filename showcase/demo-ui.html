@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BrickCore UI 录制演示站</title>
+  <style>
+    :root {
+      --primary: #409eff;
+      --primary-dark: #337ecc;
+      --bg: #f0f2f5;
+      --sidebar: #001529;
+      --text: #303133;
+      --muted: #909399;
+      --border: #dcdfe6;
+      --success: #67c23a;
+      --danger: #f56c6c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+    }
+    .hidden { display: none !important; }
+
+    /* 登录页 */
+    #page-login {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    .login-card {
+      width: 400px;
+      background: #fff;
+      border-radius: 8px;
+      padding: 40px 36px 32px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+    }
+    .login-card h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      text-align: center;
+    }
+    .login-card .subtitle {
+      text-align: center;
+      color: var(--muted);
+      margin-bottom: 28px;
+      font-size: 13px;
+    }
+    .form-item { margin-bottom: 20px; }
+    .form-item label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+    .form-item input {
+      width: 100%;
+      height: 40px;
+      padding: 0 12px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .form-item input:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 40px;
+      padding: 0 20px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-primary {
+      width: 100%;
+      background: var(--primary);
+      color: #fff;
+    }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-default {
+      background: #fff;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-default:hover { border-color: var(--primary); color: var(--primary); }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .login-tip {
+      margin-top: 16px;
+      padding: 10px 12px;
+      background: #f4f4f5;
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    #login-error {
+      color: var(--danger);
+      font-size: 13px;
+      margin-bottom: 12px;
+      min-height: 18px;
+    }
+
+    /* 后台布局 */
+    #page-app { min-height: 100vh; display: flex; }
+    .sidebar {
+      width: 220px;
+      background: var(--sidebar);
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .sidebar-logo {
+      height: 56px;
+      line-height: 56px;
+      text-align: center;
+      font-size: 16px;
+      font-weight: 600;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .menu-item {
+      padding: 14px 20px;
+      cursor: pointer;
+      color: rgba(255,255,255,0.75);
+      border-left: 3px solid transparent;
+    }
+    .menu-item:hover, .menu-item.active {
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      border-left-color: var(--primary);
+    }
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .topbar {
+      height: 56px;
+      background: #fff;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+    }
+    .topbar-user { color: var(--muted); }
+    .content { padding: 20px 24px; flex: 1; }
+    .panel {
+      background: #fff;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      padding: 20px;
+    }
+    .panel-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .search-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 16px;
+      align-items: flex-end;
+    }
+    .search-bar .form-item { margin: 0; }
+    .search-bar input, .search-bar select {
+      height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      min-width: 160px;
+    }
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 12px 10px;
+      text-align: left;
+      border-bottom: 1px solid #ebeef5;
+    }
+    th { background: #fafafa; font-weight: 600; color: #606266; }
+    tr:hover td { background: #f5f7fa; }
+    .tag-status {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .tag-ok { background: #f0f9eb; color: var(--success); }
+    .tag-off { background: #fef0f0; color: var(--danger); }
+    .toast {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #fff;
+      border: 1px solid var(--border);
+      padding: 12px 24px;
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+      z-index: 1000;
+    }
+
+    /* 弹窗 */
+    .modal-mask {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+    }
+    .modal {
+      width: 480px;
+      background: #fff;
+      border-radius: 8px;
+      padding: 24px;
+    }
+    .modal h3 { margin: 0 0 20px; font-size: 18px; }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 24px;
+    }
+  </style>
+</head>
+<body>
+  <!-- 登录页：固定 id 便于 UI 录制 -->
+  <div id="page-login">
+    <div class="login-card">
+      <h1 id="login-title">BrickCore 演示系统</h1>
+      <p class="subtitle">UI 自动化录制专用 · 元素 ID 稳定</p>
+      <div id="login-error" role="alert"></div>
+      <div class="form-item">
+        <label for="input-username">用户名</label>
+        <input id="input-username" type="text" placeholder="请输入用户名" autocomplete="username" />
+      </div>
+      <div class="form-item">
+        <label for="input-password">密码</label>
+        <input id="input-password" type="password" placeholder="请输入密码" autocomplete="current-password" />
+      </div>
+      <button id="btn-login" type="button" class="btn btn-primary">登 录</button>
+      <div class="login-tip">
+        演示账号：<strong>demo</strong> / <strong>demo123</strong><br />
+        推荐录制：登录 → 用户管理 → 查询 → 新增用户 → 保存
+      </div>
+    </div>
+  </div>
+
+  <!-- 后台页 -->
+  <div id="page-app" class="hidden">
+    <aside class="sidebar">
+      <div class="sidebar-logo" id="app-logo">演示管理系统</div>
+      <nav>
+        <div class="menu-item active" id="menu-users" data-page="users">用户管理</div>
+        <div class="menu-item" id="menu-orders" data-page="orders">订单管理</div>
+        <div class="menu-item" id="menu-settings" data-page="settings">系统设置</div>
+      </nav>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <span id="breadcrumb">首页 / 用户管理</span>
+        <span class="topbar-user">欢迎，<span id="display-username">demo</span>
+          <button id="btn-logout" type="button" class="btn btn-default" style="height:32px;margin-left:12px;">退出</button>
+        </span>
+      </header>
+      <div class="content">
+        <div class="panel" id="panel-users">
+          <div class="panel-title">用户列表</div>
+          <div class="search-bar">
+            <div class="form-item">
+              <label for="search-keyword">用户名</label>
+              <input id="search-keyword" type="text" placeholder="模糊搜索" />
+            </div>
+            <div class="form-item">
+              <label for="search-status">状态</label>
+              <select id="search-status">
+                <option value="">全部</option>
+                <option value="启用">启用</option>
+                <option value="停用">停用</option>
+              </select>
+            </div>
+            <button id="btn-search" type="button" class="btn btn-primary" style="height:36px;">查 询</button>
+            <button id="btn-reset" type="button" class="btn btn-default" style="height:36px;">重 置</button>
+          </div>
+          <div class="toolbar">
+            <span id="result-count">共 4 条</span>
+            <button id="btn-add-user" type="button" class="btn btn-success" style="height:36px;">+ 新增用户</button>
+          </div>
+          <table id="table-users">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>用户名</th>
+                <th>角色</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="table-body">
+              <tr data-id="1">
+                <td>1</td><td>zhangsan</td><td>测试工程师</td>
+                <td><span class="tag-status tag-ok">启用</span></td>
+                <td><button type="button" class="btn btn-default btn-edit" style="height:28px;padding:0 10px;">编辑</button></td>
+              </tr>
+              <tr data-id="2">
+                <td>2</td><td>lisi</td><td>开发工程师</td>
+                <td><span class="tag-status tag-ok">启用</span></td>
+                <td><button type="button" class="btn btn-default btn-edit" style="height:28px;padding:0 10px;">编辑</button></td>
+              </tr>
+              <tr data-id="3">
+                <td>3</td><td>wangwu</td><td>产品经理</td>
+                <td><span class="tag-status tag-off">停用</span></td>
+                <td><button type="button" class="btn btn-default btn-edit" style="height:28px;padding:0 10px;">编辑</button></td>
+              </tr>
+              <tr data-id="4">
+                <td>4</td><td>demo</td><td>管理员</td>
+                <td><span class="tag-status tag-ok">启用</span></td>
+                <td><button type="button" class="btn btn-default btn-edit" style="height:28px;padding:0 10px;">编辑</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新增用户弹窗 -->
+  <div id="modal-add" class="modal-mask hidden" role="dialog" aria-labelledby="modal-title">
+    <div class="modal">
+      <h3 id="modal-title">新增用户</h3>
+      <div class="form-item">
+        <label for="modal-username">用户名</label>
+        <input id="modal-username" type="text" placeholder="新用户名" />
+      </div>
+      <div class="form-item">
+        <label for="modal-role">角色</label>
+        <select id="modal-role" style="width:100%;height:36px;border:1px solid var(--border);border-radius:4px;">
+          <option value="测试工程师">测试工程师</option>
+          <option value="开发工程师">开发工程师</option>
+          <option value="产品经理">产品经理</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-modal-cancel" type="button" class="btn btn-default">取 消</button>
+        <button id="btn-modal-save" type="button" class="btn btn-primary">保 存</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const USERS = [
+      { id: 1, name: 'zhangsan', role: '测试工程师', status: '启用' },
+      { id: 2, name: 'lisi', role: '开发工程师', status: '启用' },
+      { id: 3, name: 'wangwu', role: '产品经理', status: '停用' },
+      { id: 4, name: 'demo', role: '管理员', status: '启用' },
+    ];
+
+    function showToast(msg) {
+      const el = document.createElement('div');
+      el.className = 'toast';
+      el.id = 'toast-message';
+      el.textContent = msg;
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 2500);
+    }
+
+    function renderTable(list) {
+      const body = document.getElementById('table-body');
+      body.innerHTML = list.map(u => `
+        <tr data-id="${u.id}">
+          <td>${u.id}</td><td>${u.name}</td><td>${u.role}</td>
+          <td><span class="tag-status ${u.status === '启用' ? 'tag-ok' : 'tag-off'}">${u.status}</span></td>
+          <td><button type="button" class="btn btn-default btn-edit" style="height:28px;padding:0 10px;">编辑</button></td>
+        </tr>
+      `).join('');
+      document.getElementById('result-count').textContent = `共 ${list.length} 条`;
+    }
+
+    document.getElementById('btn-login').addEventListener('click', () => {
+      const user = document.getElementById('input-username').value.trim();
+      const pass = document.getElementById('input-password').value;
+      const err = document.getElementById('login-error');
+      if (user === 'demo' && pass === 'demo123') {
+        err.textContent = '';
+        document.getElementById('page-login').classList.add('hidden');
+        document.getElementById('page-app').classList.remove('hidden');
+        document.getElementById('display-username').textContent = user;
+        showToast('登录成功');
+      } else {
+        err.textContent = '用户名或密码错误（演示账号 demo / demo123）';
+      }
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', () => {
+      document.getElementById('page-app').classList.add('hidden');
+      document.getElementById('page-login').classList.remove('hidden');
+    });
+
+    document.getElementById('btn-search').addEventListener('click', () => {
+      const kw = document.getElementById('search-keyword').value.trim().toLowerCase();
+      const st = document.getElementById('search-status').value;
+      let list = USERS.filter(u => !kw || u.name.includes(kw));
+      if (st) list = list.filter(u => u.status === st);
+      renderTable(list);
+      showToast('查询完成');
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      document.getElementById('search-keyword').value = '';
+      document.getElementById('search-status').value = '';
+      renderTable(USERS);
+    });
+
+    document.getElementById('btn-add-user').addEventListener('click', () => {
+      document.getElementById('modal-add').classList.remove('hidden');
+      document.getElementById('modal-username').value = '';
+    });
+
+    document.getElementById('btn-modal-cancel').addEventListener('click', () => {
+      document.getElementById('modal-add').classList.add('hidden');
+    });
+
+    document.getElementById('btn-modal-save').addEventListener('click', () => {
+      const name = document.getElementById('modal-username').value.trim();
+      const role = document.getElementById('modal-role').value;
+      if (!name) { showToast('请输入用户名'); return; }
+      const id = USERS.length + 1;
+      USERS.push({ id, name, role, status: '启用' });
+      renderTable(USERS);
+      document.getElementById('modal-add').classList.add('hidden');
+      showToast('保存成功');
+    });
+
+    document.querySelectorAll('.menu-item').forEach(el => {
+      el.addEventListener('click', () => {
+        document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('active'));
+        el.classList.add('active');
+        document.getElementById('breadcrumb').textContent = '首页 / ' + el.textContent;
+        if (el.dataset.page !== 'users') showToast('演示页仅实现用户管理');
+      });
+    });
+  </script>
+</body>
+</html>

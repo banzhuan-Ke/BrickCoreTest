@@ -1,0 +1,225 @@
+html,
+body,
+#app {
+    padding: 0;
+    margin: 0;
+    height: 100vh;
+    font-size: 13px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/*-------------------------------主题颜色修改----------------------------*/
+:root {
+    --el-tabs-header-height: 32px;
+    /* 主题色 - 现代蓝色 */
+    --primary-color: #107dec;
+    --secondary-color: #34495e;
+    --primary-color-line: #107dec;
+    --primary-color-background: #f8f8f8;
+    
+    /*修改elementPlus主题色*/
+    --el-color-primary: #107dec;
+    --el-color-primary-light-1: #409eff;
+    --el-color-primary-light-3: #79bbff;
+    --el-color-primary-light-5: #a0cfff;
+    --el-color-primary-light-7: #c6e2ff;
+    --el-color-primary-light-8: #d9ecff;
+    --el-color-primary-light-9: #ecf5ff;
+    --el-color-primary-dark-2: #337ecc;
+    --el-color-primary-dark-1: #1a6fc7;
+    
+    /* 布局颜色 */
+    --BackgroundColor: #ffffff;
+    --NoBackgroundColor: #131313;
+    --BgColor: #f1f1f1;
+    
+    /* 圆角统一 */
+    --border-radius-small: 4px;
+    --border-radius-base: 8px;
+    --border-radius-large: 12px;
+    
+    /* 间距统一 */
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 12px;
+    --spacing-lg: 16px;
+    --spacing-xl: 24px;
+}
+
+/* 暗黑模式 */
+html.dark {
+    --BackgroundColor: #131313;
+    --NoBackgroundColor: #ffffff;
+    --BgColor: #2a2a2a;
+    
+    --el-color-primary-light-9: #18222c;
+    --el-color-primary-light-8: #1d2f3f;
+    --el-color-primary-dark-2: #409eff;
+    --el-color-primary-dark-1: #337ecc;
+}
+
+/*---------------------------修改全局的滑块样式-----------------------*/
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: var(--el-border-color) !important;
+    border-radius: 3px;
+    transition: all 0.3s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background-color: var(--el-color-primary-light-3) !important;
+}
+
+/*----------------虚拟进度条样式--------------------------*/
+#nprogress .bar {
+    background: var(--primary-color-line) !important;
+    height: 3px;
+}
+
+/*----------------全局过渡动画---------------------------*/
+.fade-enter-active,
+.fade-leave-active {
+    transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+    opacity: 0;
+}
+
+.slide-enter-active,
+.slide-leave-active {
+    transition: transform 0.3s ease;
+}
+
+.slide-enter-from {
+    transform: translateX(-20px);
+}
+
+.slide-leave-to {
+    transform: translateX(20px);
+}
+
+/*----------------------------------元素拖拽样式---------------------------------------*/
+/* 拖拽中的元素样式 */
+.dragging {
+    border: 2px dashed var(--el-color-primary);
+    transform: scale(1.05);
+    transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+/* 选中元素的边框颜色 */
+.chosen {
+    border: 2px solid var(--el-color-primary);
+    transition: border-color 0.2s ease;
+}
+
+/* 幽灵元素的虚线边框 */
+.ghost {
+    border: 2px dashed var(--el-color-primary);
+    opacity: 0.5;
+    transition: opacity 0.2s ease, border-color 0.2s ease;
+}
+
+/* 去除卡片阴影 */
+.el-card.is-always-shadow {
+    box-shadow: none;
+}
+
+/* 全局按钮样式优化 */
+.el-button {
+    border-radius: var(--border-radius-base);
+    transition: all 0.2s ease;
+    
+    &:active {
+        transform: scale(0.98);
+    }
+}
+
+/* 全局对话框样式优化 */
+.el-dialog {
+    border-radius: var(--border-radius-large);
+    overflow: hidden;
+    
+    .el-dialog__header {
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--el-border-color-lighter);
+        margin-right: 0;
+    }
+    
+    .el-dialog__body {
+        padding: 20px;
+    }
+    
+    .el-dialog__footer {
+        padding: 12px 20px;
+        border-top: 1px solid var(--el-border-color-lighter);
+    }
+}
+
+/* 全局表单样式优化 */
+.el-form {
+    .el-form-item {
+        margin-bottom: 18px;
+    }
+    
+    .el-form-item__label {
+        font-weight: 500;
+    }
+}
+
+/* 全局输入框样式优化 */
+.el-input {
+    .el-input__inner {
+        border-radius: var(--border-radius-base);
+    }
+}
+
+/* 全局下拉框样式优化 */
+.el-select {
+    .el-input__inner {
+        border-radius: var(--border-radius-base);
+    }
+}
+
+/* 全局标签样式优化 */
+.el-tag {
+    border-radius: var(--border-radius-small);
+}
+
+/* 暗黑模式下ace编辑器样式 */
+.dark {
+    .ace_editor {
+        background: #1a1a1a;
+        color: #ffffff;
+
+        .ace_gutter-active-line {
+            background-color: #262727;
+        }
+
+        .ace_gutter {
+            background: #252526;
+            color: #ffffff;
+        }
+
+        .ace_cursor {
+            border-color: #ffffff;
+        }
+    }
+}
+
+/* 响应式适配 */
+@media screen and (max-width: 1366px) {
+    html, body, #app {
+        font-size: 12px;
+    }
+}

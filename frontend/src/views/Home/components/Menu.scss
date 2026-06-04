@@ -1,0 +1,228 @@
+.logo {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  .logo-mark {
+    height: 40px;
+    width: 40px;
+    flex-shrink: 0;
+    border-radius: 12px;
+    box-shadow: 0 8px 20px rgba(75, 111, 255, .22);
+  }
+
+  //标题样式
+  .title {
+    margin-left: 12px;
+    font-size: 16px;
+    font-weight: bold;
+    overflow: hidden;
+    white-space: nowrap;
+    color: var(--el-color-primary);
+  }
+}
+
+.menu-container {
+  border-right: none;
+  height: calc(100vh - 60px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+// 菜单分组头部样式（可点击展开/收起）
+.menu-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 15px 10px 20px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  user-select: none;
+  
+  &:hover {
+    background: var(--el-fill-color-light);
+    
+    .expand-icon {
+      color: var(--el-color-primary);
+    }
+  }
+}
+
+// 分组标题样式
+.menu-group-title {
+  display: flex;
+  align-items: center;
+  font-size: 13px;  // 字体比子菜单大
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  
+  .group-icon {
+    margin-right: 10px;
+    color: var(--el-color-primary);
+  }
+  
+  span {
+    font-size: 13px;
+  }
+}
+
+// 展开/收起图标
+.expand-icon {
+  color: var(--el-text-color-secondary);
+  transition: all 0.3s ease;
+  
+  &.is-expanded {
+    transform: rotate(180deg);
+  }
+}
+
+// 菜单项容器（用于动画过渡）
+.menu-items-wrapper {
+  overflow: hidden;
+  transition: all 0.3s ease;
+  max-height: 500px; // 足够大以容纳所有子菜单
+  opacity: 1;
+  
+  &.is-collapsed {
+    max-height: 0;
+    opacity: 0;
+  }
+}
+
+// 分组分隔线
+.menu-divider {
+  height: 1px;
+  margin: 8px 20px;
+  background: linear-gradient(90deg, transparent, var(--el-border-color-lighter), transparent);
+}
+
+//自定义菜单的样式
+.el-menu-item {
+  border-radius: 8px;
+  width: calc(100% - 20px);
+  height: 42px;
+  margin: 3px 10px;
+  padding-left: 20px !important;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  
+  //鼠标悬浮时样式
+  &:hover {
+    background: var(--el-color-primary-light-9);
+    color: var(--el-color-primary);
+    transform: translateX(3px);
+  }
+
+  //菜单激活时的样式
+  &.is-active {
+    background: var(--el-color-primary-light-9);
+    color: var(--el-color-primary);
+    font-weight: 600;
+    border-left: 3px solid var(--el-color-primary);
+    box-shadow: 0 2px 8px rgba(16, 125, 236, 0.15);
+  }
+  
+  // 图标样式
+  .el-icon {
+    transition: all 0.3s ease;
+  }
+  
+  &:hover .el-icon {
+    transform: scale(1.1);
+  }
+}
+
+// 暗黑模式适配
+.dark {
+  .menu-group-header {
+    &:hover {
+      background: var(--el-fill-color-dark);
+    }
+  }
+  
+  .menu-group-title {
+    color: var(--el-text-color-primary);
+    
+    .group-icon {
+      color: var(--el-color-primary-light-3);
+    }
+  }
+  
+  .expand-icon {
+    color: var(--el-text-color-regular);
+  }
+  
+  .menu-divider {
+    background: linear-gradient(90deg, transparent, var(--el-border-color-darker), transparent);
+  }
+  
+  .el-menu-item {
+    &:hover {
+      background: var(--el-color-primary-dark-2);
+    }
+    
+    &.is-active {
+      background: var(--el-color-primary-dark-2);
+      box-shadow: 0 2px 8px rgba(16, 125, 236, 0.25);
+    }
+  }
+}
+
+/* 清新 Pro：浅色侧栏 + 圆角激活态 */
+html.theme-pro {
+  .logo .title {
+    font-weight: 800;
+    letter-spacing: 0.02em;
+  }
+
+  .menu-container {
+    background: transparent;
+  }
+
+  .menu-group-header:hover {
+    background: rgba(255, 255, 255, .55);
+    border-radius: 10px;
+  }
+
+  .el-menu-item {
+    border-radius: 12px;
+    border-left: none !important;
+
+    &:hover,
+    &.is-active {
+      background: #fff;
+      color: var(--el-color-primary);
+      box-shadow: 0 10px 24px rgba(67, 95, 189, .1);
+      transform: none;
+    }
+
+    &.is-active {
+      font-weight: 700;
+    }
+  }
+}
+
+// 折叠状态适配
+:deep(.el-menu--collapse) {
+  .menu-group-header {
+    display: none;
+  }
+  
+  .menu-divider {
+    margin: 8px 10px;
+  }
+  
+  .el-menu-item {
+    width: calc(100% - 16px);
+    margin: 4px 8px;
+    padding-left: 0 !important;
+    justify-content: center;
+    
+    .el-icon {
+      margin-right: 0 !important;
+    }
+  }
+}

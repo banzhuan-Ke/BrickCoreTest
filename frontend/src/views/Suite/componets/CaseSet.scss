@@ -1,0 +1,55 @@
+//设置高度，滑动到底部自动加载内容
+.main_box {
+  height: 100%;
+  overflow-y: auto;
+}
+
+//加载状态
+.loading {
+  height: 40px;
+}
+
+.line {
+  height: 30px;
+  border: 1px dashed var(--primary-color-line);
+  padding: 0 10px;
+  margin: 5px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 5px;
+  cursor: move;
+
+  .name {
+    font-weight: bold;
+  }
+
+  .create_time {
+    font-weight: bold;
+  }
+
+  .btn {
+    .el-icon {
+      margin-left: 10px;
+    }
+  }
+}
+
+.dragging {
+  border: 2px dashed var(--el-color-success);
+  transform: scale(1.05); /* 拖拽时轻微放大 */
+  transition: transform 0.2s ease, border-color 0.2s ease; /* 添加动画效果 */
+}
+
+/* 选中元素的边框颜色 */
+.chosen {
+  border: 2px solid var(--el-color-success);
+  transition: border-color 0.2s ease; /* 添加边框颜色变化的动画 */
+}
+
+/* 幽灵元素的虚线边框 */
+.ghost {
+  border: 2px dashed var(--el-color-success);
+  opacity: 0.5; /* 初始透明度 */
+  transition: opacity 0.2s ease, border-color 0.2s ease; /* 添加透明度和边框颜色的动画 */
+}

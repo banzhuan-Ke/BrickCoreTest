@@ -1,0 +1,155 @@
+@use '@/style/login-page-shared.scss';
+
+.mian {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  padding: 20px 0;
+
+  .login_shell--register {
+    width: min(980px, calc(100vw - 48px));
+    max-height: calc(100vh - 80px);
+  }
+
+  .login_shell {
+    background: rgba(255, 255, 255, 0.97);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+  }
+
+  .register_box {
+    padding: 28px 36px 32px;
+    background: transparent;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+
+    &::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: var(--el-color-primary-light-5);
+      border-radius: 2px;
+    }
+
+    .register-form {
+      .el-form-item {
+        margin-bottom: 16px;
+
+        &:last-child {
+          margin-bottom: 0;
+        }
+      }
+
+      .el-input, .el-select {
+        --el-input-border-radius: 10px;
+        
+        :deep(.el-input__wrapper) {
+          padding: 3px 15px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+          transition: all 0.3s ease;
+
+          &:hover, &:focus-within {
+            box-shadow: 0 4px 12px rgba(16, 125, 236, 0.15);
+            transform: translateY(-1px);
+          }
+        }
+
+        :deep(.el-input__inner) {
+          height: 40px;
+        }
+      }
+
+      .el-select {
+        width: 100%;
+      }
+
+      .action-buttons {
+        display: flex;
+        gap: 12px;
+        margin-top: 20px;
+
+        .el-button {
+          flex: 1;
+          height: 42px;
+          font-size: 15px;
+          font-weight: 500;
+          border-radius: 10px;
+          transition: all 0.3s ease;
+
+          &:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(16, 125, 236, 0.3);
+          }
+
+          &:active {
+            transform: translateY(0);
+          }
+        }
+      }
+
+      .login-link {
+        text-align: center;
+        margin-top: 18px;
+        padding-top: 15px;
+        border-top: 1px solid var(--el-border-color-lighter);
+      }
+    }
+  }
+
+  .login-footer {
+    z-index: 2;
+    position: absolute;
+    bottom: 15px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 13px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+html.theme-pro .mian.theme-pro-page {
+  .login_shell {
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(229, 233, 245, 0.85);
+  }
+
+  .login-footer {
+    color: rgba(88, 96, 115, 0.85);
+    text-shadow: none;
+  }
+}
+
+// 暗黑模式适配
+.dark {
+  .mian {
+    .login_shell {
+      background: rgba(30, 30, 35, 0.96);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    }
+  }
+}
+
+// 响应式适配
+@media screen and (max-height: 800px) {
+  .mian .register_box {
+    padding: 20px 28px;
+  }
+}

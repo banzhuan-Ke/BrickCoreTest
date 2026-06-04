@@ -1,0 +1,167 @@
+.box {
+  padding: 0 10px;
+  flex-shrink: 0;
+  
+  .tabs {
+    height: 44px;
+    z-index: 99;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--el-fill-color-light);
+    border-radius: 8px;
+    padding: 0 12px;
+    margin: 6px 0;
+
+    // 关闭所有按钮区域
+    .button-wrapper {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      height: 32px;
+      
+      .el-button {
+        padding: 6px 12px;
+        font-size: 12px;
+        border-radius: 6px;
+        height: 32px;
+        line-height: 1;
+        
+        &:hover {
+          transform: scale(1.02);
+        }
+      }
+    }
+    
+    // 标签区域
+    .tabs-area {
+      flex: 1;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      height: 32px;
+      
+      :deep(.el-tabs) {
+        width: 100%;
+        
+        .el-tabs__header {
+          margin: 0;
+          height: 32px;
+          
+          .el-tabs__nav-wrap {
+            height: 32px;
+            
+            &::after {
+              display: none;
+            }
+            
+            .el-tabs__nav-scroll {
+              height: 32px;
+            }
+            
+            .el-tabs__nav {
+              display: flex;
+              gap: 4px;
+              border: none;
+              height: 32px;
+            }
+            
+            .el-tabs__item {
+              height: 32px;
+              line-height: 30px;
+              padding: 0 14px;
+              border-radius: 6px;
+              font-size: 13px;
+              font-weight: 500;
+              color: var(--el-text-color-regular);
+              background: var(--el-bg-color);
+              border: 1px solid var(--el-border-color-light);
+              transition: all 0.2s ease;
+              box-sizing: border-box;
+              
+              &:hover {
+                color: var(--el-color-primary);
+                border-color: var(--el-color-primary-light-5);
+              }
+              
+              &.is-active {
+                color: var(--el-color-primary);
+                background: var(--el-color-primary-light-9);
+                border-color: var(--el-color-primary);
+                font-weight: 600;
+                box-shadow: 0 2px 6px rgba(16, 125, 236, 0.15);
+              }
+              
+              // 关闭图标
+              .is-icon-close {
+                font-size: 12px;
+                margin-left: 6px;
+                
+                &:hover {
+                  background: var(--el-color-danger-light-9);
+                  color: var(--el-color-danger);
+                }
+              }
+              
+              // 图标样式
+              .el-icon {
+                font-size: 14px;
+                vertical-align: middle;
+                margin-right: 6px;
+              }
+            }
+          }
+          
+          .el-tabs__active-bar {
+            display: none;
+          }
+        }
+      }
+    }
+  }
+}
+
+html.theme-pro .box .tabs {
+  background: rgba(255, 255, 255, .72);
+  border: 1px solid var(--pro-line, #e5e9f5);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(68, 87, 150, .05);
+
+  .tabs-area :deep(.el-tabs .el-tabs__item) {
+    border-radius: 8px;
+
+    &.is-active {
+      color: #fff;
+      background: var(--el-color-primary);
+      border-color: var(--el-color-primary);
+      box-shadow: 0 8px 18px rgba(75, 111, 255, .22);
+    }
+  }
+}
+
+// 暗黑模式适配
+.dark {
+  .box {
+    .tabs {
+      background: var(--el-fill-color-dark);
+      
+      .tabs-area {
+        :deep(.el-tabs) {
+          .el-tabs__item {
+            background: var(--el-bg-color-page);
+            border-color: var(--el-border-color-darker);
+            
+            &:hover {
+              border-color: var(--el-color-primary);
+            }
+            
+            &.is-active {
+              background: var(--el-color-primary-dark-2);
+              box-shadow: 0 2px 6px rgba(16, 125, 236, 0.25);
+            }
+          }
+        }
+      }
+    }
+  }
+}
