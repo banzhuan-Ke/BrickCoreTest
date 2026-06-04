@@ -31,17 +31,90 @@ A = f"{{{A_NS}}}"
 R = f"{{{R_NS}}}"
 
 
-def _heading_level_from_style(style_val: str) -> int:
+def _parse_docx_style_index(content: bytes) -> dict[str, dict[str, str]]:
+    """解析 word/styles.xml，返回 {styleId: {name, basedOn}}。"""
+    index: dict[str, dict[str, str]] = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            if "word/styles.xml" not in zf.namelist():
+                return index
+            styles_root = ET.fromstring(zf.read("word/styles.xml"))
+    except Exception as e:
+        logger.debug("[document_structure] 读取 styles.xml 失败: %s", e)
+        return index
+
+    for st in styles_root.findall(f"{W}style"):
+        sid = st.get(f"{W}styleId") or st.get("styleId")
+        if not sid:
+            continue
+        name_el = st.find(f"{W}name")
+        name = ""
+        if name_el is not None:
+            name = (name_el.get(f"{W}val") or name_el.get("val") or "").strip()
+        based_el = st.find(f"{W}basedOn")
+        based_on = ""
+        if based_el is not None:
+            based_on = (based_el.get(f"{W}val") or based_el.get("val") or "").strip()
+        index[sid] = {"name": name, "basedOn": based_on}
+    return index
+
+
+def _resolve_style_name(style_val: str, style_index: dict[str, dict[str, str]]) -> str:
+    """将段落 pStyle 的 styleId 解析为样式名（沿 basedOn 向上查找）。"""
     if not style_val:
+        return ""
+    visited: set[str] = set()
+    current = style_val.strip()
+    fallback = current
+    while current and current not in visited:
+        visited.add(current)
+        info = style_index.get(current) or {}
+        name = (info.get("name") or "").strip()
+        if name:
+            return name
+        current = (info.get("basedOn") or "").strip()
+    return fallback
+
+
+def _heading_level_from_label(label: str) -> int:
+    if not label:
         return 0
-    s = style_val.strip()
+    s = label.strip()
     m = re.match(r"(?:Heading|heading)\s*(\d+)", s, re.I)
     if m:
         return int(m.group(1))
+    if "子标题" in s:
+        return 0
+    m2 = re.search(r"标题\s*(\d+)", s)
+    if m2:
+        return int(m2.group(1))
     if "标题" in s:
-        m2 = re.search(r"(\d+)", s)
-        return int(m2.group(1)) if m2 else 1
+        return 1
     return 0
+
+
+def _heading_level_from_style(
+    style_val: str,
+    style_index: Optional[dict[str, dict[str, str]]] = None,
+) -> int:
+    if not style_val:
+        return 0
+    s = style_val.strip()
+    if not style_index:
+        return _heading_level_from_label(s)
+
+    visited: set[str] = set()
+    current = s
+    while current and current not in visited:
+        visited.add(current)
+        info = style_index.get(current) or {}
+        name = (info.get("name") or "").strip()
+        if name:
+            level = _heading_level_from_label(name)
+            if level:
+                return level
+        current = (info.get("basedOn") or "").strip()
+    return _heading_level_from_label(s)
 
 
 def _load_docx_structured(content: bytes, file_name: str) -> DocumentLoadResult:
@@ -51,6 +124,7 @@ def _load_docx_structured(content: bytes, file_name: str) -> DocumentLoadResult:
     images: list[LoadedImage] = []
     img_idx = 0
     block_seq = 0
+    style_index = _parse_docx_style_index(content)
 
     try:
         with zipfile.ZipFile(io.BytesIO(content)) as zf:
@@ -126,7 +200,8 @@ def _load_docx_structured(content: bytes, file_name: str) -> DocumentLoadResult:
                         p_style = p_pr.find(f"{W}pStyle")
                         if p_style is not None:
                             level = _heading_level_from_style(
-                                p_style.get(f"{W}val") or p_style.get("val") or ""
+                                p_style.get(f"{W}val") or p_style.get("val") or "",
+                                style_index,
                             )
 
                     for blip in child.iter(f"{A}blip"):
@@ -220,6 +295,7 @@ def _load_docx_fallback(content: bytes, file_name: str) -> DocumentLoadResult:
     from docx.text.paragraph import Paragraph
 
     result = DocumentLoadResult(text="", source_type="docx", file_name=file_name)
+    style_index = _parse_docx_style_index(content)
     doc = Document(io.BytesIO(content))
     blocks: list[dict] = []
     block_seq = 0
@@ -232,8 +308,11 @@ def _load_docx_fallback(content: bytes, file_name: str) -> DocumentLoadResult:
                 continue
             level = 0
             try:
-                sn = para.style.name or ""
-                level = _heading_level_from_style(sn)
+                style_id = para.style.style_id if para.style is not None else ""
+                style_name = para.style.name if para.style is not None else ""
+                level = _heading_level_from_style(style_id or style_name, style_index)
+                if not level and style_name:
+                    level = _heading_level_from_style(style_name)
             except Exception:
                 pass
             block_seq += 1
