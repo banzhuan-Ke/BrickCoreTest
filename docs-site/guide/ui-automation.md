@@ -9,7 +9,7 @@ Web 界面回归：登录、表单、列表、多步骤业务流程。支持手�
 | 项 | 说明 |
 |----|------|
 | 项目与环境、测试目录 | 见 **项目与环境**、**测试目录** 章节 |
-| 执行器 | Windows 推荐 **BrickCore 桌面客户端**；Linux 服务器见 **Linux 无头 Runner** |
+| 执行器 | Windows **BrickCore 桌面客户端**（设备管理网盘/平台下载） |
 | 设备在线 | **UI 自动化 → 设备管理**：可 **网盘/平台下载** 执行器；列表中设备 **在线**；可复制 device_id |
 
 ### 设备管理页
@@ -24,27 +24,13 @@ Web 界面回归：登录、表单、列表、多步骤业务流程。支持手�
 2. 运行 `BrickCoreRunner.exe`，使用平台账号登录后点击 **上线**
 3. 详见 **执行器使用说明**
 
-### Linux 服务器（无界面）
+### Linux 服务器（商业版）
 
-```bash
-cd runner
-chmod +x start-headless-linux.sh
-./start-headless-linux.sh
-```
+商业版可从源码部署 Linux 无头 Runner，见 **Linux 无头 Runner**。社区版请使用 Windows 桌面客户端。
 
-生产环境建议配置 systemd，见 **Linux 无头 Runner**。
+### 开发调试（商业版源码）
 
-### 开发调试（本机 Python）
-
-```bash
-cd runner
-venv\Scripts\activate
-pip install -r requirements.txt
-playwright install chromium
-python main.py
-```
-
-也可用仓库内 `start-local.bat` 等脚本生成配置后再启动。
+商业版仓库含 `runner/` 源码，可在本机 Python 环境启动引擎。社区版请直接使用打包客户端。
 
 ## 基本流程
 

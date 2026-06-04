@@ -89,6 +89,7 @@ services:
       DOC_USERNAME: admin
       DOC_PASSWORD: BrickCore123456
       INTERNAL_API_KEY: brickcore-internal-demo
+      BRICKCORE_EDITION: ce
     depends_on:
       mysql:
         condition: service_healthy
@@ -97,6 +98,7 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
+      - ./docs-site:/app/docs-site:ro
       - ./backend/logs:/app/logs
       - ./backend/static/avatars:/app/static/avatars
     command: >

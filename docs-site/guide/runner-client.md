@@ -82,18 +82,17 @@
 
 | 现象 | 处理 |
 |------|------|
-| 双击 exe 闪退 | 确认 `_internal` 与 `runner` 目录完整；用最新打包脚本重建 |
+| 双击 exe 闪退 | 确认 `_internal` 与 `runner` 目录完整；重新下载最新安装包解压 |
 | 无法连接平台 | 检查服务器地址、防火墙、Backend 是否启动 |
 | MQ / Redis 连接失败 | 平台需配置 MQ/Redis **对外地址**（Windows 不能解析 Docker 内网名 `rabbitmq`） |
 | 设备一直离线 | 确认已点击「上线」且 Runner 引擎为绿点；查看客户端日志 |
 | 平台下载 404 | 未上传 zip 或未 `docker cp` 进 backend 容器；或改用网盘链接 |
-| Playwright 浏览器缺失 | 打包版启动时会提示补装；或重新执行完整打包脚本 |
+| Playwright 浏览器缺失 | 打包版启动时会提示补装；或重新下载完整安装包 |
 | UI 套件 DB 断言未执行 | 需 Runner **≥1.1.0** 且 Backend/Runner `INTERNAL_API_KEY` 一致；接口自动化不依赖 Runner |
 | 点停止后仍在跑 / 单用例停不下来 | 需升级 Runner **1.1.1** 并整包覆盖安装；Backend 也需部署最新停止 API |
 
 ## 相关文档
 
-- [执行器打包 / 获取说明](runner-packaging.md)
-- [Linux 无头 Runner](runner-linux-server.md)
+- [执行器获取与发布](runner-packaging.md)
 - [UI 自动化](ui-automation.md)
 - [系统管理 - 执行器发布](system-admin.md#执行器发布)

@@ -162,10 +162,21 @@ def read_builtin_markdown(doc_id: str) -> tuple[str, str]:
 
 
 def _override_title(entry_id: str, default_title: str, overrides: dict[str, Any]) -> str:
+    # 社区版内置文档以 docs-site 文件为准，避免历史 DB 覆盖带入 Pro 正文/标题
+    if is_community_edition():
+        return default_title
     row = overrides.get(entry_id)
     if row and getattr(row, "title", None):
         return row.title
     return default_title
+
+
+def _builtin_has_content_override(row: Any | None) -> bool:
+    if not row:
+        return False
+    if is_community_edition():
+        return bool(getattr(row, "is_hidden", False))
+    return True
 
 
 def merge_builtin_tree(overrides: dict[str, Any]) -> list[dict[str, Any]]:
@@ -185,7 +196,7 @@ def merge_builtin_tree(overrides: dict[str, Any]) -> list[dict[str, Any]]:
             children.append({
                 **child,
                 "title": _override_title(cid, child["title"], overrides),
-                "has_override": bool(co),
+                "has_override": _builtin_has_content_override(co),
             })
         if not children:
             continue
@@ -193,7 +204,7 @@ def merge_builtin_tree(overrides: dict[str, Any]) -> list[dict[str, Any]]:
             **group,
             "title": _override_title(gid, group["title"], overrides),
             "children": children,
-            "has_override": bool(go),
+            "has_override": _builtin_has_content_override(go),
         })
     return result
 
@@ -211,7 +222,7 @@ def build_manage_builtin_items(overrides: dict[str, Any]) -> list[dict[str, Any]
             "type": "builtin_group",
             "doc_type": "group",
             "is_hidden": bool(go and go.is_hidden),
-            "has_override": bool(go),
+            "has_override": _builtin_has_content_override(go),
             "content": "",
             "sort_order": go.sort_order if go else 0,
         })
@@ -219,14 +230,22 @@ def build_manage_builtin_items(overrides: dict[str, Any]) -> list[dict[str, Any]
             cid = child["id"]
             co = overrides.get(cid)
             default_title = entries.get(cid, ("", child["title"]))[1]
+            if is_community_edition():
+                try:
+                    _, file_md = read_builtin_markdown(cid)
+                except (FileNotFoundError, PermissionError):
+                    file_md = ""
+                content = file_md
+            else:
+                content = co.content if co and co.content else ""
             items.append({
                 "builtin_id": cid,
                 "title": _override_title(cid, default_title, overrides),
                 "type": "builtin",
                 "doc_type": "markdown",
                 "is_hidden": bool(co and co.is_hidden),
-                "has_override": bool(co),
-                "content": co.content if co and co.content else "",
+                "has_override": _builtin_has_content_override(co),
+                "content": content,
                 "sort_order": co.sort_order if co else 0,
             })
     return items

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_username, require_permissions
+from app.core.edition import is_community_edition
 from app.core.docs_catalog import (
     build_manage_builtin_items,
     get_builtin_doc_entries,
@@ -215,8 +216,14 @@ async def get_builtin_doc(doc_id: str):
         raise HTTPException(status_code=404, detail=str(e))
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    title = override.title if override and override.title else default_title
-    content = override.content if override and override.content is not None else md
+    if is_community_edition():
+        title = default_title
+        content = md
+        has_override = bool(override and override.is_hidden)
+    else:
+        title = override.title if override and override.title else default_title
+        content = override.content if override and override.content is not None else md
+        has_override = bool(override)
     return StandardResponse(data={
         "id": doc_id,
         "builtin_id": doc_id,
@@ -225,7 +232,7 @@ async def get_builtin_doc(doc_id: str):
         "content_md": content,
         "content_html": _md_to_html(content),
         "source": "builtin",
-        "has_override": bool(override),
+        "has_override": has_override,
         "is_hidden": bool(override and override.is_hidden),
     })
 
@@ -252,8 +259,12 @@ async def update_builtin_entry(
             doc_type="markdown",
             create_by=username,
         )
-    doc.title = body.title or default_title
-    doc.content = body.content
+    if is_community_edition():
+        doc.title = default_title
+        doc.content = None
+    else:
+        doc.title = body.title or default_title
+        doc.content = body.content
     doc.sort_order = body.sort_order
     doc.is_hidden = False
     doc.is_published = True
