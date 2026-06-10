@@ -54,7 +54,7 @@ UI 自动化、录制回放、分布式压测 Worker 需安装 **BrickCoreRunner
 
 | 方式 | 说明 |
 |------|------|
-| **百度网盘** | [BrickCoreRunner.zip](https://pan.baidu.com/s/1Nx2fkPAUi7htJKZAxp1paw?pwd=ye6b) · 提取码 `ye6b` |
+| **百度网盘** | [BrickCoreRunner.zip](https://pan.baidu.com/s/1i0odbTaCLeKkBqmtul-BGg?pwd=n9qu) · 提取码 `n9qu` |
 | **演示平台内** | 登录 [http://43.142.83.156/](http://43.142.83.156/) → **UI 自动化 → 设备管理** → **网盘下载** |
 
 安装步骤：
