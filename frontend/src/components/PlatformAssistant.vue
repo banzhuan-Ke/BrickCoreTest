@@ -23,7 +23,7 @@
           <div class="header-left">
             <AssistantMascot size="small" />
             <span class="panel-title">{{ ASSISTANT_NAME }} · 平台助手</span>
-            <el-tag size="small" type="success">Phase 3</el-tag>
+            <el-tag size="small" type="success">Phase 4</el-tag>
           </div>
           <div class="header-actions" @mousedown.stop>
             <el-tooltip :content="isMaximized ? '还原窗口' : '放大窗口'" placement="bottom">

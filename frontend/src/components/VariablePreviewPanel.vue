@@ -6,9 +6,10 @@
         <template v-else>
           <p class="preview-hint">优先级：项目变量 &lt; 环境变量 &lt; 额外传入</p>
           <el-table v-if="variableRows.length" :data="variableRows" size="small" border max-height="240">
-            <el-table-column label="变量名" prop="key" width="140" show-overflow-tooltip />
-            <el-table-column label="解析值" prop="value" min-width="160" show-overflow-tooltip />
-            <el-table-column label="来源" prop="source" width="80" />
+            <el-table-column label="变量名" prop="key" width="120" show-overflow-tooltip />
+            <el-table-column label="描述" prop="description" min-width="120" show-overflow-tooltip />
+            <el-table-column label="解析值" prop="value" min-width="140" show-overflow-tooltip />
+            <el-table-column label="来源" prop="source" width="72" />
           </el-table>
           <el-empty v-else description="暂无可用变量" :image-size="48" />
 
@@ -38,6 +39,7 @@
 import { ref, computed, watch } from 'vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { httpCaseApi } from '@/api/modules/http'
+import { getVarDescription } from '@/utils/globalVars.js'
 
 const props = defineProps({
   envId: { type: Number, default: null },
@@ -55,14 +57,22 @@ const resolvedProjectId = computed(() => props.projectId || proStore.projectInfo
 
 const variableRows = computed(() => {
   const vars = previewData.value.variables || {}
-  const projKeys = new Set(Object.keys(proStore.projectInfo?.global_vars || {}))
+  const projVars = proStore.projectInfo?.global_vars || {}
+  const projKeys = new Set(Object.keys(projVars))
   const env = props.envId ? proStore.envList.find((e) => e.id === props.envId) : null
-  const envKeys = new Set(Object.keys(env?.global_vars || {}))
-  return Object.entries(vars).map(([key, value]) => ({
-    key,
-    value: value === null || value === undefined ? '' : String(value),
-    source: props.extraVariables?.[key] !== undefined ? '传入' : envKeys.has(key) ? '环境' : projKeys.has(key) ? '项目' : '动态',
-  }))
+  const envVars = env?.global_vars || {}
+  const envKeys = new Set(Object.keys(envVars))
+  return Object.entries(vars).map(([key, value]) => {
+    let description = ''
+    if (envKeys.has(key)) description = getVarDescription(envVars, key)
+    else if (projKeys.has(key)) description = getVarDescription(projVars, key)
+    return {
+      key,
+      description: description || '—',
+      value: value === null || value === undefined ? '' : String(value),
+      source: props.extraVariables?.[key] !== undefined ? '传入' : envKeys.has(key) ? '环境' : projKeys.has(key) ? '项目' : '动态',
+    }
+  })
 })
 
 const sampleRows = computed(() => previewData.value.samples || [])

@@ -23,7 +23,7 @@ internal_router = APIRouter(prefix="/notifications", tags=["通知配置-内部�
 # ============ Schemas ============
 
 class NotificationConfigItem(BaseModel):
-    channel_type: str = Field(..., description="email/dingtalk/wechat")
+    channel_type: str = Field(..., description="email/dingtalk/wechat/feishu")
     enabled: bool = True
     config: dict = Field(default_factory=dict)
     api_auto_push_report: bool = False
@@ -194,6 +194,10 @@ async def test_notification_config(config_id: int):
             await NotificationService._send_dingtalk_alert(cfg, "[测试] 通知配置测试", content)
         elif cfg.channel_type == "wechat":
             await NotificationService._send_wechat_alert(cfg, "[测试] 通知配置测试", content)
+        elif cfg.channel_type == "feishu":
+            await NotificationService._send_feishu_alert(cfg, "[测试] 通知配置测试", content)
+        else:
+            raise HTTPException(status_code=400, detail=f"不支持的通知渠道: {cfg.channel_type}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"发送失败: {e}")
 

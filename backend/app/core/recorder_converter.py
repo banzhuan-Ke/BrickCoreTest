@@ -9,6 +9,9 @@
 import time
 from typing import List, Dict, Any
 
+from app.core.recorder_quality import apply_index_from_meta, assess_step_quality, collect_step_locator_candidates
+from app.core.ui_keywords import METHOD_TO_KEYWORD
+
 
 # 原始操作类型 → 平台 method 映射
 ACTION_TO_METHOD = {
@@ -235,12 +238,16 @@ def _action_to_step(action: dict) -> dict:
         desc = f"执行操作: {action_type}"
 
     meta = dict(action.get("meta", {}))
-    # 把录制引擎生成的候选定位器列表放入 meta，供前端 LocatorSelector 下拉选择
-    candidates = action.get("candidates", [])
-    if candidates:
-        meta["candidates"] = candidates
-    
-    return {
+    runner_candidates = action.get("candidates") or []
+    if runner_candidates:
+        meta["candidates"] = list(runner_candidates)
+    # 合并 Runner 候选 + meta 字段推导项，避免旧 Runner 或 sparse 上报时前端只有 1 条
+    pre_step = {"meta": meta, "params": params}
+    merged_candidates = collect_step_locator_candidates(pre_step)
+    if merged_candidates:
+        meta["candidates"] = merged_candidates
+
+    step = {
         "id": f"step_{int(time.time() * 1000)}_{hash(action.get('selector', '')) % 1000}",
         "keyword": _method_to_keyword(method),
         "desc": desc,
@@ -249,6 +256,8 @@ def _action_to_step(action: dict) -> dict:
         "children": [],
         "meta": meta,
     }
+    step = apply_index_from_meta(step)
+    return assess_step_quality(step)
 
 
 def _generate_fill_desc(locator: str, value: str, placeholder: str) -> str:
@@ -287,21 +296,8 @@ def _generate_click_desc(locator: str, element_text: str, action_type: str) -> s
 
 
 def _method_to_keyword(method: str) -> str:
-    """method → keyword 映射（简化版）"""
-    mapping = {
-        "open_url": "访问页面url",
-        "click_ele": "点击元素",
-        "double_click_ele": "双击元素",
-        "fill_value": "元素输入",
-        "select_option": "选择选项",
-        "wait_for_time": "强制等待时间",
-        "hover": "鼠标悬停到元素上方",
-        "press_key": "键盘按键",
-        "scroll": "滚动页面",
-        "mouse_click": "鼠标点击",
-        "upload_file": "input文件上传",
-    }
-    return mapping.get(method, method)
+    """method → keyword 映射（与 ActionGroup / Runner 对齐）"""
+    return METHOD_TO_KEYWORD.get(method, method)
 
 
 def optimize_steps_with_llm(steps: List[dict], description: str, llm_client) -> List[dict]:

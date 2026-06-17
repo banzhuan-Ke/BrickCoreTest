@@ -9,6 +9,11 @@ import urllib.parse
 from typing import Any, Optional
 
 from app.core.minio_client import minio_client
+from app.core.ui_result_extract import (
+    extract_ui_case_failure_summary,
+    find_failed_step,
+    normalize_result_data,
+)
 from app.models.http import ApiRunRecord
 from app.models.ui import UiCaseExecution
 
@@ -76,28 +81,6 @@ def load_image_from_url(url: str) -> Optional[tuple[bytes, str]]:
     if not data:
         return None
     return data, _guess_image_mime(object_name)
-
-
-def _normalize_result_data(raw: Any) -> dict:
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-    return {}
-
-
-def _find_failed_step(steps: list) -> tuple[int, Optional[dict]]:
-    for idx, step in enumerate(steps):
-        if not isinstance(step, dict):
-            continue
-        status = str(step.get("status") or "").lower()
-        if status in FAIL_STEP_STATUSES:
-            return idx, step
-    return -1, None
 
 
 def _pick_failure_screenshot(result_data: dict, failed_step: Optional[dict]) -> Optional[str]:
@@ -176,9 +159,10 @@ async def build_ui_failure_context(
     采集 UI 执行失败上下文
     返回 (prompt_vars, image_bytes_mime, screenshot_url)
     """
-    result_data = _normalize_result_data(execution.result_data)
+    result_data = normalize_result_data(execution.result_data)
+    summary = extract_ui_case_failure_summary(result_data)
     steps = result_data.get("steps") or []
-    failed_idx, failed_step = _find_failed_step(steps)
+    failed_idx, failed_step = find_failed_step(steps)
     screenshot_url = _pick_failure_screenshot(result_data, failed_step)
 
     step_summaries = []
@@ -194,22 +178,17 @@ async def build_ui_failure_context(
             }
         )
 
-    error_msg = ""
-    if failed_step:
-        error_msg = (
-            failed_step.get("message")
-            or failed_step.get("error")
-            or failed_step.get("desc")
-            or ""
-        )
-    if not error_msg:
-        error_msg = result_data.get("error") or result_data.get("message") or ""
+    error_msg = summary.get("error_hint") or ""
+    if not error_msg and summary.get("log_error_excerpt"):
+        error_msg = summary["log_error_excerpt"]
 
-    logs = result_data.get("log") or result_data.get("logs") or result_data.get("execution_log") or []
+    logs = summary.get("log_tail") or result_data.get("log") or result_data.get("logs") or result_data.get("execution_log") or []
     if isinstance(logs, list):
         log_text = "\n".join(str(x) for x in logs[-80:])
     else:
         log_text = str(logs)
+    if summary.get("log_tail"):
+        log_text = summary["log_tail"]
 
     screenshot_desc = ""
     if screenshot_url:

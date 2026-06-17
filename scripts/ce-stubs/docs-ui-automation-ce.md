@@ -21,7 +21,7 @@ Web 界面回归：登录、表单、列表、多步骤业务流程。支持手�
 ### 安装执行器（Windows）
 
 1. **设备管理** 下载 `BrickCoreRunner.zip` 并解压
-2. 运行 `BrickCoreRunner.exe`，使用平台账号登录后点击 **上线**
+2. 运行 `BrickCoreRunner.exe`，服务器填 `http://<平台IP>`（无 `:8000`），登录后点击 **上线**
 3. 详见 **执行器使用说明**
 
 ## 基本流程

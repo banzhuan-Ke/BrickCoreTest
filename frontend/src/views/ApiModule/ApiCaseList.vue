@@ -35,6 +35,12 @@
           />
           <el-button type="primary" @click="getCaseList" icon="Search">搜索</el-button>
           <el-button @click="resetSearch" icon="RefreshRight">重置</el-button>
+          <TableColumnPicker
+            :items="pickerItems"
+            @toggle="setColumnVisible"
+            @reorder="setPickerOrder"
+            @reset="resetColumns"
+          />
           <el-button
             v-if="selectedCases.length > 0"
             type="success"
@@ -71,110 +77,162 @@
           </el-upload>
 
         <!-- 用例列表 -->
-        <el-table ref="caseTableRef" :data="caseList" stripe v-loading="loading" @selection-change="handleSelectionChange">
+        <el-table
+          ref="caseTableRef"
+          :key="tableRenderKey"
+          :data="caseList"
+          stripe
+          v-loading="loading"
+          @selection-change="handleSelectionChange"
+        >
           <el-table-column type="selection" width="50" align="center" />
-          <el-table-column type="index" label="序号" width="60"/>
-          <el-table-column label="用例名称" min-width="170">
-            <template #default="{ row }">
-              <div class="case-name">
-                <el-tooltip
-                  v-if="row.is_expired"
-                  :content="`接口已更新 v${row.api_version_snapshot} → v${row.api_current_version}，请确认用例是否需要同步`"
-                  placement="top"
-                >
-                  <el-tag type="warning" size="small" style="margin-right:5px;cursor:default">已过期</el-tag>
-                </el-tooltip>
-                {{ row.name }}
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="优先级" width="80">
-            <template #default="{ row }">
-              <el-tag :type="getPriorityType(row.priority)" size="small">{{ row.priority }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="关联接口" min-width="220">
-            <template #default="{ row }">
-              <div class="api-info">
-                <div class="api-name-row">{{ row.api_name }}</div>
-                <div class="api-path-row">
-                  <el-tag :type="getMethodType(row.api_method)" size="small">{{ row.api_method }}</el-tag>
-                  <span class="api-path-text">{{ row.api_path }}</span>
+          <template v-for="col in activeColumns" :key="col.key">
+            <el-table-column
+              v-if="col.key === 'index'"
+              type="index"
+              label="序号"
+              :index="tableRowIndex"
+              :width="col.width"
+            />
+            <el-table-column
+              v-else-if="col.key === 'name'"
+              label="用例名称"
+              :min-width="col.minWidth || 170"
+            >
+              <template #default="{ row }">
+                <div class="case-name">
+                  <el-tooltip
+                    v-if="row.is_expired"
+                    :content="`接口已更新 v${row.api_version_snapshot} → v${row.api_current_version}，请确认用例是否需要同步`"
+                    placement="top"
+                  >
+                    <el-tag type="warning" size="small" style="margin-right:5px;cursor:default">已过期</el-tag>
+                  </el-tooltip>
+                  {{ row.name }}
                 </div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="断言数" width="80">
-            <template #default="{ row }">
-              {{ row.assertions?.length || 0 }}
-            </template>
-          </el-table-column>
-          <el-table-column label="请求覆盖" width="130">
-            <template #default="{ row }">
-              <div class="override-tags">
-                <el-tooltip v-if="hasHeaderOverride(row)" placement="top">
-                  <template #content>
-                    <div class="override-tooltip">
-                      <div class="tooltip-title">Header 覆盖</div>
-                      <div v-for="(v, k) in getHeaderOverrides(row)" :key="k" class="tooltip-item">
-                        <code>{{ k }}</code>: {{ v }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-else-if="col.key === 'priority'"
+              label="优先级"
+              :width="col.width"
+            >
+              <template #default="{ row }">
+                <el-tag :type="getPriorityType(row.priority)" size="small">{{ row.priority }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-else-if="col.key === 'api_info'"
+              label="关联接口"
+              :min-width="col.minWidth || 220"
+            >
+              <template #default="{ row }">
+                <div class="api-info">
+                  <div class="api-name-row">{{ row.api_name }}</div>
+                  <div class="api-path-row">
+                    <el-tag :type="getMethodType(row.api_method)" size="small">{{ row.api_method }}</el-tag>
+                    <span class="api-path-text">{{ row.api_path }}</span>
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-else-if="col.key === 'assertions'"
+              label="断言数"
+              :width="col.width"
+            >
+              <template #default="{ row }">
+                {{ row.assertions?.length || 0 }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-else-if="col.key === 'request_override'"
+              label="请求覆盖"
+              :width="col.width"
+            >
+              <template #default="{ row }">
+                <div class="override-tags">
+                  <el-tooltip v-if="hasHeaderOverride(row)" placement="top">
+                    <template #content>
+                      <div class="override-tooltip">
+                        <div class="tooltip-title">Header 覆盖</div>
+                        <div v-for="(v, k) in getHeaderOverrides(row)" :key="k" class="tooltip-item">
+                          <code>{{ k }}</code>: {{ v }}
+                        </div>
                       </div>
-                    </div>
-                  </template>
-                  <el-tag type="warning" size="small">Header</el-tag>
-                </el-tooltip>
-                <el-tooltip v-if="hasParamOverride(row)" placement="top">
-                  <template #content>
-                    <div class="override-tooltip">
-                      <div class="tooltip-title">参数覆盖</div>
-                      <div v-for="p in getParamOverrides(row)" :key="p.name" class="tooltip-item">
-                        <code>{{ p.name }}</code>: {{ p.value }}
+                    </template>
+                    <el-tag type="warning" size="small">Header</el-tag>
+                  </el-tooltip>
+                  <el-tooltip v-if="hasParamOverride(row)" placement="top">
+                    <template #content>
+                      <div class="override-tooltip">
+                        <div class="tooltip-title">参数覆盖</div>
+                        <div v-for="p in getParamOverrides(row)" :key="p.name" class="tooltip-item">
+                          <code>{{ p.name }}</code>: {{ p.value }}
+                        </div>
                       </div>
-                    </div>
-                  </template>
-                  <el-tag type="success" size="small">Param</el-tag>
-                </el-tooltip>
-                <el-tooltip v-if="hasBodyOverride(row)" placement="top">
-                  <template #content>
-                    <div class="override-tooltip">
-                      <div class="tooltip-title">Body 覆盖</div>
-                      <pre>{{ JSON.stringify(row.request_body, null, 2) }}</pre>
-                    </div>
-                  </template>
-                  <el-tag type="primary" size="small">Body</el-tag>
-                </el-tooltip>
-                <span v-if="!hasAnyOverride(row)" style="color: #999; font-size: 12px;">-</span>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="所属目录" width="120">
-            <template #default="{ row }">
-              <el-tag v-if="row.catalog_name || row.category_name" type="info" size="small">
-                {{ row.catalog_name || row.category_name }}
-              </el-tag>
-              <span v-else style="color: #999;">-</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="创建人" width="100">
-            <template #default="{ row }">
-              {{ row.create_by || '—' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="修改人" width="100">
-            <template #default="{ row }">
-              {{ row.update_by || row.create_by || '—' }}
-            </template>
-          </el-table-column>
-          <el-table-column label="更新时间" width="150">
-            <template #default="{ row }">
-              {{ formatTime(row.update_time) }}
-            </template>
-          </el-table-column>
+                    </template>
+                    <el-tag type="success" size="small">Param</el-tag>
+                  </el-tooltip>
+                  <el-tooltip v-if="hasBodyOverride(row)" placement="top">
+                    <template #content>
+                      <div class="override-tooltip">
+                        <div class="tooltip-title">Body 覆盖</div>
+                        <pre>{{ JSON.stringify(row.request_body, null, 2) }}</pre>
+                      </div>
+                    </template>
+                    <el-tag type="primary" size="small">Body</el-tag>
+                  </el-tooltip>
+                  <span v-if="!hasAnyOverride(row)" style="color: #999; font-size: 12px;">-</span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-else-if="col.key === 'catalog_name'"
+              label="所属目录"
+              :width="col.width"
+            >
+              <template #default="{ row }">
+                <el-tag v-if="row.catalog_name || row.category_name" type="info" size="small">
+                  {{ row.catalog_name || row.category_name }}
+                </el-tag>
+                <span v-else style="color: #999;">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-else-if="col.key === 'create_by'"
+              label="创建人"
+              :width="col.width"
+            >
+              <template #default="{ row }">
+                {{ row.create_by || '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-else-if="col.key === 'update_by'"
+              label="修改人"
+              :width="col.width"
+            >
+              <template #default="{ row }">
+                {{ row.update_by || row.create_by || '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-else-if="col.key === 'update_time'"
+              label="更新时间"
+              :width="col.width"
+            >
+              <template #default="{ row }">
+                {{ formatTime(row.update_time) }}
+              </template>
+            </el-table-column>
+          </template>
           <el-table-column label="操作" width="340" fixed="right">
             <template #default="{ row }">
               <el-button-group>
                 <el-button size="small" type="success" @click="handleRun(row)" icon="VideoPlay" title="执行"/>
-                <el-button size="small" type="info" @click="handleCopy(row)" icon="CopyDocument" title="复制"/>
+                <el-button size="small" type="info" @click="handleCopy(row)" icon="CopyDocument" title="复制到本项目"/>
+                <el-button size="small" type="warning" @click="openCopyDialog(row)" icon="FolderOpened" title="复制到其他项目"/>
                 <el-button size="small" type="primary" @click="handleEdit(row)" icon="Edit" title="编辑"/>
                 <el-button size="small" type="danger" @click="handleDelete(row)" icon="Delete" title="删除"/>
               </el-button-group>
@@ -768,10 +826,18 @@
       <el-button type="primary" @click="importResultDlg.visible = false">确定</el-button>
     </template>
   </el-dialog>
+
+  <CopyToProjectDialog
+    v-model="copyDialog.visible"
+    title="复制接口用例到其他项目"
+    :asset-name="copyDialog.row?.name"
+    :submit-fn="submitCopyCase"
+    @success="getCaseList"
+  />
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ProjectStore } from '@/stores/module/ProjectStore'
@@ -779,7 +845,10 @@ import http from '@/api/index'
 import { httpCaseApi } from '@/api/modules/http'
 import dateTools from '@/tools/dateTools'
 import PageCard from '@/components/PageCard.vue'
+import TableColumnPicker from '@/components/TableColumnPicker.vue'
 import CatalogTree from '@/components/CatalogTree.vue'
+import { useTableColumns } from '@/composables/useTableColumns.js'
+import { makeTableRowIndex } from '@/utils/tableIndex'
 import CaseEdit from './components/CaseEdit.vue'
 import ApiCaseGenerator from '@/views/AI/components/ApiCaseGenerator.vue'
 import EnvVarQuickEdit from './components/EnvVarQuickEdit.vue'
@@ -787,6 +856,7 @@ import VarInsertButton from '@/components/VarInsertButton.vue'
 import VariablePreviewPanel from '@/components/VariablePreviewPanel.vue'
 import BatchRunResultDialog from './components/BatchRunResultDialog.vue'
 import BatchCatalogDialog from '@/components/BatchCatalogDialog.vue'
+import CopyToProjectDialog from '@/components/CopyToProjectDialog.vue'
 import CopyTextButton from '@/components/CopyTextButton.vue'
 import CopyablePre from '@/components/CopyablePre.vue'
 import ResponseBodyViewer from '@/components/ResponseBodyViewer.vue'
@@ -796,6 +866,15 @@ import RunTimingBadges from './components/RunTimingBadges.vue'
 import CaseStageTimings from './components/CaseStageTimings.vue'
 import { getHttpResponseMs, getCaseTotalMs, formatTimingMs } from './utils/runTiming'
 import { provideAssertionResponseLocate } from '@/composables/assertionResponseLocate.js'
+
+const {
+  activeColumns,
+  pickerItems,
+  tableRenderKey,
+  setColumnVisible,
+  setPickerOrder,
+  resetColumns
+} = useTableColumns('api.cases')
 
 const proStore = ProjectStore()
 const route = useRoute()
@@ -813,6 +892,8 @@ const pagination = reactive({
   size: 20,
   total: 0
 })
+
+const tableRowIndex = makeTableRowIndex(pagination)
 
 const caseList = ref([])
 const apiList = ref([])
@@ -902,6 +983,7 @@ const runExtractorResultRows = computed(() => {
 })
 const batchRunDialog = reactive({ visible: false, result: null })
 const batchCatalogDialog = reactive({ visible: false })
+const copyDialog = reactive({ visible: false, row: null })
 const envDialog = reactive({
   visible: false,
   env_id: null,
@@ -1154,6 +1236,13 @@ const handleCopy = async (row) => {
   }
 }
 
+const openCopyDialog = (row) => {
+  copyDialog.row = row
+  copyDialog.visible = true
+}
+
+const submitCopyCase = (payload) => httpCaseApi.copy(copyDialog.row.id, payload)
+
 const handleBatchRun = () => {
   if (!proStore.envList || proStore.envList.length === 0) {
     ElMessage.warning('请先创建测试环境')
@@ -1259,6 +1348,10 @@ const applyRouteQuery = async () => {
   if (apiId) {
     searchForm.api_id = Number(apiId) || null
   }
+  const qKeyword = route.query.keyword
+  if (qKeyword && typeof qKeyword === 'string') {
+    searchForm.keyword = qKeyword
+  }
   await getCaseList()
   const editId = route.query.edit_case_id
   if (editId) {
@@ -1285,6 +1378,13 @@ onMounted(() => {
   getApiList()
   applyRouteQuery()
 })
+
+watch(
+  () => [route.query.api_id, route.query.edit_case_id, route.query.keyword],
+  () => {
+    applyRouteQuery()
+  },
+)
 </script>
 
 <style scoped lang="scss">

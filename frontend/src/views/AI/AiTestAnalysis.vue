@@ -1,15 +1,16 @@
 <template>
-  <PageCard>
-    <template #title>
+  <div :class="{ 'analysis-embed-host': embedMode }">
+  <PageCard :class="{ 'embed-hidden-card': embedMode }">
+    <template v-if="!embedMode" #title>
       <div style="font-size: 18px; font-weight: bold;">🧭 AI 测试分析</div>
     </template>
     <template #main>
-      <div class="toolbar">
+      <div v-if="!embedMode" class="toolbar">
         <el-button type="primary" @click="goUpload" icon="Upload">上传需求文档</el-button>
         <el-button @click="loadList" icon="Refresh">刷新</el-button>
       </div>
 
-      <el-table :data="reqList" v-loading="listLoading" stripe border style="margin-top: 12px;">
+      <el-table v-if="!embedMode" :data="reqList" v-loading="listLoading" stripe border style="margin-top: 12px;">
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="name" label="需求名称" min-width="180" show-overflow-tooltip />
         <el-table-column prop="test_point_count" label="测试点" width="80" align="center" />
@@ -31,12 +32,19 @@
         </el-table-column>
       </el-table>
 
-      <el-drawer v-model="detailVisible" size="90%" destroy-on-close>
-        <template #header>
+      <TestingEmbedShell
+        :inline="embedMode"
+        v-model="detailVisible"
+        :drawer-size="embedMode ? '100%' : '90%'"
+        :with-header="!embedMode"
+        :destroy-on-close="!embedMode"
+      >
+        <template v-if="!embedMode" #header>
           <span>{{ currentReq?.name || '测试分析' }}</span>
         </template>
         <div v-if="currentReq" class="detail-panel">
-          <el-descriptions :column="5" border size="small" class="req-meta">
+          <input ref="xmindFileInput" type="file" accept=".xmind" style="display: none;" @change="onXmindFileChange" />
+          <el-descriptions v-if="!embedMode || !embedTab" :column="5" border size="small" class="req-meta">
             <el-descriptions-item label="测试点">{{ overview.test_point_total || 0 }}</el-descriptions-item>
             <el-descriptions-item label="已确认">{{ overview.test_point_confirmed || 0 }}</el-descriptions-item>
             <el-descriptions-item label="方案版本">{{ overview.scheme_count || 0 }}</el-descriptions-item>
@@ -44,8 +52,8 @@
             <el-descriptions-item label="图片">{{ currentReq.image_count || 0 }} 张</el-descriptions-item>
           </el-descriptions>
 
-          <el-tabs v-model="activeTab" class="analysis-tabs">
-            <el-tab-pane label="思维导图" name="mindmap">
+          <el-tabs v-model="activeTab" class="analysis-tabs" :class="{ 'single-embed-tab': !!embedTab }">
+            <el-tab-pane v-if="showEmbedTab('mindmap')" label="思维导图" name="mindmap">
               <div class="gen-bar">
                 <el-select v-model="genForm.vision_config_id" placeholder="Vision（有图时必选）" clearable style="width: 200px;">
                   <el-option v-for="c in configList" :key="c.id" :label="c.name" :value="c.id" />
@@ -53,16 +61,19 @@
                 <el-select v-model="genForm.text_config_id" placeholder="文本模型" clearable style="width: 200px;">
                   <el-option v-for="c in configList" :key="'t'+c.id" :label="c.name" :value="c.id" />
                 </el-select>
-                <el-tooltip content="同一需求多次分批生成时用于区分，如「场景一」。导图可按批次筛选；重新生成时勾选「替换本批次」会先删该批次旧数据。" placement="top">
+                <el-tooltip content="同一需求多次分批生成时用于区分，如「场景一」。重新生成时勾选「替换本批次」会先删该批次旧数据。" placement="top">
                   <el-input v-model="genForm.batch_name" placeholder="批次名（建议填写）" style="width: 150px;" />
                 </el-tooltip>
                 <el-input-number v-model="genForm.count" :min="5" :max="100" style="width: 110px;" />
                 <el-checkbox v-model="genForm.replace_batch">替换本批次</el-checkbox>
                 <el-button type="primary" :loading="generating" @click="handleGeneratePoints">生成测试点</el-button>
+                <el-button @click="openXmindImport">导入 XMind</el-button>
                 <el-button @click="loadMindmap">刷新导图</el-button>
               </div>
               <div class="gen-bar secondary-bar">
-                <el-checkbox v-model="mindmapScopeOnly" @change="loadMindmap">导图仅显示当前勾选章节</el-checkbox>
+                <el-tooltip content="未勾选：展示全部测试点，按需求文档章节结构排列。勾选：仅展示左侧当前勾选的章节范围。" placement="top">
+                  <el-checkbox v-model="mindmapScopeOnly" @change="loadMindmap">导图仅显示当前勾选章节</el-checkbox>
+                </el-tooltip>
                 <el-tag v-if="mindmapFilteredTotal != null" type="info" size="small">
                   当前导图 {{ mindmapFilteredTotal }} 条
                 </el-tag>
@@ -93,13 +104,14 @@
                     :project-id="proStore.projectInfo?.id"
                     :export-params="mindmapExportParams"
                     :loading="mindmapLoading"
+                    :total="mindmapFilteredTotal"
                     @node-click="onPointNodeClick"
                   />
                 </div>
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="测试点列表" name="points">
+            <el-tab-pane v-if="showEmbedTab('points')" label="测试点列表" name="points">
               <div class="point-filter-bar">
                 <el-input v-model="pointFilters.keyword" placeholder="关键词（标题/描述/模块）" clearable style="width: 200px;" @keyup.enter="loadTestPoints" />
                 <el-select v-model="pointFilters.status" placeholder="状态" clearable style="width: 100px;" @change="loadTestPoints">
@@ -118,6 +130,9 @@
                 <el-select v-model="pointFilters.main_module" placeholder="主模块" clearable filterable style="width: 140px;" @change="loadTestPoints">
                   <el-option v-for="m in pointFilterOptions.main_modules" :key="m" :label="m" :value="m" />
                 </el-select>
+                <el-select v-model="pointFilters.sub_module" placeholder="子模块" clearable filterable style="width: 140px;" @change="loadTestPoints">
+                  <el-option v-for="m in pointFilterOptions.sub_modules" :key="m" :label="m" :value="m" />
+                </el-select>
                 <el-button @click="loadTestPoints" icon="Search">筛选</el-button>
                 <el-button @click="resetPointFilters">重置</el-button>
               </div>
@@ -129,6 +144,7 @@
                 </el-tooltip>
                 <el-button type="danger" :disabled="!selectedPointIds.length" @click="deleteSelected">删除选中</el-button>
                 <el-button type="primary" plain @click="openCaseGenDialog">从测试点生成用例</el-button>
+                <el-button @click="openXmindImport">导入 XMind</el-button>
                 <el-button
                   v-if="canImportLibrary"
                   type="success"
@@ -137,14 +153,14 @@
                   @click="openCopyToLibraryDialog"
                 >复制到用例库</el-button>
                 <span class="list-hint">
-                  显示 {{ displayTestPoints.length }} / 共 {{ testPointsTotalAll }} 条
+                  共 {{ testPointsTotalAll }} 条
                   <el-button
                     v-if="highlightPointId"
                     link
                     type="primary"
                     size="small"
-                    @click="highlightPointId = null"
-                  >清除测试点筛选</el-button>
+                    @click="clearPointHighlight"
+                  >清除高亮 #{{ highlightPointId }}</el-button>
                 </span>
               </div>
               <el-table
@@ -183,7 +199,7 @@
               </el-table>
             </el-tab-pane>
 
-            <el-tab-pane label="测试方案" name="scheme">
+            <el-tab-pane v-if="showEmbedTab('scheme')" label="测试方案" name="scheme">
               <div class="gen-bar">
                 <el-input v-model="schemeForm.title" placeholder="方案标题" style="width: 240px;" />
                 <el-select v-model="schemeForm.text_config_id" placeholder="文本模型" clearable style="width: 200px;">
@@ -262,7 +278,7 @@
               </el-row>
             </el-tab-pane>
 
-            <el-tab-pane label="整体视图" name="overview">
+            <el-tab-pane v-if="showEmbedTab('overview')" label="整体视图" name="overview">
               <div class="overview-stat-row">
                 <div class="overview-stat-card">
                   <div class="stat-value">{{ overview.test_point_total || 0 }}</div>
@@ -338,7 +354,8 @@
             </el-tab-pane>
           </el-tabs>
         </div>
-      </el-drawer>
+        <div v-else-if="embedMode" v-loading="true" class="embed-loading-holder" />
+      </TestingEmbedShell>
 
       <el-dialog v-model="caseGenVisible" title="从测试点生成功能用例" width="560px" destroy-on-close>
         <el-alert
@@ -356,6 +373,7 @@
           </el-form-item>
           <el-form-item label="目标条数">
             <el-input-number v-model="caseGenForm.count" :min="1" :max="50" />
+            <div class="form-item-tip">单次最多 50 条（与需求用例生成一致，保证 AI 输出稳定）；测试点超过 50 时请分批勾选生成。</div>
           </el-form-item>
           <el-form-item label="用例批次名">
             <el-input v-model="caseGenForm.batch_name" placeholder="如：测试点-v1，用于区分多批用例" />
@@ -373,6 +391,16 @@
           <el-form-item label="写入策略">
             <el-checkbox v-model="caseGenForm.replace_existing">替换同批次已有用例</el-checkbox>
             <el-checkbox v-model="caseGenForm.supplement" style="margin-left: 12px;">补充生成（不删旧用例）</el-checkbox>
+          </el-form-item>
+          <el-form-item label="额外要求">
+            <el-input
+              v-model="caseGenForm.extra_instructions"
+              type="textarea"
+              :rows="3"
+              maxlength="2000"
+              show-word-limit
+              placeholder="例如：优先覆盖 P0 测试点；步骤须含具体控件名与提示文案"
+            />
           </el-form-item>
         </el-form>
         <template #footer>
@@ -441,6 +469,15 @@
           </el-table-column>
         </el-table>
         <template #footer>
+          <el-select
+            v-model="importDuplicateMode"
+            size="small"
+            style="width: 120px; margin-right: 8px"
+            title="库中标题+模块重复时的处理方式"
+          >
+            <el-option label="重复跳过" value="skip" />
+            <el-option label="重复覆盖" value="overwrite" />
+          </el-select>
           <el-button @click="copyToLibraryVisible = false">取消</el-button>
           <el-button
             type="primary"
@@ -475,6 +512,7 @@
       </el-dialog>
     </template>
   </PageCard>
+  </div>
 </template>
 
 <script setup>
@@ -484,17 +522,33 @@ import { testPointsCasesSourceRef, formatCaseSourceRefLabel, buildCaseSourceRefO
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
 import PageCard from '@/components/PageCard.vue'
+import TestingEmbedShell from '@/components/TestingEmbedShell.vue'
 import TestPointMindMap from '@/components/TestPointMindMap.vue'
 import MarkdownReport from '@/components/MarkdownReport.vue'
 import { aiTestAnalysisApi, aiConfigApi, aiRequirementApi, aiFunctionalCaseApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
 
+const props = defineProps({
+  embedMode: { type: Boolean, default: false },
+  embedReqId: { type: Number, default: null },
+  embedTab: { type: String, default: '' },
+  highlightPointId: { type: Number, default: null }
+})
+
+const showEmbedTab = (name) => {
+  if (!props.embedTab) return true
+  if (props.embedTab === 'schemes') return name === 'scheme'
+  return props.embedTab === name
+}
+
 const router = useRouter()
 const route = useRoute()
 const proStore = ProjectStore()
 const uStore = UserStore()
-const highlightPointId = ref(null)
+const highlightPointId = ref(props.highlightPointId || null)
+const xmindFileInput = ref(null)
+const xmindImportLoading = ref(false)
 
 const canImportLibrary = computed(() => uStore.hasPermission('ai_test:execute'))
 
@@ -520,7 +574,9 @@ const genForm = reactive({
   count: 30,
   replace_batch: true
 })
-const mindmapScopeOnly = ref(true)
+/** 最近一次由章节勾选自动填入的批次名，用于区分用户手动修改 */
+const lastAutoBatchName = ref('')
+const mindmapScopeOnly = ref(false)
 const mindmapFilteredTotal = ref(null)
 const generating = ref(false)
 const mindmapLoading = ref(false)
@@ -536,13 +592,15 @@ const pointFilters = reactive({
   test_type: '',
   priority: '',
   batch_name: '',
-  main_module: ''
+  main_module: '',
+  sub_module: ''
 })
 const pointFilterOptions = ref({
   batches: [],
   test_types: [],
   priorities: [],
-  main_modules: []
+  main_modules: [],
+  sub_modules: []
 })
 
 const schemes = ref([])
@@ -578,12 +636,14 @@ const caseGenForm = reactive({
   scope_mode: 'confirmed',
   include_requirement_excerpt: true,
   replace_existing: false,
-  supplement: false
+  supplement: false,
+  extra_instructions: ''
 })
 
 const copyToLibraryVisible = ref(false)
 const copyToLibraryLoading = ref(false)
 const importingToLibrary = ref(false)
+const importDuplicateMode = ref('skip')
 const workspaceCases = ref([])
 const selectedLibraryCaseIds = ref([])
 const libraryCaseSourceRef = ref('')
@@ -627,8 +687,10 @@ const mindmapQueryParams = computed(() => {
   if (mindmapScopeOnly.value && selectedSectionIds.value.length) {
     params.section_ids = selectedSectionIds.value.join(',')
   }
-  const batch = (genForm.batch_name || '').trim()
-  if (batch) params.batch_name = batch
+  if (currentReq.value?.source_type === 'xmind') {
+    params.layout = 'module'
+    delete params.section_ids
+  }
   return params
 })
 
@@ -639,10 +701,16 @@ const mindmapExportParams = computed(() => {
 })
 
 function inferBatchName() {
-  if (genForm.batch_name?.trim()) return
   const idSet = new Set(selectedSectionIds.value)
   const selected = docSections.value.filter(s => idSet.has(s.id))
-  if (!selected.length) return
+  if (!selected.length) {
+    const current = (genForm.batch_name || '').trim()
+    if (!current || current === lastAutoBatchName.value) {
+      genForm.batch_name = ''
+      lastAutoBatchName.value = ''
+    }
+    return
+  }
   const byId = Object.fromEntries(docSections.value.map(s => [s.id, s]))
   let top = selected[0]
   let cur = top
@@ -651,7 +719,13 @@ function inferBatchName() {
     if (idSet.has(cur.id)) top = cur
   }
   const title = (top?.title || '').trim()
-  if (title) genForm.batch_name = title.slice(0, 40)
+  const inferred = title ? title.slice(0, 40) : ''
+  if (!inferred) return
+  const current = (genForm.batch_name || '').trim()
+  if (!current || current === lastAutoBatchName.value) {
+    genForm.batch_name = inferred
+    lastAutoBatchName.value = inferred
+  }
 }
 
 function buildSectionTree(sections) {
@@ -699,6 +773,7 @@ const loadDocumentStructure = async () => {
       selectedSectionIds.value = docSections.value.map(s => s.id)
       await nextTick()
       sectionTreeRef.value?.setCheckedKeys(selectedSectionIds.value)
+      inferBatchName()
     }
   } catch (e) { console.error(e) }
 }
@@ -713,6 +788,7 @@ const onSectionCheck = () => {
 const selectAllSections = () => {
   selectedSectionIds.value = docSections.value.map(s => s.id)
   sectionTreeRef.value?.setCheckedKeys(selectedSectionIds.value)
+  inferBatchName()
   estimateScopeHint()
 }
 
@@ -720,6 +796,7 @@ const clearSections = () => {
   selectedSectionIds.value = []
   sectionTreeRef.value?.setCheckedKeys([])
   scopeHint.value = ''
+  inferBatchName()
 }
 
 const estimateScopeHint = async () => {
@@ -769,9 +846,7 @@ const buildPointFilterParams = () => {
   if (pointFilters.priority) p.priority = pointFilters.priority
   if (pointFilters.batch_name) p.batch_name = pointFilters.batch_name
   if (pointFilters.main_module) p.main_module = pointFilters.main_module
-  if (mindmapScopeOnly.value && selectedSectionIds.value.length) {
-    p.section_ids = selectedSectionIds.value.join(',')
-  }
+  if (pointFilters.sub_module) p.sub_module = pointFilters.sub_module
   return p
 }
 
@@ -801,6 +876,7 @@ const resetPointFilters = () => {
   pointFilters.priority = ''
   pointFilters.batch_name = ''
   pointFilters.main_module = ''
+  pointFilters.sub_module = ''
   loadTestPoints()
 }
 
@@ -823,12 +899,21 @@ const loadOverview = async () => {
   }
 }
 
+const resolveInitialTab = () => {
+  if (props.embedMode && props.embedTab) {
+    return props.embedTab === 'schemes' ? 'scheme' : props.embedTab
+  }
+  return 'mindmap'
+}
+
 const openDetail = async (row) => {
   currentReq.value = { ...row }
   detailVisible.value = true
-  activeTab.value = 'mindmap'
+  activeTab.value = resolveInitialTab()
   currentScheme.value = null
   schemeMdEdit.value = ''
+  genForm.batch_name = ''
+  lastAutoBatchName.value = ''
   if (!schemeEnvHints.system_name) schemeEnvHints.system_name = row.name || ''
   if (!schemeForm.title) schemeForm.title = `${row.name || ''} 测试方案`
   await loadDocumentStructure()
@@ -1137,28 +1222,43 @@ watch(activeTab, (tab) => {
   if (tab === 'scheme') loadSchemes()
 })
 
-const goUpload = () => router.push('/ai-requirements')
+const goUpload = () => router.push('/ai-testing')
 
 const goCases = (row, opts = {}) => {
   const reqId = row?.id || currentReq.value?.id
   if (!reqId) return
-  const query = { reqId: String(reqId) }
+  const query = { tab: 'cases' }
   if (opts.sourceRef) query.sourceRef = opts.sourceRef
   if (opts.pointId) query.pointId = String(opts.pointId)
-  router.push({ path: '/ai-requirements', query })
+  router.push({ name: 'aiTestingWorkspace', params: { reqId: String(reqId) }, query })
 }
 
 const goCasesForPoint = (pointRow) => {
   goCases(currentReq.value, { pointId: pointRow.id })
 }
 
-const displayTestPoints = computed(() => {
-  if (!highlightPointId.value) return testPoints.value
-  return testPoints.value.filter(p => p.id === highlightPointId.value)
-})
+const clearPointHighlight = () => {
+  highlightPointId.value = null
+  if (props.embedMode && currentReq.value?.id) {
+    router.replace({
+      name: 'aiTestingWorkspace',
+      params: { reqId: currentReq.value.id },
+      query: { tab: 'points' }
+    })
+  }
+}
+
+const displayTestPoints = computed(() => testPoints.value)
 
 const testPointRowClass = ({ row }) =>
   highlightPointId.value && row.id === highlightPointId.value ? 'tp-row-highlight' : ''
+
+const resolveCaseGenScopePointIds = (mode) => {
+  const list = displayTestPoints.value
+  if (mode === 'selected') return [...selectedPointIds.value]
+  if (mode === 'confirmed') return list.filter(p => p.status === 'confirmed').map(p => p.id)
+  return list.map(p => p.id)
+}
 
 const openCaseGenDialog = () => {
   if (!currentReq.value) return
@@ -1166,11 +1266,13 @@ const openCaseGenDialog = () => {
   caseGenForm.case_gen_config_id = caseGenForm.case_gen_config_id || genForm.text_config_id
   if (selectedPointIds.value.length) {
     caseGenForm.scope_mode = 'selected'
-  } else if (overview.test_point_confirmed > 0) {
+  } else if (testPoints.value.some(p => p.status === 'confirmed')) {
     caseGenForm.scope_mode = 'confirmed'
   } else {
     caseGenForm.scope_mode = 'all'
   }
+  const scopeIds = resolveCaseGenScopePointIds(caseGenForm.scope_mode)
+  caseGenForm.count = Math.min(50, Math.max(1, scopeIds.length || 20))
   caseGenVisible.value = true
 }
 
@@ -1254,10 +1356,19 @@ const handleImportToLibrary = async () => {
     const res = await aiFunctionalCaseApi.importToLibrary(
       currentReq.value.id,
       selectedLibraryCaseIds.value,
-      proStore.projectInfo.id
+      proStore.projectInfo.id,
+      { duplicateTitleMode: importDuplicateMode.value }
     )
     if (res.data?.code === 200) {
-      ElMessage.success(res.data.message || '复制成功')
+      const d = res.data.data || {}
+      const msg = res.data.message || '复制成功'
+      if (d.copied_count > 0 || d.overwritten_count > 0) {
+        ElMessage.success(msg)
+      } else if (d.skipped_count > 0) {
+        ElMessage.warning(msg)
+      } else {
+        ElMessage.info(msg)
+      }
       copyToLibraryVisible.value = false
       await loadOverview()
     }
@@ -1274,6 +1385,11 @@ const handleGenerateCasesFromPoints = async () => {
     ElMessage.warning('请选择用例生成模型')
     return
   }
+  const scopePointIds = resolveCaseGenScopePointIds(caseGenForm.scope_mode)
+  if (!scopePointIds.length) {
+    ElMessage.warning('当前范围内没有可用测试点，请调整筛选或勾选后重试')
+    return
+  }
   const payload = {
     case_gen_config_id: caseGenForm.case_gen_config_id,
     count: caseGenForm.count,
@@ -1281,12 +1397,9 @@ const handleGenerateCasesFromPoints = async () => {
     include_requirement_excerpt: caseGenForm.include_requirement_excerpt,
     replace_existing: caseGenForm.replace_existing,
     supplement: caseGenForm.supplement,
+    extra_instructions: (caseGenForm.extra_instructions || '').trim() || undefined,
     include_unconfirmed_points: caseGenForm.scope_mode === 'all',
-    test_point_ids: caseGenForm.scope_mode === 'selected' ? [...selectedPointIds.value] : []
-  }
-  if (caseGenForm.scope_mode === 'selected' && !payload.test_point_ids.length) {
-    ElMessage.warning('请先勾选测试点，或改为「全部已确认」')
-    return
+    test_point_ids: scopePointIds
   }
   caseGenLoading.value = true
   try {
@@ -1321,6 +1434,56 @@ const handleGenerateCasesFromPoints = async () => {
   }
 }
 
+const openDetailById = async (reqId) => {
+  if (!reqId) return
+  let row = reqList.value.find(r => r.id === reqId)
+  if (!row) {
+    try {
+      const res = await aiRequirementApi.getDetail(reqId, proStore.projectInfo?.id)
+      if (res.data?.code === 200) row = res.data.data
+    } catch (e) { /* ignore */ }
+  }
+  if (row) await openDetail(row)
+}
+
+const openXmindImport = () => {
+  xmindFileInput.value?.click()
+}
+
+const onXmindFileChange = async (e) => {
+  const file = e.target.files?.[0]
+  e.target.value = ''
+  if (!file || !currentReq.value) return
+  try {
+    const { value: batchName } = await ElMessageBox.prompt('导入批次名（可选）', '导入 XMind 测试点', {
+      confirmButtonText: '导入',
+      cancelButtonText: '取消',
+      inputPlaceholder: '如：外部导图-v1'
+    }).catch(() => ({ value: null }))
+    if (batchName === null) return
+    xmindImportLoading.value = true
+    const res = await aiTestAnalysisApi.importTestPointsXmind(
+      currentReq.value.id,
+      file,
+      { batch_name: batchName || '', replace_batch: false },
+      proStore.projectInfo.id
+    )
+    if (res.data?.code === 200) {
+      ElMessage.success(res.data.message || '导入成功')
+      mindmapScopeOnly.value = false
+      await loadOverview()
+      await loadTestPoints()
+      await loadMindmap()
+    }
+  } catch (err) {
+    if (err !== 'cancel' && err !== 'close') {
+      ElMessage.error(err?.response?.data?.detail || err?.message || '导入失败')
+    }
+  } finally {
+    xmindImportLoading.value = false
+  }
+}
+
 const openDetailFromRoute = async () => {
   const rawId = route.query.reqId
   if (!rawId) return
@@ -1344,8 +1507,36 @@ const openDetailFromRoute = async () => {
 
 onMounted(async () => {
   loadConfigs()
+  if (props.embedMode && props.embedReqId) {
+    if (props.embedTab) {
+      activeTab.value = props.embedTab === 'schemes' ? 'scheme' : props.embedTab
+    }
+    if (props.highlightPointId) highlightPointId.value = props.highlightPointId
+    await openDetailById(Number(props.embedReqId))
+    detailVisible.value = true
+    return
+  }
   await loadList()
   await openDetailFromRoute()
+})
+
+watch(() => props.embedReqId, async (id) => {
+  if (!props.embedMode || !id) return
+  await openDetailById(Number(id))
+  detailVisible.value = true
+})
+
+watch(() => props.embedTab, (tab) => {
+  if (!props.embedMode || !tab) return
+  activeTab.value = tab === 'schemes' ? 'scheme' : tab
+})
+
+watch(() => props.highlightPointId, (pid) => {
+  if (pid) {
+    highlightPointId.value = pid
+    activeTab.value = 'points'
+    loadTestPoints()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -1391,7 +1582,7 @@ onBeforeUnmount(() => {
 .mindmap-layout {
   display: flex;
   gap: 12px;
-  min-height: 480px;
+  min-height: 560px;
 }
 .section-panel {
   width: 260px;
@@ -1400,7 +1591,7 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   padding: 8px;
   overflow: auto;
-  max-height: 520px;
+  max-height: 600px;
 }
 .panel-head {
   display: flex;
@@ -1501,6 +1692,12 @@ onBeforeUnmount(() => {
   font-family: Consolas, Monaco, monospace;
   font-size: 13px;
 }
+.form-item-tip {
+  margin-top: 4px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
+}
 .list-hint {
   color: #909399;
   font-size: 12px;
@@ -1518,5 +1715,22 @@ onBeforeUnmount(() => {
 }
 :deep(.tp-row-highlight) {
   background-color: #ecf5ff !important;
+}
+.analysis-embed-host :deep(.embed-hidden-card > .el-card__header) {
+  display: none;
+}
+.analysis-embed-host :deep(.embed-hidden-card) {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+.analysis-embed-host :deep(.embed-hidden-card > .el-card__body) {
+  padding: 0;
+}
+.embed-loading-holder {
+  min-height: 160px;
+}
+.single-embed-tab :deep(> .el-tabs__header) {
+  display: none;
 }
 </style>

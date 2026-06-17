@@ -64,6 +64,7 @@ async def get_task(project_id: int, page: int = 1, size: int = 10,
             "name": task.name,
             "username": task.username,
             "catalog_id": task.catalog_id,
+            "parallel": bool(task.parallel),
             "status": state,
             'create_time': task.create_time,
             "update_time": task.update_time,
@@ -101,6 +102,8 @@ async def update_task(task_id: int, item: UpdateTaskForm):
     if item.catalog_id is not None:
         await resolve_catalog(task.project_id, item.catalog_id)
         task.catalog_id = item.catalog_id
+    if item.parallel is not None:
+        task.parallel = item.parallel
     await task.save()
     return task
 
@@ -207,6 +210,7 @@ async def get_task_detail(task_id: int):
         "id": task.id,
         "name": task.name,
         "username": task.username,
+        "parallel": bool(task.parallel),
         'create_time': task.create_time,
         "update_time": task.update_time,
         "suites": suite_list,

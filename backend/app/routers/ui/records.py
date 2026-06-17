@@ -1,19 +1,47 @@
+import json
 import os
+import time
 import uuid
 import asyncio
+from typing import List
 from fastapi import APIRouter, HTTPException, Depends, status, Response
+from pydantic import BaseModel, Field
 from app.models.ui import (
     Task, Suite, Case,
     UiPlanExecution, UiSuiteExecution, UiCaseExecution
 )
 from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import UI_RECORD_VIEW
+from app.core.permissions import UI_RECORD_EDIT, UI_RECORD_VIEW
+from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.core.platform_settings_service import (
+    delete_ui_case_execution,
+    get_ui_case_record_delete_mode,
+    restore_ui_case_execution,
+)
 from app.core.report_export import generate_html_report, ImageExportOptions
 from app.core.minio_client import minio_client, is_minio_storage
 from app.schemas.ui import SuiteResultSchemas, TaskResultSchemas
 
-# 异步导出任务缓存
+# 异步导出任务缓存（内存，24h TTL）
 export_tasks: dict = {}
+EXPORT_TASK_TTL_SECONDS = 24 * 3600
+
+
+def _cleanup_export_tasks() -> None:
+    now = time.time()
+    expired = [
+        task_id
+        for task_id, meta in export_tasks.items()
+        if now - meta.get("created_at", now) > EXPORT_TASK_TTL_SECONDS
+    ]
+    for task_id in expired:
+        export_tasks.pop(task_id, None)
+        file_path = os.path.join(EXPORT_DIR, f"{task_id}.html")
+        if os.path.isfile(file_path):
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
 # 导出文件存放目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 EXPORT_DIR = os.path.join(BASE_DIR, "static", "exports")
@@ -109,12 +137,21 @@ async def get_task_record(project_id: int, task_id: int = None, page: int = 1, s
 
 
 # 未知
-@router.delete('/tasks/{record_id}', summary='删除任务运行记录', status_code=status.HTTP_204_NO_CONTENT)
-async def delete_task_record(record_id: int):
+@router.delete(
+    '/tasks/{record_id}',
+    summary='删除任务运行记录',
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permissions(UI_RECORD_EDIT))],
+)
+async def delete_task_record(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(UI_RECORD_EDIT)),
+):
     """删除任务运行记录"""
     record = await UiPlanExecution.get_or_none(id=record_id, is_del=False)
     if not record:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="任务运行记录不存在或已被删除")
+    await assert_user_project_member(user_info, record.project_id)
     # 逻辑删除
     record.is_del = True
     await record.save()
@@ -122,12 +159,16 @@ async def delete_task_record(record_id: int):
 
 # 获取单个测试计划执行结果详情
 @router.get("/tasks/{record_id}", summary="任务的执行详情", status_code=status.HTTP_200_OK, response_model=TaskResultSchemas)
-async def get_task_record_detail(record_id: int):
+async def get_task_record_detail(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(UI_RECORD_VIEW)),
+):
     """获取单个测试计划执行结果详情"""
     record = await UiPlanExecution.get_or_none(id=record_id, is_del=False).prefetch_related('task')
     if not record:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                             detail="测试计划执行记录不存在或已被删除")
+    await assert_user_project_viewer(user_info, record.project_id)
     result = TaskResultSchemas(**record.__dict__, task_name=record.task.name)
     return result
 
@@ -135,18 +176,43 @@ async def get_task_record_detail(record_id: int):
 # ==================== 套件运行记录 ====================
 
 @router.get("/suites", summary="套件运行记录", status_code=status.HTTP_200_OK)
-async def get_suite_record(suite_id: int = None, task_records_id: int = None, page: int = 1, size: int = 10):
-    """获取测试套件运行记录列表"""
-    # 未知
+async def get_suite_record(
+    project_id: int | None = None,
+    suite_id: int | None = None,
+    task_records_id: int | None = None,
+    page: int = 1,
+    size: int = 10,
+    name: str | None = None,
+    status: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    user_info: dict = Depends(require_permissions(UI_RECORD_VIEW)),
+):
+    """获取测试套件运行记录列表（按 project_id / suite_id / task_records_id 筛选）"""
     query = UiSuiteExecution.filter(is_del=False)
-    if suite_id:
-        query = query.filter(suite=suite_id)
-    elif task_records_id:
+    if task_records_id:
         query = query.filter(plan_execution=task_records_id)
+        query = query.order_by("id")
+    elif suite_id:
+        query = query.filter(suite=suite_id)
+    elif project_id:
+        await assert_user_project_viewer(user_info, project_id)
+        query = query.filter(suite__project_id=project_id, suite__is_del=False)
     else:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            detail="suite_id和suite_execution_id至少传递一个！")
-    query = query.order_by("-id")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="project_id、suite_id、task_records_id 至少传递一个！",
+        )
+    if name:
+        query = query.filter(suite__name__icontains=name)
+    if status:
+        query = query.filter(status=status)
+    if start_date:
+        query = query.filter(start_time__gte=start_date)
+    if end_date:
+        query = query.filter(start_time__lte=f"{end_date} 23:59:59")
+    if not task_records_id:
+        query = query.order_by("-id")
     total = await query.count()
     data = await query.offset((page - 1) * size).limit(size).prefetch_related('suite')
     result = []
@@ -175,12 +241,21 @@ async def get_suite_record(suite_id: int = None, task_records_id: int = None, pa
 
 
 # 未知
-@router.delete('/suites/{record_id}', summary='删除套件运行记录', status_code=status.HTTP_204_NO_CONTENT)
-async def delete_suite_record(record_id: int):
+@router.delete(
+    '/suites/{record_id}',
+    summary='删除套件运行记录',
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permissions(UI_RECORD_EDIT))],
+)
+async def delete_suite_record(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(UI_RECORD_EDIT)),
+):
     """删除套件运行记录"""
-    record = await UiSuiteExecution.get_or_none(id=record_id, is_del=False)
+    record = await UiSuiteExecution.get_or_none(id=record_id, is_del=False).prefetch_related("suite")
     if not record:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="套件运行记录不存在或已被删除")
+    await assert_user_project_member(user_info, record.suite.project_id)
     # 逻辑删除
     record.is_del = True
     await record.save()
@@ -188,23 +263,37 @@ async def delete_suite_record(record_id: int):
 
 # 获取单个测试套件执行结果详情
 @router.get("/suites/{record_id}", summary="套件的执行详情", status_code=status.HTTP_200_OK, response_model=SuiteResultSchemas)
-async def get_suite_record_detail(record_id: int):
+async def get_suite_record_detail(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(UI_RECORD_VIEW)),
+):
     """获取单个测试套件执行结果详情"""
     record = await UiSuiteExecution.get_or_none(id=record_id, is_del=False).prefetch_related('suite')
     if not record:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                             detail="测试套件执行记录不存在或已被删除")
+    await assert_user_project_viewer(user_info, record.suite.project_id)
     result = SuiteResultSchemas(**record.__dict__, suite_name=record.suite.name)
     return result
 
 
 # ==================== 用例运行记录 ====================
 
+class CaseRecordIdsForm(BaseModel):
+    record_ids: List[int] = Field(..., min_length=1, description="记录 ID 列表")
+    permanent: bool = Field(default=False, description="是否永久删除（回收站）")
+
+
 @router.get("/cases", summary="用例运行记录", status_code=status.HTTP_200_OK)
-async def get_case_record(case_id: int = None, suite_execution_id: int = None, page: int = 1, size: int = 10):
+async def get_case_record(
+    case_id: int = None,
+    suite_execution_id: int = None,
+    page: int = 1,
+    size: int = 10,
+    recycle_bin: bool = False,
+):
     """获取测试用例运行记录列表"""
-    # 未知
-    query = UiCaseExecution.filter(is_del=False).prefetch_related('case')
+    query = UiCaseExecution.filter(is_del=recycle_bin).prefetch_related('case')
     if case_id:
         query = query.filter(case=case_id)
     elif suite_execution_id:
@@ -215,10 +304,10 @@ async def get_case_record(case_id: int = None, suite_execution_id: int = None, p
     query = query.order_by("-id")
     total = await query.count()
     data = await query.offset((page - 1) * size).limit(size).prefetch_related('case')
+    delete_mode = await get_ui_case_record_delete_mode()
     result = []
     loop = asyncio.get_running_loop()
     for i in data:
-        # 把同步的 _presign_media_urls 放到线程池执行，避免阻塞事件循环
         presigned_data = await loop.run_in_executor(
             None, _presign_media_urls, i.result_data
         )
@@ -233,29 +322,112 @@ async def get_case_record(case_id: int = None, suite_execution_id: int = None, p
             "env": i.env,
             "is_del": i.is_del
         })
-    return {"total": total, "data": result}
+    return {"total": total, "data": result, "delete_mode": delete_mode}
 
 
-# 未知
-@router.delete('/cases/{record_id}', summary='删除用例运行记录', status_code=status.HTTP_204_NO_CONTENT)
-async def delete_case_record(record_id: int):
-    """删除用例运行记录"""
-    record = await UiCaseExecution.get_or_none(id=record_id, is_del=False)
+@router.post(
+    "/cases/batch-delete",
+    summary="批量删除用例运行记录",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permissions(UI_RECORD_EDIT))],
+)
+async def batch_delete_case_records(
+    body: CaseRecordIdsForm,
+    user_info: dict = Depends(require_permissions(UI_RECORD_EDIT)),
+):
+    """批量删除用例运行记录（遵循平台删除策略）"""
+    deleted = 0
+    for record_id in body.record_ids:
+        if body.permanent:
+            record = await UiCaseExecution.get_or_none(id=record_id, is_del=True).prefetch_related("case")
+        else:
+            record = await UiCaseExecution.get_or_none(id=record_id, is_del=False).prefetch_related("case")
+        if not record:
+            continue
+        await assert_user_project_member(user_info, record.case.project_id)
+        await delete_ui_case_execution(record, permanent=body.permanent)
+        deleted += 1
+    if deleted == 0:
+        raise HTTPException(status_code=400, detail="未找到可删除的记录")
+    return {"deleted": deleted}
+
+
+@router.post(
+    "/cases/batch-restore",
+    summary="批量恢复用例运行记录",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permissions(UI_RECORD_EDIT))],
+)
+async def batch_restore_case_records(
+    body: CaseRecordIdsForm,
+    user_info: dict = Depends(require_permissions(UI_RECORD_EDIT)),
+):
+    """从回收站批量恢复用例运行记录"""
+    restored = 0
+    for record_id in body.record_ids:
+        record = await UiCaseExecution.get_or_none(id=record_id, is_del=True).prefetch_related("case")
+        if not record:
+            continue
+        await assert_user_project_member(user_info, record.case.project_id)
+        await restore_ui_case_execution(record)
+        restored += 1
+    if restored == 0:
+        raise HTTPException(status_code=400, detail="未找到可恢复的记录")
+    return {"restored": restored}
+
+
+@router.post(
+    "/cases/{record_id}/restore",
+    summary="恢复用例运行记录",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permissions(UI_RECORD_EDIT))],
+)
+async def restore_case_record(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(UI_RECORD_EDIT)),
+):
+    """从回收站恢复用例运行记录"""
+    record = await UiCaseExecution.get_or_none(id=record_id, is_del=True).prefetch_related("case")
+    if not record:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="记录不存在或不在回收站中")
+    await assert_user_project_member(user_info, record.case.project_id)
+    await restore_ui_case_execution(record)
+
+
+@router.delete(
+    '/cases/{record_id}',
+    summary='删除用例运行记录',
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permissions(UI_RECORD_EDIT))],
+)
+async def delete_case_record(
+    record_id: int,
+    permanent: bool = False,
+    user_info: dict = Depends(require_permissions(UI_RECORD_EDIT)),
+):
+    """删除用例运行记录（遵循平台删除策略；回收站中 permanent=true 为物理删除）"""
+    if permanent:
+        record = await UiCaseExecution.get_or_none(id=record_id, is_del=True).prefetch_related("case")
+    else:
+        record = await UiCaseExecution.get_or_none(id=record_id, is_del=False).prefetch_related("case")
     if not record:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="用例运行记录不存在或已被删除")
-    # 逻辑删除
-    record.is_del = True
-    await record.save()
+    await assert_user_project_member(user_info, record.case.project_id)
+    await delete_ui_case_execution(record, permanent=permanent)
 
 
 # 获取单个测试用例执行结果详情
 @router.get("/cases/{record_id}", summary="用例的执行详情", status_code=status.HTTP_200_OK)
-async def get_case_record_detail(record_id: int):
+async def get_case_record_detail(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(UI_RECORD_VIEW)),
+):
     """获取单个测试用例执行结果详情"""
-    record = await UiCaseExecution.get_or_none(id=record_id, is_del=False)
+    record = await UiCaseExecution.get_or_none(id=record_id, is_del=False).prefetch_related("case")
     if not record:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                             detail="测试用例执行记录不存在或已被删除")
+    await assert_user_project_viewer(user_info, record.case.project_id)
     return record
 
 
@@ -422,12 +594,14 @@ async def export_report_async(
         record_id, record_type, include_images, image_mode, include_video
     )
     
+    _cleanup_export_tasks()
     task_id = str(uuid.uuid4())
     export_tasks[task_id] = {
         "status": "pending",
         "download_url": None,
         "filename": context[3],
-        "error": None
+        "error": None,
+        "created_at": time.time(),
     }
     
     async def _run_export():
@@ -458,6 +632,7 @@ async def export_report_async(
 @router.get("/export-status/{task_id}", summary="查询异步导出任务状态")
 async def export_report_status(task_id: str):
     """查询导出任务状态和下载链接"""
+    _cleanup_export_tasks()
     task = export_tasks.get(task_id)
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在")

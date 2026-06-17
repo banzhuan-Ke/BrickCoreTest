@@ -24,9 +24,8 @@ from app.core.functional_case_to_ui import (
 )
 from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, UI_CASE_EDIT
 from app.core.zentao_bindings import bindings_for_export, load_project_bindings
-from app.core.zentao_case_export import ZENTAO_EXPORT_COLUMNS, build_xlsx_bytes
+from app.core.zentao_case_export import ZENTAO_EXPORT_COLUMNS, build_xlsx_bytes, case_to_export_row
 from app.core.zentao_case_import import parse_zentao_xlsx_to_cases
-from app.core.zentao_bindings import resolve_stage
 from app.models.ai import AiFunctionalCase, AiRequirement, AiRequirementCase
 from app.schemas.ai import StandardResponse
 
@@ -36,6 +35,7 @@ router = APIRouter(prefix="/functional-cases", tags=["功能用例库"])
 
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 MAX_COPY_PER_REQUEST = 500
+MAX_EXPORT_ROWS = 10000
 ZENTAO_SORT_MEMORY_LIMIT = 5000
 
 FUNCTIONAL_CASE_SORT_FIELDS = frozenset({"zentao_case_id", "create_time", "update_time"})
@@ -85,6 +85,70 @@ def _apply_zentao_id_presence_filter(q, has_zentao_case_id: Optional[str]):
     if flag in ("0", "false", "no", "none"):
         return q.filter(Q(zentao_case_id__isnull=True) | Q(zentao_case_id=""))
     return q
+
+
+def _apply_functional_case_filters(
+    q,
+    *,
+    product: Optional[str] = None,
+    module: Optional[str] = None,
+    related_story: Optional[str] = None,
+    priority: Optional[str] = None,
+    source_type: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    keyword: Optional[str] = None,
+    zentao_case_id: Optional[str] = None,
+    has_zentao_case_id: Optional[str] = None,
+    import_batch: Optional[str] = None,
+):
+    """与列表接口一致的筛选项"""
+    if product:
+        q = q.filter(product__icontains=product.strip())
+    if module:
+        q = q.filter(module__icontains=module.strip())
+    if related_story:
+        q = q.filter(related_story__icontains=related_story.strip())
+    if priority:
+        q = q.filter(priority=priority)
+    if source_type:
+        q = q.filter(source_type=source_type)
+    if status_filter:
+        q = q.filter(status=status_filter)
+    if import_batch:
+        q = q.filter(source_import_batch=import_batch)
+    if keyword:
+        q = q.filter(title__icontains=keyword)
+    if zentao_case_id:
+        q = q.filter(zentao_case_id__icontains=zentao_case_id.strip())
+    return _apply_zentao_id_presence_filter(q, has_zentao_case_id)
+
+
+async def _fetch_all_functional_cases(
+    q,
+    *,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
+) -> list:
+    """按列表排序规则取全部匹配用例（导出用）"""
+    sort_field = (sort_by or "").strip()
+    desc = (sort_order or "desc").strip().lower() != "asc"
+    if sort_field == "zentao_case_id":
+        total = await q.count()
+        if total > ZENTAO_SORT_MEMORY_LIMIT:
+            order_fields = ("-_zentao_num", "-id") if desc else ("_zentao_num", "id")
+            return (
+                await q.annotate(_zentao_num=_zentao_id_numeric_sql())
+                .order_by(*order_fields)
+                .all()
+            )
+        all_cases = await q.all()
+        return _sort_cases_by_zentao_id(all_cases, desc)
+    return await _apply_list_order(q, sort_by, sort_order).all()
+
+
+async def _fetch_cases_for_export(q) -> list:
+    """导出 XLSX：按生成顺序（id 升序），与需求自上而下生成一致"""
+    return await q.order_by("id").all()
 
 
 def _resolve_project_id(user_info: dict, project_id: Optional[int] = None) -> int:
@@ -141,6 +205,7 @@ class DuplicateCheckBody(BaseModel):
 
 class ImportToLibraryBody(BaseModel):
     case_ids: list[int] = Field(..., min_length=1)
+    duplicate_title_mode: str = Field(default="skip")
 
 
 class UiContextBody(BaseModel):
@@ -180,6 +245,7 @@ class ImportUiCaseItem(BaseModel):
     steps: list = Field(default_factory=list)
     case_name: Optional[str] = Field(default=None, max_length=50)
     level: Optional[str] = Field(default=None, max_length=10)
+    case_description: Optional[str] = Field(default=None, max_length=4000, description="Web 用例描述")
     record_id: Optional[int] = None
 
 
@@ -187,45 +253,13 @@ class ImportUiBody(UiContextBody):
     items: list[ImportUiCaseItem] = Field(..., min_length=1)
 
 
-def _case_to_xlsx_rows(case_dict: dict, defaults: dict) -> list[dict]:
-    """禅道习惯：一步骤一行"""
-    steps = align_steps_expects(case_dict.get("steps") or [])
-    priority = str(case_dict.get("priority") or "2")
-    stage = (case_dict.get("stage") or "").strip() or resolve_stage(priority, defaults)
-    zentao_id = (
-        (case_dict.get("zentao_case_id") or "").strip()
-        or (case_dict.get("zentao_case_id_display") or "").strip()
-    )
-    rows = []
-    for i, st in enumerate(steps):
-        rows.append({
-            "所属产品": (case_dict.get("product") or defaults.get("product") or "").strip(),
-            "所属模块": (case_dict.get("module") or defaults.get("module") or "").strip(),
-            "相关研发需求": (case_dict.get("related_story") or defaults.get("related_story") or "").strip(),
-            "用例标题": (case_dict.get("title") or "").strip(),
-            "用例编号": zentao_id if i == 0 else "",
-            "前置条件": (case_dict.get("precondition") or "").strip() if i == 0 else "",
-            "步骤": st.get("step") or "",
-            "预期": st.get("expect") or "",
-            "优先级": priority,
-            "用例类型": (case_dict.get("type") or "功能测试").strip(),
-            "适用阶段": stage,
-        })
-    if not rows:
-        rows.append({
-            "所属产品": (case_dict.get("product") or "").strip(),
-            "所属模块": (case_dict.get("module") or "").strip(),
-            "相关研发需求": (case_dict.get("related_story") or "").strip(),
-            "用例标题": (case_dict.get("title") or "").strip(),
-            "用例编号": zentao_id,
-            "前置条件": (case_dict.get("precondition") or "").strip(),
-            "步骤": "",
-            "预期": "",
-            "优先级": priority,
-            "用例类型": case_dict.get("type") or "功能测试",
-            "适用阶段": stage,
-        })
-    return rows
+def _case_to_xlsx_row(case_dict: dict, defaults: dict) -> dict:
+    """单条用例 → 导出行，多步骤合并到步骤/预期单元格（1.xxx\\n2.xxx）"""
+    export_case = {
+        **case_dict,
+        "zentao_module": (case_dict.get("module") or "").strip(),
+    }
+    return case_to_export_row(export_case, defaults)
 
 
 def _zentao_id_numeric_sql() -> RawSQL:
@@ -254,11 +288,54 @@ async def _list_cases_by_zentao_id(q, *, desc: bool, page: int, size: int) -> tu
     return all_cases[(page - 1) * size : page * size], total
 
 
+async def _distinct_field_values(project_id: int, field: str, *, limit: int = 200) -> list[str]:
+    """项目下某字段的去重非空值（按字母序）。"""
+    rows = (
+        await AiFunctionalCase.filter(project_id=project_id, is_del=False)
+        .exclude(**{field: ""})
+        .exclude(**{field: None})
+        .order_by(field)
+        .values_list(field, flat=True)
+    )
+    seen: set[str] = set()
+    out: list[str] = []
+    for val in rows:
+        text = (val or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+@router.get(
+    "/filter-options",
+    summary="筛选项（所属产品、模块、关联需求）",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def list_filter_options(
+    project_id: Optional[int] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    pid = _resolve_project_id(user_info, project_id)
+    return StandardResponse(
+        data={
+            "products": await _distinct_field_values(pid, "product"),
+            "modules": await _distinct_field_values(pid, "module"),
+            "related_stories": await _distinct_field_values(pid, "related_story"),
+        }
+    )
+
+
 @router.get("", summary="功能用例库列表", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
 async def list_functional_cases(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
+    product: Optional[str] = None,
     module: Optional[str] = None,
+    related_story: Optional[str] = Query(None, description="关联需求（相关研发需求，模糊匹配）"),
     priority: Optional[str] = None,
     source_type: Optional[str] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
@@ -280,21 +357,19 @@ async def list_functional_cases(
 ):
     pid = _resolve_project_id(user_info, project_id)
     q = AiFunctionalCase.filter(project_id=pid, is_del=False)
-    if module:
-        q = q.filter(module__icontains=module)
-    if priority:
-        q = q.filter(priority=priority)
-    if source_type:
-        q = q.filter(source_type=source_type)
-    if status_filter:
-        q = q.filter(status=status_filter)
-    if import_batch:
-        q = q.filter(source_import_batch=import_batch)
-    if keyword:
-        q = q.filter(title__icontains=keyword)
-    if zentao_case_id:
-        q = q.filter(zentao_case_id__icontains=zentao_case_id.strip())
-    q = _apply_zentao_id_presence_filter(q, has_zentao_case_id)
+    q = _apply_functional_case_filters(
+        q,
+        product=product,
+        module=module,
+        related_story=related_story,
+        priority=priority,
+        source_type=source_type,
+        status_filter=status_filter,
+        keyword=keyword,
+        zentao_case_id=zentao_case_id,
+        has_zentao_case_id=has_zentao_case_id,
+        import_batch=import_batch,
+    )
 
     sort_field = (sort_by or "").strip()
     desc = (sort_order or "desc").strip().lower() != "asc"
@@ -456,7 +531,25 @@ async def import_to_ui(
 
 @router.get("/export/xlsx", summary="导出禅道 XLSX", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
 async def export_xlsx(
-    ids: Optional[str] = Query(None, description="逗号分隔的用例 ID"),
+    ids: Optional[str] = Query(None, description="逗号分隔的用例 ID；有值时仅导出勾选"),
+    product: Optional[str] = None,
+    module: Optional[str] = None,
+    related_story: Optional[str] = Query(None, description="关联需求（模糊匹配）"),
+    priority: Optional[str] = None,
+    source_type: Optional[str] = None,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    keyword: Optional[str] = None,
+    zentao_case_id: Optional[str] = Query(None, description="禅道用例ID（模糊匹配）"),
+    has_zentao_case_id: Optional[str] = Query(
+        None,
+        description="禅道ID有无：1/has=仅有ID，0/none=仅无ID",
+    ),
+    import_batch: Optional[str] = None,
+    sort_by: Optional[str] = Query(
+        None,
+        description="已废弃：导出固定按生成顺序（id 升序），与列表排序无关",
+    ),
+    sort_order: Optional[str] = Query("desc", description="已废弃"),
     project_id: Optional[int] = None,
     user_info: dict = Depends(is_authenticated),
 ):
@@ -466,7 +559,29 @@ async def export_xlsx(
         id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
         if id_list:
             q = q.filter(id__in=id_list)
-    cases = await q.order_by("id").all()
+        cases = await _fetch_cases_for_export(q)
+    else:
+        q = _apply_functional_case_filters(
+            q,
+            product=product,
+            module=module,
+            related_story=related_story,
+            priority=priority,
+            source_type=source_type,
+            status_filter=status_filter,
+            keyword=keyword,
+            zentao_case_id=zentao_case_id,
+            has_zentao_case_id=has_zentao_case_id,
+            import_batch=import_batch,
+        )
+        total = await q.count()
+        if total > MAX_EXPORT_ROWS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"筛选结果共 {total} 条，超过单次导出上限 {MAX_EXPORT_ROWS} 条，请缩小筛选范围",
+            )
+        cases = await _fetch_cases_for_export(q)
+
     if not cases:
         raise HTTPException(status_code=400, detail="没有可导出的用例")
 
@@ -474,7 +589,7 @@ async def export_xlsx(
     defaults = bindings_for_export(bindings)
     rows: list[dict] = []
     for case in cases:
-        rows.extend(_case_to_xlsx_rows(functional_case_to_dict(case), defaults))
+        rows.append(_case_to_xlsx_row(functional_case_to_dict(case), defaults))
 
     xlsx_bytes = build_xlsx_bytes(rows, columns=ZENTAO_EXPORT_COLUMNS)
     return StreamingResponse(
@@ -620,6 +735,8 @@ async def import_requirement_cases_to_library_handler(
     case_ids: list[int],
     project_id: int,
     username: str,
+    *,
+    duplicate_title_mode: str = "skip",
 ) -> dict[str, Any]:
     req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
     if not req:
@@ -632,15 +749,24 @@ async def import_requirement_cases_to_library_handler(
         project_id=project_id,
         id__in=case_ids,
         is_del=False,
-    ).all()
+    ).order_by("id").all()
     if not src_cases:
         raise HTTPException(status_code=400, detail="未找到可复制的用例")
 
-    library_ids, copied = await copy_requirement_cases_to_library(
-        project_id, src_cases, username, req_id
+    if duplicate_title_mode not in ("skip", "overwrite"):
+        raise HTTPException(status_code=400, detail="duplicate_title_mode 须为 skip 或 overwrite")
+
+    library_ids, copied, skipped, overwritten = await copy_requirement_cases_to_library(
+        project_id,
+        src_cases,
+        username,
+        req_id,
+        duplicate_title_mode=duplicate_title_mode,  # type: ignore[arg-type]
     )
     return {
         "copied_count": copied,
-        "skipped_count": len(case_ids) - len(src_cases),
+        "skipped_count": skipped,
+        "overwritten_count": overwritten,
+        "not_found_count": len(case_ids) - len(src_cases),
         "library_ids": library_ids,
     }

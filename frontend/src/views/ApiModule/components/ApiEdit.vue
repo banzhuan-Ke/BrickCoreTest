@@ -29,7 +29,15 @@
       </el-row>
       
       <el-row :gutter="20">
-        <el-col :span="6">
+        <el-col :span="8">
+          <el-form-item label="协议类型">
+            <el-radio-group v-model="form.protocol">
+              <el-radio-button value="http">HTTP</el-radio-button>
+              <el-radio-button value="websocket">WebSocket</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+        </el-col>
+        <el-col :span="6" v-if="form.protocol !== 'websocket'">
           <el-form-item label="请求方法" prop="method">
             <el-select v-model="form.method" placeholder="Method">
               <el-option label="GET" value="GET"/>
@@ -42,9 +50,9 @@
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :span="18">
+        <el-col :span="form.protocol === 'websocket' ? 16 : 10">
           <el-form-item label="接口路径" prop="path">
-            <el-input v-model="form.path" placeholder="/api/v1/users"/>
+            <el-input v-model="form.path" :placeholder="form.protocol === 'websocket' ? '/ws/echo 或 ws://host/ws' : '/api/v1/users'"/>
           </el-form-item>
         </el-col>
       </el-row>
@@ -59,22 +67,30 @@
       </el-form-item>
 
       <div class="var-toolbar">
-        <el-select
-          v-model="refEnvId"
-          placeholder="参考环境"
-          clearable
-          size="small"
-          style="width: 160px"
-        >
-          <el-option
-            v-for="env in proStore.envList"
-            :key="env.id"
-            :label="env.name"
-            :value="env.id"
+        <div class="var-toolbar-actions">
+          <el-select
+            v-model="refEnvId"
+            placeholder="参考环境"
+            clearable
+            size="small"
+            style="width: 160px"
+          >
+            <el-option
+              v-for="env in proStore.envList"
+              :key="env.id"
+              :label="env.name"
+              :value="env.id"
+            />
+          </el-select>
+          <VarInsertButton
+            :env-id="refEnvId"
+            :show-env-edit="false"
+            hint-text="含项目/环境/Token 授权/内置/用例变量；授权变量执行时自动注入。工厂标签与工具请用旁侧按钮。"
           />
-        </el-select>
-        <VarInsertButton :env-id="refEnvId" :show-env-edit="false" />
-        <span class="var-toolbar-hint">聚焦 Params / Headers / Body 输入框后插入 <code v-pre>${{变量名}}</code></span>
+          <ToolInsertButton />
+          <el-button type="info" link size="small" @click="tagPickerVisible = true">数据工厂标签</el-button>
+        </div>
+        <span class="var-toolbar-hint">先点击下方输入框再插入；参考环境仅预览变量列表，<strong>执行</strong>时以运行环境为准</span>
       </div>
       
       <!-- 请求参数 -->
@@ -125,9 +141,14 @@
         v-model="form.headers"
         local-title="本接口 Header"
       />
+
+      <template v-if="form.protocol === 'websocket'">
+        <div class="section-title"><span>默认 WS 步骤（用例可覆盖）</span></div>
+        <WsStepsEditor v-model="form.ws_config.steps" />
+      </template>
       
       <!-- 请求体 -->
-      <template v-if="['POST', 'PUT', 'PATCH'].includes(form.method)">
+      <template v-if="form.protocol !== 'websocket' && ['POST', 'PUT', 'PATCH'].includes(form.method)">
         <div class="section-title">
           <span>请求体 (Body)</span>
           <el-radio-group v-model="form.body_type" size="small">
@@ -169,11 +190,11 @@
             <el-table-column label="值 / 文件" min-width="260">
               <template #default="{ $index }">
                 <div class="file-field-cell">
-                  <template v-if="form.body_fields[$index].field_type === 'file'">
-                    <el-button size="small" @click="triggerFormFilePick($index)">选择并上传文件</el-button>
-                    <span v-if="form.body_fields[$index].file_name" class="file-meta-name">{{ form.body_fields[$index].file_name }}</span>
-                    <input :ref="(el) => setFormFileInput(el, $index)" class="hidden-file-input" type="file" @change="(e) => handleFormFileChange(e, $index)" />
-                  </template>
+                  <ApiTestFilePicker
+                    v-if="form.body_fields[$index].field_type === 'file'"
+                    :model-value="form.body_fields[$index]"
+                    @update:model-value="(v) => onFormFieldFileUpdate($index, v)"
+                  />
                   <el-input v-else v-model="form.body_fields[$index].value" size="small" placeholder="文本值" />
                 </div>
               </template>
@@ -375,11 +396,17 @@
       <el-button @click="testResultVisible = false">关闭</el-button>
     </template>
   </el-dialog>
+
+  <DataFactoryTagPicker
+    v-model="tagPickerVisible"
+    :project-id="proStore.projectInfo?.id"
+    @insert="onDfTagInsert"
+  />
 </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onBeforeUpdate, nextTick } from 'vue'
+import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
@@ -387,8 +414,13 @@ import http from '@/api/index'
 
 import { catalogApi, buildCatalogTree } from '@/api/modules/catalog'
 import VarInsertButton from '@/components/VarInsertButton.vue'
+import ToolInsertButton from '@/components/ToolInsertButton.vue'
+import DataFactoryTagPicker from './DataFactoryTagPicker.vue'
+import { insertVarRef } from '@/utils/varInsert.js'
 import JsonTextarea from '@/components/JsonTextarea.vue'
 import HeaderEditorPanel from '@/components/HeaderEditorPanel.vue'
+import WsStepsEditor from './WsStepsEditor.vue'
+import ApiTestFilePicker from '@/components/ApiTestFilePicker.vue'
 import {
   formatResponseExample,
   parseResponseExampleInput,
@@ -408,6 +440,19 @@ const emit = defineEmits(['update:modelValue', 'success'])
 const proStore = ProjectStore()
 const formRef = ref()
 const refEnvId = ref(null)
+const tagPickerVisible = ref(false)
+
+async function onDfTagInsert(refStr) {
+  const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
+  const name = m ? m[1] : refStr
+  const result = await insertVarRef(name)
+  if (result?.ok) {
+    ElMessage.success(result.mode === 'copy' ? `已复制 ${refStr}，请粘贴到输入框` : `已插入 ${refStr}`)
+  } else {
+    ElMessage.warning('请先将光标放入 Params / Headers / Body 输入框')
+  }
+}
+
 const saving = ref(false)
 const testing = ref(false)
 
@@ -627,6 +672,7 @@ const isEdit = computed(() => !!props.data)
 const form = reactive({
   name: '',
   catalog_id: null,
+  protocol: 'http',
   method: 'GET',
   path: '',
   base_url: '',
@@ -636,6 +682,7 @@ const form = reactive({
   body: {},
   body_type: 'json',
   body_fields: [],
+  ws_config: { steps: [] },
   response_schema: {}
 })
 
@@ -693,6 +740,7 @@ const rules = {
 const resetForm = () => {
   form.name = ''
   form.catalog_id = null
+  form.protocol = 'http'
   form.method = 'GET'
   form.path = ''
   form.base_url = ''
@@ -702,6 +750,7 @@ const resetForm = () => {
   form.body = {}
   form.body_type = 'json'
   form.body_fields = [{ name: '', value: '', field_type: 'text', file_name: '', mime_type: 'application/octet-stream', file_key: '', file_bucket: '', description: '' }]
+  form.ws_config = { steps: [] }
   form.response_schema = {}
   bodyText.value = ''
 }
@@ -714,6 +763,7 @@ const fetchApiDetail = async (apiId) => {
       const val = res.data
       form.name = val.name
       form.catalog_id = val.catalog_id ?? val.category_id ?? null
+      form.protocol = val.protocol || 'http'
       form.method = val.method
       form.path = val.path
       form.base_url = val.base_url || ''
@@ -732,6 +782,9 @@ const fetchApiDetail = async (apiId) => {
         file_bucket: f.file_bucket || '',
         description: f.description || ''
       })) : []
+      form.ws_config = val.ws_config && Array.isArray(val.ws_config.steps)
+        ? { steps: val.ws_config.steps.map(s => ({ ...s })) }
+        : { steps: [] }
       form.response_schema = val.response_schema || {}
       syncBodyText()
     }
@@ -761,6 +814,7 @@ watch(() => props.data, (val) => {
   if (val) {
     form.name = val.name
     form.catalog_id = val.catalog_id ?? val.category_id ?? null
+    form.protocol = val.protocol || 'http'
     form.method = val.method
     form.path = val.path
     form.base_url = val.base_url || ''
@@ -779,6 +833,9 @@ watch(() => props.data, (val) => {
       file_bucket: f.file_bucket || '',
       description: f.description || ''
     })) : []
+    form.ws_config = val.ws_config && Array.isArray(val.ws_config.steps)
+      ? { steps: val.ws_config.steps.map(s => ({ ...s })) }
+      : { steps: [] }
     form.response_schema = val.response_schema || {}
     syncBodyText()
   } else {
@@ -802,15 +859,9 @@ const removeParam = (index) => {
   form.params.splice(index, 1)
 }
 
-const formFileInputs = ref([])
-
-const setFormFileInput = (el, index) => {
-  if (el) formFileInputs.value[index] = el
+const onFormFieldFileUpdate = (index, patch) => {
+  Object.assign(form.body_fields[index], patch)
 }
-
-onBeforeUpdate(() => {
-  formFileInputs.value = []
-})
 
 const addFormField = () => {
   form.body_fields.push({
@@ -823,30 +874,6 @@ const addFormField = () => {
     file_bucket: '',
     description: ''
   })
-}
-
-const triggerFormFilePick = (index) => {
-  const input = formFileInputs.value[index]
-  input?.click()
-}
-
-const handleFormFileChange = async (event, index) => {
-  const file = event.target.files?.[0]
-  if (!file) return
-  try {
-    const res = await http.apiModuleApi.uploadBodyFile(file)
-    const data = res.data
-    form.body_fields[index].file_name = data.file_name
-    form.body_fields[index].mime_type = data.mime_type || file.type || 'application/octet-stream'
-    form.body_fields[index].file_bucket = data.file_bucket
-    form.body_fields[index].file_key = data.file_key
-    form.body_fields[index].value = ''
-    ElMessage.success('文件上传成功')
-  } catch (error) {
-    ElMessage.error('文件上传失败: ' + (error.response?.data?.detail || error.message))
-  } finally {
-    event.target.value = ''
-  }
 }
 
 const removeFormField = (index) => {
@@ -1008,18 +1035,28 @@ const handleTest = async () => {
 <style scoped lang="scss">
 .var-toolbar {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   margin-bottom: 12px;
   padding: 8px 12px;
   background: var(--el-fill-color-light);
   border-radius: 6px;
 }
 
+.var-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  width: 100%;
+  overflow-x: auto;
+}
+
 .var-toolbar-hint {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  line-height: 1.5;
 }
 
 .section-title {

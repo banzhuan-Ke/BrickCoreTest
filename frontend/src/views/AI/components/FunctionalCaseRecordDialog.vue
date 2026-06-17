@@ -73,6 +73,16 @@
           <el-option label="P3" value="P3" />
         </el-select>
       </el-form-item>
+      <el-form-item label="用例描述">
+        <el-input
+          v-model="caseDescription"
+          type="textarea"
+          :rows="5"
+          maxlength="4000"
+          show-word-limit
+          placeholder="导入 UI 用例库时保存；默认带入功能用例标题、步骤与预期"
+        />
+      </el-form-item>
     </el-form>
 
     <el-alert type="success" :closable="false" show-icon>
@@ -110,6 +120,8 @@ import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import FunctionalCaseUiContext from '@/views/AI/components/FunctionalCaseUiContext.vue'
 import UiCaseRecorder from '@/views/AI/components/UiCaseRecorder.vue'
+import { buildFunctionalCaseDescription } from '@/utils/functionalCaseDescription.js'
+import { normalizeRecorderApplyPayload } from '@/utils/caseDescription.js'
 import { aiFunctionalCaseApi } from '@/api/modules/ai.js'
 import { useOnlineDevices } from '@/composables/useOnlineDevices.js'
 
@@ -137,36 +149,20 @@ const importing = ref(false)
 const uiContext = reactive(defaultUiContext())
 const caseName = ref('')
 const caseLevel = ref('P2')
+const caseDescription = ref('')
 
 const { onlineDevices, loadingDevices, deviceLoadError, loadOnlineDevices } = useOnlineDevices()
 
 const priorityToLevel = (p) => ({ 1: 'P0', 2: 'P1', 3: 'P2', 4: 'P3' }[String(p || '2')] || 'P2')
 
-const buildDescription = (fc) => {
-  if (!fc) return ''
-  const parts = []
-  if (fc.title) parts.push(`【用例】${fc.title}`)
-  if (fc.precondition) parts.push(`【前置条件】${fc.precondition}`)
-  const steps = fc.steps || []
-  if (steps.length) {
-    parts.push('【测试步骤与预期】')
-    steps.forEach((st, i) => {
-      const step = (st.step || '').trim()
-      const expect = (st.expect || '').trim()
-      if (!step && !expect) return
-      let line = `${i + 1}. ${step || '（无步骤描述）'}`
-      if (expect) line += ` → 预期：${expect}`
-      parts.push(line)
-    })
-  }
-  if (uiContext.page_url?.trim()) {
-    parts.push(`【目标页面】${uiContext.page_url.trim()}`)
-  }
-  parts.push('【录制说明】登录与前置导航由人工在浏览器中完成；可在下方测试描述中补充业务背景，供 AI 优化使用。')
-  return parts.join('\n\n').slice(0, 2000)
+const syncCaseDescription = () => {
+  caseDescription.value = buildFunctionalCaseDescription(props.functionalCase, {
+    pageUrl: uiContext.page_url,
+    includeRecordHint: true,
+  })
 }
 
-const recordDescription = computed(() => buildDescription(props.functionalCase))
+const recordDescription = computed(() => caseDescription.value)
 
 watch(() => props.modelValue, async (val) => {
   visible.value = val
@@ -176,9 +172,14 @@ watch(() => props.modelValue, async (val) => {
     caseLevel.value = priorityToLevel(props.functionalCase.priority)
     hoverDelayMs.value = 1000
     deviceId.value = ''
+    syncCaseDescription()
     const list = await loadOnlineDevices()
     if (list.length === 1) deviceId.value = list[0].id
   }
+})
+
+watch(() => uiContext.page_url, () => {
+  if (visible.value && props.functionalCase) syncCaseDescription()
 })
 
 watch(visible, (val) => emit('update:modelValue', val))
@@ -209,7 +210,8 @@ const openRecorder = async () => {
   startingRecord.value = false
 }
 
-const handleRecordApply = async (steps) => {
+const handleRecordApply = async (payload) => {
+  const { steps, description: recorderDesc } = normalizeRecorderApplyPayload(payload)
   if (!steps?.length) {
     ElMessage.warning('没有可导入的步骤')
     return
@@ -219,6 +221,7 @@ const handleRecordApply = async (steps) => {
   try {
     const rid = recorderRef.value?.recordId
     const recordId = typeof rid === 'object' && rid !== null && 'value' in rid ? rid.value : rid
+    const finalDescription = (recorderDesc || caseDescription.value || '').trim() || undefined
     const res = await aiFunctionalCaseApi.importUi(
       {
         page_url: uiContext.page_url?.trim() || undefined,
@@ -229,6 +232,7 @@ const handleRecordApply = async (steps) => {
           steps,
           case_name: caseName.value?.trim() || props.functionalCase.title,
           level: caseLevel.value,
+          case_description: finalDescription,
           record_id: recordId
         }]
       },

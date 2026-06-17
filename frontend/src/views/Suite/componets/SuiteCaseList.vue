@@ -22,10 +22,20 @@
           <span class="case-name" :title="element.cases_name || element.name">{{ element.cases_name || element.name }}</span>
         </div>
         <div class="case-actions">
+          <el-select
+            v-model="element.run_mode"
+            size="small"
+            class="run-mode-select"
+            @click.stop
+          >
+            <el-option label="链路" value="chain" />
+            <el-option label="独立" value="standalone" />
+          </el-select>
           <el-tooltip content="跳过执行" placement="top">
             <el-switch 
               v-model="element.skip" 
               size="small"
+              @click.stop
             />
           </el-tooltip>
           <el-tooltip content="编辑用例" placement="top">
@@ -55,6 +65,9 @@
     <div v-if="suiteCaseList.length === 0" class="empty-tip">
       <el-empty description="暂无套件用例，请从下方拖拽添加" :image-size="60" />
     </div>
+    <p v-else class="run-mode-hint">
+      链路：参与变量传递，上游失败时跳过后续链路用例；独立：每次独立随机，失败不影响其他用例。
+    </p>
   </div>
 </template>
 
@@ -69,62 +82,57 @@ const props = defineProps({
   suiteId: {
     type: [String, Number],
     required: true
+  },
+  defaultRunMode: {
+    type: String,
+    default: 'standalone'
   }
 })
 
 const router = useRouter()
 const suiteCaseList = ref([])
-const originalCases = ref([]) // 保存原始数据用于对比
+const originalCases = ref([])
 
-// 获取套件用例列表
 const getSuiteCases = async () => {
   if (!props.suiteId) return
   try {
     const res = await http.suiteApi.getSuiteCaseList(props.suiteId)
     if (res.status === 200) {
-      suiteCaseList.value = res.data || []
-      originalCases.value = JSON.parse(JSON.stringify(res.data || []))
+      suiteCaseList.value = (res.data || []).map((item) => ({
+        ...item,
+        run_mode: item.run_mode || 'standalone',
+      }))
+      originalCases.value = JSON.parse(JSON.stringify(suiteCaseList.value))
     }
   } catch (error) {
     console.error('获取套件用例失败:', error)
   }
 }
 
-// 监听 suiteId 变化
 watch(() => props.suiteId, (newId) => {
   if (newId) {
     getSuiteCases()
   }
 }, { immediate: true })
 
-// 监听 suiteCaseList 变化
-watch(suiteCaseList, (newVal) => {
-  console.log('suiteCaseList changed:', newVal.length, newVal)
-}, { deep: true })
-
-// 删除套件用例（仅本地）
 const removeCase = async (index) => {
   suiteCaseList.value.splice(index, 1)
-  // 重新排序
   suiteCaseList.value.forEach((item, idx) => {
     item.sort = idx + 1
   })
   ElMessage.success('移除成功')
 }
 
-// 编辑用例
 const editCase = (caseId) => {
   router.push({ name: 'editCase', params: { id: caseId } })
 }
 
-// 排序
 const handleSort = () => {
   suiteCaseList.value.forEach((item, index) => {
     item.sort = index + 1
   })
 }
 
-// 内部拖拽排序
 const dragIndex = ref(-1)
 
 const handleDragStart = (e, index) => {
@@ -136,55 +144,43 @@ const handleItemDrop = (e, dropIndex) => {
   e.preventDefault()
   if (dragIndex.value === -1 || dragIndex.value === dropIndex) return
   
-  // 交换位置
   const item = suiteCaseList.value.splice(dragIndex.value, 1)[0]
   suiteCaseList.value.splice(dropIndex, 0, item)
   
-  // 重新计算 sort
   handleSort()
   
   dragIndex.value = -1
 }
 
-// 处理拖拽放下 - 添加用例到套件（仅本地）
 const handleDrop = (e) => {
-  console.log('handleDrop triggered')
   e.preventDefault()
   const data = e.dataTransfer.getData('application/json')
-  console.log('handleDrop data:', data)
   if (!data) {
-    console.log('no data')
     return
   }
   
   try {
     const caseItem = JSON.parse(data)
-    console.log('caseItem:', caseItem)
-    console.log('current suiteCaseList:', suiteCaseList.value)
     
-    // 检查是否已存在
     const exists = suiteCaseList.value.some(item => 
       (item.cases_id === caseItem.id) || (item.id === caseItem.id)
     )
-    console.log('exists:', exists)
     if (exists) {
       ElMessage.warning('该用例已在套件中')
       return
     }
     
-    // 本地添加到末尾
     const newItem = {
-      id: Date.now(), // 临时ID
+      id: Date.now(),
       cases_id: caseItem.id,
       cases_name: caseItem.name,
       suite_id: props.suiteId,
       sort: suiteCaseList.value.length + 1,
       skip: false,
-      isNew: true // 标记为新添加
+      run_mode: props.defaultRunMode || 'standalone',
+      isNew: true
     }
-    console.log('pushing newItem:', newItem)
     suiteCaseList.value.push(newItem)
-    console.log('after push, suiteCaseList:', suiteCaseList.value)
     
     ElMessage.success('添加用例成功，请保存套件')
   } catch (error) {
@@ -193,15 +189,12 @@ const handleDrop = (e) => {
   }
 }
 
-// 获取当前用例列表（供父组件调用）
 const getCurrentCases = () => {
   return suiteCaseList.value
 }
 
-// 保存套件用例（供父组件调用）
 const saveSuiteCases = async () => {
   try {
-    // 1. 删除后端有但本地没有的用例
     const currentIds = suiteCaseList.value
       .filter(item => !item.isNew && item.cases_id)
       .map(item => item.cases_id)
@@ -212,7 +205,6 @@ const saveSuiteCases = async () => {
       }
     }
     
-    // 2. 添加新用例
     const newCases = suiteCaseList.value.filter(item => item.isNew)
     for (const item of newCases) {
       await http.suiteApi.addCase(props.suiteId, {
@@ -221,14 +213,14 @@ const saveSuiteCases = async () => {
       })
     }
     
-    // 3. 更新排序
     const sortData = suiteCaseList.value.map((item, index) => ({
       cases_id: item.cases_id,
-      sort: index + 1
+      sort: index + 1,
+      skip: !!item.skip,
+      run_mode: item.run_mode || 'standalone',
     }))
     await http.suiteApi.updateCaseOrder(props.suiteId, { case_orders: sortData })
     
-    // 刷新数据
     await getSuiteCases()
     return true
   } catch (error) {
@@ -238,7 +230,6 @@ const saveSuiteCases = async () => {
   }
 }
 
-// 暴露方法给父组件
 defineExpose({
   getCurrentCases,
   saveSuiteCases
@@ -295,6 +286,7 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   overflow: hidden;
+  min-width: 0;
 }
 
 .case-index {
@@ -325,8 +317,19 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
+.run-mode-select {
+  width: 72px;
+}
+
 .empty-tip {
   padding: 20px;
+}
+
+.run-mode-hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
 }
 
 .ghost {

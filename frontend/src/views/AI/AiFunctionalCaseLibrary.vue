@@ -15,7 +15,44 @@
           style="width: 200px;"
           @keyup.enter="onSearch"
         />
-        <el-input v-model="filters.module" placeholder="所属模块" clearable style="width: 140px;" />
+        <el-select
+          v-model="filters.product"
+          filterable
+          allow-create
+          default-first-option
+          clearable
+          placeholder="所属产品"
+          style="width: 140px;"
+        >
+          <el-option v-for="p in filterOptions.products" :key="'p-' + p" :label="p" :value="p" />
+        </el-select>
+        <el-select
+          v-model="filters.module"
+          filterable
+          allow-create
+          default-first-option
+          clearable
+          placeholder="所属模块"
+          style="width: 140px;"
+        >
+          <el-option v-for="m in filterOptions.modules" :key="'m-' + m" :label="m" :value="m" />
+        </el-select>
+        <el-select
+          v-model="filters.related_story"
+          filterable
+          allow-create
+          default-first-option
+          clearable
+          placeholder="关联需求"
+          style="width: 150px;"
+        >
+          <el-option
+            v-for="r in filterOptions.related_stories"
+            :key="'r-' + r"
+            :label="r"
+            :value="r"
+          />
+        </el-select>
         <el-input
           v-model="filters.zentao_case_id"
           placeholder="禅道ID搜索"
@@ -65,22 +102,12 @@
           <el-option label="升序" value="asc" />
         </el-select>
         <el-button type="primary" @click="onSearch">查询</el-button>
-        <el-popover placement="bottom" :width="280" trigger="click">
-          <template #reference>
-            <el-button>列显示</el-button>
-          </template>
-          <div class="col-picker">
-            <el-checkbox-group v-model="visibleColumnKeys">
-              <el-checkbox
-                v-for="col in ALL_COLUMNS"
-                :key="col.key"
-                :label="col.key"
-                :disabled="col.required"
-              >{{ col.label }}</el-checkbox>
-            </el-checkbox-group>
-            <el-button size="small" link type="primary" @click="resetColumns">恢复默认</el-button>
-          </div>
-        </el-popover>
+        <TableColumnPicker
+          :items="pickerItems"
+          @toggle="setColumnVisible"
+          @reorder="setPickerOrder"
+          @reset="resetColumns"
+        />
         <el-button v-if="canExecute" type="success" @click="openEdit()">新建</el-button>
         <el-upload
           v-if="canExecute"
@@ -120,7 +147,7 @@
 
       <el-table
         v-loading="loading"
-        :key="tableRenderKey"
+        :key="listTableKey"
         :data="caseList"
         border
         stripe
@@ -171,6 +198,35 @@
             show-overflow-tooltip
           />
           <el-table-column
+            v-else-if="col.key === 'precondition'"
+            prop="precondition"
+            label="前置条件"
+            :min-width="col.minWidth || 140"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            v-else-if="col.key === 'steps_text'"
+            label="步骤"
+            :min-width="col.minWidth || 200"
+          >
+            <template #default="{ row }">
+              <div class="steps-cell" :title="formatStepsText(row.steps)">
+                {{ formatStepsText(row.steps) || '—' }}
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column
+            v-else-if="col.key === 'expects_text'"
+            label="预期"
+            :min-width="col.minWidth || 200"
+          >
+            <template #default="{ row }">
+              <div class="steps-cell" :title="formatExpectsText(row.steps)">
+                {{ formatExpectsText(row.steps) || '—' }}
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column
             v-else-if="col.key === 'priority'"
             prop="priority"
             label="优先级"
@@ -195,7 +251,17 @@
             label="来源"
             :width="col.width"
           >
-            <template #default="{ row }">{{ SOURCE_LABELS[row.source_type] || row.source_type }}</template>
+            <template #default="{ row }">
+              <span>{{ SOURCE_LABELS[row.source_type] || row.source_type }}</span>
+              <el-button
+                v-if="row.source_requirement_id"
+                link
+                type="primary"
+                size="small"
+                style="margin-left: 4px;"
+                @click="goSourceRequirement(row)"
+              >需求</el-button>
+            </template>
           </el-table-column>
           <el-table-column
             v-else-if="col.key === 'ui_import_status'"
@@ -307,7 +373,11 @@
               </el-form-item>
             </el-col>
             <el-col :span="12">
-              <el-form-item label="用例类型"><el-input v-model="editForm.type" /></el-form-item>
+              <el-form-item label="用例类型">
+                <el-select v-model="editForm.type" style="width: 100%;">
+                  <el-option v-for="t in ZENTAO_CASE_TYPES" :key="t" :label="t" :value="t" />
+                </el-select>
+              </el-form-item>
             </el-col>
             <el-col :span="12">
               <el-form-item label="适用阶段"><el-input v-model="editForm.stage" /></el-form-item>
@@ -368,7 +438,17 @@
               <el-table-column prop="title" label="用例标题" min-width="200" show-overflow-tooltip />
               <el-table-column prop="related_story" label="关联需求" width="120" show-overflow-tooltip />
               <el-table-column label="来源" width="96">
-                <template #default="{ row }">{{ SOURCE_LABELS[row.source_type] || row.source_type }}</template>
+                <template #default="{ row }">
+              <span>{{ SOURCE_LABELS[row.source_type] || row.source_type }}</span>
+              <el-button
+                v-if="row.source_requirement_id"
+                link
+                type="primary"
+                size="small"
+                style="margin-left: 4px;"
+                @click="goSourceRequirement(row)"
+              >需求</el-button>
+            </template>
               </el-table-column>
               <el-table-column prop="create_by" label="创建人" width="88" />
               <el-table-column prop="create_time" label="创建时间" width="158" />
@@ -376,6 +456,9 @@
           </el-collapse-item>
         </el-collapse>
         <div v-if="dupGroups.length" class="dup-actions">
+          <el-button type="danger" plain @click="deleteDupKeepOnePerGroup">
+            每组留一条并删除 ({{ dupKeepOneDeleteCount }})
+          </el-button>
           <el-button type="danger" :disabled="!dupSelectedIds.length" @click="deleteDupSelected">
             删除已选重复项 ({{ dupSelectedIds.length }})
           </el-button>
@@ -406,47 +489,24 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
+import TableColumnPicker from '@/components/TableColumnPicker.vue'
 import FunctionalCaseToUiDialog from '@/views/AI/components/FunctionalCaseToUiDialog.vue'
 import FunctionalCaseRecordDialog from '@/views/AI/components/FunctionalCaseRecordDialog.vue'
 import { aiFunctionalCaseApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+import { useTableColumns } from '@/composables/useTableColumns.js'
+import { formatStepsText, formatExpectsText } from '@/utils/formatCaseSteps.js'
+import { ZENTAO_CASE_TYPES } from '@/constants/zentaoCaseTypes.js'
 
-const COLUMN_STORAGE_KEY = 'brickcore_functional_case_visible_columns'
-
-const ALL_COLUMNS = [
-  { key: 'id', label: 'ID', width: 70, required: true },
-  { key: 'zentao_case_id_display', label: '禅道ID', width: 88 },
-  { key: 'product', label: '所属产品', width: 110 },
-  { key: 'module', label: '所属模块', width: 130 },
-  { key: 'related_story', label: '关联需求', minWidth: 140 },
-  { key: 'title', label: '用例标题', minWidth: 220, required: true },
-  { key: 'priority', label: '优先级', width: 72 },
-  { key: 'type', label: '用例类型', width: 96 },
-  { key: 'stage', label: '适用阶段', width: 120 },
-  { key: 'source_type', label: '来源', width: 100 },
-  { key: 'ui_import_status', label: 'UI自动化', width: 96 },
-  { key: 'create_by', label: '创建人', width: 88 },
-  { key: 'update_by', label: '修改人', width: 88 },
-  { key: 'create_time', label: '创建时间', width: 168 },
-  { key: 'update_time', label: '更新时间', width: 168 }
-]
-
-const DEFAULT_VISIBLE_KEYS = [
-  'id', 'zentao_case_id_display', 'product', 'module', 'related_story', 'title',
-  'priority', 'source_type', 'ui_import_status', 'create_by', 'update_by', 'create_time'
-]
-
-function loadVisibleKeys() {
-  try {
-    const raw = localStorage.getItem(COLUMN_STORAGE_KEY)
-    if (raw) {
-      const arr = JSON.parse(raw)
-      if (Array.isArray(arr) && arr.length) return arr
-    }
-  } catch (_) { /* ignore */ }
-  return [...DEFAULT_VISIBLE_KEYS]
-}
+const {
+  activeColumns,
+  pickerItems,
+  tableRenderKey,
+  setColumnVisible,
+  setPickerOrder,
+  resetColumns
+} = useTableColumns('ai.functional_cases')
 
 const SOURCE_LABELS = {
   requirement_copy: '需求复制',
@@ -474,19 +534,6 @@ const toUiVisible = ref(false)
 const recordVisible = ref(false)
 const recordCase = ref(null)
 
-const visibleColumnKeys = ref(loadVisibleKeys())
-watch(visibleColumnKeys, (val) => {
-  localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(val))
-}, { deep: true })
-
-const activeColumns = computed(() =>
-  ALL_COLUMNS.filter(c => visibleColumnKeys.value.includes(c.key))
-)
-
-const resetColumns = () => {
-  visibleColumnKeys.value = [...DEFAULT_VISIBLE_KEYS]
-}
-
 const loading = ref(false)
 const caseList = ref([])
 const total = ref(0)
@@ -496,7 +543,9 @@ const selectedIds = ref([])
 
 const filters = reactive({
   keyword: '',
+  product: '',
   module: '',
+  related_story: '',
   zentao_case_id: '',
   has_zentao_case_id: '',
   priority: '',
@@ -507,11 +556,44 @@ const filters = reactive({
 })
 
 const importBatches = ref([])
+const filterOptions = reactive({
+  products: [],
+  modules: [],
+  related_stories: []
+})
 const dupStrictMode = ref(false)
 
-const tableRenderKey = computed(
-  () => `${filters.sort_by}-${filters.sort_order}-${page.value}-${total.value}`
+const listTableKey = computed(
+  () => `${tableRenderKey.value}-${filters.sort_by}-${filters.sort_order}-${page.value}-${total.value}`
 )
+
+const projectId = () => {
+  const id = proStore.projectInfo?.id
+  return id != null && id !== '' ? id : null
+}
+
+const buildListQueryParams = (extra = {}) => ({
+  project_id: projectId(),
+  page: page.value,
+  size: pageSize.value,
+  keyword: filters.keyword || undefined,
+  product: filters.product || undefined,
+  module: filters.module || undefined,
+  related_story: filters.related_story || undefined,
+  zentao_case_id: filters.zentao_case_id || undefined,
+  has_zentao_case_id: filters.has_zentao_case_id || undefined,
+  priority: filters.priority || undefined,
+  source_type: filters.source_type || undefined,
+  import_batch: filters.import_batch || undefined,
+  sort_by: filters.sort_by || undefined,
+  sort_order: filters.sort_order || undefined,
+  ...extra
+})
+
+const buildExportFilterParams = () => {
+  const { project_id, page: _p, size: _s, sort_by: _sb, sort_order: _so, ...rest } = buildListQueryParams()
+  return rest
+}
 
 const onSearch = () => {
   page.value = 1
@@ -533,11 +615,6 @@ const uiTagType = (s) => {
   if (s === 'failed') return 'danger'
   if (s === 'generated') return 'warning'
   return 'info'
-}
-
-const projectId = () => {
-  const id = proStore.projectInfo?.id
-  return id != null && id !== '' ? id : null
 }
 
 const batchOptionLabel = (b) => {
@@ -575,6 +652,23 @@ const loadImportBatches = async () => {
   }
 }
 
+const loadFilterOptions = async () => {
+  if (!projectId()) return
+  try {
+    const res = await aiFunctionalCaseApi.getFilterOptions(projectId())
+    if (res.data?.code === 200) {
+      const data = res.data.data || {}
+      filterOptions.products = data.products || []
+      filterOptions.modules = data.modules || []
+      filterOptions.related_stories = data.related_stories || []
+    }
+  } catch (_) {
+    filterOptions.products = []
+    filterOptions.modules = []
+    filterOptions.related_stories = []
+  }
+}
+
 const loadList = async () => {
   if (!projectId()) {
     ElMessage.warning('请先选择项目')
@@ -582,20 +676,7 @@ const loadList = async () => {
   }
   loading.value = true
   try {
-    const res = await aiFunctionalCaseApi.getList({
-      project_id: projectId(),
-      page: page.value,
-      size: pageSize.value,
-      keyword: filters.keyword || undefined,
-      module: filters.module || undefined,
-      zentao_case_id: filters.zentao_case_id || undefined,
-      has_zentao_case_id: filters.has_zentao_case_id || undefined,
-      priority: filters.priority || undefined,
-      source_type: filters.source_type || undefined,
-      import_batch: filters.import_batch || undefined,
-      sort_by: filters.sort_by || undefined,
-      sort_order: filters.sort_order || undefined
-    })
+    const res = await aiFunctionalCaseApi.getList(buildListQueryParams())
     if (res.data?.code === 200) {
       caseList.value = res.data.data?.list || []
       total.value = res.data.data?.total || 0
@@ -688,6 +769,7 @@ const handleImportXlsx = async ({ file }) => {
         ElMessage.warning(`有 ${d.warnings.length} 条提示，可点「重复检验」清理`)
       }
       loadImportBatches()
+      loadFilterOptions()
       loadList()
     }
   } catch (e) {
@@ -696,8 +778,10 @@ const handleImportXlsx = async ({ file }) => {
 }
 
 const handleExport = async () => {
-  const ids = selectedIds.value.length ? selectedIds.value : null
-  const url = aiFunctionalCaseApi.exportXlsxUrl(projectId(), ids)
+  const exportOptions = selectedIds.value.length
+    ? { ids: selectedIds.value }
+    : { filters: buildExportFilterParams() }
+  const url = aiFunctionalCaseApi.exportXlsxUrl(projectId(), exportOptions)
   try {
     const res = await fetch(url, { headers: { Authorization: 'Bearer ' + uStore.token } })
     if (!res.ok) {
@@ -746,6 +830,47 @@ const onDupGroupSelect = (g, rows) => {
   dupSelectedIds.value = [...dupSelectSet.value]
 }
 
+/** 每组保留 ID 最小的一条，其余为待删重复项 */
+const collectDupIdsKeepOnePerGroup = () => {
+  const toDelete = []
+  for (const g of dupGroups.value) {
+    const cases = g.cases || []
+    if (cases.length < 2) continue
+    const sorted = [...cases].sort((a, b) => a.id - b.id)
+    for (let i = 1; i < sorted.length; i += 1) {
+      toDelete.push(sorted[i].id)
+    }
+  }
+  return toDelete
+}
+
+const dupKeepOneDeleteCount = computed(() => collectDupIdsKeepOnePerGroup().length)
+
+const deleteDupKeepOnePerGroup = async () => {
+  const ids = collectDupIdsKeepOnePerGroup()
+  if (!ids.length) {
+    ElMessage.info('没有可删除的重复项')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `共 ${dupGroups.value.length} 组重复，每组保留 ID 最小的一条，删除其余 ${ids.length} 条。此操作不可恢复，确定继续？`,
+      '每组留一条',
+      { type: 'warning' }
+    )
+    const res = await aiFunctionalCaseApi.batchDelete(ids, projectId())
+    if (res.data?.code === 200) {
+      ElMessage.success(`已删除 ${ids.length} 条重复用例`)
+      dupSelectedIds.value = []
+      dupSelectSet.value = new Set()
+      await runDuplicateCheck()
+      loadList()
+    }
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.response?.data?.detail || '删除失败')
+  }
+}
+
 const deleteDupSelected = async () => {
   await ElMessageBox.confirm(`确定删除选中的 ${dupSelectedIds.value.length} 条？`, '提示', { type: 'warning' })
   try {
@@ -778,6 +903,7 @@ const rollbackImportBatch = async () => {
       ElMessage.success(res.data.message || '回滚成功')
       filters.import_batch = ''
       loadImportBatches()
+      loadFilterOptions()
       loadList()
     }
   } catch (e) {
@@ -801,6 +927,15 @@ const handleBatchDelete = async () => {
 
 const goUiCase = (id) => {
   router.push({ path: `/case/edit/${id}` })
+}
+
+const goSourceRequirement = (row) => {
+  if (!row.source_requirement_id) return
+  router.push({
+    name: 'aiTestingWorkspace',
+    params: { reqId: String(row.source_requirement_id) },
+    query: { tab: 'cases' }
+  })
 }
 
 const openRecordDialog = () => {
@@ -854,8 +989,21 @@ onMounted(() => {
     return
   }
   loadImportBatches()
+  loadFilterOptions()
   loadList()
 })
+
+watch(
+  () => proStore.projectInfo?.id,
+  (id, prev) => {
+    if (id && id !== prev) {
+      loadImportBatches()
+      loadFilterOptions()
+      page.value = 1
+      loadList()
+    }
+  }
+)
 
 watch(
   () => [filters.sort_by, filters.sort_order],
@@ -883,6 +1031,16 @@ watch(
 .dup-strict-check {
   margin-left: 2px;
 }
+.steps-cell {
+  white-space: pre-line;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.45;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+}
 .col-picker {
   display: flex;
   flex-direction: column;
@@ -906,7 +1064,13 @@ watch(
   padding-right: 8px;
 }
 .dup-empty { padding: 24px; text-align: center; color: var(--el-text-color-secondary); }
-.dup-actions { margin-top: 16px; padding-bottom: 12px; }
+.dup-actions {
+  margin-top: 16px;
+  padding-bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .dup-collapse {
   :deep(.el-collapse-item__header) {
     height: auto;

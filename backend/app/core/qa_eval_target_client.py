@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 import uuid
 from datetime import datetime
@@ -39,15 +38,9 @@ QA_QUESTION_TYPES = (
 
 
 def clean_headers(headers: dict[str, Any]) -> dict[str, str]:
-    """去掉空值 Header，避免发送 token: \"\" 导致网关鉴权失败"""
-    out: dict[str, str] = {}
-    for k, v in (headers or {}).items():
-        if v is None:
-            continue
-        s = str(v).strip()
-        if s:
-            out[str(k)] = s
-    return out
+    """去掉空值 Header（实现见 stream_phase.sse_io）。"""
+    from app.core.stream_phase.sse_io import clean_stream_headers
+    return clean_stream_headers(headers)
 
 
 def auth_header_hint(url: str, raw_headers: dict[str, Any]) -> Optional[str]:
@@ -152,76 +145,8 @@ def is_qa_sse_v1_parser(parser: Optional[str]) -> bool:
 
 def parse_qa_sse_v1(lines: list[str]) -> dict[str, Any]:
     """解析问答 SSE 流（think / output_text / eof references）"""
-    thinking: list[str] = []
-    answer: list[str] = []
-    refs: list[tuple[str, float]] = []
-
-    for line in lines:
-        if not line:
-            continue
-        txt = line.strip()
-        if not txt.startswith("data:"):
-            continue
-        data = txt[5:].strip()
-        if data == "[DONE]":
-            break
-        if '"errorMessage"' in data or '"duration"' in data:
-            continue
-        try:
-            obj = json.loads(data)
-        except json.JSONDecodeError:
-            continue
-        t = obj.get("type")
-        if t in ("think", "think_answer"):
-            delta = obj.get("delta", "{}")
-            try:
-                d = json.loads(delta) if isinstance(delta, str) else delta
-                if isinstance(d, dict) and d.get("message_type") == "text":
-                    text = (d.get("content") or {}).get("text", "")
-                    if text:
-                        thinking.append(str(text))
-            except (json.JSONDecodeError, TypeError):
-                pass
-        elif t == "output_text":
-            delta = obj.get("delta", "")
-            if delta:
-                answer.append(str(delta))
-        elif t == "eof":
-            for ref in obj.get("references") or []:
-                if not isinstance(ref, dict):
-                    continue
-                name = ref.get("doc_name")
-                score_raw = ref.get("chunk_score", 0)
-                if not name:
-                    continue
-                try:
-                    score_val = float(score_raw) if score_raw else 0.0
-                except (TypeError, ValueError):
-                    score_val = 0.0
-                refs.append((str(name), score_val))
-
-    answer_str = re.sub(r"\[ref:\d+\]", "", "".join(answer)).strip()
-    thinking_str = "".join(thinking).strip()
-
-    seen: set[str] = set()
-    unique_refs: list[tuple[str, float]] = []
-    for name, score in refs:
-        if name not in seen:
-            seen.add(name)
-            unique_refs.append((name, score))
-
-    refs_all = "；".join(f"{n} ({s:.2f})" for n, s in unique_refs) if unique_refs else ""
-    high_refs = [(n, s) for n, s in unique_refs if s > 80]
-    refs_high = "；".join(f"{n} ({s:.2f})" for n, s in high_refs) if high_refs else ""
-
-    status = "success" if answer_str and not answer_str.startswith("请求") else "fail"
-    return {
-        "actual_answer": answer_str[:16000],
-        "thinking": thinking_str[:8000],
-        "references_all": refs_all[:4000],
-        "references_high": refs_high[:4000],
-        "status": status,
-    }
+    from app.core.stream_phase.parsers.qa_sse_v1 import parse_qa_sse_content
+    return parse_qa_sse_content(lines)
 
 
 async def invoke_target_api(
@@ -253,7 +178,8 @@ async def invoke_target_api(
     body = build_request_body(cfg, ctx)
     connect_timeout = int(cfg.get("connect_timeout_sec") or 30)
     read_timeout = int(cfg.get("read_timeout_sec") or cfg.get("timeout_sec") or 300)
-    timeout = httpx.Timeout(connect=connect_timeout, read=read_timeout, write=30, pool=30)
+    from app.core.stream_phase.sse_io import build_stream_timeout
+    timeout = build_stream_timeout(read_timeout, connect=connect_timeout)
     started = time.perf_counter()
 
     if auth_hint:

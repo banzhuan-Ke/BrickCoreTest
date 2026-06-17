@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.core.api_auth_service import (
     DEFAULT_CUSTOM_CODE,
     auth_config_to_dict,
+    get_enabled_auth_config,
     preview_auth_config,
     refresh_auth_config,
 )
@@ -172,6 +173,58 @@ async def test_auth_preview(body: AuthConfigTestRequest):
         },
         message="调试成功",
     )
+
+
+@router.get("/variables-preview", summary="变量插入预览：Token 授权变量", dependencies=[Depends(require_permissions(API_AUTH_VIEW))])
+async def auth_variables_preview(
+    project_id: int = Query(..., description="项目ID"),
+    environment_id: int = Query(..., description="环境ID"),
+):
+    """返回当前环境下 Token 授权可插入的变量名及缓存预览（供插入变量面板）。"""
+    env = await Environment.get_or_none(id=environment_id, project_id=project_id, is_del=False)
+    if not env:
+        raise HTTPException(status_code=404, detail="环境不存在")
+
+    cfg = await get_enabled_auth_config(project_id, environment_id)
+    if not cfg:
+        cfg = await ApiAuthConfig.filter(
+            project_id=project_id, environment_id=environment_id, is_del=False
+        ).order_by("-update_time").first()
+
+    if not cfg:
+        return StandardResponse(data={"auth_name": None, "is_enabled": False, "items": []})
+
+    cache = cfg.cache_data if isinstance(cfg.cache_data, dict) else {}
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for ex in cfg.extractors or []:
+        name = str(ex.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        items.append({
+            "name": name,
+            "preview": cache.get(name),
+            "description": f"授权「{cfg.name}」",
+        })
+
+    if cfg.auth_type == "custom_code":
+        for name, value in cache.items():
+            if name in seen:
+                continue
+            seen.add(name)
+            items.append({
+                "name": name,
+                "preview": value,
+                "description": f"授权「{cfg.name}」",
+            })
+
+    return StandardResponse(data={
+        "auth_name": cfg.name,
+        "is_enabled": cfg.is_enabled,
+        "items": items,
+    })
 
 
 @router.get("/{config_id}", summary="授权配置详情", dependencies=[Depends(require_permissions(API_AUTH_VIEW))])

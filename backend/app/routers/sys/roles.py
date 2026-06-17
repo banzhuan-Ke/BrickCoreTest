@@ -28,12 +28,20 @@ async def add_role(item: AddRoleForm, user_info: dict = Depends(is_authenticated
             dependencies=[Depends(require_permissions(ROLE_EDIT))])
 async def update_role(role_id: int, item: UpdateRoleForm, user_info: dict = Depends(is_authenticated)):
     """修改角色"""
-    # 只允许修改未删除的角色
     role = await Role.get_or_none(id=role_id, is_del=False)
     if not role:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="角色不存在或已被删除")
-    # 更新角色信息（支持修改is_del状态）
-    await role.update_from_dict(item.model_dump(exclude_unset=True))
+    if role.is_system:
+        if item.name is not None and item.name != role.name:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="系统预置角色不可修改名称")
+        if item.is_del is not None and item.is_del:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="系统预置角色不可删除")
+    data = item.model_dump(exclude_unset=True)
+    if role.code == "system_admin" and "permissions" in data:
+        from app.core.default_roles import sanitize_system_admin_permissions
+
+        data["permissions"] = sanitize_system_admin_permissions(data["permissions"])
+    await role.update_from_dict(data)
     await role.save()
     return role
 
@@ -58,6 +66,8 @@ async def delete_role(role_id: int, user_info: dict = Depends(is_authenticated))
     role = await Role.get_or_none(id=role_id, is_del=False)
     if not role:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="角色不存在或已被删除")
+    if role.is_system:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="系统预置角色不可删除")
     # 检查角色是否被未删除的用户关联
     user_role_count = await User.filter(roles__id=role_id, is_del=False).count()
     if user_role_count > 0:

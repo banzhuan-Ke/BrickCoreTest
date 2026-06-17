@@ -228,9 +228,14 @@
     <div class="mcp-section panel" v-loading="mcpLoading">
       <div class="panel-header">
         <h3>🔌 BrickCore MCP Server</h3>
-        <el-tag :type="mcpInfo.enabled ? 'success' : 'info'" size="small">
-          {{ mcpInfo.enabled ? '已启用' : '未启用' }}
-        </el-tag>
+        <div class="mcp-header-tags">
+          <el-tag :type="mcpInfo.enabled ? 'success' : 'info'" size="small">
+            {{ mcpInfo.enabled ? '已启用' : '未启用' }}
+          </el-tag>
+          <el-tag v-if="mcpInfo.tool_count" size="small" type="info">
+            {{ mcpInfo.tool_count }} 个工具
+          </el-tag>
+        </div>
       </div>
       <div v-if="mcpInfo.enabled" class="mcp-body">
         <div class="mcp-row">
@@ -363,7 +368,13 @@
           <h3>🚀 最近 5 条执行记录</h3>
           <span class="panel-sub">平台最近执行动态</span>
         </div>
-        <el-table :data="filteredRecentExecutions" size="default" :show-header="true" class="fancy-table">
+        <el-table
+          :data="filteredRecentExecutions"
+          size="default"
+          :show-header="true"
+          class="fancy-table clickable-table"
+          @row-click="openExecutionReport"
+        >
           <el-table-column type="index" width="45" />
           <el-table-column prop="name" label="执行名称" min-width="120" show-overflow-tooltip />
           <el-table-column prop="type" label="类型" width="70">
@@ -472,7 +483,7 @@ function formatDate(d) {
   return `${y}-${m}-${day}`
 }
 
-const goDocs = (docId = 'home') => {
+const goDocs = (docId = 'highlights') => {
   router.push({ path: '/docs', query: docId ? { doc: docId } : {} })
 }
 
@@ -562,10 +573,16 @@ const mcpInfo = reactive({
   enabled: false,
   endpoint: '',
   auth_hint: '',
+  tool_count: 0,
+  tool_groups: [],
   dangerous_ops: [],
   client_config: null,
 })
-const mcpToolGroups = ['项目上下文', '需求用例', '功能用例库', '测试执行', '失败分析']
+const mcpToolGroups = computed(() => {
+  const groups = mcpInfo.tool_groups
+  if (Array.isArray(groups) && groups.length) return groups
+  return ['项目上下文', '需求用例', '功能用例库', '接口与 UI 测试', '执行记录与压测', '测试执行', '失败分析']
+})
 
 const displayStats = computed(() => {
   if (activeTab.value === 'perf') {
@@ -623,6 +640,20 @@ const getExecStatusType = (status) => {
     '未执行': 'info'
   }
   return map[status] || 'info'
+}
+
+const openExecutionReport = (row) => {
+  if (row?.report_path) {
+    router.push(row.report_path)
+    return
+  }
+  if (row?.type === 'Web' && row?.id) {
+    router.push({ name: 'taskReport', params: { id: row.id } })
+    return
+  }
+  if (row?.type === '接口' && row?.id) {
+    router.push(`/api-module/report/${row.id}?type=suite`)
+  }
 }
 
 const formatExecStatus = (status) => {
@@ -1189,6 +1220,11 @@ onBeforeUnmount(() => {
 .mcp-section {
   margin-bottom: 20px;
 }
+.mcp-header-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .mcp-body {
   display: flex;
   flex-direction: column;
@@ -1336,6 +1372,10 @@ onBeforeUnmount(() => {
 }
 
 /* 表格 */
+.clickable-table :deep(.el-table__row) {
+  cursor: pointer;
+}
+
 .fancy-table {
   border-radius: 10px;
   overflow: hidden;

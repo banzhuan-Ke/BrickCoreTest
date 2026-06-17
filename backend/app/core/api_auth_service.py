@@ -228,12 +228,14 @@ async def preview_auth_config(
     if not env:
         raise RuntimeError("环境不存在")
 
+    from app.core.global_vars_validate import flatten_global_vars
+
     variables = dict(base_variables or {})
     project = await Project.get_or_none(id=project_id, is_del=False)
     if project and project.global_vars:
-        variables = {**project.global_vars, **variables}
+        variables = {**flatten_global_vars(project.global_vars), **variables}
     if env.global_vars:
-        variables = {**env.global_vars, **variables}
+        variables = {**flatten_global_vars(env.global_vars), **variables}
 
     context = {
         "environment_id": environment_id,
@@ -268,12 +270,14 @@ async def refresh_auth_config(
         "host": env.host or "",
         "variables": dict(base_variables or {}),
     }
+    from app.core.global_vars_validate import flatten_global_vars
+
     variables = dict(base_variables or {})
     project = await Project.get_or_none(id=cfg.project_id, is_del=False)
     if project and project.global_vars:
-        variables = {**project.global_vars, **variables}
+        variables = {**flatten_global_vars(project.global_vars), **variables}
     if env.global_vars:
-        variables = {**env.global_vars, **variables}
+        variables = {**flatten_global_vars(env.global_vars), **variables}
 
     if cfg.auth_type == "custom_code":
         code = (cfg.custom_code or "").strip() or DEFAULT_CUSTOM_CODE

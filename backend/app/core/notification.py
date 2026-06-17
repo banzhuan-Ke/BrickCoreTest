@@ -94,6 +94,8 @@ class NotificationService:
                     await NotificationService._send_dingtalk_alert(cfg, title, content)
                 elif cfg.channel_type == "wechat":
                     await NotificationService._send_wechat_alert(cfg, title, content)
+                elif cfg.channel_type == "feishu":
+                    await NotificationService._send_feishu_alert(cfg, title, content)
                 status_flag = "success"
             except Exception as e:
                 error_text = str(e)
@@ -587,6 +589,31 @@ class NotificationService:
             result = resp.json()
             if result.get("errcode") != 0:
                 raise RuntimeError(f"企微发送失败: {result}")
+
+    @staticmethod
+    async def _send_feishu_alert(cfg: NotificationConfig, title: str, content: dict):
+        """发送飞书告警（自定义机器人 Webhook）"""
+        config = cfg.config or {}
+        webhook = config.get("webhook_url")
+        if not webhook:
+            return
+
+        text = NotificationService._build_alert_body(content, is_html=False)
+        message = f"**{title}**\n{text}" if title else text
+        payload = {
+            "msg_type": "text",
+            "content": {
+                "text": message,
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(webhook, json=payload)
+            resp.raise_for_status()
+            result = resp.json()
+            code = result.get("code", result.get("StatusCode", -1))
+            if code not in (0, "0"):
+                raise RuntimeError(f"飞书发送失败: {result}")
 
     @staticmethod
     def _build_alert_body(content: dict, is_html: bool = False) -> str:

@@ -139,7 +139,14 @@ async def add_step(suite_id: int, item: AddStepForm):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="操作的用例不存在或已被删除")
     if case_.project_id != suite.project_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="只能添加同一项目下的用例到套件中")
-    step = await Step.create(suite=suite, cases=case_, sort=item.sort, is_del=False)
+    default_run_mode = "chain" if suite.suite_type == "2" else "standalone"
+    step = await Step.create(
+        suite=suite,
+        cases=case_,
+        sort=item.sort,
+        run_mode=default_run_mode,
+        is_del=False,
+    )
     return step
 
 
@@ -169,6 +176,7 @@ async def get_step(suite_id: int):
             "id": i.id,
             "skip": i.skip,
             "sort": i.sort,
+            "run_mode": i.run_mode or "standalone",
             "cases_id": i.cases.id,
             "suite_id": i.suite.id,
             "cases_name": i.cases.name,
@@ -203,11 +211,22 @@ async def update_suite_cases(suite_id: int, data: dict):
     if not suite:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="操作的套件不存在或已被删除")
     case_ids = data.get("case_ids", [])
+    default_run_mode = "chain" if suite.suite_type == "2" else "standalone"
+    old_steps = {
+        step.cases_id: (step.run_mode or default_run_mode)
+        for step in await Step.filter(suite_id=suite_id, is_del=False).all()
+    }
     await Step.filter(suite_id=suite_id, is_del=False).update(is_del=True)
     for idx, case_id in enumerate(case_ids):
         case_ = await Case.get_or_none(id=case_id, is_del=False)
         if case_ and case_.project_id == suite.project_id:
-            await Step.create(suite=suite, cases=case_, sort=idx, is_del=False)
+            await Step.create(
+                suite=suite,
+                cases=case_,
+                sort=idx,
+                is_del=False,
+                run_mode=old_steps.get(case_id, default_run_mode),
+            )
     return await get_step(suite_id)
 
 
@@ -231,7 +250,13 @@ async def batch_copy_cases(suite_id: int, data: dict):
     created = []
     start_sort = await Step.filter(suite_id=suite_id, is_del=False).count()
     for idx, step in enumerate(steps):
-        new_step = await Step.create(suite=suite, cases=step.cases, sort=start_sort + idx, is_del=False)
+        new_step = await Step.create(
+            suite=suite,
+            cases=step.cases,
+            sort=start_sort + idx,
+            run_mode=step.run_mode or "standalone",
+            is_del=False,
+        )
         created.append(new_step)
     return created
 
@@ -246,5 +271,15 @@ async def update_sort(suite_id: int, item: UpdateSuiteCaseSortForm):
         step = await Step.get_or_none(suite_id=suite_id, cases_id=i.cases_id, is_del=False)
         if step:
             step.sort = i.sort
+            if i.skip is not None:
+                step.skip = i.skip
+            if i.run_mode is not None:
+                run_mode = (i.run_mode or "standalone").strip().lower()
+                if run_mode not in ("chain", "standalone"):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"无效的运行模式: {i.run_mode}",
+                    )
+                step.run_mode = run_mode
             await step.save()
     return await Step.filter(suite_id=suite_id, is_del=False).order_by('sort')

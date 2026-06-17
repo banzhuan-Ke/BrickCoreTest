@@ -19,6 +19,42 @@ async def _online_device_ids() -> list[str]:
     return list(rows)
 
 
+def _split_device_ids(raw: str | None) -> Set[str]:
+    ids: Set[str] = set()
+    if not raw:
+        return ids
+    for part in str(raw).split(","):
+        part = part.strip()
+        if part:
+            ids.add(part)
+    return ids
+
+
+async def _collect_plan_device_ids(record: UiPlanExecution) -> Set[str]:
+    """解析计划执行记录关联的真实设备 ID（兼容并行计划的逗号拼接）。"""
+    device_ids: Set[str] = set()
+    env = record.env if isinstance(record.env, dict) else {}
+
+    for assignment in env.get("device_assignments") or []:
+        if isinstance(assignment, dict) and assignment.get("device_id"):
+            device_ids.add(str(assignment["device_id"]))
+
+    if env.get("device_id"):
+        device_ids.add(str(env["device_id"]))
+
+    device_ids.update(_split_device_ids(record.device_id))
+
+    suite_device_ids = await UiSuiteExecution.filter(
+        plan_execution_id=record.id,
+        is_del=False,
+    ).exclude(device_id=None).values_list("device_id", flat=True)
+    for did in suite_device_ids:
+        if did:
+            device_ids.update(_split_device_ids(str(did)))
+
+    return device_ids
+
+
 def _send_stop_to_devices(
     device_ids: Iterable[str],
     *,
@@ -50,12 +86,7 @@ async def stop_plan_execution(record_id: int) -> dict:
     if record.status not in STOPPABLE_PLAN_STATUSES:
         raise HTTPException(status_code=400, detail=f"当前状态「{record.status}」不可停止")
 
-    device_ids: Set[str] = set()
-    if record.device_id:
-        device_ids.add(record.device_id)
-    env = record.env if isinstance(record.env, dict) else {}
-    if env.get("device_id"):
-        device_ids.add(env["device_id"])
+    device_ids = await _collect_plan_device_ids(record)
     if not device_ids:
         device_ids = set(await _online_device_ids())
 
@@ -82,11 +113,10 @@ async def stop_suite_execution(record_id: int) -> dict:
         raise HTTPException(status_code=400, detail=f"当前状态「{record.status}」不可停止")
 
     device_ids: Set[str] = set()
-    if record.device_id:
-        device_ids.add(record.device_id)
+    device_ids.update(_split_device_ids(record.device_id))
     env = record.env if isinstance(record.env, dict) else {}
     if env.get("device_id"):
-        device_ids.add(env["device_id"])
+        device_ids.add(str(env["device_id"]))
     if not device_ids:
         device_ids = set(await _online_device_ids())
 
@@ -119,7 +149,7 @@ async def stop_case_execution(record_id: int) -> dict:
     env = record.env if isinstance(record.env, dict) else {}
     device_ids: Set[str] = set()
     if env.get("device_id"):
-        device_ids.add(env["device_id"])
+        device_ids.add(str(env["device_id"]))
     if not device_ids:
         device_ids = set(await _online_device_ids())
 
@@ -132,3 +162,55 @@ async def stop_case_execution(record_id: int) -> dict:
         case_execution_id=record_id,
     )
     return {"detail": "停止成功，已通知执行器中断", "devices_notified": sent}
+
+
+async def stop_executions_for_device(device_id: str) -> dict:
+    """管理员强制停止设备时，联动停止该设备上的进行中 UI 执行。"""
+    device_id = (device_id or "").strip()
+    if not device_id:
+        return {"plans_stopped": 0, "suites_stopped": 0, "cases_stopped": 0}
+
+    plans_stopped = 0
+    suites_stopped = 0
+    cases_stopped = 0
+
+    plan_records = await UiPlanExecution.filter(
+        is_del=False,
+        status__in=list(STOPPABLE_PLAN_STATUSES),
+    ).all()
+    for plan in plan_records:
+        if device_id in await _collect_plan_device_ids(plan):
+            await stop_plan_execution(plan.id)
+            plans_stopped += 1
+
+    suite_records = await UiSuiteExecution.filter(
+        is_del=False,
+        status__in=list(STOPPABLE_SUITE_STATUSES),
+        plan_execution_id=None,
+    ).all()
+    for suite in suite_records:
+        env = suite.env if isinstance(suite.env, dict) else {}
+        suite_devices = _split_device_ids(suite.device_id)
+        if env.get("device_id"):
+            suite_devices.add(str(env["device_id"]))
+        if device_id in suite_devices:
+            await stop_suite_execution(suite.id)
+            suites_stopped += 1
+
+    case_records = await UiCaseExecution.filter(
+        is_del=False,
+        status__in=list(STOPPABLE_CASE_STATUSES),
+        suite_execution_id=None,
+    ).all()
+    for case_rec in case_records:
+        env = case_rec.env if isinstance(case_rec.env, dict) else {}
+        if str(env.get("device_id") or "") == device_id:
+            await stop_case_execution(case_rec.id)
+            cases_stopped += 1
+
+    _send_stop_to_devices([device_id])
+    return {
+        "plans_stopped": plans_stopped,
+        "suites_stopped": suites_stopped,
+        "cases_stopped": cases_stopped,
+    }

@@ -48,6 +48,7 @@ async def create_cron_job(
     run_date: Optional[str] = None,
     crontab: Optional[dict] = None,
     state: bool = False,
+    use_workers: bool = False,
     username: str = Depends(get_current_username),
 ):
     """创建性能测试定时任务"""
@@ -80,6 +81,7 @@ async def create_cron_job(
         run_date=parsed_run_date,
         crontab=crontab or {},
         state=state,
+        use_workers=use_workers,
         create_by=username
     )
 
@@ -132,6 +134,7 @@ async def update_cron_job(
     run_date: Optional[str] = None,
     crontab: Optional[dict] = None,
     state: bool = False,
+    use_workers: bool = False,
     username: str = Depends(get_current_username),
 ):
     """更新性能测试定时任务"""
@@ -158,6 +161,7 @@ async def update_cron_job(
     job.run_date = parsed_run_date
     job.crontab = crontab or {}
     job.state = state
+    job.use_workers = use_workers
     await job.save()
 
     if state:
@@ -225,6 +229,7 @@ async def _cron_job_to_out(job: PerfCronJob) -> dict:
         "run_date": run_date_str,
         "crontab": job.crontab,
         "state": job.state,
+        "use_workers": bool(job.use_workers),
         "last_run_record_id": job.last_run_record_id,
         "last_run_time": job.last_run_time.strftime("%Y-%m-%d %H:%M:%S") if job.last_run_time else None,
         "last_run_status": job.last_run_status,
@@ -261,7 +266,9 @@ async def _create_real_cron_job(job: PerfCronJob):
             id=job.id,
             args=[job.id],
             replace_existing=True,
-            misfire_grace_time=3600
+            misfire_grace_time=3600,
+            max_instances=1,
+            coalesce=True,
         )
     except Exception as e:
         print(f"[PerfScheduler] 创建定时任务失败: {e}")
@@ -289,6 +296,8 @@ async def execute_perf_cron_job(job_id: str):
     """定时任务执行入口"""
     print(f"[PerfCron] 开始执行: {job_id}")
 
+    status = "failed"
+    record = None
     try:
         job = await PerfCronJob.get_or_none(id=job_id, is_del=False, state=True)
         if not job:
@@ -300,6 +309,10 @@ async def execute_perf_cron_job(job_id: str):
             print(f"[PerfCron] 场景不存在: {job.scene_id}")
             return
 
+        if await PerfRecord.filter(cron_job_id=job_id, status="running").exists():
+            print(f"[PerfCron] 上一轮仍在执行，跳过: {job_id}")
+            return
+
         env = await Environment.get_or_none(id=job.env_id, is_del=False)
         if not env:
             print(f"[PerfCron] 环境不存在: {job.env_id}")
@@ -308,6 +321,7 @@ async def execute_perf_cron_job(job_id: str):
         # 复用 exec.py 中的 start_perf 逻辑
         config = scene.config or {}
         config["env_id"] = job.env_id
+        config.setdefault("request_detail_level", "brief")
 
         record = await PerfRecord.create(
             scene_id=job.scene_id,
@@ -320,9 +334,9 @@ async def execute_perf_cron_job(job_id: str):
             cron_job_id=job_id
         )
 
-        # 导入并执行
+        # 导入并执行（可选分布式 Worker，无在线 Worker 时自动本机执行）
         from .exec import run_perf_scene
-        await run_perf_scene(record.id)
+        await run_perf_scene(record.id, use_workers=bool(job.use_workers))
 
         # 重新获取记录状态
         record = await PerfRecord.get_or_none(id=record.id)
@@ -342,7 +356,7 @@ async def execute_perf_cron_job(job_id: str):
         if job:
             job.last_run_record_id = record.id if record else None
             job.last_run_time = datetime.now()
-            job.last_run_status = status if 'status' in dir() else "failed"
+            job.last_run_status = status
             await job.save()
     except Exception as e:
         print(f"[PerfCron] 更新任务状态失败: {e}")

@@ -1,5 +1,6 @@
 <template>
-  <PageCard>
+  <div class="notification-config-root">
+  <ConfigShell :embedded="embedded">
     <template #title>
       <b>通知配置</b>
     </template>
@@ -30,6 +31,7 @@
             <el-tag v-if="scope.row.channel_type === 'email'" type="primary">邮件</el-tag>
             <el-tag v-else-if="scope.row.channel_type === 'dingtalk'" type="warning">钉钉</el-tag>
             <el-tag v-else-if="scope.row.channel_type === 'wechat'" type="success">企微</el-tag>
+            <el-tag v-else-if="scope.row.channel_type === 'feishu'" type="info">飞书</el-tag>
             <span v-else>{{ scope.row.channel_type }}</span>
           </template>
         </el-table-column>
@@ -45,6 +47,9 @@
               Webhook：{{ scope.row.config.webhook_url }}
             </span>
             <span v-else-if="scope.row.channel_type === 'wechat'">
+              Webhook：{{ scope.row.config.webhook_url }}
+            </span>
+            <span v-else-if="scope.row.channel_type === 'feishu'">
               Webhook：{{ scope.row.config.webhook_url }}
             </span>
           </template>
@@ -63,7 +68,7 @@
         </el-table-column>
       </el-table>
     </template>
-  </PageCard>
+  </ConfigShell>
 
   <!-- 添加/编辑弹窗 -->
   <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑通知配置' : '添加通知配置'" width="520px" center destroy-on-close>
@@ -76,7 +81,7 @@
             <b>使用说明</b><br/>
             • <b>启用状态</b>：关闭后该渠道不再发送任何通知。<br/>
             • <b>失败告警</b>：UI/API 套件执行失败时，所有启用的渠道都会收到告警消息。<br/>
-            • <b>自动推报告</b>（仅邮件）：API 套件 / UI 计划 / 性能测试执行完成后，自动将 HTML 报告作为邮件附件发送；钉钉/企微不支持此功能。<br/>
+            • <b>自动推报告</b>（仅邮件）：API 套件 / UI 计划 / 性能测试执行完成后，自动将 HTML 报告作为邮件附件发送；钉钉/企微/飞书不支持此功能。<br/>
             • <b>测试发送</b>：配置完成后可点击“测试”按钮手动验证连通性。
           </div>
         </template>
@@ -89,6 +94,7 @@
           <el-option label="邮件" value="email"/>
           <el-option label="钉钉" value="dingtalk"/>
           <el-option label="企业微信" value="wechat"/>
+          <el-option label="飞书" value="feishu"/>
         </el-select>
       </el-form-item>
 
@@ -123,6 +129,13 @@
         </el-form-item>
       </template>
 
+      <!-- 飞书配置 -->
+      <template v-if="formData.channel_type === 'feishu'">
+        <el-form-item label="Webhook：" prop="webhook_url">
+          <el-input v-model="formData.config.webhook_url" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxx"/>
+        </el-form-item>
+      </template>
+
       <el-form-item label="启用状态：">
         <el-switch v-model="formData.enabled"/>
       </el-form-item>
@@ -134,14 +147,20 @@
       </div>
     </template>
   </el-dialog>
+  </div>
 </template>
 
 <script setup>
+import ConfigShell from '@/components/ConfigShell.vue'
+
+defineProps({
+  embedded: { type: Boolean, default: false }
+})
+
 import { ref, reactive, onMounted, watch } from 'vue'
 import { Bell, Plus, Edit, Promotion, Delete, Check, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '@/api/index'
-import PageCard from "@/components/PageCard.vue"
 
 const projectList = ref([])
 const selectedProjectId = ref(null)
@@ -179,7 +198,7 @@ watch(() => formData.channel_type, (val) => {
   if (val !== 'dingtalk') {
     delete formData.config.secret
   }
-  if (val !== 'dingtalk' && val !== 'wechat') {
+  if (val !== 'dingtalk' && val !== 'wechat' && val !== 'feishu') {
     delete formData.config.webhook_url
   }
 })

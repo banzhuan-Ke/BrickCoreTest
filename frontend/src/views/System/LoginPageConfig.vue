@@ -1,5 +1,5 @@
 <template>
-  <PageCard>
+  <ConfigShell :embedded="embedded">
     <template #title>
       <b>登录页配置</b>
     </template>
@@ -170,13 +170,17 @@
         </el-form-item>
       </el-form>
     </template>
-  </PageCard>
+  </ConfigShell>
 </template>
 
 <script setup>
+import ConfigShell from '@/components/ConfigShell.vue'
+
+defineProps({
+  embedded: { type: Boolean, default: false }
+})
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import PageCard from '@/components/PageCard.vue'
 import { loginPageApi } from '@/api/modules/sys.js'
 import {
   PRO_BG_OPTIONS,

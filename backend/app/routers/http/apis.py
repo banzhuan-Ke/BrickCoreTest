@@ -6,9 +6,9 @@ from typing import List, Optional
 import httpx
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Query, status
 from uuid import uuid4
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from app.models.http import ApiDefinition, ApiTestCase
+from app.models.http import ApiDefinition, ApiTestCase, ApiTestFile
 from app.models.sys import TestCatalog
 from app.schemas.http import (
     ApiDefinitionCreate, ApiDefinitionUpdate, ApiDefinitionOut,
@@ -50,7 +50,8 @@ async def create_api(item: ApiDefinitionCreate, username: str = Depends(get_curr
         name=item.name,
         project_id=item.project_id,
         catalog_id=item.catalog_id,
-        method=item.method.upper(),
+        protocol=(item.protocol or "http").lower(),
+        method=item.method.upper() if (item.protocol or "http") != "websocket" else "WS",
         path=item.path,
         description=item.description,
         base_url=item.base_url,
@@ -60,6 +61,7 @@ async def create_api(item: ApiDefinitionCreate, username: str = Depends(get_curr
         body=item.body or {},
         body_type=item.body_type,
         body_fields=item.body_fields if hasattr(item, 'body_fields') else [],
+        ws_config=item.ws_config if item.ws_config else {},
         response_schema=item.response_schema,
         create_by=username,
         update_by=username,
@@ -67,6 +69,36 @@ async def create_api(item: ApiDefinitionCreate, username: str = Depends(get_curr
         version_history=[{"version": 1, "time": time.strftime("%Y-%m-%d %H:%M:%S"), "desc": "创建接口"}]
     )
     return api
+
+
+class CopyApiRequest(BaseModel):
+    target_project_id: int
+    target_catalog_id: Optional[int] = None
+    new_name: Optional[str] = None
+
+
+@router.post("/definition/{api_id}/copy", summary="复制接口到其他项目", response_model=ApiDefinitionOut,
+             dependencies=[Depends(require_permissions(API_MANAGE_EDIT))])
+async def copy_api_to_project(
+    api_id: int,
+    body: CopyApiRequest,
+    user_info: dict = Depends(require_permissions(API_MANAGE_EDIT)),
+):
+    from app.core.cross_project_copy import copy_api_definition_to_project, ensure_target_project, resolve_target_catalog
+    from app.core.ui_project_guard import assert_user_project_member
+
+    api = await ApiDefinition.get_or_none(id=api_id, is_del=False)
+    if not api:
+        raise HTTPException(status_code=404, detail="接口不存在")
+    await assert_user_project_member(user_info, api.project_id)
+    await assert_user_project_member(user_info, body.target_project_id)
+    await ensure_target_project(body.target_project_id)
+    target_catalog_id = await resolve_target_catalog(body.target_project_id, body.target_catalog_id)
+    username = user_info.get("username") or "admin"
+    new_api = await copy_api_definition_to_project(
+        api, body.target_project_id, target_catalog_id, username, body.new_name
+    )
+    return new_api
 
 
 @router.get("/definition", summary="接口列表", response_model=ApiListResponse)
@@ -113,6 +145,7 @@ async def get_apis(
             "catalog_id": api.catalog_id,
             "catalog_name": None,
             "case_count": case_count_map.get(api.id, 0),
+            "protocol": getattr(api, "protocol", "http") or "http",
             "method": api.method,
             "path": api.path,
             "description": api.description,
@@ -122,6 +155,7 @@ async def get_apis(
             "body": api.body,
             "body_type": api.body_type,
             "body_fields": api.body_fields or [],
+            "ws_config": getattr(api, "ws_config", None) or {},
             "response_schema": api.response_schema,
             "version": api.version,
             "source": api.source,
@@ -179,6 +213,7 @@ async def get_api_detail(api_id: int):
         "project_id": api.project_id,
         "catalog_id": api.catalog_id,
         "catalog_name": None,
+        "protocol": getattr(api, "protocol", "http") or "http",
         "method": api.method,
         "path": api.path,
         "description": api.description,
@@ -189,6 +224,7 @@ async def get_api_detail(api_id: int):
         "body": api.body,
         "body_type": api.body_type,
         "body_fields": api.body_fields,
+        "ws_config": getattr(api, "ws_config", None) or {},
         "response_schema": api.response_schema,
         "version": api.version,
         "source": api.source,
@@ -224,7 +260,8 @@ async def update_api(api_id: int, item: ApiDefinitionUpdate, username: str = Dep
     
     # 更新字段
     api.name = item.name
-    api.method = item.method.upper()
+    api.protocol = (item.protocol or "http").lower()
+    api.method = item.method.upper() if api.protocol != "websocket" else "WS"
     api.path = item.path
     api.description = item.description
     api.base_url = item.base_url
@@ -235,6 +272,7 @@ async def update_api(api_id: int, item: ApiDefinitionUpdate, username: str = Dep
     api.body = item.body or {}
     api.body_type = item.body_type
     api.body_fields = item.body_fields if hasattr(item, 'body_fields') else []
+    api.ws_config = item.ws_config if item.ws_config else {}
     api.response_schema = item.response_schema
     api.catalog_id = item.catalog_id
     api.version = api.version + 1
@@ -531,31 +569,55 @@ async def import_swagger(
     return result
 
 
-@router.post("/files/upload", summary="上传接口调试文件", response_model=ApiBodyFileUploadResponse,
+@router.post("/files/upload", summary="上传接口调试文件（兼容旧版，建议用 /files/upload?project_id=）",
+             response_model=ApiBodyFileUploadResponse,
              dependencies=[Depends(require_permissions(API_MANAGE_EDIT))])
-async def upload_api_body_file(file: UploadFile = File(...)):
-    """上传接口测试文件到独立 bucket"""
+async def upload_api_body_file(
+    file: UploadFile = File(...),
+    project_id: Optional[int] = Query(None, description="项目ID（传入则登记到测试文件库）"),
+    username: str = Depends(get_current_username),
+):
+    """上传接口测试文件到独立 bucket；传入 project_id 时写入 api_test_file 表便于复用。"""
     content = await file.read()
     if not content:
         raise HTTPException(status_code=422, detail="文件内容为空")
 
-    safe_name = file.filename or "upload.bin"
-    object_name = f"{uuid4().hex}/{safe_name}"
+    safe_name = (file.filename or "upload.bin").replace("\\", "/").split("/")[-1].strip()
+    mime_type = file.content_type or "application/octet-stream"
+    if project_id:
+        project = await Project.get_or_none(id=project_id, is_del=False)
+        if not project:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        object_name = f"{project_id}/{uuid4().hex}/{safe_name}"
+    else:
+        object_name = f"{uuid4().hex}/{safe_name}"
+
     success = minio_client.upload_bytes(
         object_name=object_name,
         data=content,
-        content_type=file.content_type or "application/octet-stream",
+        content_type=mime_type,
         bucket_name=API_FILE_BUCKET,
     )
     if not success:
         raise HTTPException(status_code=500, detail="文件上传失败")
+
+    if project_id:
+        await ApiTestFile.create(
+            project_id=project_id,
+            file_name=safe_name,
+            file_key=object_name,
+            file_bucket=API_FILE_BUCKET,
+            mime_type=mime_type,
+            size=len(content),
+            username=username,
+        )
 
     return ApiBodyFileUploadResponse(
         success=True,
         file_bucket=API_FILE_BUCKET,
         file_key=object_name,
         file_name=safe_name,
-        mime_type=file.content_type or "application/octet-stream",
+        mime_type=mime_type,
         size=len(content),
     )
 
@@ -841,6 +903,10 @@ async def debug_api(item: ApiDebugRequest):
             project = await Project.get_or_none(id=project_id, is_del=False)
             if project and project.global_vars:
                 variables = {**project.global_vars, **variables}
+
+        if project_id and item.env_id:
+            from app.core.data_tools.tag_service import merge_execution_variables
+            variables = await merge_execution_variables(project_id, item.env_id, variables)
 
         var_resolver = VariableResolver(variables)
 

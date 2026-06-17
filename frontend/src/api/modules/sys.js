@@ -97,6 +97,22 @@ export const roleApi = {
     deleteRole(role_id) { return this.delete(role_id) }
 }
 
+// ========== 邀请码管理 ==========
+export const inviteCodeApi = {
+    async getList(params) {
+        return await http.get('/sys/invite-codes', { params })
+    },
+    async create(data) {
+        return await http.post('/sys/invite-codes', data)
+    },
+    async update(invite_id, data) {
+        return await http.put(`/sys/invite-codes/${invite_id}`, data)
+    },
+    async delete(invite_id) {
+        return await http.delete(`/sys/invite-codes/${invite_id}`)
+    },
+}
+
 // ========== 项目管理 ==========
 export const projectApi = {
     // 获取项目列表
@@ -123,6 +139,26 @@ export const projectApi = {
     },
     async clearDefault() {
         return await http.delete('/sys/projects/default')
+    },
+
+    // ===== 项目成员 =====
+    async getMembers(project_id, params) {
+        return await http.get(`/sys/projects/${project_id}/members`, { params })
+    },
+    async addMember(project_id, data) {
+        return await http.post(`/sys/projects/${project_id}/members`, data)
+    },
+    async updateMember(project_id, member_id, data) {
+        return await http.put(`/sys/projects/${project_id}/members/${member_id}`, data)
+    },
+    async removeMember(project_id, member_id) {
+        return await http.delete(`/sys/projects/${project_id}/members/${member_id}`)
+    },
+    async transferOwner(project_id, data) {
+        return await http.post(`/sys/projects/${project_id}/members/transfer-owner`, data)
+    },
+    async getMemberRoles(project_id) {
+        return await http.get(`/sys/projects/${project_id}/members/roles`)
     },
     
     // ===== 兼容旧命名 =====
@@ -167,8 +203,8 @@ export const envApi = {
 // ========== 设备管理 ==========
 export const deviceApi = {
     // 获取设备列表
-    async getList(params) {
-        return await http.get('/sys/devices', { params })
+    async getList(params, config = {}) {
+        return await http.get('/sys/devices', { params, ...config })
     },
     // 创建设备
     async create(data) {
@@ -186,6 +222,9 @@ export const deviceApi = {
     async delete(device_id) {
         return await http.delete(`/sys/devices/${device_id}`)
     },
+    async stop(device_id) {
+        return await http.post(`/sys/devices/${device_id}/stop`)
+    },
     // WebSocket订阅日志
     wsLogUrl(device_id) {
         return `${import.meta.env.VITE_WS_URL}/sys/devices/${device_id}/ws/log`
@@ -200,11 +239,12 @@ export const deviceApi = {
     },
     
     // ===== 兼容旧命名 =====
-    getDeviceList(params) { return this.getList(params) },
+    getDeviceList(params, config) { return this.getList(params, config) },
     getDeviceDetail(device_id) { return this.getDetail(device_id) },
     createDevice(data) { return this.create(data) },
     updateDevice(device_id, data) { return this.update(device_id, data) },
-    deleteDevice(device_id) { return this.delete(device_id) }
+    deleteDevice(device_id) { return this.delete(device_id) },
+    stopDevice(device_id) { return this.stop(device_id) },
 }
 
 // ========== 文件管理 ==========
@@ -331,6 +371,28 @@ export const fileApi = {
     }
 }
 
+// ========== 资产收藏 ==========
+export const assetFavoriteApi = {
+    async list(projectId) {
+        return await http.get('/sys/asset-favorites', { params: { project_id: projectId } })
+    },
+    async add(projectId, data) {
+        return await http.post('/sys/asset-favorites', data, { params: { project_id: projectId } })
+    },
+    async remove(projectId, assetType, assetId) {
+        return await http.delete('/sys/asset-favorites', {
+            params: { project_id: projectId, asset_type: assetType, asset_id: assetId },
+        })
+    },
+}
+
+// ========== 项目内搜索 ==========
+export const searchApi = {
+    async search(projectId, q, limit = 8) {
+        return await http.get('/sys/search', { params: { project_id: projectId, q, limit } })
+    },
+}
+
 // ========== 首页看板 ==========
 export const dashboardApi = {
     // 获取看板统计数据
@@ -375,6 +437,16 @@ export const loginPageApi = {
     },
 }
 
+// ========== 平台全局设置 ==========
+export const platformSettingsApi = {
+    async getConfig() {
+        return await http.get('/sys/platform-settings/config')
+    },
+    async updateConfig(data) {
+        return await http.put('/sys/platform-settings/config', data)
+    },
+}
+
 // ========== 操作日志 ==========
 export const operationLogApi = {
     async getList(params) {
@@ -382,7 +454,13 @@ export const operationLogApi = {
     },
     async batchDelete(ids) {
         return await http.delete('/sys/operation-logs', { data: { ids } })
-    }
+    },
+    async purgeNoiseLogs(batchSize = 500) {
+        return await http.delete('/sys/operation-logs/noise', {
+            params: { batch_size: batchSize },
+            timeout: 120000,
+        })
+    },
 }
 
 // ========== 通知配置 ==========

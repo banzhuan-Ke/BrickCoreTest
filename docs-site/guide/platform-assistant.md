@@ -113,5 +113,5 @@
 
 - [MCP 外部接入](./mcp-server.md)
 - [AI 测试](./ai-testing.md)
-- [问答准确性评测](./qa-eval-accuracy.md)
+- [问答准确性评测](./ai-testing.md)
 - [AI 模型配置](./ai-testing.md#ai-模型配置)（场景绑定、模型使用情况）

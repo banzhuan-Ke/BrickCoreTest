@@ -1,10 +1,14 @@
 import json as _json
 from datetime import datetime, timezone
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Depends, status, Form, UploadFile, File
+from pydantic import BaseModel
 from fastapi.responses import Response
 from app.models.sys import Project
 from app.core.auth import is_authenticated, require_permissions
 from app.core.permissions import UI_CASE_VIEW, UI_CASE_EDIT
+from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.core.ui_execution_stale import cleanup_stale_ui_executions
 from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.schemas.ui import CaseSchemas, AddCaseForm, UpdateCaseForm, UiCaseBatchExportRequest, UiCaseImportResult, UiCaseBatchUpdateCatalogRequest
@@ -32,12 +36,17 @@ async def create_case(item: AddCaseForm):
 # 更新测试用例的接口
 @router.put("/{case_id}", summary="更新用例", response_model=CaseSchemas, status_code=status.HTTP_200_OK,
             dependencies=[Depends(require_permissions(UI_CASE_EDIT))])
-async def update_case(case_id: int, item: UpdateCaseForm):
+async def update_case(
+    case_id: int,
+    item: UpdateCaseForm,
+    user_info: dict = Depends(require_permissions(UI_CASE_EDIT)),
+):
     """更新用例信息的接口"""
     # 获取用例信息
     cases = await Case.get_or_none(id=case_id)
     if not cases:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="用例不存在")
+    await assert_user_project_member(user_info, cases.project_id)
     if item.catalog_id is not None:
         await resolve_catalog(cases.project_id, item.catalog_id)
     await cases.update_from_dict(item.model_dump(exclude_unset=True))
@@ -48,11 +57,15 @@ async def update_case(case_id: int, item: UpdateCaseForm):
 # 删除测试用例的接口
 @router.delete("/{case_id}", summary="删除用例", status_code=status.HTTP_204_NO_CONTENT,
                dependencies=[Depends(require_permissions(UI_CASE_EDIT))])
-async def delete_case(case_id: int):
+async def delete_case(
+    case_id: int,
+    user_info: dict = Depends(require_permissions(UI_CASE_EDIT)),
+):
     """删除用例信息的接口"""
     cases = await Case.get_or_none(id=case_id)
     if not cases:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="用例不存在")
+    await assert_user_project_member(user_info, cases.project_id)
     # 删除用例
     cases.is_del = True
     await cases.save()
@@ -61,27 +74,54 @@ async def delete_case(case_id: int):
 # 获取单个用例详情的接口
 @router.get("/{case_id}", summary="用例详情", response_model=CaseSchemas, status_code=status.HTTP_200_OK,
             dependencies=[Depends(require_permissions(UI_CASE_VIEW))])
-async def get_case_detail(case_id: int):
+async def get_case_detail(
+    case_id: int,
+    user_info: dict = Depends(require_permissions(UI_CASE_VIEW)),
+):
     """获取单个用例详情的接口"""
     cases = await Case.get_or_none(id=case_id, is_del=False)
     if not cases:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="用例不存在")
+    await assert_user_project_viewer(user_info, cases.project_id)
     return cases
+
+
+class CopyCaseRequest(BaseModel):
+    target_project_id: Optional[int] = None
+    target_catalog_id: Optional[int] = None
+    new_name: Optional[str] = None
 
 
 # 复制用例
 @router.post("/{case_id}/copy", summary="复制用例", response_model=CaseSchemas, status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_permissions(UI_CASE_EDIT))])
-async def copy_case(case_id: int):
-    """复制用例的接口"""
+async def copy_case(
+    case_id: int,
+    body: CopyCaseRequest | None = None,
+    user_info: dict = Depends(require_permissions(UI_CASE_EDIT)),
+):
+    """复制用例；可指定 target_project_id 跨项目复制。"""
+    from app.core.cross_project_copy import copy_ui_case_to_project, ensure_target_project, resolve_target_catalog
+
     cases = await Case.get_or_none(id=case_id).prefetch_related("project")
     if not cases:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="用例不存在")
-    # 复制用例
-    new_cases = await Case.create(
-        name=cases.name + "_副本", project=cases.project, steps=cases.steps,
-        level=cases.level, catalog_id=cases.catalog_id,
-        username=cases.username,
+    await assert_user_project_member(user_info, cases.project_id)
+
+    req = body or CopyCaseRequest()
+    target_project_id = req.target_project_id or cases.project_id
+    if target_project_id != cases.project_id:
+        await assert_user_project_member(user_info, target_project_id)
+        await ensure_target_project(target_project_id)
+    target_catalog_id = await resolve_target_catalog(target_project_id, req.target_catalog_id)
+
+    username = user_info.get("username") or cases.username
+    new_cases = await copy_ui_case_to_project(
+        cases,
+        target_project_id,
+        target_catalog_id if target_project_id != cases.project_id else (req.target_catalog_id or cases.catalog_id),
+        username,
+        req.new_name,
     )
     return new_cases
 
@@ -89,12 +129,22 @@ async def copy_case(case_id: int):
 # 批量删除用例
 @router.post("/batch-delete", summary="批量删除用例", status_code=status.HTTP_200_OK,
              dependencies=[Depends(require_permissions(UI_CASE_EDIT))])
-async def batch_delete_cases(data: dict):
+async def batch_delete_cases(
+    data: dict,
+    user_info: dict = Depends(require_permissions(UI_CASE_EDIT)),
+):
     """批量删除用例"""
     case_ids = data.get("case_ids", [])
-    if case_ids:
-        await Case.filter(id__in=case_ids).update(is_del=True)
-    return {"detail": "删除成功"}
+    deleted = 0
+    for case_id in case_ids:
+        case = await Case.get_or_none(id=case_id, is_del=False)
+        if not case:
+            continue
+        await assert_user_project_member(user_info, case.project_id)
+        case.is_del = True
+        await case.save()
+        deleted += 1
+    return {"detail": "删除成功", "deleted": deleted}
 
 
 @router.post("/batch-update-catalog", summary="批量修改用例目录", status_code=status.HTTP_200_OK,
@@ -125,7 +175,10 @@ async def export_ui_cases(item: UiCaseBatchExportRequest):
     if len(item.case_ids) > 500:
         raise HTTPException(status_code=400, detail="单次最多导出 500 条")
     cases = await Case.filter(id__in=item.case_ids, is_del=False).all()
-    cases_data = [{"name": c.name, "level": c.level, "steps": c.steps} for c in cases]
+    cases_data = [
+        {"name": c.name, "level": c.level, "steps": c.steps, "description": c.description or ""}
+        for c in cases
+    ]
     payload = {
         "meta": {
             "version": "1.0",
@@ -198,6 +251,7 @@ async def import_ui_cases(
                 project_id=project_id,
                 steps=c.get("steps") or [],
                 level=c.get("level") or "P2",
+                description=(c.get("description") or "").strip() or None,
                 username=username,
                 is_del=False,
             )

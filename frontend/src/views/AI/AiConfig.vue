@@ -1,5 +1,5 @@
 <template>
-  <PageCard>
+  <ConfigShell :embedded="embedded">
     <template #title>
       <b>🤖 AI 模型配置</b>
     </template>
@@ -460,14 +460,18 @@
         </template>
       </el-dialog>
     </template>
-  </PageCard>
+  </ConfigShell>
 </template>
 
 <script setup>
+import ConfigShell from '@/components/ConfigShell.vue'
+
+defineProps({
+  embedded: { type: Boolean, default: false }
+})
 import { ref, reactive, onMounted, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import PageCard from "@/components/PageCard.vue"
 import { aiConfigApi, aiPromptApi } from "@/api/modules/ai.js"
 import { UserStore } from "@/stores/module/UserStore.js"
 import { ProjectStore } from "@/stores/module/ProjectStore.js"

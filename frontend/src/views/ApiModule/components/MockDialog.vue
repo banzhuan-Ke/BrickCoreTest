@@ -77,7 +77,8 @@
 
       <el-form-item label="响应 Body" prop="response_body_str">
         <div style="width:100%">
-          <div style="display:flex; justify-content:flex-end; margin-bottom:4px">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; gap:8px; flex-wrap:wrap">
+            <el-button size="small" type="primary" plain :loading="aiGenerating" @click="openAiDialog">AI 生成响应体</el-button>
             <el-button size="small" text @click="formatJson('response_body')">格式化</el-button>
           </div>
           <el-input
@@ -125,6 +126,26 @@
       <el-button type="primary" :loading="submitting" @click="handleSubmit">保存</el-button>
     </template>
   </el-dialog>
+
+  <el-dialog v-model="aiDialogVisible" title="AI 生成 Mock 响应体" width="520px" append-to-body destroy-on-close>
+    <el-form label-width="90px">
+      <el-form-item label="业务描述">
+        <el-input
+          v-model="aiDescription"
+          type="textarea"
+          :rows="4"
+          placeholder="例如：返回用户列表，含 id、name、mobile；或登录成功返回 token 与用户信息"
+        />
+      </el-form-item>
+      <div style="font-size:12px;color:#909399;line-height:1.6">
+        将结合当前 Mock 的方法、路径、状态码生成 JSON 响应体；需在「AI 模型配置」中绑定场景「Mock 响应生成」或使用默认模型。
+      </div>
+    </el-form>
+    <template #footer>
+      <el-button @click="aiDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="aiGenerating" @click="handleAiGenerate">生成并填入</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -144,6 +165,9 @@ const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 const formRef = ref(null)
 const submitting = ref(false)
 const isEdit = ref(false)
+const aiDialogVisible = ref(false)
+const aiDescription = ref('')
+const aiGenerating = ref(false)
 
 const defaultForm = () => ({
   name: '',
@@ -218,6 +242,46 @@ const resetForm = () => {
   Object.assign(form, defaultForm())
   Object.assign(jsonErrors, { response_headers: false, response_body: false, match_rules: false })
   isEdit.value = false
+  aiDescription.value = ''
+}
+
+const openAiDialog = () => {
+  if (!form.path?.trim()) {
+    ElMessage.warning('请先填写匹配路径')
+    return
+  }
+  aiDescription.value = form.name ? `Mock 名称：${form.name}` : ''
+  aiDialogVisible.value = true
+}
+
+const handleAiGenerate = async () => {
+  if (!form.path?.trim()) {
+    ElMessage.warning('请先填写匹配路径')
+    return
+  }
+  aiGenerating.value = true
+  try {
+    const res = await httpMockApi.aiGenerate({
+      method: form.method,
+      path: form.path,
+      name: form.name,
+      description: aiDescription.value,
+      response_status: form.response_status,
+      project_id: props.projectId,
+    })
+    const data = res.data || {}
+    form.response_body_str = JSON.stringify(data.response_body ?? {}, null, 2)
+    if (data.response_status) {
+      form.response_status = data.response_status
+    }
+    jsonErrors.response_body = false
+    aiDialogVisible.value = false
+    ElMessage.success('AI 已生成响应体')
+  } catch (err) {
+    ElMessage.error(err?.response?.data?.detail || err.message || 'AI 生成失败')
+  } finally {
+    aiGenerating.value = false
+  }
 }
 
 const handleSubmit = async () => {

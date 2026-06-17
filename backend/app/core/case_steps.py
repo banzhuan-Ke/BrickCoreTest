@@ -6,6 +6,61 @@ from typing import Any
 
 
 _NUMBERED_LINE = re.compile(r"^\s*\d+[.、．)\]]\s*", re.MULTILINE)
+_PLACEHOLDER_STEP = re.compile(r"^执行步骤 \d+$")
+
+
+def _empty_step_fallback(step_index: int, expect: str, *, fallback_expect: str) -> str:
+    """步骤为空但有预期时，用预期摘要代替「执行步骤 N」占位"""
+    e = (expect or "").strip()
+    if e and e != fallback_expect:
+        return f"确认：{e[:120]}"
+    return f"执行步骤 {step_index}"
+
+
+def _trim_duplicate_trailing_expects(step_lines: list[str], expect_lines: list[str]) -> list[str]:
+    """AI 常在 expect 里重复编号预期却无对应 step，去掉与上一条相同的多余预期"""
+    if not step_lines or len(expect_lines) <= len(step_lines):
+        return expect_lines
+    trimmed = list(expect_lines)
+    while len(trimmed) > len(step_lines):
+        anchor = trimmed[len(step_lines) - 1]
+        extra = trimmed[len(step_lines)]
+        if extra == anchor:
+            trimmed.pop(len(step_lines))
+        else:
+            break
+    return trimmed
+
+
+def _dedupe_redundant_step_pairs(result: list[dict], *, fallback_expect: str) -> list[dict]:
+    """去掉与上一步预期相同、且 step 为占位/确认文案的多余步骤"""
+    if len(result) < 2:
+        return result
+    cleaned = [result[0]]
+    for item in result[1:]:
+        prev = cleaned[-1]
+        step = (item.get("step") or "").strip()
+        expect = (item.get("expect") or "").strip()
+        prev_expect = (prev.get("expect") or "").strip()
+        if expect == prev_expect and (
+            _PLACEHOLDER_STEP.match(step)
+            or step.startswith("确认：")
+            or _is_auto_placeholder(step, expect, fallback_expect=fallback_expect)
+        ):
+            continue
+        cleaned.append(item)
+    return cleaned
+
+
+def _is_auto_placeholder(step: str, expect: str, *, fallback_expect: str) -> bool:
+    return bool(_PLACEHOLDER_STEP.match((step or "").strip())) and (expect or "").strip() == fallback_expect
+
+
+def normalize_corner_quotes(text: str) -> str:
+    """UI 元素名：「按钮」→ \"按钮\" """
+    if not text:
+        return text
+    return str(text).replace("「", '"').replace("」", '"')
 
 
 def _strip_number_prefix(text: str) -> str:
@@ -67,11 +122,10 @@ def align_steps_expects(
     steps: Any,
     *,
     fallback_expect: str = "符合预期",
-    min_steps: int = 1,
 ) -> list[dict]:
     """
     保证返回的 steps 数组每条同时有 step、expect，且条数一致。
-    支持：多步合并在一个字符串、预期少写一条等情况自动补齐。
+    支持：多步合并在一个字符串、预期少写一条等情况自动补齐；不强制最少步数。
     """
     pairs = _parse_steps_field(steps)
 
@@ -94,12 +148,15 @@ def align_steps_expects(
             step_lines = [""] * max(len(expect_lines), 1)
         if not expect_lines:
             expect_lines = [""] * len(step_lines)
+        expect_lines = _trim_duplicate_trailing_expects(step_lines, expect_lines)
 
         n = max(len(step_lines), len(expect_lines))
         for i in range(n):
             s = (step_lines[i] if i < len(step_lines) else "").strip()
             e = (expect_lines[i] if i < len(expect_lines) else "").strip()
-            all_steps.append(s or f"执行步骤 {len(all_steps) + 1}")
+            if not s:
+                s = _empty_step_fallback(len(all_steps) + 1, e, fallback_expect=fallback_expect)
+            all_steps.append(s)
             if e:
                 all_expects.append(e)
             elif i < len(expect_lines):
@@ -110,25 +167,21 @@ def align_steps_expects(
     if not all_steps:
         return [{"step": "执行操作", "expect": fallback_expect}]
 
-    n = max(len(all_steps), len(all_expects), min_steps)
-    while len(all_steps) < n:
-        all_steps.append(f"执行步骤 {len(all_steps) + 1}")
-    while len(all_expects) < n:
-        all_expects.append(
-            all_expects[-1] if all_expects else fallback_expect
-        )
-
-    if len(all_expects) > n:
-        all_expects = all_expects[:n]
-    if len(all_steps) > n:
-        all_steps = all_steps[:n]
-
-    # 最终以较大长度对齐（防止 expect 多写）
     n = max(len(all_steps), len(all_expects))
     result = []
     for i in range(n):
-        s = (all_steps[i] if i < len(all_steps) else "").strip() or f"执行步骤 {i + 1}"
         e = (all_expects[i] if i < len(all_expects) else "").strip() or fallback_expect
-        result.append({"step": s, "expect": e})
+        s = (all_steps[i] if i < len(all_steps) else "").strip()
+        if not s:
+            s = _empty_step_fallback(i + 1, e, fallback_expect=fallback_expect)
+        result.append({
+            "step": normalize_corner_quotes(s),
+            "expect": normalize_corner_quotes(e),
+        })
 
-    return result
+    while len(result) > 1 and _is_auto_placeholder(
+        result[-1]["step"], result[-1]["expect"], fallback_expect=fallback_expect
+    ):
+        result.pop()
+
+    return _dedupe_redundant_step_pairs(result, fallback_expect=fallback_expect)

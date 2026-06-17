@@ -4,11 +4,43 @@ Prompt 模板管理器
 """
 import re
 from jinja2 import Template as Jinja2Template
+from app.core.edition import is_community_edition
+from app.core.qa_judge_prompt_ce import (
+    QA_JUDGE_DESCRIPTION_CE,
+    QA_JUDGE_SYSTEM_PROMPT_CE,
+    QA_JUDGE_USER_PROMPT_TEMPLATE_CE,
+)
 from app.models.ai import AiPromptTemplate
-from app.core.qa_judge_prompt import QA_JUDGE_USER_PROMPT_TEMPLATE
 
 
 _prompt_initialized = False
+
+EXTRA_INSTRUCTIONS_MAX_LEN = 2000
+
+
+def append_extra_instructions(
+    user_prompt: str,
+    extra_instructions: str | None,
+    *,
+    scene: str = "functional",
+) -> str:
+    """将用户额外要求追加到 Prompt 末尾，优先级高于上文默认规则。"""
+    extra = (extra_instructions or "").strip()[:EXTRA_INSTRUCTIONS_MAX_LEN]
+    if not extra:
+        return user_prompt
+    if scene == "api_case":
+        header = (
+            "## 【用户额外要求 · 优先于上文通用规则】\n"
+            "用户要求与上文冲突时，**以本节为准**（仍须遵守 JSON 数组结构与字段规范）：\n\n"
+        )
+    else:
+        header = (
+            "## 【用户额外要求 · 优先于上文通用规则】\n"
+            "以下由平台自动处理，模型**禁止**输出或改写：title（完整标题）、所属产品、禅道模块、"
+            "相关研发需求、适用阶段。\n"
+            "用户要求与上文冲突时，**以本节为准**（仍须遵守 JSON 结构与上述禁止输出字段）：\n\n"
+        )
+    return user_prompt + "\n\n---\n" + header + extra
 
 
 class PromptManager:
@@ -56,11 +88,13 @@ class PromptManager:
 {% endif %}
 
 要求：
-1. 覆盖以下场景：
-   - 正向场景（合法参数，预期成功）
-   - 边界值场景（空值、超长字符串、最大值、最小值）
-   - 异常场景（错误的数据类型、缺少必填字段、非法字符）
-   - 鉴权场景（若接口需要 Token，包含 Token 失效/过期/缺失的情况）
+1. **用例数量（硬性约束）**：必须且只能输出 **{{count}}** 条用例，JSON 数组长度必须等于 {{count}}，禁止超出。
+{% if count == 1 %}
+   - 仅 1 条时：只生成 1 条用例；场景以用户补充要求为准；若未指定则生成 1 条正向场景。
+   - 禁止为覆盖多种场景而拆成多条。
+{% else %}
+   - 在 {{count}} 条以内合理分配，优先覆盖：正向、边界值、异常、鉴权（若需要 Token）等场景，不必每种都写满。
+{% endif %}
 2. 每个用例必须包含以下字段：
    - name：用例名称（中文，必须包含接口名称或功能主语，如"获取场景知识库列表-正向场景-合法参数"）
    - request_headers：请求头（覆盖或新增）；引用环境或上游变量时使用 ${{变量名}} 语法
@@ -89,6 +123,31 @@ class PromptManager:
      * description: 描述（可选）
 3. 输出格式：标准 JSON 数组，每个元素是一个用例对象。
 4. 不要输出任何解释性文字，只输出 JSON。""",
+            "examples": [],
+        },
+        "mock_data_generation": {
+            "name": "Mock 响应体生成",
+            "scene_type": "api_mock",
+            "description": "根据接口描述 AI 生成 Mock 响应 JSON",
+            "system_prompt": (
+                "你是一位 API Mock 数据设计专家，擅长生成真实、结构合理的 JSON 响应。"
+                "你必须严格输出标准 JSON 对象，不要包含 Markdown 代码块标记。"
+            ),
+            "user_prompt_template": """请为以下 Mock 接口生成合适的 HTTP 响应体 JSON。
+
+接口信息：
+- 名称：{{ name }}
+- 方法：{{ method }}
+- 路径：{{ path }}
+- 期望状态码：{{ response_status }}
+- 业务描述：{{ description }}
+
+要求：
+1. 输出一个 JSON 对象，必须包含字段：
+   - response_body：Mock 响应体（object 或 array，符合 REST 常见结构，如 code/message/data）
+   - response_status：HTTP 状态码整数（默认 {{ response_status }}）
+2. response_body 字段名与类型应贴合路径与描述，数据应看起来真实（可虚构 id、时间戳等）
+3. 只输出 JSON 对象，不要解释文字""",
             "examples": [],
         },
         "ui_case_generation": {
@@ -211,7 +270,9 @@ class PromptManager:
 - kw_assert_page_title: {title}
 - kw_assert_page_url: {url}
 - kw_assert_value: {locator, value}
-- kw_assert_element_text: {locator, text}
+- kw_assert_element_text: {locator, text, match_mode:"exact"|"contains"}
+- kw_assert_element_text_contains: {locator, text}
+- kw_assert_text_contains: {text}
 - kw_assert_attribute: {locator, attr_name, value}
 - kw_assert_visible: {locator, index:1}
 - kw_assert_hidden: {locator, index:1}
@@ -329,6 +390,9 @@ Snapshot 类型：{{snapshot_type}}
 - 优先 data-testid、#id、name、get_by_role=、get_by_placeholder=、get_by_label=
 - get_by_text= 对 input placeholder 无效；失败定位器为「请输入…」或短 placeholder 文案时改用 get_by_placeholder=
 - 严禁返回与失败定位器完全相同的字符串
+- **步骤描述 step_desc 是业务意图**：新定位器必须能完成 step_desc 描述的操作（如「点击基础设置」必须点到「基础设置」，不能改成「设置」）
+- 页面上有多个相似文案时，选与 step_desc **完全匹配** 或 **更长更具体** 的那个，禁止用更短子串替代（例：失败 get_by_text=基础设置 时禁止改成 get_by_text=设置）
+- 常见短词（设置、登录、确定等）易重复，优先用带区域/结构信息的定位（侧栏菜单、顶栏导航、父级 class 等），必要时配合 index
 - 只输出 JSON 对象""",
             "examples": [],
         },
@@ -448,14 +512,21 @@ Snapshot 类型：{{snapshot_type}}
                 "你是一位有 10 年经验的功能测试工程师，编写可直接执行的手工测试用例。"
                 "所有步骤、预期、数值、提示文案须**有据可依**：只能来自下方【本次生成范围】正文、"
                 "其中 [图-N] 读图摘要，或需求中明确写明的测试环境地址；禁止编造需求未出现的上限、错误码或按钮文案。"
+                "高质量标准：前置条件可落地、每步操作含对象+动作+关键数据、预期可观察可判定；"
+                "涉及表单/反馈/弹窗/跳转/多状态切换的流程须拆成多步，禁止为凑条数写一步式浅用例。"
                 "你必须严格输出标准 JSON 数组，不要 Markdown 代码块。"
                 "每个用例 steps 数组每一项须同时含 step 与 expect，一步一预期，禁止合并多步。"
             ),
-            "user_prompt_template": """请基于以下需求文档信息，生成约 {{count}} 条功能测试用例（参考目标，可略多或略少，以**覆盖要点与类型配比**为准，不必凑满条数）。
+            "user_prompt_template": """请基于以下需求文档信息，生成约 {{count}} 条功能测试用例（参考目标，可略多或略少，以**覆盖要点与质量**为准，不必凑满条数）。
 
 需求名称：{{requirement_name}}
 
 {{naming_rules}}
+
+{{count_quality_hint}}
+
+【本次生成范围 · 章节】
+{{scope_section_titles}}
 
 【本次生成范围 · 正文与读图已按章节顺序合并】
 {{scoped_content}}
@@ -464,29 +535,34 @@ Snapshot 类型：{{snapshot_type}}
 
 ---
 
-## 用例类型配比（须尽量满足，合计约 {{count}} 条）
+## 测试设计维度配比（写入 test_design，**不要**写入 type）
 - **正向流程**（主路径成功）：约 35%～45%
 - **异常/反向**（非法输入、权限不足、配置缺失、操作不允许）：约 30%～40%
-- **边界值**（上限/下限/空值/超长/临界个数）：约 15%～25%
-- 若范围内出现 **API 调用、接口、OpenAPI** 等描述：另设 **至少 2 条** API/参数校验类用例（缺参、非法参数、成功调用等）
+- **边界值**（上限/下限/空值/超长/临界个数/静默逻辑）：约 15%～25%
+- 若范围内出现 **API 调用、接口、OpenAPI** 等：test_design 用「接口校验」，type 用「接口测试」
+- test_design 仅允许：正向流程|异常/反向|边界值|接口校验|其他
 
 ## 前置条件 precondition（每条必填，建议三段式，换行分隔）
 1. **环境**：测试站点/入口 URL（需求中出现的须写完整；无则写「测试环境已部署可访问」）
 2. **角色/权限**：登录账号类型或权限状态（如「已登录且具备文档抽取权限」）
-3. **数据/状态**：已上传的文件、已选场景、已配字段等与本用例相关的准备项
+3. **数据/状态**：已上传的文件、已选场景、已配字段、特定评分/记录等与本用例相关的准备项（**须写具体数值或状态**）
 
-## 步骤 step 与预期 expect（专业写法）
-- **step** 须含：**操作对象 + 具体动作 + 关键输入数据**（按钮用需求/读图中的原文名称，勿写「点击按钮」）
-- **expect** 须**可观察、可判定**：界面文案/Toast/字段值/列表条数/按钮禁用态/跳转页面等；勿写「符合预期」「显示正常」
-- 每条用例 **steps 至少 2 项**；主流程或复杂校验建议 **3～5 项**
-- 禁止将「1.xxx\\n2.yyy」写在同一个 step 字符串内
+## 步骤 step 与预期 expect（专业写法 · 质量重点）
+- **step** 须含：**操作对象 + 具体动作 + 关键输入数据**（按钮/菜单/Tab 等 UI 名称用英文双引号包裹，如 点击"提交反馈"按钮；**禁止**使用「」书名号）
+- **expect** 须**可观察、可判定**：界面文案/Toast/字段值/控件显隐/列表条数/按钮禁用态/跳转页面/是否入库等；**每一步 expect 只描述该步操作后的直接结果**
+- **步数策略**：
+  - **只读/静默/单点展示**（如仅查看卡片数值、标签文案、某分数下控件不出现）：**1 步**即可，但 expect 须具体到控件与文案
+  - **交互流程**（选择类型、填写反馈、提交、切换 Tab、刷新、二次确认）：通常 **2～4 步**（如：进入页面→执行操作→确认界面反馈/副作用）
+- steps 为 JSON 数组，**每一步一个对象**，每项同时含 step 与 expect
+- **禁止**为凑步数重复相同 expect；**禁止**只在 expect 里用「1.xxx\\n2.yyy」编号而 step 只有一条
+- **禁止**将「1.xxx\\n2.yyy」写在同一个 step 或 expect 字符串内
 
 ## 需求 grounding（硬性）
-- 文件大小、数量上限、字数限制、配额、错误提示等**必须与上文一致**；上文未写明的写「（需求待确认）」勿虚构具体数字
+- 文件大小、数量上限、字数限制、配额、评分阈值、错误提示等**必须与上文一致**；上文未写明的写「（需求待确认）」勿虚构具体数字
 - 范围内含 **[图-N]** 或读图 JSON 摘要时：相关用例至少 **30%** 应引用具体 **ui_elements / exact_messages**（控件名、布局、提示原文）
 
 ## 禁止使用的空洞表述（step/expect/precondition 均禁止）
-「执行操作」「符合预期」「显示正常」「功能正常」「操作成功」等无具体对象的描述
+「执行操作」「符合预期」「显示正常」「功能正常」「操作成功」「执行步骤 N」等无具体对象的描述
 
 ---
 
@@ -494,7 +570,8 @@ Snapshot 类型：{{snapshot_type}}
 - main_module, sub_module, feature_point（同批勿重复）, case_description, module
 - precondition, steps: [{ "step": "...", "expect": "..." }, ...]
 - priority: 仅 "1"(高)/"2"(中)/"3"(低)/"4"(建议)
-- type: 默认「功能测试」
+- test_design: 正向流程|异常/反向|边界值|接口校验|其他（必填，表示本条用例的测试设计维度）
+- type: 禅道「用例类型」，仅允许：场景测试|功能测试|性能测试|配置相关|安装部署|安全相关|接口测试|其他|自动化测试；**默认「功能测试」**（勿把正向/异常/边界写入 type）
 
 **禁止**输出 title 字段；**禁止**自行拼接【#...】完整标题。
 只输出 JSON 数组，不要任何解释文字。""",
@@ -653,7 +730,7 @@ test_point_summary 的 point_ids 必须引用上方测试点 id。只输出 JSON
 ## 生成规则
 1. **覆盖**：上方每个测试点 id 至少出现在一条用例的 `source_test_point_ids` 中
 2. **类型**：按测试点 test_type 展开（正向→主路径；异常/边界/权限→对应用例）
-3. **步骤**：每用例 steps 至少 2 项；step 含操作对象+动作+关键数据；expect 可观察可判定
+3. **步骤**：steps 为数组，每项须同时含 step 与 expect；只读/静默校验 1 步即可，表单/反馈/提交等交互流程通常 2～4 步；禁止一步式浅用例与重复 expect
 4. **优先级**：测试点 P0→用例 priority "1"；P1→"2"；P2→"3"；P3→"4"
 5. **禁止**空洞表述：「符合预期」「功能正常」「操作成功」等
 
@@ -662,7 +739,8 @@ test_point_summary 的 point_ids 必须引用上方测试点 id。只输出 JSON
 - precondition（环境/角色/数据三段式，换行分隔）
 - steps: [{ "step": "...", "expect": "..." }, ...]
 - priority: "1"|"2"|"3"|"4"
-- type: 默认「功能测试」
+- test_design: 正向流程|异常/反向|边界值|接口校验|其他
+- type: 禅道用例类型，默认「功能测试」（勿写正向/异常/边界）
 - source_test_point_ids: [测试点 id 数字数组]
 - keywords: 可选，建议含 `tp:#id` 便于追溯
 
@@ -697,20 +775,22 @@ test_point_summary 的 point_ids 必须引用上方测试点 id。只输出 JSON
 
 ---
 
-## 补充策略（优先补已有用例未覆盖的类型）
+## 补充策略（优先补已有用例未覆盖的 test_design）
 - **边界/异常/权限/状态/API 参数** 等遗漏场景
-- 类型配比参考：正向约 35%、异常约 35%、边界约 25%（在不与已有用例重复的前提下）
+- test_design 配比参考：正向约 35%、异常约 35%、边界约 25%（在不与已有用例重复的前提下）
 - 若已有用例步骤偏泛，补充的用例须更具体（含操作对象、输入数据、可观察预期）
 
 ## 写法要求（与正式生成一致）
-- **precondition**：环境 + 角色/权限 + 数据/状态（三段式）
-- **step**：操作对象 + 动作 + 关键数据；**expect**：具体界面/文案/状态，禁止「符合预期」
-- **grounding**：限额、错误提示等须来自上文；无依据写「（需求待确认）」
+- **precondition**：环境 + 角色/权限 + 数据/状态（三段式，数据须具体）
+- **steps**：每项含 step 与 expect；只读校验 1 步即可，交互流程 2～4 步；UI 名称用英文双引号；expect 须具体可判定
+- **grounding**：限额、错误提示、评分阈值等须来自上文；无依据写「（需求待确认）」
 - 含 [图-N] 或读图摘要时，补充用例应优先覆盖图中 **ui_elements / exact_messages** 相关场景
 
 ## 输出字段
 main_module, sub_module, feature_point（须区分已有）, case_description, module,
-precondition, steps[{step,expect}] 至少2步, priority(1-4), type
+precondition, steps[{step,expect}]（步数不限）, priority(1-4),
+test_design（正向流程|异常/反向|边界值|接口校验|其他）,
+type（禅道用例类型，默认「功能测试」，勿写正向/异常/边界）
 
 **禁止**输出 title；**禁止**自行拼接完整标题。
 只输出**新增**用例的 JSON 数组，条数为参考目标，可略多略少。""",
@@ -771,10 +851,11 @@ precondition, steps[{step,expect}] 至少2步, priority(1-4), type
 
 要求：
 1. 总结本次测试的整体情况（通过率、主要问题）
-2. 列出 Top 3 需要关注的问题
-3. 给出下一步建议
-4. 字数控制在 300 字以内
-5. 输出 JSON 格式：
+2. 对 failed_case_samples / failed_suite_samples 中的失败用例，**务必引用 error_hint、failed_step_keyword、log_error_excerpt 中的具体信息**；若某条 data_complete=false 且上述字段均为空，才说明「该用例缺少详细错误日志」
+3. 列出 Top 3 需要关注的问题（尽量具体到用例名与失败步骤/错误信息）
+4. 给出可执行的下一步建议（如查看失败步骤截图、重新运行单用例、检查环境变量等）
+5. 字数控制在 300 字以内
+6. 输出 JSON 格式：
 {
   "summary": "总体概述",
   "highlights": ["要点1", "要点2", "要点3"],
@@ -844,8 +925,13 @@ precondition, steps[{step,expect}] 至少2步, priority(1-4), type
 - 错误示例（严禁）："元素输入"、"点击元素"、"键盘按键"、"鼠标悬停"
 - 每条 desc 不超过30字，中文自然语言
 
-【任务4：保持参数不变】
-- method 和 params 必须和原始步骤完全一致，不要修改
+【任务4：定位表达式（params.locator）智能选择】
+- value、index、timeout、url 等其他 params 字段必须与对应原始步骤一致，禁止修改
+- drag_and_drop 步骤必须保留 params.start_selector 与 params.end_selector，禁止修改或删除
+- params.locator 允许从该步骤「候选定位」列表中重新选择更稳的一项；**禁止**自造不在列表中的表达式
+- 选择原则：优先 data-testid / #id；页面上有多个相似按钮（如同时存在「设置」与「基础设置」）时，locator 必须与 desc 中的目标名称一致
+- 常见短词（设置、登录、提交等）且存在区域链式候选（如 header >> get_by_text=设置）时，优先选区域链式而非裸 get_by_text
+- 若不确定，保持原 locator 不变
 
 ========== keyword 映射表（必须严格使用） ==========
 open_url → 访问页面url
@@ -857,6 +943,7 @@ press_key → 键盘按键
 scroll → 滚动页面
 mouse_click → 鼠标点击
 upload_file → input文件上传
+drag_and_drop → 拖拽元素
 assert_text → 断言文本存在
 assert_ele → 断言元素存在
 select_option → 下拉框选择
@@ -993,10 +1080,33 @@ kw_assert_page_title → 断言页面标题
                 "必须严格按用户给出的分项公式与 5 级等级映射执行评估，"
                 "仅输出 1 个 JSON 对象（不要 Markdown 代码块）。"
             ),
-            "user_prompt_template": QA_JUDGE_USER_PROMPT_TEMPLATE,
+            "user_prompt_template": "",
             "examples": [],
         },
     }
+
+    @classmethod
+    def _qa_judge_pro_user_template(cls) -> str:
+        from app.core.qa_judge_prompt import QA_JUDGE_USER_PROMPT_TEMPLATE
+
+        return QA_JUDGE_USER_PROMPT_TEMPLATE
+
+    @classmethod
+    def _resolve_default_template(cls, code: str) -> dict | None:
+        data = cls.DEFAULT_TEMPLATES.get(code)
+        if not data:
+            return None
+        out = dict(data)
+        if code == "qa_judge":
+            if is_community_edition():
+                out.update(
+                    description=QA_JUDGE_DESCRIPTION_CE,
+                    system_prompt=QA_JUDGE_SYSTEM_PROMPT_CE,
+                    user_prompt_template=QA_JUDGE_USER_PROMPT_TEMPLATE_CE,
+                )
+            else:
+                out["user_prompt_template"] = cls._qa_judge_pro_user_template()
+        return out
 
     @classmethod
     async def get_template(cls, code: str) -> dict:
@@ -1022,7 +1132,7 @@ kw_assert_page_title → 断言页面标题
                 "is_default": False,
             }
 
-        default = cls.DEFAULT_TEMPLATES.get(code)
+        default = cls._resolve_default_template(code)
         if not default:
             raise ValueError(f"未知的 Prompt 模板编码: {code}")
 
@@ -1072,7 +1182,10 @@ kw_assert_page_title → 断言页面标题
         global _prompt_initialized
         if _prompt_initialized:
             return
-        for code, data in cls.DEFAULT_TEMPLATES.items():
+        for code in cls.DEFAULT_TEMPLATES:
+            data = cls._resolve_default_template(code)
+            if not data:
+                continue
             template = await AiPromptTemplate.filter(code=code).first()
             if not template:
                 # 不存在则创建

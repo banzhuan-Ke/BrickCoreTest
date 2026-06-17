@@ -3,6 +3,8 @@ import json as _json
 from datetime import datetime, timezone
 from typing import Optional, List
 
+from pydantic import BaseModel
+
 from fastapi import APIRouter, HTTPException, Depends, Query, status, Form, UploadFile, File
 from fastapi.responses import Response
 
@@ -66,6 +68,7 @@ def _build_case_response(case, api, catalog):
         "api_name": api.name if api else "未知接口",
         "api_method": api.method if api else "",
         "api_path": api.path if api else "",
+        "api_protocol": getattr(api, "protocol", "http") if api else "http",
         "project_id": case.project_id,
         "catalog_id": case.catalog_id,
         "catalog_name": catalog.name if catalog else None,
@@ -82,6 +85,7 @@ def _build_case_response(case, api, catalog):
         "request_body": case.request_body,
         "request_body_type": case.request_body_type or "json",
         "request_body_fields": case.request_body_fields or [],
+        "ws_steps": getattr(case, "ws_steps", None) or [],
         "assertions": _normalize_assertions(case.assertions),
         "assertion_groups": getattr(case, "assertion_groups", None) or [],
         "extractors": _normalize_extractors(case.extractors),
@@ -134,6 +138,7 @@ async def create_test_case(item: ApiTestCaseCreate, username: str = Depends(get_
         request_body=item.request_body or {},
         request_body_type=item.request_body_type or "json",
         request_body_fields=item.request_body_fields or [],
+        ws_steps=item.ws_steps or [],
         assertions=assertions_data,
         assertion_groups=item.assertion_groups or [],
         extractors=extractors_data,
@@ -229,6 +234,7 @@ async def update_test_case(case_id: int, item: ApiTestCaseUpdate, username: str 
     case.request_body = item.request_body or {}
     case.request_body_type = item.request_body_type or "json"
     case.request_body_fields = item.request_body_fields or []
+    case.ws_steps = item.ws_steps or []
     case.assertions = [a.model_dump() for a in (item.assertions or [])]
     case.assertion_groups = item.assertion_groups or []
     case.extractors = [e.model_dump() for e in (item.extractors or [])]
@@ -454,39 +460,45 @@ async def import_test_cases(
     )
 
 
+class CopyApiCaseRequest(BaseModel):
+    target_project_id: Optional[int] = None
+    target_catalog_id: Optional[int] = None
+    new_name: Optional[str] = None
+
+
 @router.post("/case/{case_id}/copy", summary="复制测试用例", response_model=ApiTestCaseOut,
              dependencies=[Depends(require_permissions(API_CASE_EDIT))])
-async def copy_test_case(case_id: int, username: str = Depends(get_current_username)):
-    """复制接口测试用例"""
+async def copy_test_case(
+    case_id: int,
+    body: CopyApiCaseRequest | None = None,
+    user_info: dict = Depends(require_permissions(API_CASE_EDIT)),
+):
+    """复制接口测试用例；可跨项目复制（自动匹配或复制关联接口）。"""
+    from app.core.cross_project_copy import copy_api_case_to_project, ensure_target_project, resolve_target_catalog
+    from app.core.ui_project_guard import assert_user_project_member
+
     case = await ApiTestCase.get_or_none(id=case_id, is_del=False)
     if not case:
         raise HTTPException(status_code=404, detail="用例不存在")
-    
-    new_case = await ApiTestCase.create(
-        name=f"{case.name}_副本",
-        api_id=case.api_id,
-        project_id=case.project_id,
-        catalog_id=case.catalog_id,
-        request_headers=case.request_headers,
-        request_params=case.request_params,
-        request_body=case.request_body,
-        request_body_type=case.request_body_type,
-        request_body_fields=case.request_body_fields,
-        assertions=case.assertions,
-        assertion_groups=getattr(case, "assertion_groups", None) or [],
-        extractors=case.extractors,
-        depends_on=case.depends_on,
-        timeout=case.timeout,
-        retry_count=case.retry_count,
-        tags=case.tags,
-        priority=case.priority,
-        pre_script=getattr(case, "pre_script", None),
-        post_script=getattr(case, "post_script", None),
-        data_set=getattr(case, "data_set", None) or [],
-        db_assertions=getattr(case, "db_assertions", None) or [],
-        api_version_snapshot=getattr(case, "api_version_snapshot", 1),
-        create_by=username,
-        update_by=username,
+    await assert_user_project_member(user_info, case.project_id)
+
+    req = body or CopyApiCaseRequest()
+    target_project_id = req.target_project_id or case.project_id
+    if target_project_id != case.project_id:
+        await assert_user_project_member(user_info, target_project_id)
+        await ensure_target_project(target_project_id)
+    target_catalog_id = await resolve_target_catalog(
+        target_project_id,
+        req.target_catalog_id if target_project_id != case.project_id else (req.target_catalog_id or case.catalog_id),
+    )
+
+    username = user_info.get("username") or "admin"
+    new_case = await copy_api_case_to_project(
+        case,
+        target_project_id,
+        target_catalog_id,
+        username,
+        req.new_name,
     )
     return await get_test_case(new_case.id)
 
@@ -496,24 +508,20 @@ async def copy_test_case(case_id: int, username: str = Depends(get_current_usern
 async def preview_variables(body: VariablePreviewRequest):
     """合并项目/环境/额外变量，返回快照及示例字符串替换结果（执行前预览）。"""
     from app.core.variable_resolver import VariableResolver
-    from app.models.sys import Environment, Project
+    from app.core.data_tools.tag_service import merge_execution_variables
+    from app.models.sys import Environment
 
     project_id = body.project_id
-    env_vars: dict = {}
-    proj_vars: dict = {}
-
     if body.env_id:
         env = await Environment.get_or_none(id=body.env_id, is_del=False)
         if env:
             project_id = project_id or env.project_id
-            env_vars = env.global_vars or {}
 
-    if project_id:
-        project = await Project.get_or_none(id=project_id, is_del=False)
-        if project and project.global_vars:
-            proj_vars = project.global_vars or {}
-
-    merged = {**proj_vars, **env_vars, **(body.extra_variables or {})}
+    merged = await merge_execution_variables(
+        project_id,
+        body.env_id,
+        body.extra_variables or {},
+    )
     resolver = VariableResolver(merged)
 
     def _var_expr(key: str) -> str:
@@ -538,7 +546,7 @@ async def preview_variables(body: VariablePreviewRequest):
 
     return {
         "variables": resolver.get_resolved_snapshot(),
-        "priority": "project_global_vars < env_global_vars < extra_variables",
+        "priority": "project_global_vars < env_global_vars < df_tags < extra_variables",
         "samples": samples_out,
     }
 

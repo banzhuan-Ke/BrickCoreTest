@@ -5,6 +5,7 @@
     </template>
     <template #main>
       <RunnerReleasePanel />
+      <RunnerNoticePanel />
       <el-table :data="proStore.deviceList" :header-cell-style="{'text-align':'center'}"
                 :cell-style="{'text-align':'center'}" stripe>
         <template #empty>
@@ -23,9 +24,12 @@
           </template>
         </el-table-column>
         <el-table-column label="设备名称" prop="name"/>
-        <el-table-column label="客户端版本" prop="runner_client_version" width="110">
+        <el-table-column label="客户端版本" prop="runner_client_version" width="120">
           <template #default="scope">
-            <span v-if="scope.row.runner_client_version">v{{ scope.row.runner_client_version }}</span>
+            <template v-if="scope.row.runner_client_version">
+              <span>v{{ scope.row.runner_client_version }}</span>
+              <el-tag v-if="isOutdatedClient(scope.row.runner_client_version)" size="small" type="warning" style="margin-left: 4px">需升级</el-tag>
+            </template>
             <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
@@ -52,6 +56,7 @@
           <template #default="scope">
             <el-tag v-if='scope.row.status==="离线"' type="info">离线</el-tag>
             <el-tag v-else-if='scope.row.status==="在线"' type="success">在线</el-tag>
+            <el-tag v-else-if='scope.row.status==="已停止"' type="warning">已停止</el-tag>
             <el-tag v-else-if='scope.row.status==="执行中"' type="primary">执行中</el-tag>
             <el-tag v-else-if='scope.row.status==="故障"' type="danger">故障</el-tag>
           </template>
@@ -66,9 +71,18 @@
             {{ dateTools.rTime(scope.row.update_time) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="250">
+        <el-table-column label="操作" width="320">
           <template #default="scope">
             <el-button plain type="success" @click="clickDeviceInfo(scope.row)" icon="View">实时画面</el-button>
+            <el-button
+              v-if="scope.row.status === '在线' || scope.row.status === '执行中'"
+              plain
+              type="warning"
+              @click="stopDevice(scope.row)"
+              icon="VideoPause"
+            >
+              停止
+            </el-button>
             <el-button plain type="danger" @click="deleteDevice(scope.row.id)" icon="Delete">删除</el-button>
           </template>
         </el-table-column>
@@ -83,16 +97,41 @@
 
 <script setup>
 import {ref, onMounted, onUnmounted} from 'vue'
-import {Monitor} from "@element-plus/icons-vue"
+import {Monitor, VideoPause} from "@element-plus/icons-vue"
 import http from '@/api/index'
+import { runnerReleaseApi } from '@/api/modules/runner'
 import DeviceInfo from "@/views/Device/DeviceInfo.vue"
 import RunnerReleasePanel from "@/views/Device/RunnerReleasePanel.vue"
+import RunnerNoticePanel from "@/views/Device/RunnerNoticePanel.vue"
 import {ProjectStore} from "@/stores/module/ProjectStore.js"
 import {ElMessage, ElMessageBox, ElNotification} from "element-plus"
 import PageCard from "@/components/PageCard.vue"
 import dateTools from "@/tools/dateTools.js";
 
 const proStore = ProjectStore()
+const recommendedClientVersion = ref('')
+
+function parseClientVersion(version) {
+  return (version || '0').split('.').map(s => parseInt(s.split('-')[0], 10) || 0)
+}
+
+function compareClientVersion(left, right) {
+  const a = parseClientVersion(left)
+  const b = parseClientVersion(right)
+  const len = Math.max(a.length, b.length)
+  for (let i = 0; i < len; i++) {
+    const x = a[i] || 0
+    const y = b[i] || 0
+    if (x > y) return 1
+    if (x < y) return -1
+  }
+  return 0
+}
+
+const isOutdatedClient = (version) => {
+  if (!version || !recommendedClientVersion.value) return false
+  return compareClientVersion(version, recommendedClientVersion.value) < 0
+}
 
 // -----------------------------设备列表------------------------
 // 页面加载时获取设备列表
@@ -101,6 +140,11 @@ proStore.getDeviceList()
 // 定时刷新设备列表（每3秒）
 let refreshInterval = null
 onMounted(() => {
+  runnerReleaseApi.getRelease().then(res => {
+    if (res.status === 200 && res.data?.runner_client_version_latest) {
+      recommendedClientVersion.value = res.data.runner_client_version_latest
+    }
+  }).catch(() => {})
   refreshInterval = setInterval(() => {
     proStore.getDeviceList()
   }, 3000)
@@ -120,6 +164,31 @@ const showDeviceDlg = ref(false)
 const clickDeviceInfo = async (device) => {
   showDeviceDlg.value = true
   deviceId.value = device.id
+}
+
+// =============停止设备=======================
+const stopDevice = async (device) => {
+  ElMessageBox.confirm(
+    `确定停止设备「${device.name}」吗？停止后将不再接收任务与上报画面/日志，需在 Runner 客户端重新点击「上线」才能恢复。`,
+    '停止 Runner',
+    {
+      confirmButtonText: '确定停止',
+      cancelButtonText: '取消',
+      center: true,
+      type: 'warning',
+    }
+  ).then(async () => {
+    const response = await http.deviceApi.stop(device.id)
+    if (response.status === 200) {
+      ElNotification({
+        type: 'success',
+        title: '设备已停止',
+        message: response.data?.message || 'Runner 需重新上线后方可使用',
+        duration: 2500,
+      })
+      await proStore.getDeviceList()
+    }
+  }).catch(() => {})
 }
 
 // =============删除设备=======================

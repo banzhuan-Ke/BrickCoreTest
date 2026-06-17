@@ -12,6 +12,7 @@
         <div class="right-actions">
           <el-button type="primary" :icon="Message" @click="handleSendReport" :loading="sending" :disabled="reportData.status === 'running'">发送报告</el-button>
           <el-button type="success" :icon="Download" @click="handleExport" :loading="exporting">导出报告</el-button>
+          <el-button v-if="hasStreamPhaseMetrics" type="warning" :icon="Download" @click="handleExportExcel" :loading="exportingExcel">导出 Excel</el-button>
           <div class="tag-group">
             <el-tag v-if="reportData.status" :type="getStatusType(reportData.status)">
               {{ getStatusLabel(reportData.status) }}
@@ -51,6 +52,7 @@
           <div class="config-item"><span class="label">开始时间</span><span class="value">{{ reportData.started_at || '-' }}</span></div>
           <div class="config-item"><span class="label">结束时间</span><span class="value">{{ reportData.ended_at || '-' }}</span></div>
           <div class="config-item"><span class="label">峰值/平均并发</span><span class="value">{{ reportData.peak_concurrent }} / {{ reportData.avg_concurrent }}</span></div>
+          <div class="config-item"><span class="label">接口明细</span><span class="value">{{ configSummary.request_detail_level_label || '简略（失败仍含接口详情）' }}</span></div>
         </div>
       </div>
 
@@ -138,12 +140,160 @@
         </el-collapse-item>
       </el-collapse>
 
+      <!-- 业务链路汇总 -->
+      <div v-if="journeyPhaseRows.length" class="table-section">
+        <div class="section-header"><h3>🔗 业务链路汇总</h3></div>
+        <div class="config-grid" style="margin-bottom: 12px;">
+          <div class="config-item"><span class="label">链路总数</span><span class="value">{{ journeySummary.total_journeys ?? '-' }}</span></div>
+          <div class="config-item"><span class="label">链路成功率</span><span class="value">{{ journeySummary.journey_success_rate ?? '-' }}%</span></div>
+          <div class="config-item"><span class="label">平均链路耗时</span><span class="value">{{ journeySummary.avg_journey_duration_ms ?? '-' }} ms</span></div>
+          <div class="config-item"><span class="label">P95 链路耗时</span><span class="value">{{ journeySummary.p95_journey_duration_ms ?? '-' }} ms</span></div>
+        </div>
+        <el-table :data="journeyPhaseRows" size="small" border>
+          <el-table-column prop="name" label="阶段" min-width="120" />
+          <el-table-column prop="total" label="执行次数" width="90" align="center" />
+          <el-table-column prop="success" label="成功" width="70" align="center" />
+          <el-table-column prop="fail" label="失败" width="70" align="center" />
+          <el-table-column prop="error_rate" label="失败率(%)" width="90" align="center" />
+          <el-table-column prop="avg_duration_ms" label="平均耗时(ms)" width="110" align="center" />
+          <el-table-column prop="p95_duration_ms" label="P95(ms)" width="90" align="center" />
+        </el-table>
+      </div>
+
+      <!-- SSE 阶段指标汇总 -->
+      <div v-if="phaseMetricsRows.length" class="table-section">
+        <div class="section-header"><h3>⏱️ SSE 阶段计时汇总（正常请求）</h3></div>
+        <el-table :data="phaseMetricsRows" size="small" border>
+          <el-table-column prop="label" label="指标" min-width="140" />
+          <el-table-column prop="normal_count" label="正常请求数" width="100" align="center" />
+          <el-table-column prop="mean" label="平均(s)" width="90" align="center" />
+          <el-table-column prop="median" label="中位数(s)" width="90" align="center" />
+          <el-table-column prop="p90" label="P90(s)" width="80" align="center" />
+          <el-table-column prop="p95" label="P95(s)" width="80" align="center" />
+          <el-table-column prop="p99" label="P99(s)" width="80" align="center" />
+          <el-table-column prop="min" label="最小(s)" width="80" align="center" />
+          <el-table-column prop="max" label="最大(s)" width="80" align="center" />
+        </el-table>
+        <div class="field-tip" style="margin-top: 8px;">
+          异常率 {{ phaseSummary.error_rate ?? 0 }}%（{{ phaseSummary.fail_count ?? 0 }}/{{ phaseSummary.total_requests ?? 0 }} 未返回答案）
+        </div>
+      </div>
+
+      <!-- 流式请求阶段明细（分页懒加载） -->
+      <div v-if="showStreamDetailSection" class="table-section">
+        <div class="section-header detail-section-header">
+          <div>
+            <h3>📋 流式请求阶段明细</h3>
+            <p class="field-tip">共 {{ streamDetailTotal }} 条，滚动加载更多；不影响上方 QPS/阶段汇总指标。</p>
+          </div>
+          <el-radio-group v-model="streamStatusFilter" size="small" @change="onStreamFilterChange">
+            <el-radio-button value="all">全部</el-radio-button>
+            <el-radio-button value="success">成功</el-radio-button>
+            <el-radio-button value="fail">失败</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div ref="streamScrollRef" class="table-scroll stream-detail-scroll detail-lazy-scroll" @scroll="onStreamScroll">
+          <el-table v-loading="streamLoading" :data="streamDetailRows" size="small" border stripe class="stream-detail-table">
+            <el-table-column
+              v-for="col in streamDetailColumns"
+              :key="col"
+              :prop="col"
+              :label="col"
+              :min-width="streamDetailColWidth(col)"
+              :class-name="streamDetailColClass(col)"
+            >
+              <template #default="{ row }">
+                <pre v-if="isStreamTextCol(col)" class="stream-text-pre">{{ row[col] ?? '-' }}</pre>
+                <span v-else>{{ row[col] ?? '-' }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div v-if="streamLoading" class="lazy-load-hint">加载中…</div>
+          <div v-else-if="!streamHasMore && streamDetailRows.length" class="lazy-load-hint">已加载全部</div>
+        </div>
+      </div>
+
+      <!-- HTTP 请求明细（通用，分页懒加载） -->
+      <div v-if="showHttpTraceSection" class="table-section">
+        <div class="section-header detail-section-header">
+          <div>
+            <h3>🔗 HTTP 请求明细</h3>
+            <p class="field-tip">共 {{ httpTraceTotal }} 条；详细模式含成功请求，失败始终保留采样。展开行查看请求/响应详情。</p>
+          </div>
+          <el-radio-group v-model="httpStatusFilter" size="small" @change="onHttpFilterChange">
+            <el-radio-button value="all">全部</el-radio-button>
+            <el-radio-button value="success">成功</el-radio-button>
+            <el-radio-button value="fail">失败</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div ref="httpScrollRef" class="table-scroll detail-lazy-scroll" @scroll="onHttpScroll">
+          <el-table v-loading="httpLoading" :data="httpTraceRows" size="small" border stripe>
+            <el-table-column type="expand" width="40">
+              <template #default="{ row }">
+                <div class="trace-expand-panel">
+                  <div class="trace-block" v-if="row.method || row.url">
+                    <div class="trace-label">请求</div>
+                    <div><span class="trace-k">Method</span> {{ row.method || '-' }}</div>
+                    <div><span class="trace-k">URL</span> {{ row.url || '-' }}</div>
+                  </div>
+                  <div class="trace-block" v-if="row.request_headers_preview">
+                    <div class="trace-label">请求头</div>
+                    <pre class="trace-pre">{{ row.request_headers_preview }}</pre>
+                  </div>
+                  <div class="trace-block" v-if="row.request_params_preview">
+                    <div class="trace-label">Query 参数</div>
+                    <pre class="trace-pre">{{ row.request_params_preview }}</pre>
+                  </div>
+                  <div class="trace-block" v-if="row.request_body_preview">
+                    <div class="trace-label">请求 Body</div>
+                    <pre class="trace-pre">{{ row.request_body_preview }}</pre>
+                  </div>
+                  <div class="trace-block" v-if="row.thinking_preview">
+                    <div class="trace-label">思考过程</div>
+                    <pre class="trace-pre trace-pre-full">{{ row.thinking_preview }}</pre>
+                  </div>
+                  <div class="trace-block" v-if="row.response_body_preview">
+                    <div class="trace-label">响应 / 流式内容</div>
+                    <pre class="trace-pre trace-pre-full">{{ row.response_body_preview }}</pre>
+                  </div>
+                  <div class="trace-block" v-if="row.error_msg">
+                    <div class="trace-label">错误信息</div>
+                    <pre class="trace-pre error-text">{{ row.error_msg }}</pre>
+                  </div>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column type="index" label="#" width="50" align="center" />
+            <el-table-column prop="case_name" label="用例名称" min-width="120" show-overflow-tooltip />
+            <el-table-column label="状态" width="72" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.success === false ? 'danger' : 'success'">
+                  {{ row.success === false ? '失败' : '成功' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="user_id" label="用户ID" width="96" show-overflow-tooltip />
+            <el-table-column prop="method" label="方法" width="64" align="center" />
+            <el-table-column prop="url" label="URL" min-width="200" show-overflow-tooltip />
+            <el-table-column prop="status_code" label="状态码" width="76" align="center" />
+            <el-table-column prop="response_time" label="响应时间" width="96" align="center">
+              <template #default="{ row }">{{ row.response_time }} ms</template>
+            </el-table-column>
+          </el-table>
+          <div v-if="httpLoading" class="lazy-load-hint">加载中…</div>
+          <div v-else-if="!httpHasMore && httpTraceRows.length" class="lazy-load-hint">已加载全部</div>
+        </div>
+      </div>
+
       <!-- 趋势图表 -->
       <div class="chart-section">
         <div class="section-header">
           <h3>📉 性能趋势图</h3>
         </div>
-        <div ref="chartRef" class="perf-chart"></div>
+        <div v-if="!hasChartData" class="chart-empty">
+          <el-empty description="暂无秒级时序数据（流式单次压测较短或分布式秒级上报未合并时可能出现；汇总 QPS/RT 仍有效）" :image-size="72" />
+        </div>
+        <div v-show="hasChartData" ref="chartRef" class="perf-chart"></div>
       </div>
 
       <!-- HTTP 状态码分布 -->
@@ -198,7 +348,11 @@
         </div>
         <el-table :data="failedSamples" size="small" border stripe>
           <el-table-column type="index" label="#" width="50" align="center" />
-          <el-table-column prop="case_name" label="用例名称" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="case_name" label="用例名称" min-width="140" show-overflow-tooltip />
+          <el-table-column prop="user_id" label="用户ID" width="100" show-overflow-tooltip />
+          <el-table-column prop="question" label="问题" min-width="160" show-overflow-tooltip />
+          <el-table-column prop="method" label="方法" width="70" align="center" />
+          <el-table-column prop="url" label="URL" min-width="200" show-overflow-tooltip />
           <el-table-column prop="status_code" label="状态码" width="90" align="center">
             <template #default="{ row }">
               <el-tag size="small" :type="row.status_code >= 500 ? 'danger' : row.status_code >= 400 ? 'warning' : row.status_code === 0 ? 'danger' : 'info'">
@@ -222,6 +376,14 @@
         <div class="section-header">
           <h3>🔍 接口维度详情</h3>
         </div>
+        <el-alert
+          v-if="caseAggregationList.length && caseRtSampleNote"
+          :title="caseRtSampleNote"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px;"
+        />
         <el-table :data="caseAggregationList" size="default" border stripe>
           <el-table-column prop="name" label="用例名称" min-width="180" show-overflow-tooltip />
           <el-table-column prop="total" label="总请求" width="75" align="center" />
@@ -282,10 +444,13 @@ let chartInstance = null
 let histogramInstance = null
 let pollTimer = null
 const exporting = ref(false)
+const exportingExcel = ref(false)
 const sending = ref(false)
 const expandedPanels = ref([])
 
 const configSummary = computed(() => reportData.value.config_summary || {})
+
+const caseRtSampleNote = computed(() => configSummary.value.case_rt_sample_note || '')
 
 const distributedWorkers = computed(() => {
   const workers = reportData.value.distribution_info?.workers || configSummary.value.workers || []
@@ -408,6 +573,161 @@ const failedSamples = computed(() => {
   return bd.failed_samples || []
 })
 
+const STREAM_TEXT_COLS = new Set(['问题', '答案预览', '思考过程', '参考文件', '错误信息', '参考资料(全部)', '参考资料(高分)'])
+const STREAM_FULL_TEXT_KEYS = new Set(['thinking', 'answer_preview', 'references_all', 'references_high', 'reference_files'])
+
+const isStreamTextCol = (col) => STREAM_TEXT_COLS.has(col)
+
+const streamDetailRows = ref([])
+const streamDetailTotal = ref(0)
+const streamHasMore = ref(false)
+const streamLoading = ref(false)
+const streamPage = ref(1)
+const streamStatusFilter = ref('all')
+const streamScrollRef = ref(null)
+
+const httpTraceRows = ref([])
+const httpTraceTotal = ref(0)
+const httpHasMore = ref(false)
+const httpLoading = ref(false)
+const httpPage = ref(1)
+const httpStatusFilter = ref('all')
+const httpScrollRef = ref(null)
+
+const showStreamDetailSection = computed(() =>
+  (reportData.value.request_details_total || 0) > 0 || streamDetailTotal.value > 0
+)
+const showHttpTraceSection = computed(() =>
+  (reportData.value.request_traces_total || 0) > 0 || httpTraceTotal.value > 0
+)
+
+const buildStreamDetailRow = (index, d) => {
+  const row = {
+    '序号': index,
+    '用户ID': d.user_id || '',
+    '问题': d.question || '',
+    '是否成功': d.success ? '是' : '否',
+    '整体耗时(s)': d.total_time_s ?? '',
+    '响应状态码': d.status_code ?? '',
+    '错误信息': d.error || ''
+  }
+  const schema = d.phase_schema || []
+  for (const s of schema) {
+    if (s.key && s.label && row[s.label] === undefined) {
+      row[s.label] = (d.phases || {})[s.key]
+    }
+  }
+  for (const [key, val] of Object.entries(d.phases || {})) {
+    const label = schema.find(s => s.key === key)?.label || key
+    if (row[label] === undefined) row[label] = val
+  }
+  const extras = d.extras || {}
+  const extraSchema = d.extra_schema || []
+  const labelMap = Object.fromEntries(extraSchema.filter(s => s.key).map(s => [s.key, s.label]))
+  const usedLabels = new Set(Object.keys(row))
+  for (const [ek, ev] of Object.entries(extras)) {
+    let col = labelMap[ek] || ek
+    if (usedLabels.has(col)) col = `${labelMap[ek] || ek}(${ek})`
+    usedLabels.add(col)
+    if (typeof ev === 'string') {
+      row[col] = STREAM_FULL_TEXT_KEYS.has(ek) ? ev : ev.replace(/\n/g, ' ').slice(0, 500)
+    } else {
+      row[col] = ev
+    }
+  }
+  return row
+}
+
+const STREAM_COL_ORDER = ['序号', '用户ID', '问题', '是否成功', '整体耗时(s)', '响应状态码', '错误信息']
+
+const streamDetailColumns = computed(() => {
+  const keys = new Set()
+  streamDetailRows.value.forEach(row => Object.keys(row).forEach(k => keys.add(k)))
+  const rest = [...keys].filter(k => !STREAM_COL_ORDER.includes(k))
+  return [...STREAM_COL_ORDER.filter(k => keys.has(k)), ...rest]
+})
+
+const loadStreamDetails = async (reset = false) => {
+  if (streamLoading.value) return
+  if (!reset && !streamHasMore.value && streamDetailRows.value.length > 0) return
+  if (reset) {
+    streamPage.value = 1
+    streamDetailRows.value = []
+    streamHasMore.value = true
+  }
+  streamLoading.value = true
+  try {
+    const res = await perfRecordApi.getRequestItems(recordId, {
+      kind: 'stream',
+      status: streamStatusFilter.value,
+      page: streamPage.value,
+      size: 50
+    })
+    const data = res.data || res
+    streamDetailTotal.value = data.total || 0
+    streamHasMore.value = !!data.has_more
+    const base = reset ? 0 : streamDetailRows.value.length
+    const rows = (data.items || []).map((d, i) => buildStreamDetailRow(base + i + 1, d))
+    streamDetailRows.value = reset ? rows : [...streamDetailRows.value, ...rows]
+    if (data.has_more) streamPage.value += 1
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载流式明细失败')
+  } finally {
+    streamLoading.value = false
+  }
+}
+
+const loadHttpTraces = async (reset = false) => {
+  if (httpLoading.value) return
+  if (!reset && !httpHasMore.value && httpTraceRows.value.length > 0) return
+  if (reset) {
+    httpPage.value = 1
+    httpTraceRows.value = []
+    httpHasMore.value = true
+  }
+  httpLoading.value = true
+  try {
+    const res = await perfRecordApi.getRequestItems(recordId, {
+      kind: 'http',
+      status: httpStatusFilter.value,
+      page: httpPage.value,
+      size: 50
+    })
+    const data = res.data || res
+    httpTraceTotal.value = data.total || 0
+    httpHasMore.value = !!data.has_more
+    const rows = data.items || []
+    httpTraceRows.value = reset ? rows : [...httpTraceRows.value, ...rows]
+    if (data.has_more) httpPage.value += 1
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载 HTTP 追踪明细失败')
+  } finally {
+    httpLoading.value = false
+  }
+}
+
+const onStreamFilterChange = () => loadStreamDetails(true)
+const onHttpFilterChange = () => loadHttpTraces(true)
+
+const onLazyScroll = (e, loader) => {
+  const el = e.target
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 100) loader()
+}
+const onStreamScroll = (e) => onLazyScroll(e, () => loadStreamDetails(false))
+const onHttpScroll = (e) => onLazyScroll(e, () => loadHttpTraces(false))
+
+const streamDetailColWidth = (col) => {
+  if (col === '思考过程') return 360
+  if (STREAM_TEXT_COLS.has(col)) return 220
+  if (col.includes('时间') || col.endsWith('(s)')) return 110
+  if (['序号', '用户ID', '是否成功', '响应状态码'].includes(col)) return 90
+  return 100
+}
+
+const streamDetailColClass = (col) => (isStreamTextCol(col) ? 'stream-text-col' : '')
+
 const getStatusType = (status) => {
   const map = { running: 'warning', success: 'success', failed: 'danger', stopped: 'info', pending: 'info' }
   return map[status] || ''
@@ -419,14 +739,52 @@ const getStatusLabel = (status) => {
 }
 
 const getModeType = (mode) => {
-  const map = { fixed: 'primary', loop: 'success', stepping: 'warning' }
+  const map = { fixed: 'primary', loop: 'success', stepping: 'warning', stream_burst: 'danger', sse_burst: 'danger', journey_fixed: 'success', journey_loop: 'success' }
   return map[mode] || ''
 }
 
 const getModeLabel = (mode) => {
-  const map = { fixed: '固定', loop: '循环', stepping: '梯度' }
+  const map = { fixed: '固定', loop: '循环', stepping: '梯度', stream_burst: '流式阶段', sse_burst: '流式阶段', journey_fixed: '链路固定', journey_loop: '链路循环' }
   return map[mode] || mode
 }
+
+const journeySummary = computed(() => reportData.value.journey_aggregations || {})
+const journeyPhaseRows = computed(() => {
+  const phases = journeySummary.value.phases || {}
+  return Object.entries(phases).map(([key, p]) => ({
+    key,
+    name: p.name || `阶段${Number(key) + 1}`,
+    total: p.total ?? 0,
+    success: p.success ?? 0,
+    fail: p.fail ?? 0,
+    error_rate: p.error_rate ?? 0,
+    avg_duration_ms: p.avg_duration_ms ?? '-',
+    p95_duration_ms: p.p95_duration_ms ?? '-'
+  }))
+})
+
+const isStreamBurstMode = computed(() => ['stream_burst', 'sse_burst'].includes(reportData.value.mode))
+const hasStreamPhaseMetrics = computed(() => isStreamBurstMode.value)
+
+const hasChartData = computed(() => {
+  const ts = reportData.value.time_series_data
+  return Array.isArray(ts) && ts.length > 0
+})
+
+const phaseSummary = computed(() => reportData.value.phase_metrics || {})
+const phaseMetricsRows = computed(() => {
+  const metrics = phaseSummary.value.metrics || []
+  return metrics.map(m => ({
+    ...m,
+    mean: m.mean ?? 'N/A',
+    median: m.median ?? 'N/A',
+    p90: m.p90 ?? 'N/A',
+    p95: m.p95 ?? 'N/A',
+    p99: m.p99 ?? 'N/A',
+    min: m.min ?? 'N/A',
+    max: m.max ?? 'N/A',
+  }))
+})
 
 const formatNum = (val) => {
   if (val === undefined || val === null) return '-'
@@ -474,6 +832,28 @@ const handleExport = async () => {
   }
 }
 
+const handleExportExcel = async () => {
+  exportingExcel.value = true
+  try {
+    const res = await perfRecordApi.exportExcel(recordId)
+    const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `sse_phase_report_${recordId}_${new Date().getTime()}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('Excel 导出成功')
+  } catch (err) {
+    console.error(err)
+    ElMessage.error(err?.response?.data?.detail || 'Excel 导出失败')
+  } finally {
+    exportingExcel.value = false
+  }
+}
+
 const handleSendReport = async () => {
   if (reportData.value.status === 'running') {
     ElMessage.warning('压测进行中，请稍后再发送报告')
@@ -518,6 +898,18 @@ const loadReport = async () => {
   try {
     const res = await perfRecordApi.getReport(recordId)
     reportData.value = res.data || res
+    if ((reportData.value.request_details_total || 0) > 0) {
+      await loadStreamDetails(true)
+    } else {
+      streamDetailRows.value = []
+      streamDetailTotal.value = 0
+    }
+    if ((reportData.value.request_traces_total || 0) > 0) {
+      await loadHttpTraces(true)
+    } else {
+      httpTraceRows.value = []
+      httpTraceTotal.value = 0
+    }
     nextTick(() => {
       initChart()
       initHistogramChart()
@@ -546,9 +938,17 @@ const initChart = () => {
   const qpsData = timeSeries.map(d => d.qps)
   const avgRtData = timeSeries.map(d => d.avg_rt)
   const p95RtData = timeSeries.map(d => {
-    if (d.p95_rt != null && d.p95_rt !== d.avg_rt) return d.p95_rt
-    return summaryP95 != null ? summaryP95 : d.avg_rt
+    if (!d.qps || d.qps <= 0) return null
+    if (d.p95_rt != null) return d.p95_rt
+    return d.avg_rt != null ? d.avg_rt : null
   })
+  const p95MarkLine = summaryP95 != null ? {
+    silent: true,
+    symbol: 'none',
+    lineStyle: { type: 'dotted', color: '#c9a227', opacity: 0.75 },
+    label: { formatter: `全程 P95: ${summaryP95} ms`, position: 'insideEndTop', color: '#c9a227' },
+    data: [{ yAxis: summaryP95 }]
+  } : undefined
   const usersData = timeSeries.map(d => d.active_users)
   const errorRateData = timeSeries.map(d => d.error_rate || 0)
 
@@ -573,6 +973,9 @@ const initChart = () => {
         })
         if (summaryQps != null) {
           lines.push(`<span style="color:#909399">全程平均 QPS: ${summaryQps}</span>`)
+        }
+        if (summaryP95 != null) {
+          lines.push(`<span style="color:#909399">全程 P95 RT: ${summaryP95} ms</span>`)
         }
         return lines.join('<br/>')
       }
@@ -633,9 +1036,11 @@ const initChart = () => {
         type: 'line',
         yAxisIndex: 0,
         data: p95RtData,
+        connectNulls: false,
         smooth: true,
         itemStyle: { color: '#fac858' },
-        lineStyle: { width: 2, type: 'dashed' }
+        lineStyle: { width: 2, type: 'dashed' },
+        markLine: p95MarkLine
       },
       {
         name: '错误率',
@@ -699,7 +1104,17 @@ const startPolling = () => {
       try {
         const res = await perfExecApi.getStatus(recordId)
         const data = res.data || res
-        reportData.value = { ...reportData.value, ...data }
+        const patch = { ...data }
+        if (Array.isArray(data.time_series) && data.time_series.length > 0) {
+          patch.time_series_data = data.time_series
+        }
+        reportData.value = { ...reportData.value, ...patch }
+        if (patch.time_series_data?.length) {
+          nextTick(() => {
+            initChart()
+            initHistogramChart()
+          })
+        }
         if (data.status !== 'running') {
           loadReport()
         }
@@ -889,6 +1304,13 @@ window.addEventListener('resize', () => {
   height: 400px;
 }
 
+.chart-empty {
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .error-sections {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -914,5 +1336,99 @@ window.addEventListener('resize', () => {
   .error-sections {
     grid-template-columns: 1fr;
   }
+}
+
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.stream-detail-scroll :deep(.el-table__cell) {
+  white-space: nowrap;
+}
+
+.stream-detail-table :deep(.stream-text-col .cell) {
+  white-space: normal;
+  align-items: flex-start;
+}
+
+.stream-text-pre {
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-height: none;
+}
+
+.stream-detail-table :deep(.cell) {
+  white-space: nowrap;
+}
+
+.detail-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.detail-lazy-scroll {
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.lazy-load-hint {
+  text-align: center;
+  padding: 10px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.trace-expand-panel {
+  padding: 8px 12px 12px 48px;
+  background: #fafafa;
+}
+
+.trace-block {
+  margin-bottom: 10px;
+}
+
+.trace-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: #303133;
+  margin-bottom: 4px;
+}
+
+.trace-k {
+  color: #909399;
+  margin-right: 6px;
+}
+
+.trace-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.trace-pre.trace-pre-full {
+  max-height: none;
+  overflow: visible;
+}
+
+.trace-pre.error-text {
+  color: #f56c6c;
 }
 </style>

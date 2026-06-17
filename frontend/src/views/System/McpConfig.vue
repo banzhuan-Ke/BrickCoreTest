@@ -1,5 +1,5 @@
 <template>
-  <PageCard>
+  <ConfigShell :embedded="embedded">
     <template #title>
       <b>MCP 配置</b>
     </template>
@@ -53,13 +53,18 @@
         </el-form-item>
       </el-form>
     </template>
-  </PageCard>
+  </ConfigShell>
 </template>
 
 <script setup>
+import ConfigShell from '@/components/ConfigShell.vue'
+
+defineProps({
+  embedded: { type: Boolean, default: false }
+})
+
 import { reactive, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import PageCard from '@/components/PageCard.vue'
 import { mcpApi } from '@/api/modules/sys.js'
 
 const form = reactive({

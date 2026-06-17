@@ -16,13 +16,17 @@ AI_SCENE_DEFINITIONS: dict[str, tuple[str, str]] = {
     "ui_case_agent": ("UI Agent 探索", "MCP 式逐步规划执行"),
     "locator_heal": ("定位器自愈", "步骤失败时 AI 修复选择器"),
     "api_case_generate": ("API 用例生成", "基于接口定义生成用例"),
+    "mock_data_generate": ("Mock 响应生成", "AI 生成 Mock 接口响应 JSON"),
     "platform_assistant": ("平台内 AI 助手", "看板/各页面的只读问答与项目总结"),
     "report_summary": ("测试报告摘要", "执行报告 AI 摘要与建议"),
     "requirement_test_point": ("需求测试点生成", "从需求文档 AI 提取测试点"),
     "requirement_test_point_case": ("测试点→用例生成", "基于测试点批量生成功能用例"),
     "requirement_test_scheme": ("测试方案生成", "基于测试点生成测试方案文档"),
-    "recorder_optimize": ("录制步骤优化", "AI 精简录制步骤并追加断言"),
+    "recorder_optimize": ("录制步骤优化", "录制弹窗内 AI 精简步骤并追加断言"),
+    "case_steps_optimize": ("用例步骤优化", "用例编辑页 AI 优化步骤并追加断言"),
     "qa_judge": ("问答准确性评判", "知识库问答评测 LLM 打分"),
+    "browser_lab": ("智能浏览器", "browser-use 自然语言驱动浏览器演示/探索"),
+    "browser_lab_task_optimize": ("智能浏览器 · 任务描述优化", "将自然语言任务改写为 browser-use 可执行描述"),
 }
 
 AI_SCENE_GROUPS: list[dict[str, str]] = [
@@ -91,12 +95,26 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "temperature_hint": "0.3～0.5",
         "tip": "API 用例 JSON 输出，建议低温度",
     },
+    "mock_data_generate": {
+        "group": "generate",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-chat",
+        "temperature_hint": "0.3～0.5",
+        "tip": "Mock 响应 JSON，可与 API 用例生成共用模型",
+    },
     "recorder_optimize": {
         "group": "other",
         "recommended_provider": "deepseek",
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.3～0.5",
-        "tip": "步骤优化需保持步骤结构稳定",
+        "tip": "录制后步骤优化需保持步骤结构稳定",
+    },
+    "case_steps_optimize": {
+        "group": "other",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-chat",
+        "temperature_hint": "0.3～0.5",
+        "tip": "用例编辑页优化可与录制步骤优化共用同一模型",
     },
     "failure_analysis": {
         "group": "analysis",
@@ -131,8 +149,24 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "recommended_provider": "deepseek",
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.1～0.3",
-        "tip": "长公式评判 reason 很长：建议绑定 DeepSeek 文本模型，并在「参数覆盖」中设置 max_tokens≥16384、timeout≥180",
+        "tip": "建议绑定 DeepSeek 文本模型，并在「参数覆盖」中设置 max_tokens≥16384、timeout≥180",
         "default_overrides": {"max_tokens": 32768, "temperature": 0.1, "timeout": 300},
+    },
+    "browser_lab": {
+        "group": "generate",
+        "recommended_provider": "openai",
+        "recommended_model": "gpt-4o",
+        "temperature_hint": "0.2～0.4",
+        "tip": "演示/探索型任务：推荐 deepseek-v4-flash（关闭思考模式）或 gpt-4o；DeepSeek v4 须在 AI 配置中关闭「思考模式」才能 function calling；开思考模式仅适合纯探索、成功率较低；Linux 云部署为无头模式",
+        "default_overrides": {"max_tokens": 8192, "temperature": 0.3, "timeout": 300},
+    },
+    "browser_lab_task_optimize": {
+        "group": "generate",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-v4-flash",
+        "temperature_hint": "0.2～0.4",
+        "tip": "纯文本改写，推荐 deepseek-v4-flash 或 deepseek-chat；须关闭思考模式；未绑定时回退「智能浏览器」场景模型",
+        "default_overrides": {"max_tokens": 4096, "temperature": 0.3, "timeout": 120},
     },
 }
 

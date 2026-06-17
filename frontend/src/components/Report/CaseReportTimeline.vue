@@ -131,6 +131,9 @@
                 <div class="step-header">
                   <span class="step-index">步骤 {{ index + 1 }}</span>
                   <span class="step-keyword">{{ step.keyword || step.name || '执行步骤' }}</span>
+                  <el-tag v-if="step._from_fragment?.name" size="small" type="success" effect="plain">
+                    片段：{{ step._from_fragment.name }}
+                  </el-tag>
                   <el-tag size="small" :type="getStepStatusType(step.status)">
                     {{ getStepStatusText(step.status) }}
                   </el-tag>
@@ -265,28 +268,12 @@
     </div>
 
     <!-- 日志虚拟滚动 -->
-    <div class="log-section" v-if="logData.length > 0">
-      <div class="section-title">
-        执行日志
-        <el-tag size="small" type="info">{{ logData.length }} 条</el-tag>
-      </div>
-      <div class="log-container" ref="logContainer">
-        <RecycleScroller
-          class="log-scroller"
-          :items="logItems"
-          :item-size="28"
-          key-field="index"
-          v-slot="{ item }"
-        >
-          <div :class="['log-line', item.level]">
-            <span class="log-index">[{{ item.index + 1 }}]</span>
-            <span class="log-time" v-if="item.time">{{ item.time }}</span>
-            <span class="log-level" :class="item.level">{{ item.level?.toUpperCase() }}</span>
-            <span class="log-message">{{ item.message }}</span>
-          </div>
-        </RecycleScroller>
-      </div>
-    </div>
+    <ExecutionLogScroller
+      :logs="logData"
+      container-height="400px"
+      show-time
+      show-level
+    />
   </div>
 
   <!-- 无数据状态 -->
@@ -306,8 +293,7 @@ import {
   VideoPlay,
   Collection
 } from '@element-plus/icons-vue'
-import { RecycleScroller } from 'vue-virtual-scroller'
-import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
+import ExecutionLogScroller from '@/components/Report/ExecutionLogScroller.vue'
 import { fileApi } from '@/api/modules/sys'
 import { aiGenerateApi } from '@/api/modules/ai.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -534,7 +520,6 @@ watch(() => props.runInfo, () => {
 }, { deep: true })
 
 const currentScreenshot = ref(0)
-const logContainer = ref(null)
 const applyingStepIndex = ref(-1)
 
 const caseIdForWriteback = computed(() => {
@@ -735,52 +720,6 @@ const screenshotPreviewList = computed(() => screenshots.value.map(s => s.url))
 // 处理截图切换
 const handleScreenshotChange = (index) => {
   currentScreenshot.value = index
-}
-
-// 日志列表（添加索引和解析）
-const logItems = computed(() => {
-  if (!logData.value.length) return []
-  return logData.value.map((log, index) => {
-    const parsed = parseLogLine(log, index)
-    return { ...parsed, index }
-  })
-})
-
-// 解析日志行
-const parseLogLine = (log, index) => {
-  // 如果是字符串
-  if (typeof log === 'string') {
-    const result = { message: log, index, level: 'info', time: null }
-    
-    // 尝试匹配 [TIME] [LEVEL] message 格式
-    const match = log.match(/^\[(\d{2}:\d{2}:\d{2}[\.:]?\d*)\]?\s*\[(\w+)\]?\s*(.*)/i)
-    if (match) {
-      result.time = match[1]
-      result.level = match[2].toLowerCase()
-      result.message = match[3]
-    } else {
-      // 尝试检测日志级别关键词
-      const lowerLog = log.toLowerCase()
-      if (lowerLog.includes('error') || lowerLog.includes('exception')) result.level = 'error'
-      else if (lowerLog.includes('warn')) result.level = 'warning'
-      else if (lowerLog.includes('debug')) result.level = 'debug'
-      else if (lowerLog.includes('success') || lowerLog.includes('pass')) result.level = 'success'
-    }
-    
-    return result
-  }
-  
-  // 如果是对象（结构化日志）
-  if (typeof log === 'object' && log !== null) {
-    return {
-      message: log.message || log.msg || log.content || JSON.stringify(log),
-      index,
-      level: log.level || 'info',
-      time: log.time || log.timestamp || null
-    }
-  }
-  
-  return { message: String(log), index, level: 'info', time: null }
 }
 </script>
 
@@ -1043,65 +982,6 @@ const parseLogLine = (log, index) => {
         word-break: break-all;
         max-height: 300px;
         overflow-y: auto;
-      }
-    }
-  }
-  
-  .log-container {
-    height: 400px;
-    background: #1e1e1e;
-    border-radius: 8px;
-    overflow: hidden;
-    
-    .log-scroller {
-      height: 100%;
-      
-      .log-line {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 4px 12px;
-        font-family: 'Consolas', 'Monaco', monospace;
-        font-size: 13px;
-        line-height: 20px;
-        border-bottom: 1px solid #2a2a2a;
-        color: #d4d4d4;
-        
-        &:hover {
-          background: #2a2a2a;
-        }
-        
-        .log-index {
-          color: #6e7681;
-          min-width: 50px;
-          font-size: 11px;
-        }
-        
-        .log-time {
-          color: #6e7681;
-          min-width: 80px;
-          font-size: 11px;
-        }
-        
-        .log-level {
-          min-width: 50px;
-          font-weight: bold;
-          font-size: 11px;
-          
-          &.error { color: #f85149; }
-          &.warning { color: #ffa657; }
-          &.warn { color: #ffa657; }
-          &.info { color: #58a6ff; }
-          &.debug { color: #8b949e; }
-          &.success { color: #3fb950; }
-        }
-        
-        .log-message {
-          flex: 1;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
       }
     }
   }

@@ -43,10 +43,10 @@ def _build_user_data(user: User, roles: list = None, permissions: list = None) -
 
 @router.post("/register", summary="用户注册", response_model=RegisterSchemas, status_code=status.HTTP_201_CREATED)
 async def register(item: RegisterForm):
-    # 验证超管账号密码，防止随意注册
-    admin = await User.get_or_none(username=item.admin_username, is_del=False)
-    if not admin or not admin.is_superuser or not auth.verify_password(item.admin_password, admin.password):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="超管账号或密码不正确，无法注册")
+    from app.core.invite_code_service import validate_and_consume_invite_code
+
+    role_ids = await validate_and_consume_invite_code(item.invite_code)
+    item.roles = role_ids
     return await _do_register(item)
 
 

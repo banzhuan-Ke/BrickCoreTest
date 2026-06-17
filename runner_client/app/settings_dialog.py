@@ -22,8 +22,8 @@ from runner_client.app.preferences import (
 from runner_client.app.runtime_check import is_packaged_app
 
 
-def _is_community_source_tree() -> bool:
-    """社区版仓库无 runner/WebEngine 与打包脚本。"""
+def _is_public_source_tree() -> bool:
+    """公开仓库无 runner/WebEngine 与打包脚本。"""
     here = Path(__file__).resolve()
     for root in here.parents:
         if (root / "docs-site").is_dir():
@@ -37,13 +37,13 @@ def _settings_hint_text() -> str:
             "说明：登录平台后点击「上线」即可连接执行器。\n"
             "安装包请从平台「系统管理 → 执行器发布」或网盘获取。"
         )
-    if _is_community_source_tree():
+    if _is_public_source_tree():
         return (
-            "说明：社区版请从网盘或平台「执行器发布」下载 BrickCoreRunner.zip。\n"
-            "本仓库仅含客户端 GUI 源码，不含 runner 引擎与打包脚本。"
+            "说明：请从网盘或平台「执行器发布」下载 BrickCoreRunner.zip。\n"
+            "本仓库仅含客户端 GUI 源码，引擎随安装包分发。"
         )
     return (
-        "说明（商业版源码）：安装包由 scripts\\build_runner_client.ps1 生成，\n"
+        "说明：安装包由 scripts\\build_runner_client.ps1 生成，\n"
         "输出 runner_client\\dist\\BrickCoreRunner\\，可复制到其他 Windows 电脑。"
     )
 

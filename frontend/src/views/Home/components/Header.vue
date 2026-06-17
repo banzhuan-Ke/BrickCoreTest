@@ -22,6 +22,12 @@
     </div>
 
     <div class="right_box">
+      <el-tooltip content="项目内搜索 (Ctrl+K)" placement="bottom">
+        <div class="icon-btn" @click="showSearch = true">
+          <el-icon :size="20"><Search /></el-icon>
+        </div>
+      </el-tooltip>
+
       <!-- 界面风格 -->
       <el-tooltip content="切换界面风格" placement="bottom">
         <ThemeSwitcher compact />
@@ -130,7 +136,7 @@
     <HelpContent :is-help-fullscreen="isHelpFullscreen" />
   </el-dialog>
 
-
+  <GlobalProjectSearch v-model="showSearch" />
 </template>
 
 <script setup>
@@ -143,6 +149,8 @@ import {ElNotification, ElMessage, ElMessageBox} from 'element-plus'
 import dateTools from "@/tools/dateTools.js"
 import HelpContent from "@/components/HelpContent.vue"
 import ThemeSwitcher from "@/components/ThemeSwitcher.vue"
+import GlobalProjectSearch from "@/components/GlobalProjectSearch.vue"
+import { Search } from '@element-plus/icons-vue'
 
 // 定义props判断是否为项目列表页
 const props = defineProps({
@@ -190,6 +198,8 @@ function logout() {
       })
 }
 
+const showSearch = ref(false)
+
 // 帮助对话框
 let showHelp = ref(false)
 let isHelpFullscreen = ref(false)
@@ -218,7 +228,7 @@ function goProfile() {
 
 function onHelpCommand(cmd) {
   if (cmd === 'docs') {
-    router.push({ name: 'docsCenter' })
+    router.push({ name: 'docsCenter', query: { doc: 'highlights' } })
     return
   }
   showHelp.value = true
@@ -246,6 +256,13 @@ const onScreenfullChange = () => {
 
 // 每隔一秒更新时间
 let clockTimer = null
+const onGlobalKeydown = (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    showSearch.value = true
+  }
+}
+
 onMounted(() => {
   nTime.value = getNowTime()
   clockTimer = setInterval(() => {
@@ -254,6 +271,7 @@ onMounted(() => {
   if (screenfull.isEnabled) {
     screenfull.on('change', onScreenfullChange)
   }
+  window.addEventListener('keydown', onGlobalKeydown)
 })
 onBeforeUnmount(() => {
   if (clockTimer) {
@@ -263,6 +281,7 @@ onBeforeUnmount(() => {
   if (screenfull.isEnabled) {
     screenfull.off('change', onScreenfullChange)
   }
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 // 点击全屏
 const handleFullScreen = () => {

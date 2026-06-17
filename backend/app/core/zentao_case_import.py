@@ -8,6 +8,7 @@ from typing import Any, Optional
 from app.core.case_steps import align_steps_expects, split_numbered_lines
 from app.core.zentao_bindings import resolve_stage
 from app.core.zentao_case_export import ZENTAO_DEFAULT_COLUMNS
+from app.core.zentao_case_types import normalize_zentao_case_type
 
 # 表头别名 → 标准列名
 _HEADER_ALIASES = {
@@ -170,7 +171,7 @@ def parse_zentao_xlsx_to_cases(
             "precondition": first.get("前置条件", ""),
             "steps": steps,
             "priority": priority,
-            "type": (first.get("用例类型") or "功能测试").strip(),
+            "type": normalize_zentao_case_type(first.get("用例类型")),
             "stage": stage,
             "keywords": "",
             "source_import_batch": import_batch,

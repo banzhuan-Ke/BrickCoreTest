@@ -21,7 +21,7 @@ SOURCES: list[tuple[str, str, str]] = [
     ("runner-client", "docs-site/guide/runner-client.md", "执行器使用说明"),
     ("runner-packaging", "scripts/ce-stubs/docs-runner-packaging-ce.md", "执行器获取与发布"),
     ("api-automation", "docs-site/guide/api-automation.md", "接口自动化"),
-    ("data-factory", "docs-site/guide/data-factory.md", "数据工厂"),
+    ("data-factory", "scripts/ce-stubs/docs-data-factory-ce.md", "数据工厂"),
     ("api-auth", "docs-site/guide/api-auth.md", "Token 授权"),
     ("perf-testing", "docs-site/guide/perf-testing.md", "性能测试"),
     ("ai-testing", "docs-site/guide/ai-testing.md", "AI 测试"),

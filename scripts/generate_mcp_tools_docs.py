@@ -57,6 +57,14 @@ CATEGORY_SPECS: list[tuple[str, set[str]]] = [
         },
     ),
     (
+        "3.1 数据工厂（只读）",
+        {
+            "list_data_factory_datasources",
+            "list_sql_templates",
+            "get_sql_template",
+        },
+    ),
+    (
         "4. UI 自动化（只读）",
         {
             "list_ui_tasks",

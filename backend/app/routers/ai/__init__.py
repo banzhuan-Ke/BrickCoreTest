@@ -13,6 +13,7 @@ from app.routers.ai.analyze import router as analyze_router
 from app.routers.ai.functional_cases import router as functional_cases_router
 from app.routers.ai.usage_logs import router as usage_logs_router
 from app.routers.ai.qa_eval import router as qa_eval_router
+from app.routers.ai.browser_lab import router as browser_lab_router
 
 ai_router = APIRouter(prefix="/ai", tags=["AI测试"])
 
@@ -28,3 +29,4 @@ ai_router.include_router(workbench_router)
 ai_router.include_router(analyze_router)
 ai_router.include_router(usage_logs_router)
 ai_router.include_router(qa_eval_router)
+ai_router.include_router(browser_lab_router)

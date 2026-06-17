@@ -6,7 +6,7 @@
 
 **http://43.142.83.156/showcase/**
 
-**使用说明（无需登录）：** [http://43.142.83.156/showcase/docs/](http://43.142.83.156/showcase/docs/) — 与平台「文档中心」同目录（社区版展示集）
+**使用说明（无需登录）：** [http://43.142.83.156/showcase/docs/](http://43.142.83.156/showcase/docs/) — 与平台「文档中心」同目录
 
 （Gitee Pages 已下线，改用演示站 Nginx 托管，见根目录 `nginx-docker.conf` 中 `/showcase/`）
 

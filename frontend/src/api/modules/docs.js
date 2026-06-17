@@ -16,6 +16,9 @@ export const docsApi = {
     restoreBuiltin(entryId) {
         return http.post(`/sys/docs/builtin/${entryId}/restore`)
     },
+    syncBuiltinFromFiles() {
+        return http.post('/sys/docs/builtin/sync-from-files')
+    },
     listManage() {
         return http.get('/sys/docs/manage')
     },

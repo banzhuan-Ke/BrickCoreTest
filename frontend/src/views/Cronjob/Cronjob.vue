@@ -110,7 +110,7 @@
           <div>暂无执行记录</div>
         </div>
       </template>
-      <el-table-column label="序号" type="index" width="80"/>
+      <el-table-column label="序号" type="index" :index="recordTableRowIndex" width="80"/>
       <el-table-column prop="task_name" label="任务名称" show-overflow-tooltip min-width="150"/>
       <el-table-column label="浏览器" prop="env.browser_type" width="100">
         <template #default="scope">
@@ -419,6 +419,7 @@ import {Clock, Search, RefreshRight} from "@element-plus/icons-vue"
 import http from '@/api/index'
 import {ElNotification, ElMessageBox, ElMessage} from "element-plus"
 import dateTools from "@/tools/dateTools.js"
+import { makeTableRowIndex } from '@/utils/tableIndex'
 import {ProjectStore} from "@/stores/module/ProjectStore.js"
 import PageCard from "@/components/PageCard.vue"
 import {UserStore} from "@/stores/module/UserStore.js"
@@ -484,6 +485,8 @@ const recordPage = reactive({
   size: 10,
   total: 0
 })
+
+const recordTableRowIndex = makeTableRowIndex(recordPage)
 
 
 

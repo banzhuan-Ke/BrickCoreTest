@@ -18,10 +18,7 @@ from app.core import config as settings
 from app.core.auth import is_authenticated, require_permissions
 from app.core.permissions import UI_CRON_VIEW, UI_CRON_EDIT
 from tortoise import transactions
-from app.models.ui import UiPlanExecution, UiSuiteExecution, UiCaseExecution
-from app.models.ui import Suite
-from app.core.mq_producer import MQProducer
-from app.core.ai_project_settings import resolve_locator_heal_for_execute
+from app.models.ui import UiPlanExecution
 from app.core.scheduler_lock import with_scheduler_lock
 from app.models.sys import Device
 
@@ -43,84 +40,36 @@ scheduler = AsyncIOScheduler(jobstores=job_stores, job_defaults=job_defaults, ti
 
 @with_scheduler_lock(lock_prefix="scheduler:ui", expire_seconds=300)
 async def run_task(task_id, env_id, cronjob_id=None):
-    """提交任务到rabbitmq（补充关联资源的删除状态校验）"""
-    # 校验任务是否存在且未被删除
-    task = await Task.get_or_none(id=task_id, is_del=False).prefetch_related('suites', 'project')
+    """提交任务到 RabbitMQ（支持计划级并行：多在线执行器等权分配套件）"""
+    task = await Task.get_or_none(id=task_id, is_del=False).prefetch_related("suites", "project")
     if not task:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="测试计划不存在或已被删除！")
-    # 校验环境是否存在且未被删除
-    env = await Environment.get_or_none(id=env_id, is_del=False)
-    if not env:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="测试环境不存在或已被删除！")
-    # 获取第一个在线且未删除的设备
-    device = await Device.filter(status="在线", is_del=False).first()
-    if not device:
+
+    online_devices = await Device.filter(status="在线", is_del=False).all()
+    if not online_devices:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="在线设备不存在！")
-    device_id = device.id
 
-    ai_heal_enabled = await resolve_locator_heal_for_execute(task.project_id, None)
+    if task.parallel and len(online_devices) > 1:
+        devices = [{"device_id": d.id, "weight": 1} for d in online_devices]
+        device_id = None
+    else:
+        devices = []
+        device_id = online_devices[0].id
 
-    # 组装执行的数据（保持原有逻辑）
-    env_config = {
-        "is_debug": True,
-        "browser_type": 'chromium',
-        "host": env.host,
-        "global_variable": env.global_vars,
-        "ai_heal_enabled": ai_heal_enabled,
-    }
-    # 创建任务执行记录（带 cronjob_id）
-    task_record = await UiPlanExecution.create(
-        task=task, 
-        username=task.username, 
-        env=env_config, 
-        project=task.project,
-        cronjob_id=cronjob_id
+    from app.core.ui_plan_runner import execute_ui_plan
+
+    return await execute_ui_plan(
+        task,
+        env_id=env_id,
+        browser_type="chromium",
+        headless=True,
+        username=task.username,
+        device_id=device_id,
+        devices=devices,
+        ai_heal_enabled=None,
+        trigger_source="cron",
+        cronjob_id=cronjob_id,
     )
-    task_count = 0
-    mq = MQProducer()
-    # 获取测试计划的套件（过滤已删除的套件）
-    for suite in await task.suites.filter(is_del=False).all():
-        cases = []
-        suite_ = await Suite.get_or_none(id=suite.id, is_del=False).prefetch_related('steps')
-        if not suite_:
-            continue  # 跳过已删除的套件
-        # 创建套件运行记录
-        suite_record = await UiSuiteExecution.create(suite=suite_, username=suite_.username, env=env_config,
-                                                   plan_execution=task_record)
-        # 遍历套件中的用例（过滤已删除的用例）
-        for i in await suite_.steps.filter(is_del=False).all().order_by("sort"):
-            case_ = await i.cases
-            if not case_ or case_.is_del:
-                continue  # 跳过已删除的用例
-            # 创建用例执行记录
-            case_record = await UiCaseExecution.create(case=case_, username=case_.username, suite_execution=suite_record,
-                                                     env=env_config)
-            cases.append({
-                "record_id": case_record.id,
-                'id': case_.id,
-                'name': case_.name,
-                "skip": i.skip,
-                "steps": case_.steps
-            })
-        task_count += len(cases)
-        suite_record.case_count = len(cases)
-        await suite_record.save()
-        # 发送套件任务到MQ
-        run_suite = {
-            'id': suite_.id,
-            'suite_execution_id': suite_record.id,
-            'plan_execution_id': task_record.id,
-            'name': suite_.name,
-            "username": suite_.username,
-            'pre_actions': suite_.pre_actions or [],
-            "cases": cases
-        }
-        mq.send_test_task(env_config=env_config, run_case=run_suite, device_id=device_id)
-    mq.close()
-    # 更新任务总用例数
-    task_record.case_count = task_count
-    await task_record.save()
-    return {"msg": "定时任务已经提交到对应的设备，等待执行完毕！", "plan_execution_id": task_record.id}
 
 
 # 创建定时任务
@@ -137,6 +86,10 @@ async def create_cronjob(item: CronjobForm):
     task = await Task.get_or_none(id=item.task, is_del=False)
     if not task:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="测试计划不存在或已被删除")
+    if env.project_id != item.project:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="执行环境与所选项目不匹配")
+    if task.project_id != item.project:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="测试计划与所选项目不匹配")
 
     # 校验任务类型
     if item.run_type not in ["Interval", "date", "crontab"]:
@@ -380,6 +333,18 @@ async def update_cronjob(cronjob_id: str, item: CronjobUpdateForm):
         task = await Task.get_or_none(id=item.task, is_del=False)
         if not task:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="测试计划不存在或已被删除")
+
+    target_project_id = item.project if item.project is not None else cronjob.project_id
+    target_env_id = item.env if item.env is not None else cronjob.env_id
+    target_task_id = item.task if item.task is not None else cronjob.task_id
+    if target_env_id and target_project_id:
+        env_row = await Environment.get_or_none(id=target_env_id, is_del=False)
+        if env_row and env_row.project_id != target_project_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="执行环境与所选项目不匹配")
+    if target_task_id and target_project_id:
+        task_row = await Task.get_or_none(id=target_task_id, is_del=False)
+        if task_row and task_row.project_id != target_project_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="测试计划与所选项目不匹配")
 
     async with transactions.in_transaction('default') as tx:
         try:

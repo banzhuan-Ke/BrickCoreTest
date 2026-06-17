@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import uuid
 import zipfile
 from collections import defaultdict
@@ -104,6 +105,7 @@ def filter_test_points(
     test_type: Optional[str] = None,
     priority: Optional[str] = None,
     main_module: Optional[str] = None,
+    sub_module: Optional[str] = None,
     keyword: Optional[str] = None,
 ) -> list[dict]:
     out = list(points or [])
@@ -124,10 +126,10 @@ def filter_test_points(
         out = [p for p in out if (p.get("priority") or "") == priority]
     if main_module and main_module.strip():
         kw = main_module.strip()
-        out = [
-            p for p in out
-            if kw in (p.get("main_module") or "") or kw in (p.get("module_path") or "")
-        ]
+        out = [p for p in out if (p.get("main_module") or "").strip() == kw]
+    if sub_module and sub_module.strip():
+        kw = sub_module.strip()
+        out = [p for p in out if (p.get("sub_module") or "").strip() == kw]
     if keyword and keyword.strip():
         kw = keyword.strip().lower()
         out = [
@@ -138,6 +140,19 @@ def filter_test_points(
             or kw in (p.get("main_module") or "").lower()
         ]
     return out
+
+
+def sort_test_points_list(points: list[dict]) -> list[dict]:
+    """按主模块、子模块、sort_order、ID 排序，便于列表与导图展示。"""
+    return sorted(
+        points or [],
+        key=lambda p: (
+            (p.get("main_module") or "").strip(),
+            (p.get("sub_module") or "").strip(),
+            p.get("sort_order") or 0,
+            p.get("id") or 0,
+        ),
+    )
 
 
 def _section_depth(section_id: str, section_by_id: dict[str, dict]) -> int:
@@ -481,6 +496,125 @@ def build_xmind_bytes(root_title: str, points: list[dict], tree_root: Optional[d
         zf.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
     return buf.getvalue()
+
+
+_POINT_TITLE_RE = re.compile(r"^\((P[0-3])\)\s*(?:\[([^\]]+)\]\s*)?(.*)$", re.I)
+
+
+def _extract_xmind_topic_notes(topic: dict) -> str:
+    notes = topic.get("notes") or {}
+    if not isinstance(notes, dict):
+        return _as_text(notes)
+    plain = notes.get("plain")
+    if isinstance(plain, dict):
+        return (plain.get("content") or "").strip()
+    if isinstance(plain, str):
+        return plain.strip()
+    real = notes.get("realHTML") or notes.get("html")
+    if isinstance(real, dict):
+        return _as_text(real.get("content"))
+    return _as_text(real)
+
+
+def _parse_xmind_leaf_title(raw: str) -> tuple[str, str, str]:
+    text = (raw or "").strip()
+    if not text:
+        return "P2", "正向", ""
+    match = _POINT_TITLE_RE.match(text)
+    if match:
+        priority = PRIORITY_MAP.get(match.group(1).upper(), "P2")
+        test_type = (match.group(2) or "正向").strip()
+        if test_type not in VALID_TEST_TYPES:
+            test_type = "其他"
+        title = (match.group(3) or text).strip()
+        return priority, test_type, title
+    return "P2", "正向", text
+
+
+def _walk_xmind_topic(
+    topic: dict,
+    ancestors: list[str],
+    out: list[dict],
+    sort_order: int,
+    *,
+    is_root: bool = False,
+) -> int:
+    if not isinstance(topic, dict):
+        return sort_order
+    attached = (topic.get("children") or {}).get("attached") or []
+    title = (topic.get("title") or "").strip()
+
+    if not attached:
+        if not title:
+            return sort_order
+        priority, test_type, clean_title = _parse_xmind_leaf_title(title)
+        if not clean_title:
+            return sort_order
+        main = ancestors[0] if len(ancestors) >= 1 else "未分类"
+        sub = ancestors[1] if len(ancestors) >= 2 else "通用"
+        if len(ancestors) > 2:
+            sub = "/".join(ancestors[1:])
+        out.append({
+            "title": clean_title,
+            "description": _extract_xmind_topic_notes(topic)[:5000],
+            "test_type": test_type,
+            "priority": priority,
+            "main_module": main[:100],
+            "sub_module": sub[:100],
+            "module_path": "/".join(p for p in [main, sub] if p)[:200],
+            "sort_order": sort_order,
+        })
+        return sort_order + 1
+
+    child_ancestors = list(ancestors)
+    if title and not is_root:
+        child_ancestors = ancestors + [title]
+    idx = sort_order
+    for child in attached:
+        idx = _walk_xmind_topic(child, child_ancestors, out, idx, is_root=False)
+    return idx
+
+
+def _load_xmind_content_json(content: bytes) -> list[dict]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            names = zf.namelist()
+            target = "content.json" if "content.json" in names else None
+            if not target:
+                for name in names:
+                    if name.endswith("content.json"):
+                        target = name
+                        break
+            if not target:
+                raise ValueError("未找到 content.json，请使用 XMind Zen 格式 (.xmind)")
+            raw = zf.read(target).decode("utf-8")
+    except zipfile.BadZipFile as e:
+        raise ValueError("无效的 XMind 文件（需为 .xmind ZIP 格式）") from e
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError("XMind content.json 解析失败") from e
+    if isinstance(data, list):
+        return [s for s in data if isinstance(s, dict)]
+    if isinstance(data, dict):
+        return [data]
+    raise ValueError("不支持的 XMind 内容结构")
+
+
+def parse_xmind_to_test_points(content: bytes) -> list[dict]:
+    """解析 XMind Zen (.xmind) 为测试点草稿列表。"""
+    sheets = _load_xmind_content_json(content)
+    raw_items: list[dict] = []
+    sort_order = 0
+    for sheet in sheets:
+        root = sheet.get("rootTopic") or sheet.get("rootTopic".lower()) or {}
+        sort_order = _walk_xmind_topic(root, [], raw_items, sort_order, is_root=True)
+    normalized = normalize_test_points(raw_items)
+    for idx, item in enumerate(normalized):
+        item["sort_order"] = idx
+    if not normalized:
+        raise ValueError("XMind 中未识别到有效测试点（请确认叶子节点为测试点标题）")
+    return normalized
 
 
 def format_environment_hints_for_prompt(hints: Optional[dict]) -> str:

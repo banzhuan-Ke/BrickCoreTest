@@ -26,5 +26,8 @@ export const ParamsMap = {
     is_equal: "是否相等",
     attr_name: "属性名称",
     wait_until: "等待状态",
-    file_path: "文件绝对路径"
+    file_path: "文件绝对路径",
+  file_key: "MinIO 对象键",
+  file_bucket: "MinIO bucket",
+  file_name: "原始文件名",
 }

@@ -43,11 +43,12 @@
 
         <h4>AI 需求 / 功能用例流程（推荐）：</h4>
         <ol>
-          <li><strong>配置模型</strong> → 「AI 测试 → AI 模型配置」添加文本模型；含图 PRD 另配 Vision 模型（如 qwen-vl）</li>
-          <li><strong>上传需求</strong> → 「需求用例生成」上传 PDF/Word，按章节勾选范围</li>
-          <li><strong>测试分析</strong> → 生成测试点与测试方案，确认后从测试点展开功能用例</li>
-          <li><strong>复制入库</strong> → 需求页勾选用例「导入到用例库」，形成项目级长期资产</li>
-          <li><strong>复核导出</strong> → 用例库或需求页编辑、导出禅道 XLSX；库内支持禅道 XLSX 回导</li>
+          <li><strong>配置模型</strong> → 「系统管理 → 平台配置 → AI」添加文本模型；含图 PRD 另配 Vision 模型（如 qwen-vl）</li>
+          <li><strong>上传需求</strong> → 「需求测试中心」上传 PDF/Word，进入单需求工作台</li>
+          <li><strong>测试设计</strong> → Tab「思维导图/测试点」生成或导入 XMind 测试点；Tab「测试方案」生成方案</li>
+          <li><strong>生成用例</strong> → Tab「需求文档」按章节生成，或 Tab「测试点」从测试点展开（单次最多 50 条）</li>
+          <li><strong>复制入库</strong> → Tab「功能用例」勾选 →「导入到用例库」，形成项目级长期资产</li>
+          <li><strong>复核导出</strong> → 用例库或工作台编辑、导出禅道 XLSX；库内支持禅道 XLSX 回导</li>
           <li><strong>延伸自动化</strong> → 功能用例库勾选 → AI 生成 / 录制 UI 步骤；或接口模块 AI 生成用例</li>
         </ol>
       </div>
@@ -58,16 +59,16 @@
         <h3>🤖 AI 自动化测试（平台特色）</h3>
         <p>
           BrickCore 集成大语言模型（LLM），覆盖<strong>需求文档 → 测试分析 → 禅道功能用例</strong>，以及<strong>接口 / UI 执行用例</strong>的 AI 辅助生成。
-          建议优先走「需求 + 测试分析」主线，再按需延伸到接口/UI 自动化。
+          建议优先走「需求测试中心」全链路（文档 → 测试点 → 用例），再按需延伸到接口/UI 自动化。
         </p>
 
         <h4>前置配置：</h4>
         <ol>
-          <li>进入「<strong>AI 测试 → AI 模型配置</strong>」，添加 LLM（支持 DeepSeek / 通义千问 / OpenAI / Claude 等）</li>
+          <li>进入「<strong>系统管理 → 平台配置 → AI</strong>」，添加 LLM（支持 DeepSeek / 通义千问 / OpenAI / Claude 等）</li>
           <li>填写 API Key、模型名称、API Base，启用并<strong>设为默认</strong>（未单独选模型时使用）</li>
           <li>需求文档含截图/流程图时，另增一条 <strong>Vision 模型</strong>（如通义 qwen-vl）；纯文本模型无法读图</li>
           <li>可在「Prompt 模板」Tab 微调各场景提示词（API/UI 生成、需求解析、测试点等）</li>
-          <li>在「需求用例生成」详情中配置<strong>禅道导入绑定</strong>（产品、模块、研发需求等），生成用例时自动带入</li>
+          <li>在工作台 Tab「配置」中选择<strong>导出目标</strong>（禅道 XLSX / 通用 XLSX）；禅道模式下配置产品、模块、研发需求，生成用例时自动带入</li>
         </ol>
 
         <h4>菜单结构（AI 测试）：</h4>
@@ -77,10 +78,9 @@
           </thead>
           <tbody>
             <tr><td>AI 工作台</td><td>/ai-test</td><td>统计、推荐流程、快捷入口、批量任务进度</td></tr>
-            <tr><td>测试分析</td><td>/ai-test-analysis</td><td>测试点、方案、导图、从测试点生成功能用例</td></tr>
-            <tr><td>需求用例生成</td><td>/ai-requirements</td><td>上传 PRD、章节生成、工作区编辑、导出禅道</td></tr>
-            <tr><td>功能用例库</td><td>/ai-functional-cases</td><td>项目级功能用例资产；禅道导入；转 UI 自动化</td></tr>
-            <tr><td>AI 模型配置</td><td>/ai-config</td><td>LLM 配置、场景绑定、Prompt 模板</td></tr>
+            <tr><td>需求测试中心</td><td>/ai-testing</td><td>需求列表、测试点/方案/用例统一工作台、XMind 导入、全局测试点/方案</td></tr>
+            <tr><td>功能用例库</td><td>/ai-functional-cases</td><td>项目级功能用例资产；禅道导入；转 UI 自动化；来源可回链需求工作台</td></tr>
+            <tr><td>平台配置（AI/邮件/MCP 等）</td><td>/platform-config</td><td>LLM、场景绑定、SMTP、项目通知、MCP、执行器发布、登录页</td></tr>
             <tr><td>模型使用情况</td><td>/ai-usage</td><td>Token 统计、场景占比与趋势图表；项目列自动补全</td></tr>
           </tbody>
         </table>
@@ -98,75 +98,57 @@
         <h4>零、AI 工作台（总览入口）</h4>
         <p>路径：<strong>AI 测试 → AI 工作台</strong>。提供项目统计、推荐流程、快捷跳转，以及最近需求 / 最近 AI 生成记录；批量生成进行中时会显示进度条。</p>
 
-        <h4>一、需求文档 → 功能用例</h4>
-        <p>路径：<strong>AI 测试 → 需求用例生成</strong>。</p>
+        <h4>一、需求测试中心（文档 → 测试点 → 用例）</h4>
+        <p>路径：<strong>AI 测试 → 需求测试中心</strong>（`/ai-testing`）。原「需求用例生成」与「测试分析」已合并。</p>
+        <p><strong>子页</strong>：需求列表 · 全部测试点 · 全部测试方案 · 单需求工作台（Tab：概览 / 需求文档 / 思维导图 / 测试点 / 测试方案 / 功能用例 / 配置）</p>
         <ol>
-          <li><strong>上传文档</strong> → 支持 PDF / Word / TXT / MD，系统自动解析章节树与嵌入图片</li>
-          <li><strong>勾选章节</strong> → 选择本次生成范围，可先「预估 Token」避免单次过大</li>
-          <li><strong>选择模型</strong> → 文本模型生成用例；有图时选择 Vision 模型读图</li>
-          <li><strong>生成用例</strong> → 输出禅道格式（模块、标题、前置、步骤、预期、优先级等），支持单批 / 多批队列异步生成</li>
-          <li><strong>补充生成</strong> → 按<strong>批次名称</strong>在已有用例基础上追加，批次名须与首次一致</li>
-          <li><strong>编辑导出</strong> → 表格内修改后「导出 XLSX」导入禅道；可按「来源章节」「来源批次」筛选</li>
+          <li><strong>上传文档</strong> → 需求列表上传 PDF / Word / TXT / MD，进入工作台</li>
+          <li><strong>Tab「需求文档」</strong> → 章节树勾选范围（全选/清空/<strong>选未覆盖</strong>）→ 预估 Token → 加入队列或单批/异步批量生成禅道格式用例；下方「章节覆盖检查」可查看已覆盖/未覆盖节数</li>
+          <li><strong>Tab「思维导图 / 测试点」</strong> → AI 生成测试点，或 <strong>导入 XMind</strong>；主/子模块筛选为精确匹配</li>
+          <li><strong>确认测试点</strong> → 勾选后「确认选中」；生成方案默认只纳入已确认项</li>
+          <li><strong>Tab「测试方案」</strong> → 生成 Markdown 方案，可导出 Word</li>
+          <li><strong>从测试点生成用例</strong> → Tab「测试点」按当前筛选/勾选生成（单次最多 50 条），来源 <code>test_points:batch:批次名</code></li>
+          <li><strong>Tab「功能用例」</strong> → 编辑、导出禅道、复制到用例库；可按来源批次筛选</li>
+          <li><strong>Tab「配置」</strong> → 导出目标、禅道绑定（禅道模式）、用例标题命名模板（内置三套预设，变量说明与预览）</li>
         </ol>
         <p style="color:#909399;font-size:13px;">
-          来源批次 <code>batch:批次名</code> 表示从文档章节直接生成；与测试分析产生的批次不同。
+          来源批次 <code>batch:批次名</code> 表示从文档章节直接生成；<code>test_points:batch:批次名</code> 表示从测试点展开。旧路径 <code>/ai-requirements</code>、<code>/ai-test-analysis</code> 会自动重定向。
         </p>
-
-        <h4>二、测试分析（测试点 → 方案 → 用例）</h4>
-        <p>路径：<strong>AI 测试 → 测试分析</strong>。与需求文档共用同一份上传文件，无需重复上传。</p>
-        <ol>
-          <li><strong>生成测试点</strong> → 按章节范围生成结构化测试点，支持思维导图、XMind 导出、批次管理</li>
-          <li><strong>确认测试点</strong> → 列表中勾选后「确认选中」，方案与用例生成默认只纳入已确认项</li>
-          <li><strong>生成测试方案</strong> → 输出 Markdown 方案，可填测试环境补充信息，支持预览、编辑、导出 Word</li>
-          <li><strong>从测试点生成用例</strong> → 写入「需求用例」同一张表，来源标识为 <code>test_points:batch:批次名</code></li>
-          <li><strong>复制到用例库</strong> → 测试点列表、整体视图、方案页或列表行「复制到库」，将工作区用例写入功能用例库（原工作区保留）</li>
-          <li><strong>追溯与筛选</strong> → 在需求用例页按「测试点批次」筛选；用例行可点击「测试点 #id」跳回测试分析</li>
-        </ol>
+        <h4>生成范围与补缺口（文档 Tab）</h4>
         <table class="help-table">
           <thead>
-            <tr>
-              <th>推荐顺序</th>
-              <th>说明</th>
-            </tr>
+            <tr><th>操作</th><th>说明</th></tr>
           </thead>
           <tbody>
-            <tr>
-              <td>上传需求</td>
-              <td>在「需求用例生成」完成文档上传与解析</td>
-            </tr>
-            <tr>
-              <td>测试分析</td>
-              <td>测试点 → 确认 → 测试方案 → 从测试点生成功能用例</td>
-            </tr>
-            <tr>
-              <td>需求用例页</td>
-              <td>统一编辑、按来源筛选、导出禅道</td>
-            </tr>
+            <tr><td>全选 / 清空</td><td>快速勾选或取消全部章节</td></tr>
+            <tr><td><strong>选未覆盖</strong></td><td>仅勾选尚无对应用例的章节（依据用例 <code>section_ids</code>）；全部已覆盖时提示无需补充</td></tr>
+            <tr><td>章节覆盖检查</td><td>显示已覆盖/未覆盖节数；队列有待执行批次时预览「执行后预计覆盖」</td></tr>
+            <tr><td>加入队列 → 批量生成</td><td>大文档按场景拆批；首轮生成后可用「选未覆盖」+ 队列「补充」补缺口</td></tr>
           </tbody>
         </table>
 
-        <h4>三、功能用例库（项目级资产）</h4>
-        <p>路径：<strong>AI 测试 → 功能用例库</strong>。与工作区（需求页临时用例）分离，适合长期维护与自动化选型。</p>
+        <h4>二、功能用例库（项目级资产）</h4>
+        <p>路径：<strong>AI 测试 → 功能用例库</strong>。与工作区（需求工作台 Tab「功能用例」）分离，适合长期维护与自动化选型。</p>
         <ol>
-          <li><strong>复制入库</strong> → 在「需求用例生成」勾选工作区用例 →「导入到用例库」；<strong>复制</strong>而非移动，原需求侧数据保留</li>
+          <li><strong>复制入库</strong> → 在工作台 Tab「功能用例」勾选 →「导入到用例库」；<strong>复制</strong>而非移动</li>
           <li><strong>禅道 XLSX 导入</strong> → 上传平台导出格式的 Excel 回导；导入时<strong>不自动去重</strong></li>
           <li><strong>重复检验</strong> → 按「标题 + 模块」扫描重复组，人工勾选批量删除</li>
-          <li><strong>筛选排序</strong> → 支持禅道 ID、来源、关键词；可按创建/修改时间、禅道 ID 排序</li>
+          <li><strong>筛选排序</strong> → 支持禅道 ID、来源、关键词；可按创建/修改时间、禅道 ID 排序；工具栏「列显示」可勾选/拖拽列顺序（偏好保存在浏览器）</li>
           <li><strong>导出禅道</strong> → 勾选或按筛选导出 XLSX，列与平台导出模板一致</li>
         </ol>
         <p style="color:#909399;font-size:13px;">
           来源标识：<code>requirement_copy</code>（需求复制）、<code>zentao_xlsx</code>（禅道导入）、<code>manual</code>（手工新建）。
         </p>
 
-        <h4>三-A、问答准确性评测（知识库 / RAG）</h4>
-        <p>路径：<strong>AI 测试 → 问答准确性评测</strong>。对标线下 550 题 RAG 批量问答与总结报告。</p>
+        <h4>三-A、问答准确性评测（知识库 / 问答机器人）</h4>
+        <p>路径：<strong>AI 测试 → 问答准确性评测</strong>。维护标准问答集，批量调用被测 API 并输出统计与对比报告。</p>
         <ol>
           <li><strong>评测集</strong>：下载 Excel 模板导入（问题、标准答案必填；序号、问答目录、多轮、问题类型等）</li>
           <li><strong>被测 API</strong>：配置 SSE 流式或 HTTP 问答接口，支持接口调试</li>
-          <li><strong>执行评测</strong>：填写<strong>评测名称</strong>（默认评测集名，可在执行记录中识别）；模式：自动（API+LLM 评判）/ 仅评判 / 仅拉取；支持序号范围、失败重跑、自动分批（500+ 题）</li>
+          <li><strong>执行评测</strong>：填写<strong>评测名称</strong>（默认评测集名，可在执行记录中识别）；模式：自动（API+LLM 评判）/ 仅评判 / 仅拉取；支持序号范围、失败重跑、自动分批（大批量题目）</li>
           <li><strong>报告</strong>：统计报告（优秀率/场景类型分析）、单题报告、人工审核、合并导出与迭代对比</li>
         </ol>
-        <p style="color:#909399;font-size:13px;">评判模型在「AI 模型配置 → 场景绑定 → 问答准确性评判」；设计详见 <code>docs/设计文档/qa-eval-accuracy.md</code>。</p>
+        <p style="color:#909399;font-size:13px;">评判模型在「AI 模型配置 → 场景绑定 → 问答准确性评判」。</p>
 
         <h4>四、AI 生成 API 测试用例</h4>
         <ol>
@@ -251,9 +233,9 @@
             <tr><th>阶段</th><th>页面</th><th>产出</th></tr>
           </thead>
           <tbody>
-            <tr><td>1. 上传需求</td><td>需求用例生成</td><td>章节树、工作区功能用例（草稿）</td></tr>
-            <tr><td>2. 测试分析</td><td>测试分析</td><td>测试点、测试方案、导图/XMind</td></tr>
-            <tr><td>3. 生成用例</td><td>测试分析 / 需求页</td><td>写入工作区 <code>ai_requirement_case</code></td></tr>
+            <tr><td>1. 上传需求</td><td>需求测试中心</td><td>章节树、进入工作台</td></tr>
+            <tr><td>2. 测试设计</td><td>工作台 Tab 测试点/方案</td><td>测试点、方案、导图/XMind 导入</td></tr>
+            <tr><td>3. 生成用例</td><td>工作台 Tab 文档/测试点</td><td>写入工作区 <code>ai_requirement_case</code></td></tr>
             <tr><td>4. 入库治理</td><td>功能用例库</td><td>复制入库、禅道导入、重复检验</td></tr>
             <tr><td>5. UI 自动化</td><td>功能用例库 / Web 用例</td><td>AI 生成或录制 → 导入 Playwright 步骤</td></tr>
             <tr><td>6. 接口自动化</td><td>接口管理</td><td>AI 生成 API 用例（可选，与功能用例并行）</td></tr>
@@ -293,11 +275,11 @@
 
         <h4>规划中的能力（尚未上线）：</h4>
         <ul>
-          <li>AI 生成测试报告文字摘要</li>
           <li>Vision 模型直接参与 UI 步骤生成（截图理解，与失败分析读图不同）</li>
           <li>功能用例 → 接口用例批量生成</li>
           <li>SSE 流式展示 AI 思考过程（当前为整段返回）</li>
         </ul>
+        <p class="help-note">报告页已支持 <strong>AI 报告摘要</strong>（关注要点与下一步建议）；顶部栏 <strong>Ctrl+K</strong> 可项目内搜索资产。</p>
       </div>
 
       <el-divider />
@@ -608,8 +590,9 @@
           <li><strong>基础变量</strong>：<code v-pre>${{变量名}}</code> - 从环境、前置脚本或上游用例提取的变量</li>
           <li><strong>随机数</strong>：<code v-pre>${{random_int}}</code> - 随机整数（默认 1000–9999）；环境变量可配置 <code>faker.random_int(min=100,max=100000)</code></li>
           <li><strong>时间戳</strong>：<code v-pre>${{now_time}}</code> - 当前时间；<code v-pre>${{today}}</code> - 当前日期</li>
-          <li><strong>同用例内一致</strong>：同一用例多次引用 <code v-pre>${{random_int}}</code> 值相同；套件内不同用例会重新生成</li>
-          <li><strong>跨用例传递</strong>：用例 1 提取/后置脚本设置的变量（如 token）会自动传给套件后续用例</li>
+          <li><strong>同用例内一致</strong>：同一用例多次引用 <code v-pre>${{random_int}}</code> 值相同</li>
+          <li><strong>套件链路传递</strong>：套件开启「变量传递」且用例标记为「链路」时，<code v-pre>${{base_name}}</code> 等会传给后续链路用例；「独立」用例每次重新随机</li>
+          <li><strong>失败策略</strong>：链路用例失败仅跳过后续链路用例；勾选「失败全停」时任一失败停止全部</li>
           <li><strong>嵌套示例</strong>：<code>{"tag_name": "标签_${{random_int}}"}</code>，引用 <code v-pre>${{tag_name}}</code> → <code>标签_4829</code></li>
         </ul>
 
@@ -742,7 +725,7 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
 
       <div class="help-section">
         <h3>⚡ 9. 性能测试</h3>
-        <p>基于已有 API 用例快速发起压测，无需编写脚本。支持三种压测模式，自动采集并生成聚合报告。</p>
+        <p>基于已有 API 用例快速发起压测。支持固定/循环/梯度、<strong>流式阶段单次</strong>（SSE 问答阶段计时）、<strong>业务链路</strong>（多步骤传参）等模式。</p>
 
         <h4>使用步骤：</h4>
         <ol>
@@ -752,7 +735,7 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
           <li><strong>查看报告</strong> → 在「性能测试 → 执行记录」中点击「报告」查看详细结果</li>
         </ol>
 
-        <h4>三种压测模式：</h4>
+        <h4>压测模式：</h4>
         <table class="help-table">
           <thead>
             <tr>
@@ -765,17 +748,27 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
             <tr>
               <td>固定模式</td>
               <td>固定并发数，持续指定时间</td>
-              <td>标准压力测试，如 10 并发持续 60 秒</td>
+              <td>标准压力测试</td>
             </tr>
             <tr>
               <td>循环模式</td>
-              <td>固定并发数，每个用户循环指定次数</td>
-              <td>固定总量测试，如 10 并发各执行 100 次</td>
+              <td>固定并发，每用户执行指定次数</td>
+              <td>固定总量测试</td>
             </tr>
             <tr>
               <td>梯度模式</td>
-              <td>分阶段递增并发，每阶段持续指定时间</td>
-              <td>容量测试，逐步加压找到性能拐点</td>
+              <td>分阶段递增并发</td>
+              <td>容量测试、找性能拐点</td>
+            </tr>
+            <tr>
+              <td>流式阶段</td>
+              <td>每用户 1 次 SSE 流式请求，采集各阶段耗时</td>
+              <td>问答/SSE 接口阶段性能</td>
+            </tr>
+            <tr>
+              <td>业务链路</td>
+              <td>多 API 步骤顺序执行，extractors 传参</td>
+              <td>登录→业务接口等完整链路</td>
             </tr>
           </tbody>
         </table>
@@ -794,14 +787,25 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
           <li><strong>Avg / Median / P90 / P95 / P99 RT</strong>：平均/中位数/百分位响应时间，P95 表示 95% 的请求响应时间低于该值</li>
           <li><strong>StdDev</strong>：响应时间标准差，越大说明响应越不稳定</li>
           <li><strong>Received/Sent KB/s</strong>：每秒接收/发送的数据量</li>
-          <li><strong>错误分类</strong>：按错误类型和状态码分类统计失败请求</li>
+          <li><strong>错误分类 / 失败采样</strong>：失败请求分类；最多 50 条失败详情（含完整响应 trace）</li>
+          <li><strong>流式阶段</strong>：SSE 阶段汇总 + 逐路明细（思考过程、答案预览完整展示；明细表分页加载）</li>
+          <li><strong>成功 QPS</strong>：仅成功请求的吞吐，与总 QPS 对照阅读</li>
         </ul>
 
         <h4>注意事项：</h4>
         <ul>
           <li>压测目标建议仅对测试环境执行，避免影响生产服务</li>
-          <li>性能测试复用接口用例的变量替换和断言逻辑，但不做跨请求变量传递</li>
+          <li>性能测试复用接口用例的变量替换和断言；<strong>业务链路模式</strong>支持步骤间 extractors 传参，普通多接口场景仍不做跨请求传参</li>
+          <li>执行时可选择请求详情 <strong>简略/详细</strong>：详细模式额外保留成功 HTTP trace，<strong>不影响 QPS/RT 聚合指标</strong></li>
           <li>压测过程中可随时点击「停止」终止执行</li>
+        </ul>
+
+        <h4>分布式执行机（推荐 BrickCoreRunner）：</h4>
+        <ul>
+          <li><strong>推荐</strong>：BrickCoreRunner v1.3.14+ → 默认 UI 执行器；压测时切换执行角色为「仅压测执行机」→ 选择压测项目 → 上线；场景执行时勾选「使用分布式 Worker」</li>
+          <li><strong>备选</strong>：在 runner 目录运行 <code>python -u perf_worker.py</code>（见「性能测试 → 执行机」页命令）</li>
+          <li>客户端与脚本使用<strong>同一压测引擎</strong>，平台报告指标一致；客户端可在「当前会话日志」查看秒级 QPS/RT，日志文件 <code>runner/logs/perf_worker.log</code></li>
+          <li>不勾选 Worker 时由平台服务器本机压测，适合小并发验证</li>
         </ul>
       </div>
 
@@ -899,7 +903,7 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
 
       <div class="help-footer">
         <p>📧 遇到问题？请联系系统管理员或查看接口文档获取更多技术支持。</p>
-        <p style="color: #999; font-size: 12px;">版本：v1.5.0 | 更新日期：2026-06-01</p>
+        <p style="color: #999; font-size: 12px;">版本：v1.5.1 | 更新日期：2026-06-05</p>
       </div>
     </el-scrollbar>
   </div>

@@ -52,10 +52,14 @@ $ExcludeDirs = @(
 $ExcludeFiles = @(
     "scripts\build_runner_client.ps1",
     "scripts\migrate_to_test_catalog.py",
+    "scripts\update_resume_2026.py",
+    "scripts\reset-local-docker.ps1",
+    "scripts\verify_runner_dist.ps1",
     "backend\static\runner\BrickCoreRunner.zip",
     "backend\check_migration.py",
     "backend\check_migration2.py",
     "backend\test_stream_debug.py",
+    "backend\app\core\qa_judge_prompt.py",
     "import_ui_case.py",
     "restart-all.bat",
     "restart-dev.bat",
@@ -161,6 +165,8 @@ function Write-CeStubs {
         @("docs-runner-packaging-ce.md", (Join-Path "docs-site" (Join-Path "guide" "runner-packaging.md"))),
         @("docs-ui-automation-ce.md", (Join-Path "docs-site" (Join-Path "guide" "ui-automation.md"))),
         @("docs-system-admin-ce.md", (Join-Path "docs-site" (Join-Path "guide" "system-admin.md"))),
+        @("docs-data-factory-ce.md", (Join-Path "docs-site" (Join-Path "guide" "data-factory.md"))),
+        @("docs-runner-linux-server-ce.md", (Join-Path "docs-site" (Join-Path "guide" "runner-linux-server.md"))),
         @("runner-client-README.md", (Join-Path "runner_client" "README.md"))
     )
     foreach ($pair in $demoMaps) {
@@ -247,6 +253,8 @@ if (-not $DryRun) {
 }
 Write-Host ""
 Write-Host "Next:"
+Write-Host "  .\scripts\verify-ce-sync.ps1 -CeRoot `"$CeRoot`""
 Write-Host "  cd `"$CeRoot`""
 Write-Host "  git status"
 Write-Host "Doc: docs/其他文档/CE同步与发布手册.md"
+Write-Host "Workflow: .\scripts\publish-ce.ps1 -ExecuteSync"

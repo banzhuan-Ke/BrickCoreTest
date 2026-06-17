@@ -94,6 +94,26 @@ def require_permissions(*perms: str):
     return checker
 
 
+def require_any_permissions(*perms: str):
+    """满足任一权限即可（超级管理员自动跳过）"""
+    async def checker(token: str = Depends(oauth2_scheme)):
+        user_data = await is_authenticated(token)
+        from app.models.sys import User
+        from app.core.permissions import get_user_permissions
+        user = await User.get_or_none(id=user_data.get("id"), is_del=False).prefetch_related("roles")
+        if user and user.is_superuser:
+            return user_data
+        allowed = set(await get_user_permissions(user))
+        if not any(p in allowed for p in perms):
+            role_names = [r.name for r in await user.roles.all()] if user else []
+            raise HTTPException(
+                status_code=403,
+                detail=f"权限不足: 需要以下任一权限 {list(perms)}, 拥有{sorted(allowed)}, roles={role_names}"
+            )
+        return user_data
+    return checker
+
+
 def create_token(userinfo: dict):
     """创建JWT Token"""
     expire = int(time.time()) + TOKEN_TIMEOUT
@@ -164,6 +184,8 @@ async def verify_runner_token(x_runner_token: str = Header(..., alias="X-Runner-
     device = await Device.get_or_none(id=device_id, is_del=False)
     if not device or device.runner_session_jti != jti:
         raise HTTPException(status_code=401, detail="Runner 会话已失效，请重新连接")
+    if device.status == "已停止":
+        raise HTTPException(status_code=403, detail="设备已被管理员停止，请重新上线")
 
     return data
 

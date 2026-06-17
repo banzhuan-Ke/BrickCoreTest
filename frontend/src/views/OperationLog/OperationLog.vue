@@ -39,10 +39,19 @@
         />
         <el-button type="primary" @click="handleSearch" icon="Search">搜索</el-button>
         <el-button @click="resetSearch" icon="RefreshRight">重置</el-button>
+        <TableColumnPicker
+          :items="pickerItems"
+          @toggle="setColumnVisible"
+          @reorder="setPickerOrder"
+          @reset="resetColumns"
+        />
         <el-button type="danger" @click="handleBatchDelete" :disabled="selectedIds.length === 0" icon="Delete">批量删除</el-button>
+        <el-button type="warning" :loading="purgingNoise" @click="handlePurgeNoise" icon="Delete">
+          清理机器噪音日志
+        </el-button>
       </div>
 
-      <el-table :data="logList" style="width: 100%" :header-cell-style="{'text-align':'center'}"
+      <el-table :key="tableRenderKey" :data="logList" style="width: 100%" :header-cell-style="{'text-align':'center'}"
                 :cell-style="{'text-align':'center'}" stripe v-loading="loading"
                 @selection-change="handleSelectionChange" ref="logTableRef">
         <template #empty>
@@ -54,30 +63,89 @@
           </div>
         </template>
         <el-table-column type="selection" width="55"/>
-        <el-table-column label="序号" type="index" width="70"/>
-        <el-table-column prop="username" label="操作人" width="120"/>
-        <el-table-column prop="action" label="操作行为" width="140"/>
-        <el-table-column prop="module" label="所属模块" width="110"/>
-        <el-table-column prop="path_name" label="路径名称" min-width="160" show-overflow-tooltip/>
-        <el-table-column label="请求方法/路径" min-width="200" show-overflow-tooltip>
-          <template #default="scope">
-            <el-tag size="small" :type="methodType(scope.row.method)">{{ scope.row.method }}</el-tag>
-            <span style="margin-left: 6px;">{{ scope.row.path }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="status_code" label="状态码" width="90">
-          <template #default="scope">
-            <el-tag size="small" :type="statusType(scope.row.status_code)">{{ scope.row.status_code }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="ip" label="IP地址" width="130"/>
-        <el-table-column prop="create_time" label="操作时间" width="170"/>
-        <el-table-column label="参数" width="80">
-          <template #default="scope">
-            <el-button v-if="hasParams(scope.row.params)" link type="primary" @click="showParams(scope.row)">查看</el-button>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
+        <template v-for="col in activeColumns" :key="col.key">
+          <el-table-column
+            v-if="col.key === 'index'"
+            label="序号"
+            type="index"
+            :index="tableRowIndex"
+            :width="col.width"
+          />
+          <el-table-column
+            v-else-if="col.key === 'username'"
+            prop="username"
+            label="操作人"
+            :width="col.width"
+          >
+            <template #default="{ row }">
+              <el-tag v-if="isMachineUser(row.username)" size="small" type="info">{{ row.username }}</el-tag>
+              <el-tag v-else-if="row.username === '未知用户'" size="small" type="warning">{{ row.username }}</el-tag>
+              <span v-else>{{ row.username }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            v-else-if="col.key === 'action'"
+            prop="action"
+            label="操作行为"
+            :width="col.width"
+          />
+          <el-table-column
+            v-else-if="col.key === 'module'"
+            prop="module"
+            label="所属模块"
+            :width="col.width"
+          />
+          <el-table-column
+            v-else-if="col.key === 'path_name'"
+            prop="path_name"
+            label="路径名称"
+            :min-width="col.minWidth || 160"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            v-else-if="col.key === 'method_path'"
+            label="请求方法/路径"
+            :min-width="col.minWidth || 200"
+            show-overflow-tooltip
+          >
+            <template #default="scope">
+              <el-tag size="small" :type="methodType(scope.row.method)">{{ scope.row.method }}</el-tag>
+              <span style="margin-left: 6px;">{{ scope.row.path }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            v-else-if="col.key === 'status_code'"
+            prop="status_code"
+            label="状态码"
+            :width="col.width"
+          >
+            <template #default="scope">
+              <el-tag size="small" :type="statusType(scope.row.status_code)">{{ scope.row.status_code }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            v-else-if="col.key === 'ip'"
+            prop="ip"
+            label="IP地址"
+            :width="col.width"
+          />
+          <el-table-column
+            v-else-if="col.key === 'create_time'"
+            prop="create_time"
+            label="操作时间"
+            :width="col.width"
+          />
+          <el-table-column
+            v-else-if="col.key === 'params'"
+            label="参数"
+            :width="col.width"
+          >
+            <template #default="scope">
+              <el-button v-if="hasParams(scope.row.params)" link type="primary" @click="showParams(scope.row)">查看</el-button>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+        </template>
       </el-table>
     </template>
     <template #bottom>
@@ -108,6 +176,18 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Clock, Search, RefreshRight, Delete } from '@element-plus/icons-vue'
 import http from '@/api/index'
 import PageCard from "@/components/PageCard.vue"
+import TableColumnPicker from '@/components/TableColumnPicker.vue'
+import { useTableColumns } from '@/composables/useTableColumns.js'
+import { makeTableRowIndex } from '@/utils/tableIndex'
+
+const {
+  activeColumns,
+  pickerItems,
+  tableRenderKey,
+  setColumnVisible,
+  setPickerOrder,
+  resetColumns
+} = useTableColumns('operation.log')
 
 const logList = ref([])
 const loading = ref(false)
@@ -116,6 +196,9 @@ const pageConfig = reactive({
   size: 20,
   total: 0
 })
+
+const tableRowIndex = makeTableRowIndex(pageConfig)
+
 const searchForm = reactive({
   username: '',
   module: '',
@@ -127,6 +210,7 @@ const paramsDialogVisible = ref(false)
 const currentParams = ref({})
 const selectedIds = ref([])
 const logTableRef = ref(null)
+const purgingNoise = ref(false)
 
 const handleSelectionChange = (selection) => {
   selectedIds.value = selection.map(item => item.id)
@@ -147,6 +231,40 @@ const handleBatchDelete = () => {
       ElMessage.success('删除成功')
       selectedIds.value = []
       getLogList()
+    }
+  }).catch(() => {})
+}
+
+const isMachineUser = (username) => {
+  if (!username) return false
+  return username.startsWith('压测Worker·')
+    || username.startsWith('Runner设备(')
+    || username === '系统内部服务'
+}
+
+const handlePurgeNoise = () => {
+  ElMessageBox.confirm(
+    '将删除 Runner 屏幕/设备日志上报、压测 Worker 心跳与秒级上报等机器噪音日志（通常无人工审计价值）。数据量大时会分批删除，请耐心等待。此操作不可恢复，确定继续吗？',
+    '清理机器噪音日志',
+    { confirmButtonText: '确定清理', cancelButtonText: '取消', type: 'warning' }
+  ).then(async () => {
+    purgingNoise.value = true
+    let total = 0
+    try {
+      while (true) {
+        const res = await http.operationLogApi.purgeNoiseLogs()
+        const deleted = res.data?.deleted ?? 0
+        total += deleted
+        if (deleted === 0 || res.data?.done) {
+          break
+        }
+      }
+      ElMessage.success(total > 0 ? `已清理 ${total} 条噪音日志` : '没有需要清理的噪音日志')
+      getLogList()
+    } catch (error) {
+      ElMessage.error(error?.response?.data?.detail || error?.message || '清理失败')
+    } finally {
+      purgingNoise.value = false
     }
   }).catch(() => {})
 }

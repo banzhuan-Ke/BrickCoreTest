@@ -13,6 +13,7 @@ from app.models.http import (
 from app.core.auth import is_authenticated, require_permissions, get_current_username
 from app.core.permissions import API_CASE_EXECUTE
 from app.core.notification import NotificationService
+from app.core.data_tools.inline_tools import ensure_dt_cache
 from app.models.sys import Environment, NotificationConfig, Project
 
 # 导入 schemas
@@ -87,7 +88,7 @@ router = APIRouter(prefix="/exec", tags=["接口测试执行"], dependencies=[De
 from .suites import run_single_case  # noqa: E402
 
 
-from app.core.api_suite_runner import merge_exec_variables as _merge_exec_variables, run_suite_hooks as _run_suite_hooks
+from app.core.api_suite_runner import execute_api_suite_cases as _execute_api_suite_cases
 
 
 # ============ 批量执行和套件执行 ============
@@ -119,45 +120,45 @@ async def batch_run(request: ApiBatchRunRequest, background_tasks: BackgroundTas
             run_by=username
         )
     
-    results = []
-    success_count = 0
-    failed_count = 0
-    accumulated_vars = {}
-    hooks_result: dict = {"setup": [], "teardown": [], "db_assertions": [], "success": True}
     batch_start_time = time.time()
 
-    merged_vars = await _merge_exec_variables(env, project_global_vars, accumulated_vars)
-    setup_hooks = await _run_suite_hooks(suite, request.env_id, merged_vars, setup=True)
-    hooks_result["setup"] = setup_hooks.get("setup", [])
-    if not setup_hooks.get("success"):
-        hooks_result["success"] = False
+    if suite:
+        run_result = await _execute_api_suite_cases(
+            suite=suite,
+            env=env,
+            case_ids=request.case_ids,
+            suite_record=suite_record,
+            username=username,
+            auto_validate_schema=getattr(request, "auto_validate_schema", False),
+            project_global_vars=project_global_vars,
+        )
+        results = run_result["case_results"]
+        success_count = run_result["success_count"]
+        failed_count = run_result["failed_count"]
+        hooks_result = run_result["hooks_result"]
+    else:
+        results = []
+        success_count = 0
+        failed_count = 0
+        accumulated_vars = ensure_dt_cache({})
+        hooks_result: dict = {"setup": [], "teardown": [], "db_assertions": [], "success": True}
 
-    try:
-        for case_id in request.case_ids:
-            result = await run_single_case(
-                case_id, request.env_id, suite_record.id if suite_record else None, username,
-                accumulated_vars, getattr(request, 'auto_validate_schema', False),
-                project_global_vars=project_global_vars,
-            )
-            results.append(result)
-            accumulated_vars.update(result.extracted_vars)
-            
-            if result.status == "success":
-                success_count += 1
-            else:
-                failed_count += 1
-            
-            if suite and suite.stop_on_failure and result.status != "success":
-                break
-    finally:
-        merged_vars = await _merge_exec_variables(env, project_global_vars, accumulated_vars)
-        teardown_hooks = await _run_suite_hooks(suite, request.env_id, merged_vars, teardown=True)
-        hooks_result["teardown"] = teardown_hooks.get("teardown", [])
-        hooks_result["db_assertions"] = teardown_hooks.get("db_assertions", [])
-        if not teardown_hooks.get("success"):
-            hooks_result["success"] = False
-            if teardown_hooks.get("db_assertions"):
-                failed_count = max(failed_count, 1)
+        try:
+            for case_id in request.case_ids:
+                result = await run_single_case(
+                    case_id, request.env_id, None, username,
+                    accumulated_vars, getattr(request, "auto_validate_schema", False),
+                    project_global_vars=project_global_vars,
+                )
+                results.append(result)
+                accumulated_vars.update(result.extracted_vars)
+
+                if result.status == "success":
+                    success_count += 1
+                else:
+                    failed_count += 1
+        except Exception:
+            raise
     
     if suite_record:
         end_time = time.time()
@@ -298,49 +299,34 @@ async def run_suite_async(suite_id: int, request: ApiSuiteRunRequest, background
     )
 
     async def _run_in_background():
-        """后台执行套件（重用 batch_run 主体逻辑，跳过重复建记录）"""
+        """后台执行套件（重用 execute_api_suite_cases，跳过重复建记录）"""
         start_time = time.time()
-        results = []
-        success_count = 0
-        failed_count = 0
-        accumulated_vars = {}
-        hooks_result: dict = {"setup": [], "teardown": [], "db_assertions": [], "success": True}
-
         proj = await Project.get_or_none(id=suite.project_id, is_del=False)
         project_global_vars = (proj.global_vars or {}) if proj else {}
 
-        merged_vars = await _merge_exec_variables(env, project_global_vars, accumulated_vars)
-        setup_hooks = await _run_suite_hooks(suite, env_id, merged_vars, setup=True)
-        hooks_result["setup"] = setup_hooks.get("setup", [])
-        if not setup_hooks.get("success"):
-            hooks_result["success"] = False
-
         try:
-            for case_id in case_ids:
-                result = await run_single_case(
-                    case_id, env_id, suite_record.id, username,
-                    accumulated_vars,
-                    getattr(batch_request, 'auto_validate_schema', False),
-                    project_global_vars=project_global_vars,
-                )
-                results.append(result)
-                accumulated_vars.update(result.extracted_vars)
-                if result.status == "success":
-                    success_count += 1
-                else:
-                    failed_count += 1
+            run_result = await _execute_api_suite_cases(
+                suite=suite,
+                env=env,
+                case_ids=case_ids,
+                suite_record=suite_record,
+                username=username,
+                auto_validate_schema=getattr(batch_request, "auto_validate_schema", False),
+                project_global_vars=project_global_vars,
+            )
+        except Exception as e:
+            print(f"[AsyncSuiteRun] 执行异常: {e}")
+            import traceback
+            traceback.print_exc()
+            suite_record.status = "failed"
+            suite_record.end_time = time.strftime("%Y-%m-%d %H:%M:%S")
+            suite_record.duration = round((time.time() - start_time) * 1000, 2)
+            await suite_record.save()
+            return
 
-                if suite.stop_on_failure and result.status != "success":
-                    break
-        finally:
-            merged_vars = await _merge_exec_variables(env, project_global_vars, accumulated_vars)
-            teardown_hooks = await _run_suite_hooks(suite, env_id, merged_vars, teardown=True)
-            hooks_result["teardown"] = teardown_hooks.get("teardown", [])
-            hooks_result["db_assertions"] = teardown_hooks.get("db_assertions", [])
-            if not teardown_hooks.get("success"):
-                hooks_result["success"] = False
-                if teardown_hooks.get("db_assertions"):
-                    failed_count = max(failed_count, 1)
+        success_count = run_result["success_count"]
+        failed_count = run_result["failed_count"]
+        hooks_result = run_result["hooks_result"]
 
         end_time = time.time()
         suite_record.status = "success" if failed_count == 0 and hooks_result.get("success", True) else "failed"

@@ -198,7 +198,10 @@ async def get_dashboard(
     perf_q = PerfRecord.filter(started_at__gte=s_dt, started_at__lte=e_dt)
     if project_id:
         perf_q = perf_q.filter(project_id=project_id)
-    perf_records = await perf_q.all()
+    perf_records = await perf_q.only(
+        "id", "started_at", "status", "qps", "error_rate",
+        "scene_id", "fail_count", "total_requests",
+    ).prefetch_related("scene").all()
 
     perf_trend_map = {d: {"success": 0, "fail": 0} for d in date_list}
     for r in perf_records:
@@ -287,23 +290,21 @@ async def get_dashboard(
     top_failed_cases = all_fails[:5]
 
     # ========== Top 5 性能测试失败场景（按错误率）==========
-    perf_failed_q = PerfRecord.filter(
-        started_at__gte=s_dt, started_at__lte=e_dt, status__in=["success", "failed"]
-    ).order_by("-error_rate").limit(5)
-    if project_id:
-        perf_failed_q = perf_failed_q.filter(project_id=project_id)
-    perf_failed_records = await perf_failed_q.prefetch_related("scene").all()
-
+    # 复用上方已加载的 perf_records，避免 DB 对大表按 error_rate 排序导致 sort buffer 溢出
+    perf_top_candidates = sorted(
+        (r for r in perf_records if r.status in ("success", "failed") and r.error_rate > 0),
+        key=lambda r: r.error_rate,
+        reverse=True,
+    )[:5]
     perf_top_failed_scenes = []
-    for r in perf_failed_records:
+    for r in perf_top_candidates:
         scene = await r.scene
-        if r.error_rate > 0:
-            perf_top_failed_scenes.append({
-                "scene_name": scene.name if scene else "未知场景",
-                "error_rate": round(r.error_rate, 2),
-                "fail_count": r.fail_count,
-                "total_requests": r.total_requests
-            })
+        perf_top_failed_scenes.append({
+            "scene_name": scene.name if scene else "未知场景",
+            "error_rate": round(r.error_rate, 2),
+            "fail_count": r.fail_count,
+            "total_requests": r.total_requests
+        })
 
     # ========== 最近执行记录 ==========
     recent_executions = []
@@ -319,11 +320,14 @@ async def get_dashboard(
             "id": r.id,
             "name": task.name if task else "未知计划",
             "type": "Web",
+            "record_type": "ui_task",
+            "task_id": task.id if task else None,
             "run_by": r.username,
             "start_time": r.start_time.strftime("%Y-%m-%d %H:%M:%S") if r.start_time else None,
             "status": r.status,
             "pass_rate": r.pass_rate,
-            "total_cases": r.case_count
+            "total_cases": r.case_count,
+            "report_path": f"/record/report/task/{r.id}",
         })
 
     # API 套件执行记录
@@ -337,30 +341,46 @@ async def get_dashboard(
             "id": r.id,
             "name": suite.name if suite else "未知套件",
             "type": "接口",
+            "record_type": "api_suite",
+            "suite_id": r.suite_id,
+            "env_id": r.env_id,
             "run_by": r.run_by,
             "start_time": r.start_time.strftime("%Y-%m-%d %H:%M:%S") if r.start_time else None,
             "status": r.status,
             "pass_rate": round((r.success_cases / r.total_cases * 100), 2) if r.total_cases else 0,
-            "total_cases": r.total_cases
+            "total_cases": r.total_cases,
+            "report_path": f"/api-module/report/{r.id}?type=suite",
         })
 
-    # 性能测试执行记录
-    perf_exec_q = PerfRecord.filter().order_by("-started_at").limit(5)
+    # 性能测试执行记录（按 id 倒序走主键，避免对大表按 started_at 排序导致 sort buffer 溢出）
+    perf_exec_filter: Dict[str, Any] = {}
     if project_id:
-        perf_exec_q = perf_exec_q.filter(project_id=project_id)
-    perf_exec_records = await perf_exec_q.prefetch_related("scene").all()
+        perf_exec_filter["project_id"] = project_id
+    perf_exec_records = await (
+        PerfRecord.filter(**perf_exec_filter)
+        .order_by("-id")
+        .limit(5)
+        .only(
+            "id", "scene_id", "run_by", "started_at", "status",
+            "qps", "error_rate", "total_requests",
+        )
+        .prefetch_related("scene")
+        .all()
+    )
     for r in perf_exec_records:
         scene = await r.scene
         recent_executions.append({
             "id": r.id,
             "name": scene.name if scene else "未知场景",
             "type": "性能",
+            "record_type": "perf",
             "run_by": r.run_by,
             "start_time": r.started_at.strftime("%Y-%m-%d %H:%M:%S") if r.started_at else None,
             "status": r.status,
             "qps": r.qps,
             "error_rate": round(r.error_rate, 2),
-            "total_requests": r.total_requests
+            "total_requests": r.total_requests,
+            "report_path": f"/perf-report/{r.id}",
         })
 
     recent_executions.sort(key=lambda x: x["start_time"] or "", reverse=True)

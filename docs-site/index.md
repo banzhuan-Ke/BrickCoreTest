@@ -1,6 +1,6 @@
 # BrickCore 使用文档
 
-欢迎使用 **BrickCore** 一体化自动化测试平台（社区版）。本文档按菜单结构说明各功能的操作步骤与常见问题。
+欢迎使用 **BrickCore** 一体化自动化测试平台。本文档按菜单结构说明各功能的操作步骤与常见问题。
 
 ## 平台能做什么
 
@@ -15,7 +15,7 @@
 
 ## 登录与顶部操作
 
-1. 打开平台地址登录。**在线演示**：[http://43.142.83.156/](http://43.142.83.156/)（账号见演示站说明）
+1. 在浏览器中打开平台地址，使用管理员分配的账号登录
 2. 顶部 **选择项目**：用例、接口、AI 数据归属当前项目
 3. 顶部 **选择测试环境**（部分页面）：执行时可覆盖
 4. 左侧菜单按业务分组展开
@@ -24,9 +24,9 @@
 
 ## 执行器（UI 自动化必备）
 
-社区版 Git **不包含** Playwright 引擎源码。请：
+请按以下步骤安装执行器：
 
-1. 从 [百度网盘](https://pan.baidu.com/s/1Nx2fkPAUi7htJKZAxp1paw?pwd=ye6b)（提取码 `ye6b`）或演示站 **设备管理 → 网盘下载** 获取 `BrickCoreRunner.zip`
+1. 从 [百度网盘](https://pan.baidu.com/s/1Nx2fkPAUi7htJKZAxp1paw?pwd=ye6b)（提取码 `ye6b`）或平台 **设备管理 → 网盘下载** 获取 `BrickCoreRunner.zip`
 2. 解压后运行 `BrickCoreRunner.exe`，登录并 **上线** 设备
 3. 详见 [执行器使用说明](guide/runner-client.md)、[执行器获取与发布](guide/runner-packaging.md)
 

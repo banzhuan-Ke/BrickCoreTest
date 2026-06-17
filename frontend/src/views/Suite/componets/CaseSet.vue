@@ -1,26 +1,39 @@
 <template>
   <div class="case-set">
-    <!-- 搜索框 -->
-    <div class="search-box">
+    <div class="filter-bar">
       <el-input
         v-model="searchName"
-        placeholder="搜索用例名称"
+        placeholder="标题"
         clearable
         size="small"
-        @input="handleSearch"
+        class="filter-title"
+        @keyup.enter="handleSearch"
         @clear="handleSearch"
       >
         <template #prefix>
           <el-icon><Search /></el-icon>
         </template>
       </el-input>
+      <el-select
+        v-model="searchLevel"
+        placeholder="优先级"
+        clearable
+        size="small"
+        class="filter-level"
+        @change="handleSearch"
+      >
+        <el-option label="P0" value="P0" />
+        <el-option label="P1" value="P1" />
+        <el-option label="P2" value="P2" />
+        <el-option label="P3" value="P3" />
+      </el-select>
+      <el-button size="small" type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
     </div>
-    
+
     <div class="case-list-container" v-infinite-scroll="loadMore" :infinite-scroll-disabled="disabled">
-      <!-- 用例列表 - 使用普通列表渲染 -->
       <div class="case-list">
-        <div 
-          v-for="item in displayList" 
+        <div
+          v-for="item in caseList"
           :key="item.id"
           class="case-item"
           draggable="true"
@@ -29,28 +42,31 @@
           <div class="case-info">
             <el-icon><Document /></el-icon>
             <span class="case-name" :title="item.name">{{ item.name }}</span>
+            <el-tag v-if="item.level" size="small" :type="levelTagType(item.level)" class="level-tag">
+              {{ item.level }}
+            </el-tag>
           </div>
-          <el-button 
-            @click="editCase(item.id)" 
-            :icon="Edit" 
-            circle 
+          <el-button
+            @click="editCase(item.id)"
+            :icon="Edit"
+            circle
             size="small"
-            type="primary" 
+            type="primary"
             plain
           />
         </div>
       </div>
-      
+
       <div v-if="loading" class="loading-more">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>加载中...</span>
       </div>
-      
-      <div v-if="!loading && noMore && displayList.length > 0" class="no-more">
+
+      <div v-if="!loading && noMore && caseList.length > 0" class="no-more">
         <el-divider>没有更多了</el-divider>
       </div>
-      
-      <div v-if="!loading && displayList.length === 0" class="empty-tip">
+
+      <div v-if="!loading && caseList.length === 0" class="empty-tip">
         <el-empty description="暂无数据" :image-size="60" />
       </div>
     </div>
@@ -64,11 +80,11 @@ import { Document, Edit, Loading, Search } from '@element-plus/icons-vue'
 import http from '@/api/index'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 
-const props = defineProps({
+defineProps({
   suiteId: {
     type: [String, Number],
-    required: true
-  }
+    default: null,
+  },
 })
 
 const router = useRouter()
@@ -80,27 +96,23 @@ const page = ref(1)
 const size = ref(20)
 const total = ref(0)
 const searchName = ref('')
+const searchLevel = ref('')
 const noMore = computed(() => caseList.value.length >= total.value)
 const disabled = computed(() => loading.value || noMore.value)
 
-// 显示的用例列表（根据搜索条件过滤）
-const displayList = computed(() => {
-  console.log('caseList changed:', caseList.value.length, caseList.value)
-  if (!searchName.value.trim()) {
-    return caseList.value
-  }
-  const keyword = searchName.value.trim().toLowerCase()
-  return caseList.value.filter(item => item.name.toLowerCase().includes(keyword))
-})
+const levelTagType = (level) => {
+  const map = { P0: 'danger', P1: 'warning', P2: 'primary', P3: 'info' }
+  return map[level] || 'info'
+}
 
-// 监听 caseList 变化
-watch(caseList, (newVal) => {
-  console.log('caseList watch:', newVal.length, newVal)
-}, { deep: true })
+const resetAndLoad = () => {
+  page.value = 1
+  caseList.value = []
+  total.value = 0
+  getCaseList()
+}
 
-// 获取用例列表
 const getCaseList = async () => {
-  console.log('getCaseList called, page:', page.value)
   if (loading.value) return
   loading.value = true
   try {
@@ -109,55 +121,50 @@ const getCaseList = async () => {
       size: size.value,
       project_id: proStore.projectInfo.id,
     }
-    if (searchName.value.trim()) {
-      params.name = searchName.value.trim()
-    }
-    console.log('request params:', params)
+    const name = searchName.value.trim()
+    if (name) params.name = name
+    if (searchLevel.value) params.level = searchLevel.value
+
     const res = await http.caseApi.getList(params)
-    console.log('response:', res.status, res.data)
     if (res.status === 200) {
       caseList.value.push(...res.data.data)
       total.value = res.data.total
-      console.log('after push, caseList:', caseList.value.length)
     }
-  } catch (error) {
-    console.error('获取用例列表失败:', error)
+  } catch {
+    // ignore
   } finally {
     loading.value = false
   }
 }
 
-// 搜索处理（防抖）
 let searchTimer = null
 const handleSearch = () => {
   clearTimeout(searchTimer)
-  searchTimer = setTimeout(() => {
-    page.value = 1
-    caseList.value = []
-    getCaseList()
-  }, 300)
+  searchTimer = setTimeout(resetAndLoad, 200)
 }
 
-// 加载更多
 const loadMore = () => {
   page.value++
   getCaseList()
 }
 
-// 拖拽开始
 const handleDragStart = (e, item) => {
   e.dataTransfer.setData('application/json', JSON.stringify(item))
   e.dataTransfer.effectAllowed = 'copy'
 }
 
-// 编辑用例
 const editCase = (caseId) => {
   router.push({ name: 'editCase', params: { id: caseId } })
 }
 
-// 初始加载
-console.log('CaseSet init, project_id:', proStore.projectInfo.id)
-getCaseList()
+watch(
+  () => proStore.projectInfo.id,
+  (id) => {
+    if (id) resetAndLoad()
+  }
+)
+
+resetAndLoad()
 </script>
 
 <style scoped lang="scss">
@@ -166,17 +173,33 @@ getCaseList()
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
-.search-box {
-  padding: 12px 12px 0 12px;
+.filter-bar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
   border-bottom: 1px solid var(--el-border-color-light);
+}
+
+.filter-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-level {
+  width: 88px;
+  flex-shrink: 0;
 }
 
 .case-list-container {
   flex: 1;
   overflow-y: auto;
   padding: 12px;
+  min-height: 0;
 }
 
 .case-list {
@@ -195,12 +218,12 @@ getCaseList()
   border-radius: 6px;
   cursor: grab;
   transition: all 0.2s;
-  
+
   &:hover {
     border-color: var(--el-color-primary);
     background: var(--el-color-primary-light-9);
   }
-  
+
   &:active {
     cursor: grabbing;
   }
@@ -210,9 +233,10 @@ getCaseList()
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   overflow: hidden;
-  
+  min-width: 0;
+
   .el-icon {
     color: var(--el-color-primary);
     flex-shrink: 0;
@@ -220,10 +244,15 @@ getCaseList()
 }
 
 .case-name {
+  flex: 1;
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.level-tag {
+  flex-shrink: 0;
 }
 
 .loading-more {

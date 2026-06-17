@@ -1,10 +1,17 @@
 <template>
-  <div class="mindmap-wrap">
+  <div ref="wrapRef" class="mindmap-wrap" :class="{ 'is-fullscreen': isFullscreen }">
     <div class="mindmap-toolbar">
       <el-button size="small" @click="resetZoom" icon="Refresh">重置视图</el-button>
+      <el-button size="small" @click="collapseToModules" :disabled="!hasData">收起到模块</el-button>
+      <el-button size="small" @click="expandAllNodes" :disabled="!hasData">展开全部</el-button>
+      <el-button size="small" type="primary" @click="toggleFullscreen" :icon="isFullscreen ? 'Close' : 'FullScreen'">
+        {{ isFullscreen ? '退出全屏' : '全屏预览' }}
+      </el-button>
       <el-button size="small" type="primary" @click="exportPng" :disabled="!hasData" icon="Picture">导出 PNG</el-button>
       <el-button size="small" type="success" @click="exportXmind" :disabled="!hasData || !reqId" icon="Download">导出 XMind</el-button>
+      <span v-if="total != null && total > 0" class="stat-tag">{{ total }} 条测试点</span>
       <span v-if="!hasData" class="empty-hint">暂无测试点，请先生成</span>
+      <span v-else class="zoom-hint">滚轮缩放 · 拖拽平移 · 点击节点展开/折叠</span>
     </div>
     <div ref="chartRef" class="mindmap-chart" v-loading="loading"></div>
   </div>
@@ -21,23 +28,68 @@ const props = defineProps({
   reqId: { type: Number, default: null },
   projectId: { type: Number, default: null },
   exportParams: { type: Object, default: () => ({}) },
-  loading: { type: Boolean, default: false }
+  loading: { type: Boolean, default: false },
+  total: { type: Number, default: null }
 })
 
 const emit = defineEmits(['node-click'])
 
+const wrapRef = ref(null)
 const chartRef = ref(null)
+const isFullscreen = ref(false)
 let chart = null
+let expandDepth = 3
 
 const hasData = computed(() => {
   const d = props.treeData
   return d && (d.children?.length > 0 || d.name)
 })
 
+function countPoints(node) {
+  if (!node) return 0
+  let n = node.value?.point_id ? 1 : 0
+  for (const c of node.children || []) n += countPoints(c)
+  return n
+}
+
+function inferExpandDepth(pointCount) {
+  if (pointCount <= 20) return 4
+  if (pointCount <= 60) return 3
+  return 2
+}
+
+function truncateLabel(name, maxLen) {
+  const text = name || ''
+  return text.length > maxLen ? `${text.slice(0, maxLen)}…` : text
+}
+
+function cloneTreeData(data) {
+  return JSON.parse(JSON.stringify(data))
+}
+
+function applyCollapseDepth(node, depth = 0, maxDepth = expandDepth) {
+  if (!node?.children?.length) return
+  node.collapsed = depth >= maxDepth
+  node.children.forEach(child => applyCollapseDepth(child, depth + 1, maxDepth))
+}
+
+function applyExpandAll(node) {
+  if (!node?.children?.length) return
+  node.collapsed = false
+  node.children.forEach(applyExpandAll)
+}
+
 function buildOption(data) {
+  const pointCount = countPoints(data)
+  const manyLeaves = pointCount > 40
+  const leafFontSize = manyLeaves ? 10 : 11
+  const branchFontSize = manyLeaves ? 12 : 13
+
   return {
     tooltip: {
       trigger: 'item',
+      confine: true,
+      extraCssText: 'max-width: 420px; white-space: normal; word-break: break-all;',
       formatter(params) {
         const v = params.data?.value || {}
         if (v.point_id) {
@@ -56,34 +108,42 @@ function buildOption(data) {
     series: [{
       type: 'tree',
       data: [data],
-      top: '2%',
-      left: '8%',
-      bottom: '2%',
-      right: '22%',
+      top: '1%',
+      left: '4%',
+      bottom: '1%',
+      right: manyLeaves ? '38%' : '24%',
       symbol: 'emptyCircle',
-      symbolSize: 8,
+      symbolSize: 7,
       orient: 'LR',
+      roam: true,
       expandAndCollapse: true,
-      initialTreeDepth: 4,
+      initialTreeDepth: expandDepth,
       label: {
         position: 'left',
         verticalAlign: 'middle',
         align: 'right',
-        fontSize: 12,
-        distance: 8
+        fontSize: branchFontSize,
+        distance: 6,
+        formatter: ({ name, data: nodeData }) => {
+          const isLeaf = !nodeData?.children?.length
+          return truncateLabel(name, isLeaf ? 26 : 36)
+        }
       },
       leaves: {
         label: {
           position: 'right',
           verticalAlign: 'middle',
           align: 'left',
-          color: '#303133'
+          fontSize: leafFontSize,
+          color: '#606266',
+          lineHeight: manyLeaves ? 14 : 16,
+          formatter: ({ name }) => truncateLabel(name, 26)
         }
       },
-      lineStyle: { color: '#c0c4cc', width: 1.5, curveness: 0.5 },
-      emphasis: { focus: 'descendant' },
-      animationDuration: 450,
-      animationDurationUpdate: 650
+      lineStyle: { color: '#c0c4cc', width: 1.2, curveness: 0.45 },
+      emphasis: { focus: 'descendant', blurScope: 'coordinateSystem' },
+      animationDuration: 350,
+      animationDurationUpdate: 500
     }]
   }
 }
@@ -97,14 +157,52 @@ function renderChart() {
       if (v?.point_id) emit('node-click', v)
     })
   }
-  chart.setOption(buildOption(JSON.parse(JSON.stringify(props.treeData))), true)
+  const pointCount = countPoints(props.treeData)
+  expandDepth = inferExpandDepth(pointCount)
+  const data = cloneTreeData(props.treeData)
+  applyCollapseDepth(data, 0, expandDepth)
+  chart.setOption(buildOption(data), true)
   chart.resize()
 }
 
 function resetZoom() {
   if (!chart || !props.treeData) return
-  chart.setOption(buildOption(JSON.parse(JSON.stringify(props.treeData))), true)
+  expandDepth = inferExpandDepth(countPoints(props.treeData))
+  renderChart()
 }
+
+function collapseToModules() {
+  if (!chart || !props.treeData) return
+  expandDepth = 2
+  renderChart()
+}
+
+function expandAllNodes() {
+  if (!chart || !props.treeData) return
+  expandDepth = 99
+  const data = cloneTreeData(props.treeData)
+  applyExpandAll(data)
+  chart.setOption(buildOption(data), true)
+  chart.resize()
+}
+
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value
+}
+
+function onFullscreenKeydown(e) {
+  if (e.key === 'Escape' && isFullscreen.value) {
+    isFullscreen.value = false
+  }
+}
+
+watch(isFullscreen, async (v) => {
+  document.body.style.overflow = v ? 'hidden' : ''
+  if (v) document.addEventListener('keydown', onFullscreenKeydown)
+  else document.removeEventListener('keydown', onFullscreenKeydown)
+  await nextTick()
+  chart?.resize()
+})
 
 function exportPng() {
   if (!chart) {
@@ -151,11 +249,13 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
+  document.removeEventListener('keydown', onFullscreenKeydown)
+  document.body.style.overflow = ''
   chart?.dispose()
   chart = null
 })
 
-defineExpose({ exportPng, exportXmind, resetZoom })
+defineExpose({ exportPng, exportXmind, resetZoom, toggleFullscreen })
 </script>
 
 <style scoped>
@@ -163,7 +263,15 @@ defineExpose({ exportPng, exportXmind, resetZoom })
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 420px;
+  min-height: 480px;
+}
+.mindmap-wrap.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  background: #fff;
+  padding: 16px 20px;
+  min-height: 0;
 }
 .mindmap-toolbar {
   display: flex;
@@ -172,16 +280,31 @@ defineExpose({ exportPng, exportXmind, resetZoom })
   margin-bottom: 8px;
   flex-wrap: wrap;
 }
+.stat-tag {
+  font-size: 12px;
+  color: #409eff;
+  background: #ecf5ff;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
 .empty-hint {
   color: #909399;
   font-size: 13px;
-  margin-left: 8px;
+  margin-left: 4px;
+}
+.zoom-hint {
+  color: #909399;
+  font-size: 12px;
+  margin-left: auto;
 }
 .mindmap-chart {
   flex: 1;
-  min-height: 400px;
+  min-height: 440px;
   border: 1px solid #ebeef5;
   border-radius: 6px;
   background: #fafafa;
+}
+.is-fullscreen .mindmap-chart {
+  min-height: 0;
 }
 </style>

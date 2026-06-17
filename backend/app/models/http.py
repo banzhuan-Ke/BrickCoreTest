@@ -9,6 +9,7 @@ class ApiDefinition(models.Model):
     catalog = fields.ForeignKeyField("models.TestCatalog", related_name="api_defs", null=True, description="所属目录")
     
     # 请求基本信息
+    protocol = fields.CharField(max_length=20, default="http", description="协议 http/websocket")
     method = fields.CharField(max_length=10, description="请求方法")
     path = fields.CharField(max_length=500, description="接口路径")
     description = fields.TextField(null=True, description="接口描述")
@@ -21,6 +22,7 @@ class ApiDefinition(models.Model):
     body = fields.JSONField(default=dict, description="请求体")
     body_type = fields.CharField(max_length=20, default="json", description="请求体类型")
     body_fields = fields.JSONField(default=list, description="form-data 字段")
+    ws_config = fields.JSONField(default=dict, description="WebSocket 默认配置（steps 等）")
     
     # 响应结构定义（支持从 Swagger/Postman 导入或手动维护）
     response_schema = fields.JSONField(default=dict, null=True, description="响应结构定义")
@@ -60,6 +62,7 @@ class ApiTestCase(models.Model):
     request_body = fields.JSONField(default=dict, description="请求体覆盖")
     request_body_type = fields.CharField(max_length=20, default="json", description="请求体类型")
     request_body_fields = fields.JSONField(default=list, description="form-data 字段覆盖")
+    ws_steps = fields.JSONField(default=list, description="WebSocket 步骤序列")
     
     # 断言配置
     assertions = fields.JSONField(default=list, description="断言规则")
@@ -465,3 +468,65 @@ class SqlTemplate(models.Model):
     class Meta:
         table = "sql_template"
         table_description = "数据工厂 SQL 模板"
+
+
+class DataToolRecord(models.Model):
+    """通用数据工厂工具使用记录（带标签，供接口变量引用）"""
+    id = fields.IntField(pk=True)
+    project = fields.ForeignKeyField("models.Project", related_name="data_tool_records", description="所属项目")
+    environment = fields.ForeignKeyField(
+        "models.Environment", related_name="data_tool_records", null=True, on_delete=fields.SET_NULL,
+        description="生效环境",
+    )
+    tool_id = fields.CharField(max_length=64, description="工具 ID")
+    tool_name = fields.CharField(max_length=100, description="工具名称")
+    tool_category = fields.CharField(max_length=32, description="工具分类")
+    tag = fields.CharField(max_length=64, description="主标签（${{df:tag}}）")
+    tags = fields.JSONField(default=list, description="附加标签")
+    input_data = fields.JSONField(default=dict, description="输入参数")
+    output_data = fields.JSONField(default=dict, description="输出结果")
+    output_text = fields.TextField(null=True, description="输出文本")
+    remark = fields.CharField(max_length=255, null=True, description="备注")
+    is_del = fields.BooleanField(default=False)
+    create_by = fields.CharField(max_length=50, default="")
+    update_by = fields.CharField(max_length=50, null=True)
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "data_tool_record"
+        table_description = "数据工厂工具记录"
+
+
+class ApiTestFile(models.Model):
+    """接口自动化 form-data 测试文件（MinIO api-test-files，按项目隔离）"""
+    id = fields.IntField(pk=True, auto_increment=True)
+    project = fields.ForeignKeyField("models.Project", related_name="api_test_files", description="所属项目")
+    file_name = fields.CharField(max_length=255, description="原始文件名")
+    file_key = fields.CharField(max_length=500, description="MinIO 对象键")
+    file_bucket = fields.CharField(max_length=100, description="MinIO bucket")
+    mime_type = fields.CharField(max_length=128, default="application/octet-stream", description="MIME 类型")
+    size = fields.IntField(default=0, description="文件大小（字节）")
+    username = fields.CharField(max_length=50, description="上传人")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+    create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    update_time = fields.DatetimeField(auto_now=True, description="更新时间")
+
+    class Meta:
+        table = "api_test_file"
+        table_description = "接口自动化测试文件"
+
+
+class DataToolFavorite(models.Model):
+    """数据工厂工具/标签收藏（按用户+项目）"""
+    id = fields.IntField(pk=True)
+    user = fields.ForeignKeyField("models.User", related_name="data_tool_favorites", description="用户")
+    project = fields.ForeignKeyField("models.Project", related_name="data_tool_favorites", description="项目")
+    item_type = fields.CharField(max_length=16, description="tool|tag")
+    item_key = fields.CharField(max_length=64, description="tool_id 或标签名")
+    sort_order = fields.IntField(default=0, description="排序")
+    create_time = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "data_tool_favorite"
+        table_description = "数据工厂收藏"

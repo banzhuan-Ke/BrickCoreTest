@@ -9,19 +9,25 @@ import httpx
 from app.core.variable_resolver import VariableResolver
 
 
-def build_api_url(base_url: str, path: str) -> str:
+def build_api_url(base_url: str, path: str, protocol: str = "http") -> str:
     """
     拼接基础URL和接口路径，处理斜杠边界和绝对路径
-    - 如果 path 本身是绝对路径（以 http:// 或 https:// 开头），直接返回 path
-    - 处理 base_url 尾部 / 和 path 头部 / 的重复问题
+    - 如果 path 本身是绝对路径（含 http/https/ws/wss），直接返回 path
+    - WebSocket 协议时自动将 http(s) 转为 ws(s)
     """
-    if path and path.startswith(("http://", "https://")):
-        return path
-    if not base_url:
+    if path and path.startswith(("http://", "https://", "ws://", "wss://")):
+        url = path
+    elif not base_url:
         raise ValueError("缺少基础URL，请配置接口基础URL或选择执行环境")
-    base_url = base_url.rstrip("/")
-    path = path if path.startswith("/") else "/" + path
-    return base_url + path
+    else:
+        base_url = base_url.rstrip("/")
+        path = path if path.startswith("/") else "/" + path
+        url = base_url + path
+
+    if protocol == "websocket":
+        from app.core.ws_executor import ensure_ws_url
+        return ensure_ws_url(url)
+    return url
 
 
 def replace_variables(data, variables, resolver: Optional[VariableResolver] = None):

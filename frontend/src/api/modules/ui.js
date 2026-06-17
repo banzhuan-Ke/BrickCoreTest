@@ -28,8 +28,8 @@ export const uiCaseApi = {
         return await http.delete(`/ui/cases/${case_id}`)
     },
     // 复制用例
-    async copy(case_id) {
-        return await http.post(`/ui/cases/${case_id}/copy`)
+    async copy(case_id, data = null) {
+        return await http.post(`/ui/cases/${case_id}/copy`, data || {})
     },
     // 批量删除
     async batchDelete(data) {
@@ -56,6 +56,31 @@ export const uiCaseApi = {
     updateCase(case_id, data) { return this.update(case_id, data) },
     deleteCase(case_id) { return this.delete(case_id) },
     copyCase(case_id) { return this.copy(case_id) }
+}
+
+// ========== 步骤片段 ==========
+export const uiFragmentApi = {
+    async getList(params) {
+        return await http.get('/ui/fragments', { params })
+    },
+    async getDetail(fragment_id, project_id) {
+        return await http.get(`/ui/fragments/${fragment_id}`, { params: { project_id } })
+    },
+    async create(data) {
+        return await http.post('/ui/fragments', data)
+    },
+    async update(fragment_id, data, project_id) {
+        return await http.put(`/ui/fragments/${fragment_id}`, data, { params: { project_id } })
+    },
+    async delete(fragment_id, project_id, force = false) {
+        return await http.delete(`/ui/fragments/${fragment_id}`, { params: { project_id, force } })
+    },
+    async getReferences(fragment_id, project_id) {
+        return await http.get(`/ui/fragments/${fragment_id}/references`, { params: { project_id } })
+    },
+    async previewExpand(fragment_id, data) {
+        return await http.post(`/ui/fragments/${fragment_id}/expand`, data)
+    },
 }
 
 // ========== 套件管理 ==========
@@ -125,8 +150,8 @@ export const uiSuiteApi = {
 // ========== 任务/计划管理 ==========
 export const uiTaskApi = {
     // 获取任务列表
-    async getList(params) {
-        return await http.get('/ui/tasks', { params })
+    async getList(params, config = {}) {
+        return await http.get('/ui/tasks', { params, ...config })
     },
     // 创建任务
     async create(data) {
@@ -154,7 +179,7 @@ export const uiTaskApi = {
     },
     
     // ===== 兼容旧命名 =====
-    getTaskList(params) { return this.getList(params) },
+    getTaskList(params, config) { return this.getList(params, config) },
     createTask(data) { return this.create(data) },
     getTaskDetail(task_id) { return this.getDetail(task_id) },
     updateTask(task_id, data) { return this.update(task_id, data) },
@@ -272,8 +297,17 @@ export const uiRecordApi = {
     deleteSuiteRecord(record_id) { 
         return http.delete(`/ui/records/suites/${record_id}`) 
     },
-    deleteCaseRecord(record_id) { 
-        return http.delete(`/ui/records/cases/${record_id}`) 
+    deleteCaseRecord(record_id, params = {}) {
+        return http.delete(`/ui/records/cases/${record_id}`, { params })
+    },
+    batchDeleteCaseRecords(record_ids, permanent = false) {
+        return http.post('/ui/records/cases/batch-delete', { record_ids, permanent })
+    },
+    batchRestoreCaseRecords(record_ids) {
+        return http.post('/ui/records/cases/batch-restore', { record_ids })
+    },
+    restoreCaseRecord(record_id) {
+        return http.post(`/ui/records/cases/${record_id}/restore`)
     },
     exportTaskReport(record_id) { return this.exportReport(record_id, 'task') },
     exportSuiteReport(record_id) { return this.exportReport(record_id, 'suite') }

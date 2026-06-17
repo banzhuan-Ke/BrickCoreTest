@@ -38,9 +38,11 @@ class User(models.Model):
 class Role(models.Model):
     """角色模型"""
     id = fields.IntField(pk=True, auto_increment=True, description="角色ID")
+    code = fields.CharField(max_length=50, description="角色唯一标识", null=True, unique=True)
     name = fields.CharField(max_length=50, description="角色名称")
     description = fields.CharField(max_length=255, description="角色描述", default="")
     permissions = fields.JSONField(description="权限列表", default=list)
+    is_system = fields.BooleanField(default=False, description="是否系统预置角色")
     create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
     update_time = fields.DatetimeField(auto_now=True, description="更新时间")
     is_del = fields.BooleanField(description="是否删除", default=False)
@@ -51,6 +53,27 @@ class Role(models.Model):
     class Meta:
         table = "role"
         table_description = "角色列表"
+
+
+class InviteCode(models.Model):
+    """注册邀请码"""
+    id = fields.IntField(pk=True, auto_increment=True, description="邀请码ID")
+    code = fields.CharField(max_length=32, unique=True, description="邀请码")
+    role_ids = fields.JSONField(default=list, description="注册后绑定的角色ID列表")
+    max_uses = fields.IntField(default=1, description="最大可用次数")
+    used_count = fields.IntField(default=0, description="已使用次数")
+    expires_at = fields.DatetimeField(null=True, description="过期时间")
+    note = fields.CharField(max_length=255, default="", description="备注")
+    created_by_id = fields.IntField(null=True, description="创建人ID")
+    created_by_username = fields.CharField(max_length=50, default="", description="创建人用户名")
+    is_active = fields.BooleanField(default=True, description="是否启用")
+    create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    update_time = fields.DatetimeField(auto_now=True, description="更新时间")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+
+    class Meta:
+        table = "invite_code"
+        table_description = "注册邀请码"
 
 
 class Project(models.Model):
@@ -71,6 +94,28 @@ class Project(models.Model):
     class Meta:
         table = "project"
         table_description = "测试项目"
+
+
+class ProjectMember(models.Model):
+    """项目成员"""
+    id = fields.IntField(pk=True, auto_increment=True, description="成员记录ID")
+    project = fields.ForeignKeyField("models.Project", related_name="members", description="所属项目")
+    user = fields.ForeignKeyField("models.User", related_name="project_memberships", description="用户")
+    role = fields.CharField(max_length=20, description="项目角色 owner/manager/member/viewer", default="member")
+    invited_by = fields.ForeignKeyField(
+        "models.User",
+        related_name="invited_project_members",
+        null=True,
+        description="邀请人",
+    )
+    create_time = fields.DatetimeField(auto_now_add=True, description="加入时间")
+    update_time = fields.DatetimeField(auto_now=True, description="更新时间")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+
+    class Meta:
+        table = "project_member"
+        table_description = "项目成员"
+        unique_together = (("project", "user"),)
 
 
 class Environment(models.Model):
@@ -168,7 +213,7 @@ class NotificationConfig(models.Model):
     """项目通知配置"""
     id = fields.IntField(pk=True, auto_increment=True, description="配置ID")
     project = fields.ForeignKeyField("models.Project", related_name="notifications", description="所属项目")
-    channel_type = fields.CharField(max_length=20, description="通知渠道: email/dingtalk/wechat")
+    channel_type = fields.CharField(max_length=20, description="通知渠道: email/dingtalk/wechat/feishu")
     enabled = fields.BooleanField(default=True, description="是否启用")
     config = fields.JSONField(default=dict, description="渠道参数")
     auto_push_report = fields.BooleanField(default=False, description="是否自动推送报告(兼容旧字段)")
@@ -187,7 +232,7 @@ class NotificationLog(models.Model):
     """通知推送记录"""
     id = fields.IntField(pk=True, auto_increment=True, description="记录ID")
     project = fields.ForeignKeyField("models.Project", related_name="notification_logs", description="所属项目", null=True)
-    channel_type = fields.CharField(max_length=20, description="通知渠道: email/dingtalk/wechat")
+    channel_type = fields.CharField(max_length=20, description="通知渠道: email/dingtalk/wechat/feishu")
     notify_type = fields.CharField(max_length=20, description="通知类型: alert/report")
     title = fields.CharField(max_length=255, description="消息标题")
     content_summary = fields.JSONField(default=dict, description="内容摘要")
@@ -260,6 +305,23 @@ class SystemLoginPageConfig(models.Model):
         table_description = "登录页配置"
 
 
+class SystemPlatformSettings(models.Model):
+    """平台全局设置（数据保留策略等）"""
+    id = fields.IntField(pk=True, auto_increment=True, description="配置ID")
+    ui_case_record_delete_mode = fields.CharField(
+        max_length=20,
+        default="logical",
+        description="UI用例运行记录删除模式：logical|physical|recycle_bin",
+    )
+    update_by = fields.CharField(max_length=50, default="", description="最后修改人")
+    create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    update_time = fields.DatetimeField(auto_now=True, description="更新时间")
+
+    class Meta:
+        table = "system_platform_settings"
+        table_description = "平台全局设置"
+
+
 class SystemRunnerReleaseConfig(models.Model):
     """执行器客户端安装包发布配置（网盘/OSS 外链，避免大文件占服务器磁盘）"""
     id = fields.IntField(pk=True, auto_increment=True, description="配置ID")
@@ -300,3 +362,19 @@ class PlatformDoc(models.Model):
     class Meta:
         table = "platform_doc"
         table_description = "平台文档"
+
+
+class AssetFavorite(models.Model):
+    """用户收藏的接口 / Web 用例（按项目隔离）"""
+    id = fields.IntField(pk=True)
+    user = fields.ForeignKeyField("models.User", related_name="asset_favorites", description="用户")
+    project = fields.ForeignKeyField("models.Project", related_name="asset_favorites", description="项目")
+    asset_type = fields.CharField(max_length=16, description="api|ui_case")
+    asset_id = fields.IntField(description="资产 ID")
+    sort_order = fields.IntField(default=0, description="排序")
+    create_time = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "asset_favorite"
+        table_description = "接口/Web用例收藏"
+        unique_together = (("user_id", "project_id", "asset_type", "asset_id"),)

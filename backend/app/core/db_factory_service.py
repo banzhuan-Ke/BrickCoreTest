@@ -12,8 +12,7 @@ import re
 from decimal import Decimal
 from typing import Any, Optional
 
-import pymysql
-
+from app.core.db_drivers import execute_on_datasource, test_connection as driver_test_connection, validate_command
 from app.core.encryption import decrypt_value, encrypt_value
 from app.core.variable_resolver import VariableResolver
 from app.models.http import EnvDatasource, SqlTemplate
@@ -88,18 +87,14 @@ def sql_template_to_dict(tpl: SqlTemplate, datasource_name: str = "", env_name: 
     }
 
 
-def validate_sql(sql: str, *, allow_write: bool, for_assertion: bool = False) -> tuple[bool, str]:
-    text = (sql or "").strip()
-    if not text:
-        return False, "SQL 不能为空"
-    if FORBIDDEN_SQL.search(text):
-        return False, "禁止执行 DROP/TRUNCATE/ALTER 等危险语句"
-    if for_assertion or not allow_write:
-        if WRITE_SQL.search(text):
-            return False, "当前模式仅允许 SELECT 查询"
-        if not READ_SQL.match(text):
-            return False, "仅允许 SELECT/SHOW/DESCRIBE/EXPLAIN 语句"
-    return True, ""
+def validate_sql(
+    sql: str,
+    *,
+    allow_write: bool,
+    for_assertion: bool = False,
+    db_type: str = "mysql",
+) -> tuple[bool, str]:
+    return validate_command(sql, db_type=db_type, allow_write=allow_write, for_assertion=for_assertion)
 
 
 def _normalize_value(val: Any) -> Any:
@@ -158,70 +153,15 @@ def _compare(actual: Any, expected: Any, operator: str) -> bool:
     return False
 
 
-def _connection_kwargs(ds: EnvDatasource) -> dict[str, Any]:
-    password = ""
-    if ds.password_encrypted:
-        try:
-            password = decrypt_value(ds.password_encrypted)
-        except Exception:
-            password = ""
-    return {
-        "host": ds.host,
-        "port": int(ds.port or 3306),
-        "user": ds.username,
-        "password": password,
-        "database": ds.database_name,
-        "charset": "utf8mb4",
-        "connect_timeout": int(ds.timeout_seconds or 10),
-        "read_timeout": int(ds.timeout_seconds or 10),
-        "write_timeout": int(ds.timeout_seconds or 10),
-        "cursorclass": pymysql.cursors.DictCursor,
-        "autocommit": True,
-    }
-
-
 def _execute_sql_sync(ds: EnvDatasource, sql: str, *, allow_write: bool, for_assertion: bool, max_rows: int) -> dict[str, Any]:
-    ok, err = validate_sql(sql, allow_write=allow_write, for_assertion=for_assertion)
-    if not ok:
-        return {"success": False, "error": err, "rows": [], "row_count": 0, "affected_rows": 0}
-
-    conn = None
-    try:
-        conn = pymysql.connect(**_connection_kwargs(ds))
-        with conn.cursor() as cursor:
-            cursor.execute(sql)
-            if READ_SQL.match(sql.strip()):
-                rows = cursor.fetchmany(max_rows + 1)
-                truncated = len(rows) > max_rows
-                if truncated:
-                    rows = rows[:max_rows]
-                normalized = [{k: _normalize_value(v) for k, v in row.items()} for row in rows]
-                return {
-                    "success": True,
-                    "rows": normalized,
-                    "row_count": len(normalized),
-                    "affected_rows": 0,
-                    "truncated": truncated,
-                }
-            return {
-                "success": True,
-                "rows": [],
-                "row_count": 0,
-                "affected_rows": cursor.rowcount,
-            }
-    except Exception as exc:
-        return {"success": False, "error": str(exc), "rows": [], "row_count": 0, "affected_rows": 0}
-    finally:
-        if conn:
-            conn.close()
+    return execute_on_datasource(
+        ds, sql, allow_write=allow_write, for_assertion=for_assertion, max_rows=max_rows
+    )
 
 
 async def test_datasource_connection(ds: EnvDatasource) -> dict[str, Any]:
-    sql = "SELECT 1 AS ok"
-    result = await asyncio.to_thread(
-        _execute_sql_sync, ds, sql, allow_write=False, for_assertion=True, max_rows=1
-    )
-    return {"success": result.get("success", False), "error": result.get("error"), "rows": result.get("rows", [])}
+    result = await asyncio.to_thread(driver_test_connection, ds)
+    return result
 
 
 async def get_datasource_by_id(datasource_id: int, project_id: Optional[int] = None) -> Optional[EnvDatasource]:

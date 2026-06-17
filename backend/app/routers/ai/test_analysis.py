@@ -3,17 +3,18 @@ AI 测试分析：测试点（思维导图）+ 测试方案
 """
 import json
 import logging
+import os
 import re
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.core.auth import is_authenticated, require_permissions
 from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW
-from app.core.ai_prompts import PromptManager
+from app.core.ai_prompts import PromptManager, append_extra_instructions
 from app.core.ai_usage_log import log_ai_usage
 from app.core.requirement_document import (
     build_interleaved_content,
@@ -34,8 +35,10 @@ from app.core.test_analysis import (
     build_echarts_tree,
     build_mindmap_tree,
     build_xmind_bytes,
+    parse_xmind_to_test_points,
     compute_overview,
     filter_test_points,
+    sort_test_points_list,
     format_environment_hints_for_prompt,
     format_scope_section_titles,
     format_test_points_for_case_generation,
@@ -66,6 +69,7 @@ from app.routers.ai.requirements import (
     _get_ai_config,
     _merge_test_point_keywords,
     _normalize_cases,
+    _normalize_keywords_text,
     _requirement_to_dict,
     _resolve_naming_template,
     _resolve_project_id,
@@ -118,6 +122,11 @@ class GenerateCasesFromTestPointsRequest(BaseModel):
     replace_existing: bool = Field(default=False, description="替换同 source_ref 的已有用例")
     supplement: bool = False
     include_requirement_excerpt: bool = True
+    extra_instructions: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description="用户额外要求，优先于默认 Prompt 规则",
+    )
 
 
 class SchemeEnvironmentHints(BaseModel):
@@ -357,17 +366,25 @@ async def get_mindmap(
 ):
     project_id = _resolve_project_id(user_info, project_id)
     req = await _get_requirement(req_id, project_id)
-    points = await AiRequirementTestPoint.filter(requirement_id=req_id, is_del=False).order_by("sort_order", "id")
-    pt_dicts = [_point_to_dict(p) for p in points]
+    points = await AiRequirementTestPoint.filter(requirement_id=req_id, is_del=False)
+    all_pt_dicts = sort_test_points_list([_point_to_dict(p) for p in points])
     filter_sections = _parse_section_ids_param(section_ids)
-    pt_dicts = filter_test_points(pt_dicts, section_ids=filter_sections, batch_name=batch_name)
+    pt_dicts = filter_test_points(all_pt_dicts, section_ids=filter_sections, batch_name=batch_name)
     sections = _requirement_sections(req)
     tree_layout = "section" if layout == "section" else "module"
+    # XMind 等无 section_ids 的测试点：section 筛选会排空，回退为 module 布局展示全部
+    if not pt_dicts and all_pt_dicts:
+        pt_dicts = filter_test_points(all_pt_dicts, batch_name=batch_name)
+        tree_layout = "module"
+    elif tree_layout == "section" and all_pt_dicts and not any(p.get("section_ids") for p in all_pt_dicts):
+        pt_dicts = filter_test_points(all_pt_dicts, batch_name=batch_name)
+        tree_layout = "module"
     return StandardResponse(data={
         "mindmap": resolve_mindmap_tree(req.name, pt_dicts, sections, layout=tree_layout),
         "echarts_tree": build_echarts_tree(req.name, pt_dicts, sections, layout=tree_layout),
         "total": len(pt_dicts),
         "filtered": bool(filter_sections or batch_name),
+        "layout": tree_layout,
     })
 
 
@@ -435,19 +452,18 @@ async def list_test_points(
     test_type: Optional[str] = Query(None),
     priority: Optional[str] = Query(None),
     batch_name: Optional[str] = Query(None, description="批次名（不含 batch: 前缀）"),
-    main_module: Optional[str] = Query(None, description="主模块模糊匹配"),
-    keyword: Optional[str] = Query(None, description="标题/描述关键词"),
+    main_module: Optional[str] = Query(None, description="主模块（精确匹配）"),
+    sub_module: Optional[str] = Query(None, description="子模块（精确匹配）"),
+    keyword: Optional[str] = Query(None, description="标题/描述关键词（模糊）"),
     section_ids: Optional[str] = Query(None, description="逗号分隔章节ID"),
     user_info: dict = Depends(is_authenticated),
 ):
     project_id = _resolve_project_id(user_info, project_id)
     await _get_requirement(req_id, project_id)
-    points = await AiRequirementTestPoint.filter(requirement_id=req_id, is_del=False).order_by(
-        "sort_order", "id"
-    )
-    pt_dicts = [_point_to_dict(p) for p in points]
+    points = await AiRequirementTestPoint.filter(requirement_id=req_id, is_del=False)
+    pt_dicts = sort_test_points_list([_point_to_dict(p) for p in points])
     filter_sections = _parse_section_ids_param(section_ids)
-    filtered = filter_test_points(
+    filtered = sort_test_points_list(filter_test_points(
         pt_dicts,
         section_ids=filter_sections,
         batch_name=batch_name,
@@ -455,8 +471,9 @@ async def list_test_points(
         test_type=test_type,
         priority=priority,
         main_module=main_module,
+        sub_module=sub_module,
         keyword=keyword,
-    )
+    ))
     batches = sorted({
         (p.get("source_ref") or "").replace("batch:", "")
         for p in pt_dicts
@@ -471,8 +488,228 @@ async def list_test_points(
             "test_types": sorted({p.get("test_type") for p in pt_dicts if p.get("test_type")}),
             "priorities": sorted({p.get("priority") for p in pt_dicts if p.get("priority")}),
             "main_modules": sorted({p.get("main_module") for p in pt_dicts if p.get("main_module")}),
+            "sub_modules": sorted({p.get("sub_module") for p in pt_dicts if p.get("sub_module")}),
         },
     })
+
+
+@router.get("/test-points", summary="项目级测试点列表", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+async def list_project_test_points(
+    project_id: Optional[int] = Query(None),
+    requirement_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    test_type: Optional[str] = Query(None),
+    priority: Optional[str] = Query(None),
+    batch_name: Optional[str] = Query(None),
+    main_module: Optional[str] = Query(None),
+    sub_module: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    qs = AiRequirementTestPoint.filter(project_id=project_id, is_del=False).order_by("-update_time", "-id")
+    if requirement_id:
+        qs = qs.filter(requirement_id=requirement_id)
+    points = await qs
+    pt_dicts = [_point_to_dict(p) for p in points]
+    filtered = filter_test_points(
+        pt_dicts,
+        batch_name=batch_name,
+        status=status,
+        test_type=test_type,
+        priority=priority,
+        main_module=main_module,
+        sub_module=sub_module,
+        keyword=keyword,
+    )
+    total = len(filtered)
+    start = (page - 1) * size
+    page_items = filtered[start: start + size]
+    req_ids = {p.get("requirement_id") for p in page_items if p.get("requirement_id")}
+    req_names: dict[int, str] = {}
+    if req_ids:
+        for r in await AiRequirement.filter(id__in=list(req_ids), is_del=False):
+            req_names[r.id] = r.name
+    for p in page_items:
+        p["requirement_name"] = req_names.get(p.get("requirement_id"), "")
+    return StandardResponse(data={"list": page_items, "total": total, "page": page, "size": size})
+
+
+@router.get("/test-schemes", summary="项目级测试方案列表", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+async def list_project_test_schemes(
+    project_id: Optional[int] = Query(None),
+    requirement_id: Optional[int] = Query(None),
+    keyword: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    qs = AiRequirementTestScheme.filter(project_id=project_id, is_del=False).order_by("-update_time", "-id")
+    if requirement_id:
+        qs = qs.filter(requirement_id=requirement_id)
+    if status:
+        qs = qs.filter(status=status)
+    schemes = await qs
+    rows = [_scheme_to_dict(s) for s in schemes]
+    if keyword and keyword.strip():
+        kw = keyword.strip().lower()
+        rows = [r for r in rows if kw in (r.get("title") or "").lower()]
+    req_ids = {r.get("requirement_id") for r in rows if r.get("requirement_id")}
+    req_names: dict[int, str] = {}
+    if req_ids:
+        for r in await AiRequirement.filter(id__in=list(req_ids), is_del=False):
+            req_names[r.id] = r.name
+    for r in rows:
+        r["requirement_name"] = req_names.get(r.get("requirement_id"), "")
+    total = len(rows)
+    start = (page - 1) * size
+    return StandardResponse(data={"list": rows[start: start + size], "total": total, "page": page, "size": size})
+
+
+async def _import_xmind_points_for_requirement(
+    req_id: int,
+    project_id: int,
+    content: bytes,
+    file_filename: str,
+    batch_name: str,
+    replace_batch: bool,
+    username: str,
+) -> list[dict]:
+    if not content:
+        raise HTTPException(status_code=400, detail="文件内容为空")
+    if len(content) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="XMind 文件超过 15MB 限制")
+    try:
+        normalized = parse_xmind_to_test_points(content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    batch_ref = _batch_source_ref(batch_name)
+    if replace_batch and batch_ref:
+        await AiRequirementTestPoint.filter(
+            requirement_id=req_id, source_ref=batch_ref, is_del=False
+        ).update(is_del=True)
+
+    created = []
+    for idx, item in enumerate(normalized):
+        pt = await AiRequirementTestPoint.create(
+            requirement_id=req_id,
+            project_id=project_id,
+            title=item["title"],
+            description=item.get("description"),
+            test_type=item.get("test_type", "正向"),
+            priority=item.get("priority", "P2"),
+            module_path=item.get("module_path", ""),
+            main_module=item.get("main_module", ""),
+            sub_module=item.get("sub_module", ""),
+            acceptance_ref=item.get("acceptance_ref"),
+            section_ids=item.get("section_ids") or [],
+            source_ref=batch_ref or None,
+            status="draft",
+            sort_order=item.get("sort_order", idx),
+            extra={**(item.get("extra") or {}), "import_source": "xmind", "import_file": file_filename},
+            create_by=username,
+        )
+        created.append(_point_to_dict(pt))
+    return created
+
+
+@router.post(
+    "/requirements/create-from-xmind",
+    summary="从 XMind 新建需求并导入测试点",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def create_requirement_from_xmind(
+    file: UploadFile = File(...),
+    name: str = Form(default=""),
+    batch_name: str = Form(default=""),
+    replace_batch: bool = Form(default=False),
+    project_id: int = Form(...),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    file_name = (file.filename or "").lower()
+    if not file_name.endswith(".xmind"):
+        raise HTTPException(status_code=400, detail="请上传 .xmind 文件")
+    content = await file.read()
+    username = user_info.get("username") or user_info.get("sub") or "system"
+    base = os.path.splitext(file.filename or "xmind")[0].strip()
+    req_name = (name or base or "XMind 导入").strip() or "XMind 导入"
+
+    requirement = await AiRequirement.create(
+        project_id=project_id,
+        name=req_name,
+        source_type="xmind",
+        original_content="",
+        parsed_content={
+            "file_name": file.filename or "",
+            "source_kind": "xmind_only",
+            "xmind_source": file.filename or "",
+        },
+        parse_status="parsed",
+        create_by=username,
+    )
+    created = await _import_xmind_points_for_requirement(
+        requirement.id,
+        project_id,
+        content,
+        file.filename or "",
+        batch_name,
+        replace_batch,
+        username,
+    )
+    row = _requirement_to_dict(requirement)
+    row["test_point_count"] = len(created)
+    row["scheme_count"] = 0
+    row["case_count"] = 0
+    return StandardResponse(
+        message=f"已创建需求并导入 {len(created)} 条测试点",
+        data={
+            "requirement": row,
+            "created_count": len(created),
+            "batch_name": batch_name.strip(),
+        },
+    )
+
+
+@router.post(
+    "/requirements/{req_id}/test-points/import-xmind",
+    summary="从 XMind 导入测试点",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def import_test_points_xmind(
+    req_id: int,
+    file: UploadFile = File(...),
+    batch_name: str = Form(default=""),
+    replace_batch: bool = Form(default=False),
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    await _get_requirement(req_id, project_id)
+    file_name = (file.filename or "").lower()
+    if not file_name.endswith(".xmind"):
+        raise HTTPException(status_code=400, detail="请上传 .xmind 文件")
+    content = await file.read()
+    username = user_info.get("username") or user_info.get("sub") or "system"
+    created = await _import_xmind_points_for_requirement(
+        req_id,
+        project_id,
+        content,
+        file.filename or "",
+        batch_name,
+        replace_batch,
+        username,
+    )
+
+    return StandardResponse(
+        message=f"已导入 {len(created)} 条测试点",
+        data={"created_count": len(created), "list": created, "batch_name": batch_name.strip()},
+    )
 
 
 @router.post("/requirements/{req_id}/test-points/generate", summary="AI 生成测试点", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
@@ -718,6 +955,8 @@ async def generate_cases_from_test_points(
                 f"\n\n【本批次已有用例 {existing_count} 条 · 请补充遗漏，勿重复相同验证点】\n"
                 f"{existing_cases_text}"
             )
+        extra_instructions = (body.extra_instructions or "").strip()
+        user_prompt = append_extra_instructions(user_prompt, extra_instructions)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -755,8 +994,8 @@ async def generate_cases_from_test_points(
             tp_ids = [int(tp_ids)]
         tp_ids = [int(x) for x in tp_ids if str(x).isdigit()]
         if not tp_ids:
-            kw = item.get("keywords") or ""
-            for m in re.findall(r"tp:#?(\d+)", str(kw)):
+            kw = _normalize_keywords_text(item.get("keywords"))
+            for m in re.findall(r"tp:#?(\d+)", kw):
                 tid = int(m)
                 if tid in point_id_set:
                     tp_ids.append(tid)
@@ -779,6 +1018,10 @@ async def generate_cases_from_test_points(
         section_ctx,
         batch_name=case_batch,
         requirement_name=req.name,
+        requirement_id=req.id,
+        story_code=str((req.parsed_content or {}).get("story_code") or "").strip()
+        if isinstance(req.parsed_content, dict)
+        else "",
     )
     cases_data = [apply_bindings_to_case_fields(c, effective) for c in named_cases]
 
@@ -799,9 +1042,14 @@ async def generate_cases_from_test_points(
             tp_ids = [int(tp_ids)] if str(tp_ids).isdigit() else []
         tp_ids = [int(x) for x in tp_ids if str(x).isdigit()]
         keywords = _merge_test_point_keywords(item.get("keywords", ""), tp_ids)
+        extra_seed: dict = {}
+        if tp_ids:
+            extra_seed["test_point_ids"] = tp_ids
+        if item.get("test_design"):
+            extra_seed["test_design"] = item["test_design"]
         case_extra = build_requirement_case_extra(
             effective,
-            existing={"test_point_ids": tp_ids} if tp_ids else {},
+            existing=extra_seed or None,
         )
         case = await AiRequirementCase.create(
             requirement_id=req.id,

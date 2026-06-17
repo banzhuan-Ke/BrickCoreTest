@@ -20,12 +20,18 @@
           <el-form-item label="创建人：" prop="username">
             <el-input v-model="taskInfo.username" disabled></el-input>
           </el-form-item>
+          <el-form-item label="并行执行：">
+            <el-switch v-model="taskInfo.parallel" active-text="套件按执行器权重分发" inactive-text="串行（单执行器）" />
+            <div class="field-hint">开启后，运行计划时可选择多个执行器并设置权重；套件内用例仍串行。</div>
+          </el-form-item>
         </el-form>
         <div class="title">测试计划中的套件</div>
+        <div class="field-hint suite-order-hint">
+          计划内各套件通常相互独立，执行顺序一般不影响测试结果；下方拖拽主要用于列表整理与移除管理。
+        </div>
         <draggable
-            v-model="taskInfo.suites" item-key="index"
+            v-model="taskInfo.suites" item-key="suite_id"
             :group="{ name: 'suite', pull: false, put: true }"
-            :sort="false"
             handle=".sort_hand"
             @add="handleAdd"
             chosen-class="chosen"
@@ -95,6 +101,7 @@ const taskId = route.params.id
 const taskInfo = reactive({
   "name": "",
   "catalog_id": null,
+  "parallel": false,
   "suites": null,
 })
 
@@ -103,6 +110,7 @@ const getTaskDetail = async () => {
   const response = await http.taskApi.getTaskDetail(taskId)
   taskInfo.name = response.data.name
   taskInfo.catalog_id = response.data.catalog_id ?? null
+  taskInfo.parallel = !!response.data.parallel
   taskInfo.username = response.data.username
   taskInfo.suites = response.data.suites
 }
@@ -119,23 +127,40 @@ const formUpdateDataRef = ref()
 async function updateTask(elForm) {
   elForm.validate(async function (res) {
     if (!res) return
-    const response = await http.taskApi.updateTask(taskId, taskInfo)
-    if (response.status === 200) {
-      // 提示套件添加成功
-      ElNotification({
-        title: '修改计划成功！',
-        type: 'success',
-        duration: 1500
-      })
-      back()
-    } else {
+    const response = await http.taskApi.updateTask(taskId, {
+      name: taskInfo.name,
+      catalog_id: taskInfo.catalog_id,
+      parallel: taskInfo.parallel,
+    })
+    if (response.status !== 200) {
       ElNotification({
         title: '修改计划失败！',
         type: 'error',
         duration: 1500,
         message: response.data.detail
       })
+      return
     }
+    if (Array.isArray(taskInfo.suites) && taskInfo.suites.length) {
+      const suiteRes = await http.taskApi.updateSuites(taskId, {
+        suite_ids: taskInfo.suites.map((s) => s.suite_id),
+      })
+      if (suiteRes.status !== 200) {
+        ElNotification({
+          title: '套件顺序保存失败！',
+          type: 'error',
+          duration: 1500,
+          message: suiteRes.data?.detail || '请重试',
+        })
+        return
+      }
+    }
+    ElNotification({
+      title: '修改计划成功！',
+      type: 'success',
+      duration: 1500
+    })
+    back()
   })
 }
 
@@ -206,4 +231,15 @@ const back = () => {
 
 <style scoped lang="scss">
 @use "./TaskEdit.scss";
+
+.field-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
+}
+
+.suite-order-hint {
+  margin: 4px 0 12px;
+}
 </style>

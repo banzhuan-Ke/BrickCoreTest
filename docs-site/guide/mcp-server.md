@@ -106,7 +106,7 @@ Claude Desktop 配置文件（Windows）：`%APPDATA%\Claude\claude_desktop_conf
 
 登录平台后，右下角 **小测 · 平台助手** 可直接问答（**Phase 3**）：项目概览、需求/用例、接口/UI/压测全域查询、最近失败等；执行/生成/分析类操作会弹出 **确认卡片**；支持 **多会话**、**消息全文搜索**、回答内 **可点击跳转**（suite_id / plan_id 等）；**可拖动放大浮窗**，表格 Markdown 正常渲染。
 <!-- mcp-tools:auto:assistant-stats:start -->
-与对外 MCP 共用同一套后端工具（MCP 共 **55** 个，助手只读白名单 **35** 个 + **10** 个 preview）；外部 Kimi/Cursor 仍走 MCP 接入。
+与对外 MCP 共用同一套后端工具（MCP 共 **58** 个，助手只读白名单 **38** 个 + **10** 个 preview）；外部 Kimi/Cursor 仍走 MCP 接入。
 <!-- mcp-tools:auto:assistant-stats:end -->
 
 **AI 模型配置 → 场景绑定**：为各 AI 场景指定默认模型，支持推荐配置与「一键套用」。

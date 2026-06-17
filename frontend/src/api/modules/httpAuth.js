@@ -32,5 +32,10 @@ export const httpAuthConfigApi = {
         return await http.post('/api-module/auth-config/test-preview', data, {
             timeout: 35000
         })
+    },
+    async getVariablesPreview(projectId, environmentId) {
+        return await http.get('/api-module/auth-config/variables-preview', {
+            params: { project_id: projectId, environment_id: environmentId }
+        })
     }
 }

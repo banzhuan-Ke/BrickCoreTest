@@ -10,6 +10,7 @@ from PySide6.QtCore import QThread, QTimer, Qt, Signal, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -23,6 +24,10 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QPlainTextEdit,
+    QRadioButton,
+    QScrollArea,
+    QSplitter,
+    QSpinBox,
     QStyle,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -31,13 +36,18 @@ from PySide6.QtWidgets import (
 
 from runner_client import __version__
 from runner_client.app.api_client import ApiError, BrickCoreApi, compare_version
+from runner_client.app.brick_animation import StartupSplash
 from runner_client.app.engine_manager import EngineManager
 from runner_client.app.health import probe_connect_bundle
+from runner_client.app.perf_worker_manager import PerfWorkerManager
 from runner_client.app.preferences import load_preferences
 from runner_client.app.runtime_check import (
+    RepairKind,
+    diagnose_perf_runtime,
     diagnose_runner_runtime,
     is_packaged_app,
     repair_playwright_browsers,
+    repair_runner_dependencies,
 )
 from runner_client.app.secure_store import decrypt_text, encrypt_text
 from runner_client.app.server_dialog import ServerManageDialog
@@ -49,8 +59,13 @@ from runner_client.app.store import (
     save_servers,
     save_session,
 )
+from runner_client.app.styles import APP_STYLESHEET
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+EXEC_ROLE_UI = "ui"
+EXEC_ROLE_PERF = "perf"
+EXEC_ROLE_BOTH = "both"
 
 
 def _clean_log_text(text: str) -> str:
@@ -62,21 +77,127 @@ def _clean_log_text(text: str) -> str:
 
 def _status_dot(ok: bool | None) -> str:
     if ok is True:
-        return "🟢"
+        return "●"
     if ok is False:
-        return "🔴"
-    return "⚪"
+        return "●"
+    return "○"
+
+
+def _health_state(ok: bool | None) -> str:
+    if ok is True:
+        return "ok"
+    if ok is False:
+        return "bad"
+    return "idle"
+
+
+class _ApiHealthWorker(QThread):
+    result_ready = Signal(bool)
+
+    def __init__(self, base_url: str, parent=None) -> None:
+        super().__init__(parent)
+        self._base_url = base_url
+
+    def run(self) -> None:
+        self.result_ready.emit(BrickCoreApi(self._base_url).health_check())
+
+
+class _VersionInfoWorker(QThread):
+    result_ready = Signal(object)
+
+    def __init__(self, base_url: str, parent=None) -> None:
+        super().__init__(parent)
+        self._base_url = base_url
+
+    def run(self) -> None:
+        self.result_ready.emit(BrickCoreApi(self._base_url).fetch_version_info())
+
+
+class _ConnectWorker(QThread):
+    """上线前检查 Runner 依赖并调用 connect API（避免阻塞 UI）。"""
+
+    prepared = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        api: BrickCoreApi,
+        device_name: str,
+        runner_dir: Path,
+        *,
+        execution_role: str,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._api = api
+        self._device_name = device_name
+        self._runner_dir = runner_dir
+        self._execution_role = execution_role
+
+    def run(self) -> None:
+        need_ui = self._execution_role in (EXEC_ROLE_UI, EXEC_ROLE_BOTH)
+        need_perf = self._execution_role in (EXEC_ROLE_PERF, EXEC_ROLE_BOTH)
+
+        if need_ui:
+            ok, message, repair = diagnose_runner_runtime(self._runner_dir)
+            if not ok:
+                self.prepared.emit(
+                    {
+                        "runtime_ok": False,
+                        "message": message,
+                        "repair": repair,
+                        "runtime_kind": "ui",
+                    }
+                )
+                return
+
+        if need_perf:
+            ok, message, repair = diagnose_perf_runtime(self._runner_dir)
+            if not ok:
+                self.prepared.emit(
+                    {
+                        "runtime_ok": False,
+                        "message": message,
+                        "repair": repair,
+                        "runtime_kind": "perf",
+                    }
+                )
+                return
+
+        connect_data: dict = {}
+        if need_ui:
+            try:
+                connect_data = self._api.connect_runner(self._device_name)
+            except ApiError as exc:
+                self.failed.emit(str(exc))
+                return
+            except Exception as exc:
+                self.failed.emit(str(exc))
+                return
+
+        self.prepared.emit(
+            {
+                "runtime_ok": True,
+                "connect_data": connect_data,
+                "execution_role": self._execution_role,
+            }
+        )
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("BrickCore Runner 客户端")
-        self.resize(780, 680)
+        self.setWindowTitle("BrickCore Runner · 执行器客户端")
+        self.resize(820, 780)
+        self.setMinimumSize(720, 560)
 
         self.engine = EngineManager()
+        self.perf_engine = PerfWorkerManager()
         self.api: BrickCoreApi | None = None
         self.connect_data: dict | None = None
+        self._online = False
+        self._active_role = EXEC_ROLE_UI
+        self._perf_project_id: int | None = None
         self.servers = load_servers()
         self.prefs = load_preferences()
         self._version_info: dict | None = None
@@ -84,6 +205,10 @@ class MainWindow(QMainWindow):
         self._health_poll_ms = 10_000
         self._last_api_health_ts = 0.0
         self._last_api_health_ok: bool | None = None
+        self._api_health_worker: _ApiHealthWorker | None = None
+        self._version_worker: _VersionInfoWorker | None = None
+        self._connect_worker: _ConnectWorker | None = None
+        self._pending_perf_project_id: int | None = None
 
         self._build_ui()
         self._setup_tray()
@@ -101,44 +226,79 @@ class MainWindow(QMainWindow):
         self.health_timer.setInterval(self._health_poll_ms)
         self.health_timer.timeout.connect(self._refresh_health)
 
-        QTimer.singleShot(400, self._check_version_on_startup)
-        if is_packaged_app():
-            QTimer.singleShot(300, self._check_runner_runtime)
+        QTimer.singleShot(300, self._check_version_on_startup)
 
     def _check_runner_runtime(self) -> None:
-        ok, message, fixable = diagnose_runner_runtime(self.engine.runner_dir)
+        ok, message, repair = diagnose_runner_runtime(self.engine.runner_dir)
         if ok:
             return
-        if not fixable:
+        self._offer_runtime_repair(message, repair)
+
+    def _offer_runtime_repair(self, message: str, repair: RepairKind) -> bool:
+        if not repair:
             QMessageBox.critical(self, "Runner 运行时", message)
-            return
+            return False
+        if repair == "deps":
+            prompt = (
+                f"{message}\n\n"
+                "常见原因：未通过 start-client.bat 启动，或 runner/venv 依赖未装全。\n"
+                "是否现在安装 Python 依赖？（需联网）"
+            )
+        else:
+            prompt = f"{message}\n\n是否现在下载安装 Chromium？（需联网，约 150MB）"
         answer = QMessageBox.question(
             self,
             "Runner 运行时",
-            f"{message}\n\n是否现在下载安装 Chromium？（需联网，约 150MB）",
+            prompt,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
-            return
-        dialog = _RuntimeRepairDialog(self.engine.runner_dir, parent=self)
-        dialog.exec()
+            return False
+        dialog = _RuntimeRepairDialog(self.engine.runner_dir, repair_kind=repair, parent=self)
+        return dialog.exec() == QDialog.DialogCode.Accepted
 
     def _build_ui(self) -> None:
         root = QWidget()
+        root.setObjectName("centralRoot")
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
-        header = QHBoxLayout()
-        title = QLabel("BrickCore Runner · 执行器客户端")
-        title.setFont(QFont("", 14, QFont.Weight.Bold))
-        header.addWidget(title)
-        header.addStretch()
+        header_card = QWidget()
+        header_card.setObjectName("headerCard")
+        header_layout = QHBoxLayout(header_card)
+        header_layout.setContentsMargins(16, 14, 16, 14)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
+        title = QLabel("BrickCore Runner")
+        title.setObjectName("appTitle")
+        subtitle = QLabel("UI 自动化 · 分布式压测 · 一体化执行器")
+        subtitle.setObjectName("appSubtitle")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        header_layout.addLayout(title_col)
+        header_layout.addStretch()
+
         self.version_label = QLabel(f"v{__version__}")
-        header.addWidget(self.version_label)
+        self.version_label.setObjectName("versionBadge")
+        header_layout.addWidget(self.version_label)
+
         self.update_btn = QPushButton("检查更新")
+        header_layout.addWidget(self.update_btn)
         self.update_btn.clicked.connect(self._check_version_update)
-        header.addWidget(self.update_btn)
-        layout.addLayout(header)
+        layout.addWidget(header_card)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 4, 0)
+        scroll_layout.setSpacing(12)
 
         server_box = QGroupBox("服务器环境")
         server_form = QFormLayout(server_box)
@@ -155,7 +315,7 @@ class MainWindow(QMainWindow):
         self.server_url_edit.setPlaceholderText("http://localhost:8000")
         self.server_url_edit.editingFinished.connect(self._sync_url_to_current_server)
         server_form.addRow("地址", self.server_url_edit)
-        layout.addWidget(server_box)
+        scroll_layout.addWidget(server_box)
 
         login_box = QGroupBox("登录")
         login_form = QFormLayout(login_box)
@@ -164,19 +324,55 @@ class MainWindow(QMainWindow):
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         login_form.addRow("用户名", self.username_edit)
         login_form.addRow("密码", self.password_edit)
-        layout.addWidget(login_box)
+        scroll_layout.addWidget(login_box)
 
         device_box = QGroupBox("设备")
         device_form = QFormLayout(device_box)
         self.device_name_edit = QLineEdit()
         self.device_name_edit.setPlaceholderText("如：Windows本地 / Windows本地-线上")
         device_form.addRow("设备名称", self.device_name_edit)
-        layout.addWidget(device_box)
+        scroll_layout.addWidget(device_box)
+
+        role_box = QGroupBox("执行角色")
+        role_layout = QVBoxLayout(role_box)
+        role_row = QHBoxLayout()
+        self.role_ui = QRadioButton("仅 UI 执行器")
+        self.role_perf = QRadioButton("仅压测执行机")
+        self.role_both = QRadioButton("UI + 压测（双开）")
+        self.role_ui.setChecked(True)
+        self._role_group = QButtonGroup(self)
+        for btn in (self.role_ui, self.role_perf, self.role_both):
+            self._role_group.addButton(btn)
+            role_row.addWidget(btn)
+        role_row.addStretch()
+        role_layout.addLayout(role_row)
+        role_hint = QLabel("压测模式需在平台执行场景时勾选「使用分布式 Worker」。")
+        role_hint.setWordWrap(True)
+        role_hint.setStyleSheet("color: #909399; font-size: 12px;")
+        role_layout.addWidget(role_hint)
+        scroll_layout.addWidget(role_box)
+
+        self.perf_box = QGroupBox("压测配置")
+        perf_form = QFormLayout(self.perf_box)
+        self.perf_project_combo = QComboBox()
+        self.perf_project_combo.setPlaceholderText("登录后加载项目列表")
+        perf_form.addRow("压测项目", self.perf_project_combo)
+        self.perf_max_concurrent_spin = QSpinBox()
+        self.perf_max_concurrent_spin.setRange(1, 2000)
+        self.perf_max_concurrent_spin.setValue(200)
+        perf_form.addRow("最大并发", self.perf_max_concurrent_spin)
+        self.perf_box.setVisible(False)
+        scroll_layout.addWidget(self.perf_box)
+
+        for btn in (self.role_ui, self.role_perf, self.role_both):
+            btn.toggled.connect(self._on_role_changed)
 
         btn_row = QHBoxLayout()
         self.login_btn = QPushButton("登录")
         self.connect_btn = QPushButton("上线")
+        self.connect_btn.setObjectName("primaryBtn")
         self.disconnect_btn = QPushButton("下线")
+        self.disconnect_btn.setObjectName("dangerBtn")
         self.settings_btn = QPushButton("设置…")
         self.connect_btn.setEnabled(False)
         self.disconnect_btn.setEnabled(False)
@@ -189,22 +385,37 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.disconnect_btn)
         btn_row.addStretch()
         btn_row.addWidget(self.settings_btn)
-        layout.addLayout(btn_row)
+        scroll_layout.addLayout(btn_row)
 
         health_box = QGroupBox("连接状态")
         health_layout = QHBoxLayout(health_box)
-        self.health_api = QLabel("平台 API ⚪")
-        self.health_mq = QLabel("消息队列 ⚪")
-        self.health_redis = QLabel("Redis ⚪")
-        self.health_engine = QLabel("Runner 引擎 ⚪")
-        for lbl in (self.health_api, self.health_mq, self.health_redis, self.health_engine):
+        health_layout.setSpacing(10)
+        self.health_api = QLabel("平台 API ○")
+        self.health_mq = QLabel("消息队列 ○")
+        self.health_redis = QLabel("Redis ○")
+        self.health_engine = QLabel("UI 引擎 ○")
+        self.health_perf = QLabel("压测节点 ○")
+        for lbl in (self.health_api, self.health_mq, self.health_redis, self.health_engine, self.health_perf):
+            lbl.setObjectName("healthPill")
+            lbl.setProperty("health", "idle")
+            lbl.style().unpolish(lbl)
+            lbl.style().polish(lbl)
             health_layout.addWidget(lbl)
         health_layout.addStretch()
-        layout.addWidget(health_box)
+        scroll_layout.addWidget(health_box)
 
         self.status_label = QLabel("状态：未连接")
+        self.status_label.setObjectName("statusBanner")
         self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
+        scroll_layout.addWidget(self.status_label)
+        scroll_layout.addStretch()
+
+        scroll.setWidget(scroll_content)
+
+        log_panel = QWidget()
+        log_panel_layout = QVBoxLayout(log_panel)
+        log_panel_layout.setContentsMargins(0, 0, 0, 0)
+        log_panel_layout.setSpacing(8)
 
         log_header = QHBoxLayout()
         log_title = QLabel("当前会话日志")
@@ -214,12 +425,30 @@ class MainWindow(QMainWindow):
         self.history_log_btn = QPushButton("历史日志…")
         self.history_log_btn.clicked.connect(self._open_log_history)
         log_header.addWidget(self.history_log_btn)
-        layout.addLayout(log_header)
+        log_panel_layout.addLayout(log_header)
 
         self.log_view = QPlainTextEdit()
+        self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
         self.log_view.setPlaceholderText("本次上线后的 Runner 日志将显示在这里…")
-        layout.addWidget(self.log_view, stretch=1)
+        self.log_view.setMinimumHeight(120)
+        log_panel_layout.addWidget(self.log_view, stretch=1)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(scroll)
+        splitter.addWidget(log_panel)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([420, 260])
+        layout.addWidget(splitter, stretch=1)
+
+    def _set_health_label(self, label: QLabel, name: str, ok: bool | None) -> None:
+        state = _health_state(ok)
+        label.setText(f"{name} {_status_dot(ok)}")
+        label.setProperty("health", state)
+        label.style().unpolish(label)
+        label.style().polish(label)
 
     def _setup_tray(self) -> None:
         icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
@@ -252,10 +481,90 @@ class MainWindow(QMainWindow):
 
     def _sync_tray_actions(self) -> None:
         logged_in = bool(self.api and self.api.user_token)
-        online = bool(self.connect_data and self.engine.is_running)
+        online = self._online
         self.tray_connect_action.setEnabled(logged_in and not online)
         self.tray_disconnect_action.setEnabled(online)
         self.tray_login_action.setEnabled(not online)
+
+    def _get_execution_role(self) -> str:
+        if self.role_both.isChecked():
+            return EXEC_ROLE_BOTH
+        if self.role_perf.isChecked():
+            return EXEC_ROLE_PERF
+        return EXEC_ROLE_UI
+
+    def _needs_ui_role(self, role: str | None = None) -> bool:
+        role = role or self._get_execution_role()
+        return role in (EXEC_ROLE_UI, EXEC_ROLE_BOTH)
+
+    def _needs_perf_role(self, role: str | None = None) -> bool:
+        role = role or self._get_execution_role()
+        return role in (EXEC_ROLE_PERF, EXEC_ROLE_BOTH)
+
+    def _on_role_changed(self, _checked: bool = False) -> None:
+        need_perf = self._needs_perf_role()
+        self.perf_box.setVisible(need_perf)
+        disabled = self._online
+        for btn in (self.role_ui, self.role_perf, self.role_both):
+            btn.setEnabled(not disabled)
+        self.perf_project_combo.setEnabled(not disabled)
+        self.perf_max_concurrent_spin.setEnabled(not disabled)
+
+    def _apply_session_execution_prefs(self, session: dict) -> None:
+        """恢复会话中的设备名、压测参数；执行角色每次打开默认 UI（不记忆压测选项）。"""
+        self.role_ui.setChecked(True)
+        max_conc = session.get("perf_max_concurrent")
+        if isinstance(max_conc, int) and max_conc > 0:
+            self.perf_max_concurrent_spin.setValue(max_conc)
+        self._pending_perf_project_id = session.get("perf_project_id")
+        self._on_role_changed()
+
+    def _select_perf_project(self, project_id: int | None) -> None:
+        if project_id is None:
+            return
+        for i in range(self.perf_project_combo.count()):
+            if self.perf_project_combo.itemData(i) == project_id:
+                self.perf_project_combo.setCurrentIndex(i)
+                return
+
+    def _load_projects_for_user(self) -> None:
+        if not self.api or not self.api.user_token:
+            return
+        try:
+            projects = self.api.list_projects()
+        except ApiError as exc:
+            self._append_log(f"[客户端] 加载项目列表失败：{exc}")
+            return
+        except Exception as exc:
+            self._append_log(f"[客户端] 加载项目列表失败：{exc}")
+            return
+
+        current_id = self.perf_project_combo.currentData()
+        self.perf_project_combo.blockSignals(True)
+        self.perf_project_combo.clear()
+        default_id = None
+        for project in projects:
+            pid = project.get("id")
+            name = project.get("name") or f"项目 {pid}"
+            if pid is None:
+                continue
+            label = name
+            if project.get("is_user_default"):
+                label = f"{name}（默认）"
+                default_id = pid
+            self.perf_project_combo.addItem(label, pid)
+        self.perf_project_combo.blockSignals(False)
+
+        pending = getattr(self, "_pending_perf_project_id", None)
+        if pending:
+            self._select_perf_project(pending)
+            self._pending_perf_project_id = None
+        elif current_id:
+            self._select_perf_project(current_id)
+        elif default_id:
+            self._select_perf_project(default_id)
+        elif self.perf_project_combo.count() > 0:
+            self.perf_project_combo.setCurrentIndex(0)
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
@@ -268,7 +577,7 @@ class MainWindow(QMainWindow):
 
     def _quit_app(self) -> None:
         self._quitting = True
-        if self.engine.is_running:
+        if self._online:
             self._on_disconnect()
         self.tray.hide()
         QApplication.quit()
@@ -336,6 +645,7 @@ class MainWindow(QMainWindow):
             session.get("device_name")
             or ("Windows本地" if "localhost" in self._current_server_url() else "Windows本地-线上")
         )
+        self._apply_session_execution_prefs(session)
         self.password_edit.clear()
         if self.prefs.get("remember_password"):
             token = session.get("password_token", "")
@@ -355,44 +665,76 @@ class MainWindow(QMainWindow):
     def _set_status(self, text: str) -> None:
         self.status_label.setText(text)
 
-    def _refresh_health(self, *, force_api_probe: bool = False) -> None:
+    def _schedule_api_health_probe(self, *, force: bool = False) -> None:
         base_url = self._current_server_url()
-        api_ok: bool | None = None
+        if not base_url:
+            return
         now = time.monotonic()
-        should_probe_api = force_api_probe or (
-            base_url and (now - self._last_api_health_ts) >= self._health_poll_ms / 1000.0
-        )
-        if should_probe_api and base_url:
-            probe = BrickCoreApi(base_url)
-            api_ok = probe.health_check()
-            self._last_api_health_ts = now
-        elif base_url and self._last_api_health_ok is not None:
-            api_ok = self._last_api_health_ok
-        if api_ok is not None:
-            self._last_api_health_ok = api_ok
-        self.health_api.setText(f"平台 API {_status_dot(api_ok)}")
+        if (
+            not force
+            and self._last_api_health_ok is not None
+            and (now - self._last_api_health_ts) < self._health_poll_ms / 1000.0
+        ):
+            self._set_health_label(self.health_api, "平台 API", self._last_api_health_ok)
+            return
+        if self._api_health_worker and self._api_health_worker.isRunning():
+            return
+        self._set_health_label(self.health_api, "平台 API", None)
+        self.health_api.setText("平台 API ○ 检测中…")
+        worker = _ApiHealthWorker(base_url, parent=self)
+        self._api_health_worker = worker
+        worker.result_ready.connect(self._on_api_health_probe_result)
+        worker.start()
+
+    def _on_api_health_probe_result(self, api_ok: bool) -> None:
+        self._last_api_health_ok = api_ok
+        self._last_api_health_ts = time.monotonic()
+        self._set_health_label(self.health_api, "平台 API", api_ok)
+
+    def _refresh_health(self, *, force_api_probe: bool = False) -> None:
+        if force_api_probe:
+            self._schedule_api_health_probe(force=True)
+        elif self._last_api_health_ok is not None:
+            self._set_health_label(self.health_api, "平台 API", self._last_api_health_ok)
+        else:
+            self._schedule_api_health_probe()
 
         mq_ok = redis_ok = None
-        if self.connect_data:
+        if self.connect_data and self._needs_ui_role(self._active_role):
             probes = probe_connect_bundle(self.connect_data)
             mq_ok = probes["mq"]
             redis_ok = probes["redis"]
-        self.health_mq.setText(f"消息队列 {_status_dot(mq_ok)}")
-        self.health_redis.setText(f"Redis {_status_dot(redis_ok)}")
+        self._set_health_label(self.health_mq, "消息队列", mq_ok)
+        self._set_health_label(self.health_redis, "Redis", redis_ok)
 
-        if self.connect_data:
-            engine_ok = self.engine.is_running
+        if self._online:
+            if self._needs_ui_role(self._active_role):
+                engine_ok = self.engine.is_running
+            else:
+                engine_ok = None
+            if self._needs_perf_role(self._active_role):
+                perf_ok = self.perf_engine.is_running
+            else:
+                perf_ok = None
         else:
-            engine_ok = None
-        self.health_engine.setText(f"Runner 引擎 {_status_dot(engine_ok)}")
+            engine_ok = perf_ok = None
+        self._set_health_label(self.health_engine, "UI 引擎", engine_ok)
+        self._set_health_label(self.health_perf, "压测节点", perf_ok)
 
     def _check_version_on_startup(self) -> None:
         base_url = self._current_server_url()
         if not base_url:
             return
-        api = BrickCoreApi(base_url)
-        self._version_info = api.fetch_version_info()
-        self._refresh_health()
+        if self._version_worker and self._version_worker.isRunning():
+            return
+        worker = _VersionInfoWorker(base_url, parent=self)
+        self._version_worker = worker
+        worker.result_ready.connect(self._on_version_info_ready)
+        worker.start()
+
+    def _on_version_info_ready(self, info: object) -> None:
+        self._version_info = info if isinstance(info, dict) else None
+        self._schedule_api_health_probe(force=True)
         if not self._version_info:
             return
         latest = self._version_info.get("runner_client_version_latest") or ""
@@ -481,7 +823,14 @@ class MainWindow(QMainWindow):
 
     def _persist_session(self, username: str, device_name: str, password: str = "") -> None:
         base_url = self._current_server_url()
-        payload: dict = {"username": username, "device_name": device_name}
+        payload: dict = {
+            "username": username,
+            "device_name": device_name,
+            "perf_max_concurrent": self.perf_max_concurrent_spin.value(),
+        }
+        project_id = self.perf_project_combo.currentData()
+        if project_id is not None:
+            payload["perf_project_id"] = project_id
         if self.prefs.get("remember_password") and password:
             payload["password_token"] = encrypt_text(password)
         elif not self.prefs.get("remember_password"):
@@ -510,8 +859,9 @@ class MainWindow(QMainWindow):
 
         self._persist_session(username, self.device_name_edit.text().strip(), password)
         self.connect_btn.setEnabled(True)
-        self._set_status(f"已登录 {base_url}（{username}），可点击「上线」启动 Runner。")
+        self._set_status(f"已登录 {base_url}（{username}），可点击「上线」启动执行器。")
         self._append_log(f"[客户端] 登录成功：{username} @ {base_url}")
+        self._load_projects_for_user()
         self._refresh_health(force_api_probe=True)
         self._sync_tray_actions()
 
@@ -519,106 +869,244 @@ class MainWindow(QMainWindow):
         if not self.api or not self.api.user_token:
             QMessageBox.warning(self, "提示", "请先登录")
             return
+        if self._connect_worker and self._connect_worker.isRunning():
+            return
+
+        execution_role = self._get_execution_role()
+        if self._needs_perf_role(execution_role):
+            project_id = self.perf_project_combo.currentData()
+            if not project_id:
+                QMessageBox.warning(self, "提示", "请选择压测项目（需与平台顶部项目一致）")
+                return
+
+        if execution_role == EXEC_ROLE_BOTH:
+            answer = QMessageBox.question(
+                self,
+                "双开确认",
+                "UI + 压测同时运行会占用较多 CPU 与网络带宽，可能影响 UI 用例稳定性。\n\n是否继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
         device_name = self.device_name_edit.text().strip() or "执行设备"
         base_url = self._current_server_url()
         self._persist_session(self.username_edit.text().strip(), device_name, self.password_edit.text())
 
-        try:
-            ok, message, fixable = diagnose_runner_runtime(self.engine.runner_dir)
-            if not ok:
-                if fixable:
-                    answer = QMessageBox.question(
-                        self,
-                        "Runner 运行时",
-                        f"{message}\n\n是否现在安装 Chromium？",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    )
-                    if answer == QMessageBox.StandardButton.Yes:
-                        dialog = _RuntimeRepairDialog(self.engine.runner_dir, parent=self)
-                        if dialog.exec() != QDialog.DialogCode.Accepted:
-                            return
-                    else:
-                        return
-                else:
-                    QMessageBox.critical(self, "Runner 运行时", message)
-                    return
+        self.connect_btn.setEnabled(False)
+        self.login_btn.setEnabled(False)
+        self._set_status("正在检查运行环境并上线…")
 
-            self.connect_data = self.api.connect_runner(device_name)
-        except ApiError as exc:
-            QMessageBox.critical(self, "上线失败", str(exc))
+        worker = _ConnectWorker(
+            self.api,
+            device_name,
+            self.engine.runner_dir,
+            execution_role=execution_role,
+            parent=self,
+        )
+        self._connect_worker = worker
+        worker.prepared.connect(self._on_connect_prepared)
+        worker.failed.connect(self._on_connect_failed)
+        worker.start()
+
+    def _on_connect_failed(self, message: str) -> None:
+        self.connect_btn.setEnabled(True)
+        self.login_btn.setEnabled(True)
+        self._set_status("上线失败")
+        QMessageBox.critical(self, "上线失败", message)
+
+    def _on_connect_prepared(self, result: dict) -> None:
+        if not result.get("runtime_ok"):
+            self.connect_btn.setEnabled(True)
+            self.login_btn.setEnabled(True)
+            self._set_status("运行环境未就绪")
+            if not self._offer_runtime_repair(
+                str(result.get("message") or "运行时检查未通过"),
+                result.get("repair"),
+            ):
+                return
+            self._on_connect()
             return
 
-        latest = self.connect_data.get("client_version_latest") or ""
-        if latest and compare_version(__version__, latest) < 0:
-            self._show_version_dialog(
-                f"当前客户端 {__version__}，平台最新 {latest}。",
-                force=False,
-            )
+        execution_role = result.get("execution_role") or EXEC_ROLE_UI
+        self._active_role = execution_role
+        self.connect_data = result.get("connect_data") or {}
+        device_name = self.device_name_edit.text().strip() or "执行设备"
+        base_url = self._current_server_url()
 
+        if self._needs_ui_role(execution_role):
+            latest = self.connect_data.get("client_version_latest") or ""
+            if latest and compare_version(__version__, latest) < 0:
+                self._show_version_dialog(
+                    f"当前客户端 {__version__}，平台最新 {latest}。",
+                    force=False,
+                )
+
+        started_parts: list[str] = []
         try:
-            self.engine.start(self.connect_data, device_name)
+            if self._needs_ui_role(execution_role):
+                self.engine.start(self.connect_data, device_name)
+                started_parts.append("UI")
+            if self._needs_perf_role(execution_role):
+                project_id = int(self.perf_project_combo.currentData())
+                self._perf_project_id = project_id
+                perf_name = device_name if execution_role == EXEC_ROLE_PERF else f"{device_name}-压测"
+                self.perf_engine.start(
+                    master_url=base_url,
+                    name=perf_name,
+                    project_id=project_id,
+                    max_concurrent=self.perf_max_concurrent_spin.value(),
+                )
+                started_parts.append("压测")
         except Exception as exc:
-            QMessageBox.critical(self, "启动引擎失败", str(exc))
+            if self.engine.is_running:
+                self.engine.stop()
+            if self.perf_engine.is_running:
+                self.perf_engine.stop()
+            if self._needs_ui_role(execution_role) and self.api and self.connect_data.get("device_id"):
+                try:
+                    self.api.disconnect_runner(self.connect_data.get("device_id", ""))
+                except Exception:
+                    pass
+            self.connect_btn.setEnabled(True)
+            self.login_btn.setEnabled(True)
+            self.connect_data = None
+            self._active_role = EXEC_ROLE_UI
+            self._set_status("启动失败")
+            QMessageBox.critical(self, "启动失败", str(exc))
             return
 
+        self._online = True
         self.connect_btn.setEnabled(False)
         self.disconnect_btn.setEnabled(True)
         self.login_btn.setEnabled(False)
         self.poll_timer.start()
-        self.heartbeat_timer.start()
+        if self._needs_ui_role(execution_role):
+            self.heartbeat_timer.start()
+        else:
+            self.heartbeat_timer.stop()
+
+        role_label = " + ".join(started_parts)
         device_id = self.connect_data.get("device_id", "")
         self.log_view.clear()
-        self._set_status(f"已上线 · 设备 {device_name} ({device_id}) · {base_url}")
-        self._append_log(f"[客户端] Runner 引擎已启动，device_id={device_id}")
+        status_bits = [f"已上线 · {role_label}"]
+        if device_id:
+            status_bits.append(f"设备 {device_name} ({device_id})")
+        else:
+            status_bits.append(device_name)
+        status_bits.append(base_url)
+        self._set_status(" · ".join(status_bits))
+
+        from runner_client.app.engine_manager import runner_python_executable
+
+        if self._needs_ui_role(execution_role):
+            self._append_log(
+                f"[客户端] UI 引擎已启动，device_id={device_id}，python={runner_python_executable()}"
+            )
+        if self._needs_perf_role(execution_role):
+            self._append_log(
+                f"[客户端] 压测 Worker 已启动，project_id={self.perf_project_combo.currentData()}，"
+                f"max_concurrent={self.perf_max_concurrent_spin.value()}"
+            )
+
+        self._on_role_changed()
         self.health_timer.start()
         self._refresh_health(force_api_probe=True)
         self._sync_tray_actions()
-        self.tray.showMessage("BrickCore Runner", "已上线，等待平台派发任务", QSystemTrayIcon.MessageIcon.Information, 3000)
+        self.tray.showMessage(
+            "BrickCore Runner",
+            f"已上线（{role_label}），等待平台派发任务",
+            QSystemTrayIcon.MessageIcon.Information,
+            3000,
+        )
 
     def _on_disconnect(self) -> None:
         self.poll_timer.stop()
         self.heartbeat_timer.stop()
         self.health_timer.stop()
         device_id = (self.connect_data or {}).get("device_id", "")
-        if self.api and device_id:
+        if self.api and device_id and self._needs_ui_role(self._active_role):
             try:
                 self.api.disconnect_runner(device_id)
             except Exception:
                 pass
+        if (
+            self.api
+            and self._needs_perf_role(self._active_role)
+            and self._perf_project_id
+        ):
+            try:
+                self.api.unregister_perf_worker(self._perf_project_id)
+                self._append_log("[客户端] 压测 Worker 已向平台注销")
+            except Exception as exc:
+                self._append_log(f"[客户端] 压测 Worker 注销失败：{exc}")
         self.engine.stop()
+        self.perf_engine.stop()
         self.connect_data = None
+        self._perf_project_id = None
+        self._online = False
+        self._active_role = EXEC_ROLE_UI
         self.connect_btn.setEnabled(bool(self.api and self.api.user_token))
         self.disconnect_btn.setEnabled(False)
         self.login_btn.setEnabled(True)
         self._set_status("已下线")
-        self._append_log("[客户端] Runner 已下线")
+        self._append_log("[客户端] 执行器已下线")
+        self._on_role_changed()
         self._refresh_health()
         self._sync_tray_actions()
 
     def _poll_logs(self) -> None:
-        chunk = self.engine.read_new_log_lines()
-        if chunk:
-            self._append_log(chunk)
+        if self._needs_ui_role(self._active_role):
+            chunk = self.engine.read_new_log_lines()
+            if chunk:
+                self._append_log(chunk)
+            else:
+                chunk = self.engine.read_new_output()
+                if chunk:
+                    self._append_log(chunk)
+
+        if self._needs_perf_role(self._active_role):
+            perf_chunk = self.perf_engine.read_new_log_lines()
+            if not perf_chunk:
+                perf_chunk = self.perf_engine.read_new_output()
+            if perf_chunk:
+                for line in perf_chunk.splitlines():
+                    self._append_log(f"[压测] {line}")
+
+        if not self._online:
             return
-        chunk = self.engine.read_new_output()
-        if chunk:
-            self._append_log(chunk)
-        elif self.connect_data and not self.engine.is_running:
-            self._append_log("[客户端] Runner 进程已退出")
+
+        ui_dead = (
+            self._needs_ui_role(self._active_role)
+            and not self.engine.is_running
+        )
+        perf_dead = (
+            self._needs_perf_role(self._active_role)
+            and not self.perf_engine.is_running
+        )
+        if ui_dead:
+            self._append_log("[客户端] UI 引擎进程已退出")
+        if perf_dead:
+            self._append_log("[客户端] 压测 Worker 进程已退出")
+        if ui_dead or perf_dead:
             self._on_disconnect()
 
     def _send_heartbeat(self) -> None:
-        if not self.api or not self.connect_data:
+        if not self.api or not self.connect_data or not self._needs_ui_role(self._active_role):
             return
         device_id = self.connect_data.get("device_id", "")
         try:
             self.api.heartbeat(device_id)
+        except ApiError as exc:
+            if exc.status_code in (401, 403):
+                self._append_log("[客户端] 会话已失效或被管理员停止，自动下线")
+                self._on_disconnect()
         except Exception:
             pass
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._quitting:
-            if self.engine.is_running:
+            if self._online:
                 self._on_disconnect()
             event.accept()
             return
@@ -632,7 +1120,7 @@ class MainWindow(QMainWindow):
                 2500,
             )
             return
-        if self.engine.is_running:
+        if self._online:
             self._on_disconnect()
         event.accept()
 
@@ -720,13 +1208,19 @@ class _InstallWorker(QThread):
     finished_ok = Signal()
     finished_err = Signal(str)
 
-    def __init__(self, runner_dir: Path, parent=None) -> None:
+    def __init__(self, runner_dir: Path, repair_kind: RepairKind = "playwright", parent=None) -> None:
         super().__init__(parent)
         self._runner_dir = runner_dir
+        self._repair_kind = repair_kind or "playwright"
 
     def run(self) -> None:
         try:
-            repair_playwright_browsers(
+            repair_fn = (
+                repair_runner_dependencies
+                if self._repair_kind == "deps"
+                else repair_playwright_browsers
+            )
+            repair_fn(
                 self._runner_dir,
                 on_output=lambda text: self.log_line.emit(text),
             )
@@ -736,15 +1230,24 @@ class _InstallWorker(QThread):
 
 
 class _RuntimeRepairDialog(QDialog):
-    def __init__(self, runner_dir, parent=None) -> None:
+    def __init__(self, runner_dir, repair_kind: RepairKind = "playwright", parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("安装 Playwright Chromium")
+        self._repair_kind = repair_kind or "playwright"
+        if self._repair_kind == "deps":
+            self.setWindowTitle("安装 Runner 依赖")
+            hint = "正在安装 Python 依赖，请稍候（需联网）…"
+            done_text = "[完成] 依赖已就绪"
+        else:
+            self.setWindowTitle("安装 Playwright Chromium")
+            hint = "正在安装浏览器，请稍候（约 150MB，需联网）…"
+            done_text = "[完成] Chromium 已就绪"
+        self._done_text = done_text
         self.resize(560, 320)
         self._runner_dir = runner_dir
         self._worker: _InstallWorker | None = None
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("正在安装浏览器，请稍候（约 150MB，需联网）…"))
+        layout.addWidget(QLabel(hint))
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         layout.addWidget(self.log_view)
@@ -755,7 +1258,7 @@ class _RuntimeRepairDialog(QDialog):
         self._close_btn.setEnabled(False)
         layout.addWidget(buttons)
 
-        self._worker = _InstallWorker(runner_dir, self)
+        self._worker = _InstallWorker(runner_dir, repair_kind=self._repair_kind, parent=self)
         self._worker.log_line.connect(self._append)
         self._worker.finished_ok.connect(self._on_ok)
         self._worker.finished_err.connect(self._on_err)
@@ -766,7 +1269,7 @@ class _RuntimeRepairDialog(QDialog):
             self.log_view.appendPlainText(text)
 
     def _on_ok(self) -> None:
-        self._append("[完成] Chromium 已就绪")
+        self._append(self._done_text)
         self._close_btn.setText("完成")
         self._close_btn.setEnabled(True)
         self.accept()
@@ -789,8 +1292,31 @@ def run_app() -> int:
     app.setApplicationName("BrickCore Runner")
     app.setQuitOnLastWindowClosed(False)
     app.setFont(QFont("Microsoft YaHei UI", 10))
-    window = MainWindow()
-    window.show()
+    app.setStyleSheet(APP_STYLESHEET)
+
+    splash = StartupSplash()
+    splash.show_centered()
+    app.processEvents()
+
+    splash_start = time.monotonic()
+    main_window: MainWindow | None = None
+
+    def _open_main_window() -> None:
+        nonlocal main_window
+        if main_window is None:
+            main_window = MainWindow()
+        splash.finish()
+        main_window.setWindowTitle("BrickCore Runner · 执行器客户端")
+        main_window.show()
+
+    def _bootstrap() -> None:
+        nonlocal main_window
+        main_window = MainWindow()
+        elapsed_ms = int((time.monotonic() - splash_start) * 1000)
+        remain = max(0, 1200 - elapsed_ms)
+        QTimer.singleShot(remain, _open_main_window)
+
+    QTimer.singleShot(0, _bootstrap)
     return app.exec()
 
 

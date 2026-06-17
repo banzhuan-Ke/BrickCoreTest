@@ -17,7 +17,7 @@ mcp = FastMCP(
     name="BrickCore",
     instructions=(
         "BrickCore 一体化智能测试平台 MCP Server。"
-        "提供项目上下文、需求用例、功能用例库、测试执行与失败分析能力。"
+        "提供项目上下文、需求用例、功能用例库、数据工厂、测试执行与失败分析能力。"
         "危险操作需先调用 preview_* 获取 confirm_token，再调用 confirm_* 执行。"
         "查询某项目全貌（环境、模块、需求、用例库规模）时，优先调用 get_project_overview(project_id)，"
         "不要连续多次调用 list_environments + list_modules + list_requirements。"
@@ -26,6 +26,31 @@ mcp = FastMCP(
 )
 
 _MCP_AUTH_HEADER_NAMES = {"authorization", "x-mcp-api-key"}
+
+MCP_TOOL_GROUPS: tuple[str, ...] = (
+    "项目上下文",
+    "需求用例",
+    "功能用例库",
+    "接口与 UI 测试",
+    "执行记录与压测",
+    "测试执行",
+    "失败分析",
+)
+
+MCP_DANGEROUS_OPS: tuple[str, ...] = (
+    "preview_trigger_generate → confirm_trigger_generate",
+    "preview_run_api_suite → confirm_run_api_suite",
+    "preview_run_api_plan → confirm_run_api_plan",
+    "preview_run_api_case → confirm_run_api_case",
+    "preview_run_qa_eval → confirm_run_qa_eval",
+    "preview_run_ui_case → confirm_run_ui_case",
+    "preview_run_ui_task → confirm_run_ui_task",
+    "preview_run_ui_suite → confirm_run_ui_suite",
+    "preview_run_perf_scene → confirm_run_perf_scene",
+    "analyze_failure（外部 MCP 直接调用；平台助手走 preview_analyze_failure → confirm_analyze_failure）",
+)
+
+_REGISTERED_TOOL_NAMES: list[str] = []
 
 
 def _read_request_headers() -> dict[str, str]:
@@ -57,6 +82,7 @@ def _register(name: str, handler: Callable, description: str = "") -> None:
         tool_impl.__annotations__["return"] = type_hints["return"]
 
     mcp.tool(name=name)(tool_impl)
+    _REGISTERED_TOOL_NAMES.append(name)
 
 
 # 项目上下文
@@ -160,15 +186,9 @@ async def get_server_info() -> dict[str, Any]:
         "authenticated": authed,
         "username": username,
         "transport": "streamable-http",
-        "tool_groups": [
-            "项目上下文",
-            "需求用例",
-            "功能用例库",
-            "接口与 UI 测试",
-            "执行记录与压测",
-            "测试执行",
-            "失败分析",
-        ],
+        "tool_groups": list(MCP_TOOL_GROUPS),
+        "tool_count": len(_REGISTERED_TOOL_NAMES) + 1,
+        "dangerous_ops": list(MCP_DANGEROUS_OPS),
     }
 
 
@@ -181,6 +201,11 @@ def get_mcp_asgi_app():
     if _mcp_asgi_app is None:
         _mcp_asgi_app = mcp.http_app(path="/", transport="streamable-http")
     return _mcp_asgi_app
+
+
+def get_registered_tool_count() -> int:
+    """已注册 MCP 工具数（含 get_server_info）。"""
+    return len(_REGISTERED_TOOL_NAMES) + 1
 
 
 def build_client_config(base_url: str, api_key: str = "") -> dict[str, Any]:

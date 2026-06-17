@@ -32,8 +32,17 @@
         <VarInsertButton
           v-if="selectedEnvId"
           :env-id="selectedEnvId"
+          hint-text="不含工厂标签；请用「数据工厂标签」或「插入工具」。"
           @edit-env-vars="varEditVisible = true"
         />
+        <ToolInsertButton v-if="selectedEnvId" />
+        <el-button
+          v-if="selectedEnvId"
+          type="info"
+          link
+          size="small"
+          @click="tagPickerVisible = true"
+        >数据工厂标签</el-button>
       </div>
       <VariablePreviewPanel
         v-if="selectedEnvId"
@@ -42,7 +51,24 @@
       />
       
       <!-- 请求配置 -->
-      <div class="request-panel">
+      <div v-if="isWsApi" class="request-panel">
+        <div class="panel-header">
+          <el-tag type="warning" size="small">WebSocket</el-tag>
+          <el-input v-model="request.url" placeholder="ws://host/path 或 /ws/echo" size="small" />
+          <el-button type="primary" size="small" @click="sendWsRequest" :loading="loading" icon="Promotion">
+            执行
+          </el-button>
+        </div>
+        <el-tabs v-model="activeTab" class="debug-tabs">
+          <el-tab-pane label="Headers" name="headers">
+            <HeaderEditorPanel v-model="request.headers" local-title="连接 Header" :show-description="false" />
+          </el-tab-pane>
+          <el-tab-pane label="WS 步骤" name="ws-steps">
+            <WsStepsEditor v-model="wsSteps" />
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+      <div v-else class="request-panel">
         <div class="panel-header">
           <el-select v-model="request.method" size="small" style="width: 100px;">
             <el-option v-for="m in methods" :key="m" :label="m" :value="m"/>
@@ -130,11 +156,11 @@
                 <el-table-column label="值 / 文件" min-width="260">
                   <template #default="{ $index }">
                     <div class="file-field-cell">
-                      <template v-if="request.body_fields[$index].field_type === 'file'">
-                        <el-button size="small" @click="triggerFormFilePick($index)">选择并上传文件</el-button>
-                        <span v-if="request.body_fields[$index].file_name" class="file-meta-name">{{ request.body_fields[$index].file_name }}</span>
-                        <input :ref="(el) => setFormFileInput(el, $index)" class="hidden-file-input" type="file" @change="(e) => handleFormFileChange(e, $index)" />
-                      </template>
+                      <ApiTestFilePicker
+                        v-if="request.body_fields[$index].field_type === 'file'"
+                        :model-value="request.body_fields[$index]"
+                        @update:model-value="(v) => onFormFieldFileUpdate($index, v)"
+                      />
                       <el-input v-else v-model="request.body_fields[$index].value" size="small" placeholder="文本值" />
                     </div>
                   </template>
@@ -234,6 +260,11 @@
   </el-dialog>
 
   <EnvVarQuickEdit v-model="varEditVisible" :env-id="selectedEnvId" />
+  <DataFactoryTagPicker
+    v-model="tagPickerVisible"
+    :project-id="proStore.projectInfo?.id"
+    @insert="onDfTagInsert"
+  />
 </template>
 
 <script setup>
@@ -243,11 +274,16 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import http from '@/api/index'
 import EnvVarQuickEdit from './EnvVarQuickEdit.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
+import ToolInsertButton from '@/components/ToolInsertButton.vue'
+import DataFactoryTagPicker from './DataFactoryTagPicker.vue'
+import { insertVarRef } from '@/utils/varInsert.js'
 import VariablePreviewPanel from '@/components/VariablePreviewPanel.vue'
 import CopyTextButton from '@/components/CopyTextButton.vue'
 import CopyablePre from '@/components/CopyablePre.vue'
 import JsonTextarea from '@/components/JsonTextarea.vue'
 import HeaderEditorPanel from '@/components/HeaderEditorPanel.vue'
+import WsStepsEditor from './WsStepsEditor.vue'
+import ApiTestFilePicker from '@/components/ApiTestFilePicker.vue'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -262,9 +298,22 @@ const activeTab = ref('params')
 const responseTab = ref('body')
 const loading = ref(false)
 const response = ref(null)
+const wsSteps = ref([])
 const customBaseUrl = ref('')
 const selectedEnvId = ref(null)
 const varEditVisible = ref(false)
+const tagPickerVisible = ref(false)
+
+async function onDfTagInsert(refStr) {
+  const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
+  const name = m ? m[1] : refStr
+  const result = await insertVarRef(name)
+  if (result?.ok) {
+    ElMessage.success(result.mode === 'copy' ? `已复制 ${refStr}，请粘贴` : `已插入 ${refStr}`)
+  } else {
+    ElMessage.warning('请先将光标放入请求参数输入框')
+  }
+}
 
 // 当前选中的环境
 const selectedEnv = computed(() => {
@@ -275,8 +324,11 @@ const selectedEnv = computed(() => {
 const previewSamples = computed(() => {
   const samples = []
   if (request.url) samples.push(String(request.url))
+  wsSteps.value.forEach(s => { if (s.message) samples.push(String(s.message)) })
   return samples
 })
+
+const isWsApi = computed(() => (request.protocol || props.api?.protocol) === 'websocket')
 
 const responseBodyText = computed(() => {
   if (!response.value) return ''
@@ -362,7 +414,7 @@ function validateBeforeSend(fullUrl) {
     return false
   }
 
-  const isAbsolute = /^https?:\/\//i.test(fullUrl)
+  const isAbsolute = /^(https?|wss?):\/\//i.test(fullUrl)
   if (!selectedEnvId.value && !isAbsolute) {
     if (request.base_url === 'custom' && customBaseUrl.value?.trim()) {
       return true
@@ -374,6 +426,7 @@ function validateBeforeSend(fullUrl) {
 }
 
 const request = reactive({
+  protocol: 'http',
   method: 'GET',
   url: '',
   base_url: '',
@@ -459,6 +512,7 @@ const mapBodyFields = (fields) =>
 
 const applyApiToRequest = (val) => {
   if (!val) return
+  request.protocol = val.protocol || 'http'
   request.method = val.method || 'GET'
   request.url = val.path || ''
   request.base_url = val.base_url || ''
@@ -467,9 +521,12 @@ const applyApiToRequest = (val) => {
   request.body = val.body ?? null
   request.body_fields = mapBodyFields(val.body_fields)
   request.body_type = val.body_type || 'json'
+  wsSteps.value = (val.ws_config?.steps || []).map(s => ({ ...s }))
   syncBodyText()
   if (request.body_type === 'form-data') {
     activeTab.value = 'body'
+  } else if (request.protocol === 'websocket') {
+    activeTab.value = 'ws-steps'
   }
 }
 
@@ -503,7 +560,6 @@ const handleClosed = () => {
   response.value = null
   customBaseUrl.value = ''
   request.base_url = ''
-  formFileInputs.value = []
   request.body_fields = []
   bodyText.value = ''
 }
@@ -516,10 +572,8 @@ const removeParam = (index) => {
   request.params.splice(index, 1)
 }
 
-const formFileInputs = ref([])
-
-const setFormFileInput = (el, index) => {
-  if (el) formFileInputs.value[index] = el
+const onFormFieldFileUpdate = (index, patch) => {
+  Object.assign(request.body_fields[index], patch)
 }
 
 const addFormField = () => {
@@ -533,30 +587,6 @@ const addFormField = () => {
     file_bucket: '',
     description: ''
   })
-}
-
-const triggerFormFilePick = (index) => {
-  const input = formFileInputs.value[index]
-  input?.click()
-}
-
-const handleFormFileChange = async (event, index) => {
-  const file = event.target.files?.[0]
-  if (!file) return
-  try {
-    const res = await http.apiModuleApi.uploadBodyFile(file)
-    const data = res.data
-    request.body_fields[index].file_name = data.file_name
-    request.body_fields[index].mime_type = data.mime_type || file.type || 'application/octet-stream'
-    request.body_fields[index].file_bucket = data.file_bucket
-    request.body_fields[index].file_key = data.file_key
-    request.body_fields[index].value = ''
-    ElMessage.success('文件上传成功')
-  } catch (error) {
-    ElMessage.error('文件上传失败: ' + (error.response?.data?.detail || error.message))
-  } finally {
-    event.target.value = ''
-  }
 }
 
 const removeFormField = (index) => {
@@ -636,6 +666,57 @@ const sendRequest = async () => {
     if (res.status === 200) {
       response.value = res.data
       responseTab.value = 'body'
+    }
+  } catch (error) {
+    ElMessage.error(extractApiErrorMessage(error))
+  } finally {
+    loading.value = false
+  }
+}
+
+const sendWsRequest = async () => {
+  if (!request.url) {
+    ElMessage.warning('请输入 WebSocket URL 或路径')
+    return
+  }
+
+  const baseUrl = request.base_url === 'custom' ? customBaseUrl.value : request.base_url
+  let fullUrl = request.url
+  if (baseUrl) {
+    const cleanBase = baseUrl.replace(/\/$/, '')
+    const cleanPath = request.url.replace(/^\//, '')
+    fullUrl = cleanBase + '/' + cleanPath
+  }
+  if (!validateBeforeSend(fullUrl)) return
+
+  loading.value = true
+  try {
+    const res = await http.apiModuleApi.debugWs({
+      url: fullUrl,
+      headers: request.headers,
+      steps: wsSteps.value,
+      timeout: 30,
+      env_id: selectedEnvId.value || undefined,
+      project_id: proStore.projectInfo?.id || undefined,
+    })
+    if (res.status === 200) {
+      const data = res.data
+      response.value = {
+        status_code: data.success ? 101 : 0,
+        headers: {},
+        body: data.messages,
+        time: data.elapsed_ms || 0,
+        size: JSON.stringify(data.messages || []).length,
+        ws_error: data.error,
+        ws_assertions: data.assertions || [],
+        response_body: data.response_body,
+      }
+      responseTab.value = 'body'
+      if (data.error) {
+        ElMessage.error(data.error)
+      } else if (!data.success) {
+        ElMessage.warning('WebSocket 执行完成，但断言未全部通过')
+      }
     }
   } catch (error) {
     ElMessage.error(extractApiErrorMessage(error))

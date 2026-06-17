@@ -131,6 +131,25 @@ def compute_section_coverage(
         for sid in ids:
             if sid in all_ids:
                 covered.add(sid)
+
+    # 子章节均已覆盖时，父章节视为已覆盖（避免「选未覆盖」误勾选整棵子树）
+    children_map: dict[str, list[str]] = {}
+    for sec in all_sections:
+        sid = sec.get("id")
+        pid = sec.get("parent_id")
+        if sid and pid:
+            children_map.setdefault(pid, []).append(sid)
+    changed = True
+    while changed:
+        changed = False
+        for sid in all_ids:
+            if sid in covered:
+                continue
+            kids = [k for k in children_map.get(sid, []) if k in all_ids]
+            if kids and all(k in covered for k in kids):
+                covered.add(sid)
+                changed = True
+
     uncovered = [s for s in all_sections if s.get("id") not in covered]
     return {
         "total": len(all_ids),

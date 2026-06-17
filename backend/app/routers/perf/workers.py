@@ -6,7 +6,19 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from tortoise.transactions import in_transaction
+
 from app.models.perf import PerfWorker, PerfRecord
+from app.core.perf_trace import append_request_detail
+from app.routers.perf.perf_state import _running_progress
+from app.routers.perf.progress_utils import compute_running_progress
+from app.routers.perf.case_agg_utils import (
+    merge_case_aggregation,
+    finalize_case_aggregation,
+    strip_rt_samples_from_case_aggregations,
+)
+
+ERROR_RATE_AUTO_STOP_MSG = "错误率连续3秒超过阈值，已自动停止"
 
 # 前端用 router（继承 perf_router 的认证依赖）
 router = APIRouter(prefix="/workers", tags=["性能测试Worker节点"])
@@ -32,12 +44,18 @@ class WorkerHeartbeatRequest(BaseModel):
     current_record_id: Optional[int] = None
 
 
+class WorkerUnregisterRequest(BaseModel):
+    token: str
+    host: str
+
+
 class WorkerReportData(BaseModel):
     worker_id: int
     token: str
     timestamp: int  # 秒级时间戳
     qps: float = 0
     avg_rt: float = 0
+    p95_rt: float = 0
     error_rate: float = 0
     active_users: int = 0
     total_req: int = 0
@@ -69,6 +87,8 @@ class WorkerFinalReport(BaseModel):
     error_breakdown: dict = {}
     case_aggregations: dict = {}
     time_series_data: list = []
+    phase_metrics: dict = {}
+    request_details: list = []
 
 
 # ========== 内存中的分布式聚合数据 ==========
@@ -79,6 +99,29 @@ _worker_reports: dict = {}
 _task_queue: dict = {}
 # 任务事件: {worker_id: asyncio.Event}
 _task_events: dict = {}
+
+_final_merge_locks: dict[int, asyncio.Lock] = {}
+
+
+def _get_final_merge_lock(record_id: int) -> asyncio.Lock:
+    if record_id not in _final_merge_locks:
+        _final_merge_locks[record_id] = asyncio.Lock()
+    return _final_merge_locks[record_id]
+
+
+def _worker_assigned_to_record(worker: PerfWorker, record: PerfRecord) -> bool:
+    if worker.current_record_id == record.id:
+        return True
+    dist = record.distribution_info if isinstance(record.distribution_info, dict) else {}
+    for item in dist.get("workers") or []:
+        if item.get("worker_id") == worker.id:
+            return True
+    return False
+
+
+async def _assert_worker_assigned(worker: PerfWorker, record: PerfRecord) -> None:
+    if not _worker_assigned_to_record(worker, record):
+        raise HTTPException(status_code=403, detail="Worker 未参与该压测任务")
 
 
 def _get_worker_reports(record_id: int):
@@ -117,11 +160,14 @@ async def register_worker(req: WorkerRegisterRequest, project_id: int = Query(..
     ).order_by("-id").first()
 
     if existing:
+        was_executing = existing.status == "busy" or bool(existing.current_record_id)
         existing.name = req.name
         existing.port = req.port or 0
         existing.max_concurrent = req.max_concurrent
         existing.status = "idle"
-        existing.current_record_id = None
+        # 执行中重连时不要清 current_record_id，否则平台会误判任务已结束并提前 finalize
+        if not was_executing:
+            existing.current_record_id = None
         existing.last_heartbeat = now
         await existing.save()
         # 清理历史重复注册（同机多次启动留下的脏数据）
@@ -162,6 +208,43 @@ async def worker_heartbeat(req: WorkerHeartbeatRequest):
     await worker.save()
 
     return {"message": "心跳成功"}
+
+
+@public_router.get("/records/{record_id}/stop-check", summary="Worker 查询是否应停止压测")
+async def worker_stop_check(
+    record_id: int,
+    worker_id: int = Query(...),
+    token: str = Query(...),
+):
+    worker = await PerfWorker.get_or_none(id=worker_id)
+    if not worker or worker.token != token:
+        raise HTTPException(status_code=403, detail="Token 无效")
+    record = await PerfRecord.get_or_none(id=record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    await _assert_worker_assigned(worker, record)
+    should_stop = record.status in ("stopped", "failed", "success")
+    return {"should_stop": should_stop, "status": record.status}
+
+
+@public_router.post("/unregister", summary="Worker 主动下线")
+async def unregister_worker(req: WorkerUnregisterRequest, project_id: int = Query(...)):
+    """客户端下线时调用，立即将节点标记为离线（不再等待心跳超时）。"""
+    workers = await PerfWorker.filter(
+        project_id=project_id,
+        token=req.token,
+        host=req.host,
+    ).all()
+    if not workers:
+        return {"message": "未找到 Worker 记录", "count": 0}
+
+    stale = datetime.now() - timedelta(days=1)
+    for w in workers:
+        w.status = "idle"
+        w.current_record_id = None
+        w.last_heartbeat = stale
+        await w.save()
+    return {"message": "已下线", "count": len(workers)}
 
 
 @router.get("", summary="Worker 列表")
@@ -350,38 +433,48 @@ async def receive_worker_report(record_id: int, data: WorkerReportData):
     worker = await PerfWorker.get_or_none(id=data.worker_id)
     if not worker or worker.token != data.token:
         raise HTTPException(status_code=403, detail="Token 无效")
+    record = await PerfRecord.get_or_none(id=record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    await _assert_worker_assigned(worker, record)
     reports = _get_worker_reports(record_id)
     if data.worker_id not in reports:
         reports[data.worker_id] = []
     reports[data.worker_id].append(data.dict())
+
+    # 分布式压测期间将合并时序写入 DB，供前端轮询实时图表
+    if record.status == "running":
+        merged_ts = await merge_worker_time_series(record_id)
+        if merged_ts:
+            record.time_series_data = merged_ts
+            record.total_requests = sum(int(ts.get("qps") or 0) for ts in merged_ts)
+            record.success_count = sum(int(ts.get("success") or 0) for ts in merged_ts)
+            record.fail_count = sum(int(ts.get("fail") or 0) for ts in merged_ts)
+            latest = merged_ts[-1]
+            record.qps = latest.get("qps", 0)
+            record.avg_response_time = latest.get("avg_rt", 0)
+            record.error_rate = latest.get("error_rate", 0)
+            progress = compute_running_progress(record.config_snapshot or {}, merged_ts)
+            if progress:
+                _running_progress[record_id] = progress
+            await record.save()
+
     return {"message": "上报成功"}
 
 
-@public_router.post("/{record_id}/final", summary="接收 Worker 最终报告")
-async def receive_worker_final_report(record_id: int, data: WorkerFinalReport):
-    """Worker 执行完成后上报最终报告"""
-    worker = await PerfWorker.get_or_none(id=data.worker_id)
-    if not worker or worker.token != data.token:
-        raise HTTPException(status_code=403, detail="Token 无效")
-    record = await PerfRecord.get_or_none(id=record_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="记录不存在")
-
+def _merge_worker_final_into_record(record: PerfRecord, data: WorkerFinalReport) -> None:
     if not isinstance(record.error_breakdown, dict):
         record.error_breakdown = {}
 
-    # 累加到已有数据（支持多 Worker 累加）
     record.total_requests += data.total_requests
     record.success_count += data.success_count
     record.fail_count += data.fail_count
-
-    # 记录最大执行时长（QPS 在 finalize 时按 total_requests/duration 统一计算）
+    record.error_breakdown["_worker_final_count"] = int(record.error_breakdown.get("_worker_final_count") or 0) + 1
     record.duration = max(record.duration or 0, data.duration)
 
     if record.total_requests > 0:
         record.error_rate = round(record.fail_count / record.total_requests * 100, 2)
 
-    # 累加流量字节（finalize 时统一换算 KB/s）
     if isinstance(record.error_breakdown, dict):
         record.error_breakdown["_total_bytes_received"] = (
             record.error_breakdown.get("_total_bytes_received", 0) + data.total_bytes_received
@@ -390,7 +483,6 @@ async def receive_worker_final_report(record_id: int, data: WorkerFinalReport):
             record.error_breakdown.get("_total_bytes_sent", 0) + data.total_bytes_sent
         )
 
-    # 保存 Worker RT 统计用于最终聚合（从真实样本计算，比秒级反推准确）
     existing_rt_stats = []
     if isinstance(record.error_breakdown, dict):
         existing_rt_stats = record.error_breakdown.pop("_worker_rt_stats", [])
@@ -403,20 +495,17 @@ async def receive_worker_final_report(record_id: int, data: WorkerFinalReport):
         "p90": data.p90_response_time,
         "p95": data.p95_response_time,
         "p99": data.p99_response_time,
-        "std_dev": data.std_dev_response_time
+        "std_dev": data.std_dev_response_time,
     })
 
-    # 合并错误分类（兼容新的统一格式）
     existing_errors = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
     new_errors = data.error_breakdown or {}
 
-    # 合并全量状态码分布
     for key, val in (new_errors.get("status_code_distribution") or {}).items():
         existing_errors.setdefault("status_code_distribution", {})[key] = (
             existing_errors.get("status_code_distribution", {}).get(key, 0) + val
         )
 
-    # 合并直方图
     new_hist = new_errors.get("rt_histogram") or []
     if new_hist:
         merged_hist = existing_errors.get("rt_histogram") or []
@@ -428,24 +517,54 @@ async def receive_worker_final_report(record_id: int, data: WorkerFinalReport):
                 hist_map[h["label"]] = dict(h)
         existing_errors["rt_histogram"] = list(hist_map.values())
 
-    # by_status_code
     for key, val in (new_errors.get("by_status_code") or {}).items():
         existing_errors.setdefault("by_status_code", {})[key] = existing_errors.get("by_status_code", {}).get(key, 0) + val
-    # by_type
     for key, val in (new_errors.get("by_type") or {}).items():
         existing_errors.setdefault("by_type", {})[key] = existing_errors.get("by_type", {}).get(key, 0) + val
-    # failed_samples
+
     new_samples = (new_errors.get("failed_samples") or [])
     if new_samples:
         existing_samples = existing_errors.get("failed_samples", [])
         existing_samples.extend(new_samples)
         existing_errors["failed_samples"] = existing_samples[:50]
-    # 兼容旧版扁平格式（直接累加）
+
+    new_traces = (new_errors.get("request_traces") or [])
+    if new_traces:
+        existing_traces = existing_errors.get("request_traces", [])
+        existing_traces.extend(new_traces)
+        existing_errors["request_traces"] = existing_traces[:500]
+
+    new_journey = new_errors.get("journey_aggregations") or {}
+    if new_journey:
+        old_j = existing_errors.get("journey_aggregations") or {}
+        merged_j = {
+            "total_journeys": old_j.get("total_journeys", 0) + new_journey.get("total_journeys", 0),
+            "success_journeys": old_j.get("success_journeys", 0) + new_journey.get("success_journeys", 0),
+            "fail_journeys": old_j.get("fail_journeys", 0) + new_journey.get("fail_journeys", 0),
+            "phases": dict(old_j.get("phases") or {}),
+        }
+        tj = merged_j["total_journeys"]
+        merged_j["journey_success_rate"] = round(merged_j["success_journeys"] / tj * 100, 2) if tj else 0
+        for pk, pv in (new_journey.get("phases") or {}).items():
+            if pk not in merged_j["phases"]:
+                merged_j["phases"][pk] = dict(pv)
+            else:
+                op = merged_j["phases"][pk]
+                op["total"] = op.get("total", 0) + pv.get("total", 0)
+                op["success"] = op.get("success", 0) + pv.get("success", 0)
+                op["fail"] = op.get("fail", 0) + pv.get("fail", 0)
+                op["error_rate"] = round(op["fail"] / op["total"] * 100, 2) if op.get("total") else 0
+        existing_errors["journey_aggregations"] = merged_j
+
     for key, val in new_errors.items():
         if key in (
-            "by_status_code", "by_type", "failed_samples",
-            "status_code_distribution", "rt_histogram",
+            "by_status_code", "by_type", "failed_samples", "request_traces",
+            "status_code_distribution", "rt_histogram", "journey_aggregations",
         ):
+            continue
+        if key == "stop_reason":
+            if val and not existing_errors.get("stop_reason"):
+                existing_errors["stop_reason"] = val
             continue
         if isinstance(val, int):
             existing_errors[key] = existing_errors.get(key, 0) + val
@@ -457,46 +576,74 @@ async def receive_worker_final_report(record_id: int, data: WorkerFinalReport):
     existing_errors["_worker_rt_stats"] = existing_rt_stats
     record.error_breakdown = existing_errors
 
-    # 合并接口维度聚合
-    import numpy as np
     existing_cases = record.case_aggregations or {}
     new_cases = data.case_aggregations or {}
     for case_id, new_agg in new_cases.items():
-        if case_id not in existing_cases:
-            existing_cases[case_id] = new_agg
-        else:
-            old = existing_cases[case_id]
-            old["total"] = old.get("total", 0) + new_agg.get("total", 0)
-            old["success"] = old.get("success", 0) + new_agg.get("success", 0)
-            old["fail"] = old.get("fail", 0) + new_agg.get("fail", 0)
-            # 合并 RT 数据并重新计算聚合指标
-            old_rts = []
-            # 尝试从 old 的各百分位字段反推近似样本（兜底）
-            if "rts" in old:
-                old_rts = old.pop("rts")
-            elif old.get("avg_rt"):
-                old_rts = [old.get("avg_rt", 0)] * old.get("total", 0)
-            new_rts = new_agg.get("rts", [])
-            if not new_rts and new_agg.get("avg_rt"):
-                new_rts = [new_agg.get("avg_rt", 0)] * new_agg.get("total", 0)
-            merged_rts = old_rts + new_rts
-            if merged_rts:
-                old["avg_rt"] = round(sum(merged_rts) / len(merged_rts), 2)
-                old["min_rt"] = round(min(merged_rts), 2)
-                old["max_rt"] = round(max(merged_rts), 2)
-                old["median_rt"] = round(float(np.median(merged_rts)), 2)
-                old["p90_rt"] = round(float(np.percentile(merged_rts, 90)), 2)
-                old["p95_rt"] = round(float(np.percentile(merged_rts, 95)), 2)
-                old["p99_rt"] = round(float(np.percentile(merged_rts, 99)), 2)
-                old["std_dev"] = round(float(np.std(merged_rts)), 2)
-            old["error_rate"] = round(old["fail"] / old["total"] * 100, 2) if old["total"] > 0 else 0
+        cid = str(case_id)
+        merged_raw = merge_case_aggregation(existing_cases.get(cid), new_agg)
+        existing_cases[cid] = finalize_case_aggregation(merged_raw, keep_samples=True)
     record.case_aggregations = existing_cases
 
-    # 时序以秒级上报内存聚合为准；仅在没有秒级上报时用最终报告中的时序兜底
-    if data.time_series_data and not _get_worker_reports(record_id):
-        record.time_series_data = data.time_series_data
+    if data.request_details:
+        existing_details = record.request_details or []
+        for detail in data.request_details:
+            append_request_detail(existing_details, detail)
+        record.request_details = existing_details
+    if data.phase_metrics or data.request_details:
+        from app.core.stream_phase import aggregate_phase_metrics, extract_stream_detail, normalize_stream_profile
+        normalized = [extract_stream_detail(d) for d in (record.request_details or [])]
+        record.request_details = normalized
+        profile = normalize_stream_profile(record.config_snapshot or {})
+        record.phase_metrics = aggregate_phase_metrics(
+            normalized,
+            parser_id=profile.get("parser_id", ""),
+            phase_schema=normalized[0].get("phase_schema") if normalized else [],
+        )
 
-    await record.save()
+    if data.time_series_data:
+        bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
+        finals = bd.get("_worker_final_time_series") or []
+        finals.append(list(data.time_series_data))
+        bd["_worker_final_time_series"] = finals
+        record.error_breakdown = bd
+
+
+@public_router.post("/{record_id}/final", summary="接收 Worker 最终报告")
+async def receive_worker_final_report(record_id: int, data: WorkerFinalReport):
+    """Worker 执行完成后上报最终报告"""
+    worker = await PerfWorker.get_or_none(id=data.worker_id)
+    if not worker or worker.token != data.token:
+        raise HTTPException(status_code=403, detail="Token 无效")
+
+    async with _get_final_merge_lock(record_id):
+        async with in_transaction():
+            record = await PerfRecord.select_for_update().get_or_none(id=record_id)
+            if not record:
+                raise HTTPException(status_code=404, detail="记录不存在")
+            await _assert_worker_assigned(worker, record)
+
+            bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
+            merged_ids = bd.get("_merged_worker_ids") or []
+            if data.worker_id in merged_ids:
+                return {"message": "已处理"}
+            merged_ids.append(data.worker_id)
+            bd["_merged_worker_ids"] = merged_ids
+            record.error_breakdown = bd
+
+            # 秒级上报运行期间已把 total/success/fail 写入 record；
+            # 最终报告按 Worker 累加，首个最终报告到达前需清零，避免与秒级汇总重复计数。
+            if len(merged_ids) == 1:
+                record.total_requests = 0
+                record.success_count = 0
+                record.fail_count = 0
+
+            _merge_worker_final_into_record(record, data)
+            _refresh_record_summary_metrics(record)
+            worker_db = await PerfWorker.select_for_update().get(id=data.worker_id)
+            worker_db.current_record_id = None
+            worker_db.status = "idle"
+            await worker_db.save()
+            await record.save()
     return {"message": "最终报告接收成功"}
 
 
@@ -530,7 +677,8 @@ def _recompute_rt_from_case_aggregations(record: PerfRecord) -> None:
     p90s, p95s, p99s, medians, stds = [], [], [], [], []
     for agg in cases.values():
         t = agg.get("total", 0)
-        if t <= 0 or not agg.get("avg_rt"):
+        avg_rt = agg.get("avg_rt")
+        if t <= 0 or avg_rt is None:
             continue
         weighted.append((agg["avg_rt"], t))
         mins.append(agg.get("min_rt", 0))
@@ -551,6 +699,39 @@ def _recompute_rt_from_case_aggregations(record: PerfRecord) -> None:
     record.p95_response_time = round(sum(p * t for p, (_, t) in zip(p95s, weighted)) / w, 2)
     record.p99_response_time = round(sum(p * t for p, (_, t) in zip(p99s, weighted)) / w, 2)
     record.std_dev_response_time = round(sum(s * t for s, (_, t) in zip(stds, weighted)) / w, 2)
+
+
+def _apply_worker_rt_stats_to_record(record: PerfRecord, *, pop_temp: bool = False) -> None:
+    """从 Worker 最终报告累加的 RT 统计回填 record 顶栏延迟指标"""
+    bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
+    rt_stats = bd.get("_worker_rt_stats") or []
+    if not rt_stats:
+        return
+    total_weight = sum(s["total"] for s in rt_stats)
+    if total_weight <= 0:
+        return
+    record.avg_response_time = round(sum(s["avg"] * s["total"] for s in rt_stats) / total_weight, 2)
+    record.min_response_time = round(min(s["min"] for s in rt_stats), 2)
+    record.max_response_time = round(max(s["max"] for s in rt_stats), 2)
+    record.median_response_time = round(sum(s["median"] * s["total"] for s in rt_stats) / total_weight, 2)
+    record.p90_response_time = round(sum(s["p90"] * s["total"] for s in rt_stats) / total_weight, 2)
+    record.p95_response_time = round(sum(s["p95"] * s["total"] for s in rt_stats) / total_weight, 2)
+    record.p99_response_time = round(sum(s["p99"] * s["total"] for s in rt_stats) / total_weight, 2)
+    record.std_dev_response_time = round(sum(s["std_dev"] * s["total"] for s in rt_stats) / total_weight, 2)
+    if pop_temp:
+        bd.pop("_worker_rt_stats", None)
+        record.error_breakdown = bd
+
+
+def _refresh_record_summary_metrics(record: PerfRecord, *, pop_rt_temp: bool = False) -> None:
+    """回填 record 顶栏 QPS / 延迟（Worker 最终报告或 finalize 时调用）"""
+    _apply_worker_rt_stats_to_record(record, pop_temp=pop_rt_temp)
+    if record.avg_response_time is None or record.avg_response_time <= 0:
+        _recompute_rt_from_case_aggregations(record)
+    dur = record.duration or 0
+    total_req = record.total_requests or 0
+    if dur > 0 and total_req > 0:
+        record.qps = round(total_req / dur, 2)
 
 
 async def merge_worker_time_series(record_id: int) -> list:
@@ -577,7 +758,6 @@ async def merge_worker_time_series(record_id: int) -> list:
                     "fail": 0,
                     "_rt_weight": 0,
                     "_p95_weight": 0,
-                    "_error_count": 0
                 }
             m = merged[ts]
             # 以每秒请求数为准（qps 字段即该秒请求量），避免累计 total_req 参与合并
@@ -598,19 +778,73 @@ async def merge_worker_time_series(record_id: int) -> list:
                     ) / (m["_p95_weight"] + sec_req)
                     m["_p95_weight"] += sec_req
                 m["_rt_weight"] += sec_req
-            m["_error_count"] += int(dp.get("error_rate", 0) * sec_req / 100) if sec_req > 0 else 0
 
     # 计算错误率
     for m in merged.values():
         total = m["total_req"]
-        m["error_rate"] = round(m["_error_count"] / total * 100, 2) if total > 0 else 0
+        m["error_rate"] = round(m["fail"] / total * 100, 2) if total > 0 else 0
         if m.get("_p95_weight", 0) <= 0 and m.get("avg_rt"):
             m["p95_rt"] = m["avg_rt"]
         m.pop("_rt_weight", None)
         m.pop("_p95_weight", None)
-        m.pop("_error_count", None)
 
     # 按时间戳排序
+    return sorted(merged.values(), key=lambda x: x["timestamp"])
+
+
+def merge_time_series_lists(series_list: list) -> list:
+    """合并多个 Worker 最终报告中的时序点（秒级上报缺失时的兜底）。"""
+    if not series_list:
+        return []
+    merged = {}
+    for series in series_list:
+        if not series:
+            continue
+        for dp in series:
+            ts = dp.get("timestamp")
+            if ts is None:
+                continue
+            if ts not in merged:
+                merged[ts] = {
+                    "timestamp": ts,
+                    "qps": 0,
+                    "avg_rt": 0,
+                    "p95_rt": 0,
+                    "error_rate": 0,
+                    "active_users": 0,
+                    "total_req": 0,
+                    "success": 0,
+                    "fail": 0,
+                    "_rt_weight": 0,
+                    "_p95_weight": 0,
+                }
+            m = merged[ts]
+            sec_req = int(dp.get("qps") or dp.get("total_req") or 0)
+            m["qps"] += sec_req
+            m["total_req"] += sec_req
+            m["success"] += int(dp.get("success") or 0)
+            m["fail"] += int(dp.get("fail") or 0)
+            m["active_users"] += dp.get("active_users", 0)
+            if sec_req > 0:
+                m["avg_rt"] = (
+                    m["avg_rt"] * m["_rt_weight"] + dp.get("avg_rt", 0) * sec_req
+                ) / (m["_rt_weight"] + sec_req)
+                p95_val = dp.get("p95_rt")
+                if p95_val is not None:
+                    m["p95_rt"] = (
+                        m["p95_rt"] * m["_p95_weight"] + p95_val * sec_req
+                    ) / (m["_p95_weight"] + sec_req)
+                    m["_p95_weight"] += sec_req
+                m["_rt_weight"] += sec_req
+
+    for m in merged.values():
+        total = m["total_req"]
+        m["error_rate"] = round(m["fail"] / total * 100, 2) if total > 0 else 0
+        if m.get("_p95_weight", 0) <= 0 and m.get("avg_rt"):
+            m["p95_rt"] = m["avg_rt"]
+        m.pop("_rt_weight", None)
+        m.pop("_p95_weight", None)
+
     return sorted(merged.values(), key=lambda x: x["timestamp"])
 
 
@@ -623,50 +857,45 @@ async def finalize_distributed_record(record_id: int):
     # 合并时序数据
     merged_ts = await merge_worker_time_series(record_id)
 
+    bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
+    final_ts_lists = bd.pop("_worker_final_time_series", None)
+    if not merged_ts and final_ts_lists:
+        merged_ts = merge_time_series_lists(final_ts_lists)
+
     # 如果秒级上报为空，回退到最终报告中已合并的 time_series_data
     if not merged_ts and record.time_series_data:
         merged_ts = record.time_series_data
 
+    record.error_breakdown = bd
     record.time_series_data = merged_ts
-
-    # 从 Worker 累加的 RT 统计计算最终整体指标（比秒级反推准确）
-    rt_stats = (record.error_breakdown or {}).get("_worker_rt_stats", [])
-    if rt_stats:
-        total_weight = sum(s["total"] for s in rt_stats)
-        if total_weight > 0:
-            record.avg_response_time = round(sum(s["avg"] * s["total"] for s in rt_stats) / total_weight, 2)
-            record.min_response_time = round(min(s["min"] for s in rt_stats), 2)
-            record.max_response_time = round(max(s["max"] for s in rt_stats), 2)
-            record.median_response_time = round(sum(s["median"] * s["total"] for s in rt_stats) / total_weight, 2)
-            record.p90_response_time = round(sum(s["p90"] * s["total"] for s in rt_stats) / total_weight, 2)
-            record.p95_response_time = round(sum(s["p95"] * s["total"] for s in rt_stats) / total_weight, 2)
-            record.p99_response_time = round(sum(s["p99"] * s["total"] for s in rt_stats) / total_weight, 2)
-            record.std_dev_response_time = round(sum(s["std_dev"] * s["total"] for s in rt_stats) / total_weight, 2)
-        # 清理临时数据
-        if isinstance(record.error_breakdown, dict):
-            record.error_breakdown.pop("_worker_rt_stats", None)
 
     # 请求数以 Worker 最终报告为准；仅未收到最终报告时用秒级时序回填
     if merged_ts and (record.total_requests or 0) == 0:
-        record.total_requests = sum(ts["total_req"] for ts in merged_ts)
-        record.success_count = sum(ts["success"] for ts in merged_ts)
-        record.fail_count = sum(ts["fail"] for ts in merged_ts)
+        record.total_requests = sum(int(ts.get("qps") or ts.get("total_req") or 0) for ts in merged_ts)
+        record.success_count = sum(int(ts.get("success") or 0) for ts in merged_ts)
+        record.fail_count = sum(int(ts.get("fail") or 0) for ts in merged_ts)
 
     if not record.duration and merged_ts:
         record.duration = max(ts["timestamp"] for ts in merged_ts) + 1
 
     _reconcile_request_counts(record)
+    _refresh_record_summary_metrics(record, pop_rt_temp=True)
 
-    dur = record.duration or 0
-    total_req = record.total_requests or 0
-    if dur > 0 and total_req > 0:
-        record.qps = round(total_req / dur, 2)
+    if record.case_aggregations:
+        record.case_aggregations = strip_rt_samples_from_case_aggregations(record.case_aggregations)
 
-    if not (record.avg_response_time or 0):
-        _recompute_rt_from_case_aggregations(record)
-
-    # 状态判定：有失败即 failed（和本地执行保持一致）
-    if record.error_rate and record.error_rate > 0:
+    # 状态判定：保留用户手动停止；有失败即 failed（和本地执行保持一致）
+    bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
+    if record.status == "stopped":
+        pass
+    elif bd.get("stop_reason") == ERROR_RATE_AUTO_STOP_MSG:
+        record.status = "stopped"
+    elif (record.total_requests or 0) == 0 and (record.distribution_info or {}).get("is_distributed"):
+        record.status = "failed"
+        if not bd.get("stop_reason"):
+            bd["stop_reason"] = "未收到 Worker 最终报告或总请求数为 0"
+        record.error_breakdown = bd
+    elif record.error_rate and record.error_rate > 0:
         record.status = "failed"
     else:
         record.status = "success"
@@ -675,6 +904,8 @@ async def finalize_distributed_record(record_id: int):
     bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
     total_recv = bd.pop("_total_bytes_received", 0)
     total_sent = bd.pop("_total_bytes_sent", 0)
+    bd.pop("_worker_final_count", None)
+    bd.pop("_merged_worker_ids", None)
     dur = record.duration or 0
     if dur > 0:
         record.received_kb_per_sec = round(total_recv / 1024 / dur, 2)
@@ -686,6 +917,8 @@ async def finalize_distributed_record(record_id: int):
 
     # 清理内存数据
     _clear_worker_reports(record_id)
+    _final_merge_locks.pop(record_id, None)
+    _running_progress.pop(record_id, None)
 
     # 更新 Worker 状态为 idle
     workers = await PerfWorker.filter(current_record_id=record_id).all()

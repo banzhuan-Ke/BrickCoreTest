@@ -65,4 +65,40 @@ export const dataFactoryApi = {
     testDbAssertions(data) {
         return apiPost('/api-module/data-factory/db-assertions/test', data)
     },
+    getToolsCatalog(params) {
+        return apiGet('/api-module/data-factory/tools/catalog', { params })
+    },
+    getInlineToolsCatalog() {
+        return apiGet('/api-module/data-factory/tools/inline-catalog')
+    },
+    executeTool(data) {
+        return apiPost('/api-module/data-factory/tools/execute', data)
+    },
+    listToolRecords(params) {
+        return apiGet('/api-module/data-factory/tool-records', { params })
+    },
+    listToolTags(params) {
+        return apiGet('/api-module/data-factory/tool-records/tags', { params })
+    },
+    createToolRecord(data) {
+        return apiPost('/api-module/data-factory/tool-records', data)
+    },
+    updateToolRecord(id, data) {
+        return apiPut(`/api-module/data-factory/tool-records/${id}`, data)
+    },
+    deleteToolRecord(id, params = {}) {
+        return apiDelete(`/api-module/data-factory/tool-records/${id}`, { params })
+    },
+    getToolRecordUsages(id) {
+        return apiGet(`/api-module/data-factory/tool-records/${id}/usages`)
+    },
+    listFavorites(params) {
+        return apiGet('/api-module/data-factory/favorites', { params })
+    },
+    addFavorite(projectId, data) {
+        return apiPost('/api-module/data-factory/favorites', data, { params: { project_id: projectId } })
+    },
+    removeFavorite(projectId, params) {
+        return apiDelete('/api-module/data-factory/favorites', { params: { project_id: projectId, ...params } })
+    },
 }

@@ -7,9 +7,10 @@ from app.schemas.sys import TestCatalogOut, TestCatalogCreate, TestCatalogUpdate
 from app.models.sys import TestCatalog, Project
 from app.models.ui import Case, Suite, Task
 from app.models.http import ApiDefinition, ApiTestCase, ApiTestSuite, ApiTestPlan
+from app.models.perf import PerfScene
 from app.core.auth import is_authenticated, require_permissions, get_current_username
 from app.core.permissions import MODULE_VIEW, MODULE_EDIT
-from app.core.catalog_utils import build_catalog_tree, resolve_catalog
+from app.core.catalog_utils import build_catalog_tree, resolve_catalog, apply_catalog_filter
 
 router = APIRouter(prefix="/catalogs", tags=["测试目录"], dependencies=[Depends(is_authenticated)])
 
@@ -47,6 +48,9 @@ def _counts_to_row_fields(
     ui_case_counts: Dict[int, int],
     ui_suite_counts: Dict[int, int],
     api_suite_counts: Dict[int, int],
+    ui_task_counts: Dict[int, int],
+    api_plan_counts: Dict[int, int],
+    perf_scene_counts: Dict[int, int],
 ) -> dict:
     api_n = api_counts.get(catalog_id, 0)
     case_n = case_counts.get(catalog_id, 0)
@@ -57,11 +61,17 @@ def _counts_to_row_fields(
         "case_count": case_n,
         "ui_case_count": ui_case_n,
         "suite_count": suite_n,
+        "ui_task_count": ui_task_counts.get(catalog_id, 0),
+        "api_plan_count": api_plan_counts.get(catalog_id, 0),
+        "perf_scene_count": perf_scene_counts.get(catalog_id, 0),
         "api_defs": api_n,
         "api_cases": case_n,
         "ui_cases": ui_case_n,
         "ui_suites": ui_suite_counts.get(catalog_id, 0),
         "api_suites": api_suite_counts.get(catalog_id, 0),
+        "ui_tasks": ui_task_counts.get(catalog_id, 0),
+        "api_plans": api_plan_counts.get(catalog_id, 0),
+        "perf_scenes": perf_scene_counts.get(catalog_id, 0),
     }
 
 
@@ -81,9 +91,13 @@ async def _attach_counts_to_catalog_rows(flat: List[dict], project_id: Optional[
     ui_case_counts = await _count_by_catalog(Case, catalog_ids, project_id)
     ui_suite_counts = await _count_by_catalog(Suite, catalog_ids, project_id)
     api_suite_counts = await _count_by_catalog(ApiTestSuite, catalog_ids, project_id)
+    ui_task_counts = await _count_by_catalog(Task, catalog_ids, project_id)
+    api_plan_counts = await _count_by_catalog(ApiTestPlan, catalog_ids, project_id)
+    perf_scene_counts = await _count_by_catalog(PerfScene, catalog_ids, project_id)
     for item in flat:
         item.update(_counts_to_row_fields(
             item["id"], api_counts, case_counts, ui_case_counts, ui_suite_counts, api_suite_counts,
+            ui_task_counts, api_plan_counts, perf_scene_counts,
         ))
 
 
@@ -93,19 +107,67 @@ async def _get_asset_counts(catalog_id: int) -> dict:
     ui_case_n = await Case.filter(catalog_id=catalog_id, is_del=False).count()
     ui_suite_n = await Suite.filter(catalog_id=catalog_id, is_del=False).count()
     api_suite_n = await ApiTestSuite.filter(catalog_id=catalog_id, is_del=False).count()
+    ui_task_n = await Task.filter(catalog_id=catalog_id, is_del=False).count()
+    api_plan_n = await ApiTestPlan.filter(catalog_id=catalog_id, is_del=False).count()
+    perf_scene_n = await PerfScene.filter(catalog_id=catalog_id, is_del=False).count()
     return {
         "api_count": api_n,
         "case_count": case_n,
         "ui_case_count": ui_case_n,
         "suite_count": ui_suite_n + api_suite_n,
+        "ui_task_count": ui_task_n,
+        "api_plan_count": api_plan_n,
+        "perf_scene_count": perf_scene_n,
         "ui_cases": ui_case_n,
         "ui_suites": ui_suite_n,
         "api_defs": api_n,
         "api_cases": case_n,
         "api_suites": api_suite_n,
-        "ui_tasks": await Task.filter(catalog_id=catalog_id, is_del=False).count(),
-        "api_plans": await ApiTestPlan.filter(catalog_id=catalog_id, is_del=False).count(),
+        "ui_tasks": ui_task_n,
+        "api_plans": api_plan_n,
+        "perf_scenes": perf_scene_n,
     }
+
+
+def _asset_row(asset_type: str, row_id: int, name: str, username: str, create_time, api_id: int | None = None) -> dict:
+    return {
+        "id": row_id,
+        "name": name,
+        "asset_type": asset_type,
+        "username": username or "—",
+        "create_time": create_time,
+        "api_id": api_id,
+    }
+
+
+async def _list_catalog_assets(catalog_id: int, project_id: int, include_children: bool) -> List[dict]:
+    items: List[dict] = []
+
+    async def fetch(model):
+        qs = model.filter(is_del=False)
+        if hasattr(model, "project_id"):
+            qs = qs.filter(project_id=project_id)
+        qs = await apply_catalog_filter(qs, project_id, catalog_id, include_children=include_children)
+        return await qs.order_by("-id")
+
+    for case in await fetch(Case):
+        items.append(_asset_row("ui_case", case.id, case.name, case.username, case.create_time))
+    for suite in await fetch(Suite):
+        items.append(_asset_row("ui_suite", suite.id, suite.name, suite.username, suite.create_time))
+    for task in await fetch(Task):
+        items.append(_asset_row("ui_task", task.id, task.name, task.username, task.create_time))
+    for api in await fetch(ApiDefinition):
+        items.append(_asset_row("api_def", api.id, api.name, api.create_by, api.create_time))
+    for case in await fetch(ApiTestCase):
+        items.append(_asset_row("api_case", case.id, case.name, case.create_by, case.create_time, api_id=case.api_id))
+    for suite in await fetch(ApiTestSuite):
+        items.append(_asset_row("api_suite", suite.id, suite.name, suite.create_by, suite.create_time))
+    for plan in await fetch(ApiTestPlan):
+        items.append(_asset_row("api_plan", plan.id, plan.name, plan.create_by, plan.create_time))
+    for scene in await fetch(PerfScene):
+        items.append(_asset_row("perf_scene", scene.id, scene.name, scene.create_by, scene.create_time))
+
+    return items
 
 
 @router.post("", summary="创建目录", status_code=status.HTTP_201_CREATED, response_model=TestCatalogOut,
@@ -157,6 +219,20 @@ async def list_catalogs(
     return build_catalog_tree(flat)
 
 
+@router.get("/{catalog_id}/assets", summary="目录关联资产列表", status_code=status.HTTP_200_OK,
+            dependencies=[Depends(require_permissions(MODULE_VIEW))])
+async def list_catalog_assets(
+    catalog_id: int,
+    project_id: int = Query(..., description="项目ID"),
+    include_children: bool = Query(False, description="是否包含子目录资产"),
+):
+    catalog = await TestCatalog.get_or_none(id=catalog_id, project_id=project_id, is_del=False)
+    if not catalog:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="目录不存在或已被删除")
+    items = await _list_catalog_assets(catalog_id, project_id, include_children)
+    return {"items": items, "total": len(items)}
+
+
 @router.get("/{catalog_id}", summary="目录详情", status_code=status.HTTP_200_OK,
             dependencies=[Depends(require_permissions(MODULE_VIEW))])
 async def get_catalog_detail(catalog_id: int):
@@ -203,6 +279,7 @@ async def delete_catalog(catalog_id: int):
     await ApiTestCase.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
     await ApiTestSuite.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
     await ApiTestPlan.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
+    await PerfScene.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
 
     catalog.is_del = True
     await catalog.save()

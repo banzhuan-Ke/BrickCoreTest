@@ -29,7 +29,7 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="变量值" min-width="220">
+        <el-table-column label="变量值" min-width="200">
           <template #default="{ row, $index }">
             <el-input
               v-model="varList[$index].value"
@@ -39,6 +39,24 @@
               placeholder="支持 faker.random_int(min=1,max=99)"
               @blur="syncFromTable"
             />
+          </template>
+        </el-table-column>
+        <el-table-column label="描述" min-width="160" show-overflow-tooltip>
+          <template #default="{ row, $index }">
+            <el-tooltip
+              :content="varList[$index].description"
+              placement="top"
+              :disabled="!varList[$index].description || row._rawObject"
+              :show-after="300"
+            >
+              <el-input
+                v-model="varList[$index].description"
+                size="small"
+                placeholder="用途说明，插入变量时可查看"
+                :disabled="row._rawObject"
+                @blur="syncFromTable"
+              />
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column label="敏感" width="72" align="center">
@@ -224,7 +242,7 @@ function onModeChange(nextMode) {
 }
 
 function addRow() {
-  varList.value.push({ key: '', value: '', secret: false })
+  varList.value.push({ key: '', value: '', description: '', secret: false, _rawObject: false })
 }
 
 function removeRow(index) {
@@ -239,7 +257,7 @@ function insertBuiltin(key) {
     row.key = row.key || key
     row.value = expr
   } else {
-    varList.value.push({ key, value: expr, secret: false })
+    varList.value.push({ key, value: expr, description: '', secret: false, _rawObject: false })
   }
   syncFromTable()
 }

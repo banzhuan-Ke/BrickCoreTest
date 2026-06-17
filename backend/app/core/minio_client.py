@@ -13,6 +13,7 @@ from app.core.config import (
     API_FILE_BUCKET,
     MINIO_CONFIG,
     STORAGE_TYPE,
+    UI_TEST_FILE_BUCKET,
 )
 
 logger = logging.getLogger(__name__)
@@ -211,7 +212,7 @@ class MinioClient:
     def ensure_default_buckets(self) -> list[str]:
         """启动时确保平台默认 bucket 存在（Runner 截图 / API 附件 / AI 需求）。"""
         created: list[str] = []
-        for name in {self.bucket_name, self.api_file_bucket, AI_REQUIREMENT_BUCKET}:
+        for name in {self.bucket_name, self.api_file_bucket, AI_REQUIREMENT_BUCKET, UI_TEST_FILE_BUCKET}:
             if name and self._ensure_bucket(name):
                 created.append(name)
         if created:

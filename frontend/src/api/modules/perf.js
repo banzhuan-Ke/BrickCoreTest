@@ -5,6 +5,19 @@ import http from '../request'
  * 对应后端 /perf/* 接口
  */
 
+// ========== 流式阶段解析器 ==========
+export const perfStreamParserApi = {
+    async getList() {
+        return await http.get('/perf/stream-parsers', { silent403: true })
+    },
+    async getPreset(parser_id) {
+        return await http.get(`/perf/stream-parsers/${parser_id}/preset`)
+    },
+    async test(data) {
+        return await http.post('/perf/stream-parsers/test', data)
+    }
+}
+
 // ========== 性能测试场景管理 ==========
 export const perfSceneApi = {
     // 获取场景列表
@@ -54,8 +67,11 @@ export const perfSceneApi = {
 // ========== 性能测试执行 ==========
 export const perfExecApi = {
     // 启动压测
-    async start(scene_id, env_id, use_workers = false) {
-        return await http.post(`/perf/exec/${scene_id}?env_id=${env_id}&use_workers=${use_workers}`)
+    async start(scene_id, env_id, use_workers = false, request_detail_level = 'brief') {
+        const level = request_detail_level === 'full' ? 'full' : 'brief'
+        return await http.post(
+            `/perf/exec/${scene_id}?env_id=${env_id}&use_workers=${use_workers}&request_detail_level=${level}`
+        )
     },
     // 停止压测
     async stop(record_id) {
@@ -81,6 +97,10 @@ export const perfRecordApi = {
     async getReport(record_id) {
         return await http.get(`/perf/records/${record_id}/report`)
     },
+    // 分页获取请求明细（流式 / HTTP，支持状态筛选）
+    async getRequestItems(record_id, params = {}) {
+        return await http.get(`/perf/records/${record_id}/request-items`, { params })
+    },
     // 批量删除记录
     async batchDelete(record_ids) {
         return await http.post('/perf/records/batch-delete', record_ids)
@@ -88,6 +108,12 @@ export const perfRecordApi = {
     // 导出性能测试报告
     async exportReport(record_id) {
         return await http.get(`/perf/records/${record_id}/export`, {
+            responseType: 'blob'
+        })
+    },
+    // 导出 SSE 阶段压测 Excel
+    async exportExcel(record_id) {
+        return await http.get(`/perf/records/${record_id}/export-excel`, {
             responseType: 'blob'
         })
     },

@@ -2,6 +2,7 @@
 UI 步骤定位器自愈（MCP snapshot + 文本 LLM）
 """
 import logging
+import re
 from typing import Any, Optional
 
 from app.core.ai_prompts import PromptManager
@@ -21,6 +22,68 @@ HEALABLE_METHODS = frozenset({
     "kw_assert_checked", "kw_assert_empty", "kw_assert_editable", "kw_assert_focused",
     "extract_text", "extract_attribute",
 })
+
+
+def _extract_text_from_locator(locator: str) -> Optional[str]:
+    """从定位表达式中提取目标可见文案（用于校验是否缩小了匹配范围）。"""
+    locator = (locator or "").strip()
+    if not locator:
+        return None
+    if locator.startswith("get_by_text="):
+        return locator[len("get_by_text="):].strip()
+    if locator.startswith("get_by_role="):
+        parts = locator[len("get_by_role="):].split(",", 1)
+        if len(parts) > 1:
+            return parts[1].strip()
+    m = re.search(r':has-text\("([^"]+)"\)', locator)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _extract_target_from_step_desc(step_desc: str) -> Optional[str]:
+    """从步骤描述中提取用户意图点击/操作的目标文案。"""
+    step_desc = (step_desc or "").strip()
+    if not step_desc:
+        return None
+    for pattern in (
+        r"点击['「]([^'」]+)['」]",
+        r"悬停到\s*['「]([^'」]+)['」]",
+        r"双击['「]([^'」]+)['」]",
+        r"点击\s+(.+?)(?:\s*按钮|\s*链接|$)",
+        r"点击\s*(\S+)",
+    ):
+        m = re.search(pattern, step_desc)
+        if m:
+            target = m.group(1).strip()
+            if target:
+                return target
+    return None
+
+
+def _reject_shortened_text_match(
+    *,
+    failed_locator: str,
+    new_locator: str,
+    step_desc: Optional[str],
+) -> Optional[str]:
+    """若新定位器把目标文案缩短（如 基础设置→设置），返回拒绝原因。"""
+    failed_text = _extract_text_from_locator(failed_locator)
+    new_text = _extract_text_from_locator(new_locator)
+    if not new_text:
+        return None
+
+    desc_target = _extract_target_from_step_desc(step_desc or "")
+    for expected in (desc_target, failed_text):
+        if not expected or expected == new_text:
+            continue
+        if expected in new_text or new_text in expected:
+            if len(new_text) < len(expected) and new_text != expected:
+                return (
+                    f"新定位器「{new_locator}」比步骤意图「{expected}」匹配范围更小，"
+                    "可能点到页面上其他相似按钮"
+                )
+    return None
 
 
 def _extract_json_object(text: str) -> dict:
@@ -121,6 +184,20 @@ async def heal_locator(
         return {
             "success": False,
             "reason": "建议定位器与原定位器相同",
+            "locator": new_locator,
+            "raw_response": raw,
+            "tokens_used": tokens,
+        }
+
+    shorten_reason = _reject_shortened_text_match(
+        failed_locator=failed_locator,
+        new_locator=new_locator,
+        step_desc=step_desc,
+    )
+    if shorten_reason:
+        return {
+            "success": False,
+            "reason": shorten_reason,
             "locator": new_locator,
             "raw_response": raw,
             "tokens_used": tokens,

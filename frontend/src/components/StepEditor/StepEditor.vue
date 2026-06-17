@@ -27,6 +27,7 @@
             @delete="deleteStep(index)"
             @add-branch="addBranch(index)"
             @delete-branch="deleteBranch(index, $event)"
+            @expand-fragment="onExpandFragment"
           />
         </div>
       </VueDraggable>
@@ -47,17 +48,28 @@
       @save="handleStepSave"
       @cancel="handleStepCancel"
     />
+
+    <FragmentRefEditDialog
+      v-model="fragmentDialogVisible"
+      :step="editingFragmentStep"
+      @save="handleFragmentSave"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, provide } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
 import { Plus } from '@element-plus/icons-vue'
 import StepItem from './StepItem.vue'
 import StepEditDialog from './StepEditDialog.vue'
+import FragmentRefEditDialog from './FragmentRefEditDialog.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { generateStepId } from '@/utils/stepHelper'
+import { generateStepId, normalizeExpandedFragmentSteps } from '@/utils/stepHelper'
+import { uiFragmentApi } from '@/api/modules/ui'
+import { ProjectStore } from '@/stores/module/ProjectStore'
+
+const proStore = ProjectStore()
 
 const props = defineProps({
   steps: {
@@ -79,13 +91,81 @@ const dialogVisible = ref(false)
 const editingStep = ref(null)
 const editingIndex = ref(-1)
 const isNewStep = ref(false) // 标记是否是新增步骤
+const fragmentDialogVisible = ref(false)
+const editingFragmentStep = ref(null)
+const editingFragmentIndex = ref(-1)
+const fragmentOnSave = ref(null)
+
+provide('fragmentRefEdit', (step, onSave) => {
+  editingFragmentStep.value = JSON.parse(JSON.stringify(step))
+  editingFragmentIndex.value = -1
+  fragmentOnSave.value = onSave
+  fragmentDialogVisible.value = true
+})
+
+provide('expandFragmentStep', async (refStep, onReplace) => {
+  const fid = refStep?.params?.fragment_id
+  const projectId = proStore.projectInfo?.id
+  const name = refStep?.params?.fragment_name || refStep?.desc || '片段'
+  if (!fid || !projectId) {
+    ElMessage.warning('片段信息不完整，无法展开')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定将片段「${name}」展开为普通步骤吗？\n\n展开后此处将变为可独立编辑的步骤，且无法恢复为片段引用类型。`,
+      '展开为普通步骤',
+      {
+        confirmButtonText: '确定展开',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+  try {
+    const res = await uiFragmentApi.previewExpand(fid, {
+      project_id: projectId,
+      variables: refStep.params?.variables || {},
+      steps: [refStep],
+    })
+    const expanded = normalizeExpandedFragmentSteps(res.data?.data?.expanded_steps || [])
+    if (!expanded.length) {
+      ElMessage.warning('片段内没有可展开的步骤')
+      return
+    }
+    onReplace(expanded)
+    ElMessage.success(`已展开为 ${expanded.length} 个普通步骤`)
+  } catch (e) {
+    const detail = e?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' ? detail : detail?.message || '展开失败')
+  }
+})
 
 // 打开编辑弹窗
 function openEditDialog(step, index) {
+  if (step?.method === 'fragment_ref') {
+    editingFragmentStep.value = JSON.parse(JSON.stringify(step))
+    editingFragmentIndex.value = index
+    fragmentOnSave.value = null
+    fragmentDialogVisible.value = true
+    return
+  }
   editingStep.value = { ...step }
   editingIndex.value = index
   isNewStep.value = false
   dialogVisible.value = true
+}
+
+function handleFragmentSave(updatedStep) {
+  if (fragmentOnSave.value) {
+    fragmentOnSave.value(updatedStep)
+    fragmentOnSave.value = null
+  } else if (editingFragmentIndex.value >= 0) {
+    updateStep(editingFragmentIndex.value, updatedStep)
+  }
+  fragmentDialogVisible.value = false
 }
 
 function onDebugStep(index) {
@@ -160,6 +240,12 @@ function onDragEnd() {
 function updateStep(index, newStep) {
   const steps = [...localSteps.value]
   steps[index] = { ...steps[index], ...newStep }
+  localSteps.value = steps
+}
+
+function onExpandFragment({ index, expanded }) {
+  const steps = [...localSteps.value]
+  steps.splice(index, 1, ...expanded)
   localSteps.value = steps
 }
 
@@ -274,11 +360,23 @@ function handleStepCancel() {
   padding: 10px;
   background: var(--el-fill-color-light);
   border-radius: 8px;
+  position: relative;
   
   &.is-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    .draggable-container {
+      min-height: 200px;
+      width: 100%;
+    }
+
+    .empty-tip {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
   }
 }
 

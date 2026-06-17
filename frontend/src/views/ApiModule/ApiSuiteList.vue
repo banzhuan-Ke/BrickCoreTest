@@ -38,12 +38,19 @@
     <!-- 套件列表 -->
     <el-table :data="suiteList" v-loading="loading" border @selection-change="handleSelectionChange">
       <el-table-column type="selection" width="50" align="center" />
-      <el-table-column type="index" width="50" />
+      <el-table-column type="index" :index="tableRowIndex" width="50" />
       <el-table-column prop="name" label="套件名称" min-width="150" show-overflow-tooltip />
       <el-table-column prop="catalog_name" label="所属目录" width="120" show-overflow-tooltip>
         <template #default="{ row }">{{ row.catalog_name || row.module_name || '—' }}</template>
       </el-table-column>
       <el-table-column prop="case_count" label="用例数" width="80" align="center" />
+      <el-table-column label="执行模式" width="100" align="center">
+        <template #default="{ row }">
+          <el-tag :type="row.parallel ? 'warning' : 'info'" size="small">
+            {{ row.parallel ? '并行' : '串行' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
       <el-table-column prop="create_by" label="创建人" width="100" />
       <el-table-column label="修改人" width="100">
@@ -143,6 +150,17 @@
             </el-form-item>
           </el-col>
         </el-row>
+
+        <el-form-item label="执行模式">
+          <el-switch
+            v-model="form.parallel"
+            active-text="并行执行"
+            inactive-text="串行执行"
+          />
+          <span class="hint-text" style="margin-left:12px;color:var(--el-text-color-secondary);font-size:12px">
+            串行模式下用例按序执行且提取变量可传递；并行模式下用例同时执行，变量不传递
+          </span>
+        </el-form-item>
         
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" />
@@ -289,6 +307,7 @@ import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import { getHttpResponseMs } from './utils/runTiming'
 import DbAssertionsEditor from './components/DbAssertionsEditor.vue'
 import { dataFactoryApi } from '@/api/modules/dataFactory'
+import { makeTableRowIndexRefs } from '@/utils/tableIndex'
 
 const route = useRoute()
 const router = useRouter()
@@ -302,6 +321,7 @@ const suiteList = ref([])
 const total = ref(0)
 const page = ref(1)
 const size = ref(20)
+const tableRowIndex = makeTableRowIndexRefs(page, size)
 const keyword = ref('')
 const catalogId = ref(null)
 const selectedSuites = ref([])
@@ -504,7 +524,7 @@ const handleSubmit = async () => {
   try {
     const data = {
       project_id: projectId.value,
-      ...form
+      ...form,
     }
     
     if (isEdit.value) {

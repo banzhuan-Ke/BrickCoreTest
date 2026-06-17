@@ -58,8 +58,7 @@ async def runner_engine_ready(
     update["status"] = "在线"
     update["is_del"] = False
     update["runner_last_heartbeat"] = datetime.now()
-    if item.client_version:
-        update["runner_client_version"] = item.client_version
+    # engine-ready 上报的是 RUNNER_ENGINE_VERSION，勿覆盖桌面客户端 runner_client_version
     await device.update_from_dict(update)
     await device.save()
     return {"ok": True, "device_id": device_id}

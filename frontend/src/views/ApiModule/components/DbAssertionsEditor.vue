@@ -2,7 +2,7 @@
   <div class="db-assertions-editor">
     <div class="toolbar">
       <el-button type="primary" size="small" icon="Plus" @click="addRow">添加断言</el-button>
-      <span class="tip">仅支持 SELECT；变量语法 <code v-pre>${{变量名}}</code></span>
+      <span class="tip">{{ tipText }}</span>
     </div>
     <el-table :data="modelValue" size="small" border class="config-table">
       <el-table-column label="名称" width="120">
@@ -10,21 +10,25 @@
           <el-input v-model="modelValue[$index].name" size="small" placeholder="断言名称" />
         </template>
       </el-table-column>
-      <el-table-column label="数据源" width="150">
+      <el-table-column label="数据源" width="160">
         <template #default="{ $index }">
           <el-select v-model="modelValue[$index].datasource_id" size="small" clearable placeholder="默认数据源" style="width: 100%">
-            <el-option v-for="ds in datasources" :key="ds.id" :label="ds.name" :value="ds.id" />
+            <el-option v-for="ds in datasources" :key="ds.id" :label="dsLabel(ds)" :value="ds.id" />
           </el-select>
         </template>
       </el-table-column>
-      <el-table-column label="SQL (SELECT)" min-width="220">
+      <el-table-column :label="sqlColumnLabel" min-width="260">
         <template #default="{ $index }">
-          <el-input v-model="modelValue[$index].sql" size="small" type="textarea" :rows="2" placeholder="SELECT count(*) AS cnt FROM user WHERE mobile='${{phone}}'" />
+          <MonacoEditor
+            v-model="modelValue[$index].sql"
+            language="sql"
+            height="100px"
+          />
         </template>
       </el-table-column>
       <el-table-column label="字段" width="90">
         <template #default="{ $index }">
-          <el-input v-model="modelValue[$index].field" size="small" placeholder="cnt" />
+          <el-input v-model="modelValue[$index].field" size="small" :placeholder="fieldPlaceholder($index)" />
         </template>
       </el-table-column>
       <el-table-column label="操作符" width="130">
@@ -49,6 +53,9 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
+import MonacoEditor from '@/components/MonacoEditor'
+
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
   datasources: { type: Array, default: () => [] },
@@ -68,6 +75,34 @@ const operators = [
   { label: '存在记录', value: 'exists' },
   { label: '不存在', value: 'not_exists' },
 ]
+
+const hasRedis = computed(() => (props.datasources || []).some((d) => (d.db_type || '').toLowerCase() === 'redis'))
+const hasPg = computed(() => (props.datasources || []).some((d) => (d.db_type || '').toLowerCase() === 'postgresql'))
+
+const tipText = computed(() => {
+  const parts = ['变量语法 ${{变量名}}']
+  if (hasRedis.value) parts.push('Redis 用 GET/HGET 等只读命令')
+  if (hasPg.value) parts.push('PostgreSQL 支持 SELECT')
+  else parts.push('MySQL/PostgreSQL 仅 SELECT')
+  return parts.join('；')
+})
+
+const sqlColumnLabel = computed(() => (hasRedis.value ? 'SQL / Redis 命令' : 'SQL (SELECT)'))
+
+function dsById(id) {
+  return (props.datasources || []).find((d) => d.id === id)
+}
+
+function dsLabel(ds) {
+  const t = (ds.db_type || 'mysql').toLowerCase()
+  const tag = { mysql: 'MySQL', postgresql: 'PG', redis: 'Redis' }[t] || t
+  return `${ds.name} [${tag}]`
+}
+
+function fieldPlaceholder(index) {
+  const ds = dsById(props.modelValue?.[index]?.datasource_id)
+  return (ds?.db_type || '').toLowerCase() === 'redis' ? '可选' : 'cnt'
+}
 
 function addRow() {
   const next = [...(props.modelValue || []), {

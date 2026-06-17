@@ -25,6 +25,18 @@
           <div class="stat-value">{{ summaryStats.suiteCount }}</div>
           <div class="stat-label">套件数</div>
         </div>
+        <div class="stat-card">
+          <div class="stat-value">{{ summaryStats.uiTaskCount }}</div>
+          <div class="stat-label">UI 计划</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">{{ summaryStats.apiPlanCount }}</div>
+          <div class="stat-label">接口计划</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">{{ summaryStats.perfSceneCount }}</div>
+          <div class="stat-label">性能场景</div>
+        </div>
       </div>
       <div class="catalog-page">
         <div class="catalog-sidebar">
@@ -59,17 +71,26 @@
             <el-table-column prop="parent_name" label="上级目录" min-width="120">
               <template #default="{ row }">{{ row.parent_name || '—' }}</template>
             </el-table-column>
-            <el-table-column label="接口数" width="90">
+            <el-table-column label="接口数" width="80">
               <template #default="{ row }">{{ row.api_count ?? 0 }}</template>
             </el-table-column>
-            <el-table-column label="用例数" width="90">
+            <el-table-column label="用例数" width="80">
               <template #default="{ row }">{{ row.case_count ?? 0 }}</template>
             </el-table-column>
-            <el-table-column label="套件数" width="90">
+            <el-table-column label="套件数" width="80">
               <template #default="{ row }">{{ row.suite_count ?? row.suites ?? 0 }}</template>
             </el-table-column>
-            <el-table-column label="UI用例" width="90">
+            <el-table-column label="UI用例" width="80">
               <template #default="{ row }">{{ row.ui_case_count ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column label="UI计划" width="80">
+              <template #default="{ row }">{{ row.ui_task_count ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column label="接口计划" width="90">
+              <template #default="{ row }">{{ row.api_plan_count ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column label="性能场景" width="90">
+              <template #default="{ row }">{{ row.perf_scene_count ?? 0 }}</template>
             </el-table-column>
             <el-table-column prop="username" label="创建人" width="100">
               <template #default="{ row }">{{ row.username || row.create_by || '—' }}</template>
@@ -90,37 +111,37 @@
     </template>
   </PageCard>
 
-  <el-drawer v-model="showAssets" :with-header="false" size="80%">
+  <el-drawer v-model="showAssets" :with-header="false" size="85%">
     <div class="drawer-header">
-      <div class="title">{{ currentCatalog?.name }} — 关联套件</div>
+      <div class="title">{{ currentCatalog?.name }} — 关联资产</div>
     </div>
     <div class="filter-bar">
-      <el-radio-group v-model="suiteTypeFilter" size="small" @change="filterSuites">
-        <el-radio-button label="all">全部</el-radio-button>
-        <el-radio-button label="web">Web</el-radio-button>
-        <el-radio-button label="api">接口</el-radio-button>
+      <el-radio-group v-model="assetGroupFilter" size="small" @change="filterAssets">
+        <el-radio-button label="all">全部 ({{ assetList.length }})</el-radio-button>
+        <el-radio-button label="web">Web ({{ assetCountByGroup.web }})</el-radio-button>
+        <el-radio-button label="api">接口 ({{ assetCountByGroup.api }})</el-radio-button>
+        <el-radio-button label="perf">性能 ({{ assetCountByGroup.perf }})</el-radio-button>
       </el-radio-group>
     </div>
     <el-table
-      :data="filteredSuiteList"
+      :data="filteredAssetList"
       style="width: calc(100% - 40px)"
       :header-cell-style="{'text-align':'center'}"
       :cell-style="{'text-align':'center'}"
       stripe
+      v-loading="assetsLoading"
     >
       <template #empty>
-        <el-empty description="暂无套件" />
+        <el-empty description="暂无资产" />
       </template>
       <el-table-column label="序号" type="index" width="70"/>
-      <el-table-column prop="name" label="套件名称"/>
-      <el-table-column prop="suite_type" label="套件类型" width="120">
-        <template #default="scope">
-          <el-tag v-if='scope.row.suite_type==="1" || scope.row.suite_type==="web"' type="success">Web</el-tag>
-          <el-tag v-else-if='scope.row.suite_type==="2" || scope.row.suite_type==="api"' type="primary">接口</el-tag>
-          <el-tag v-else type="info">未分类</el-tag>
+      <el-table-column prop="name" label="资产名称" min-width="180"/>
+      <el-table-column label="资产类型" width="120">
+        <template #default="{ row }">
+          <el-tag :type="row.typeTag" size="small">{{ row.typeLabel }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="username" label="创建人"/>
+      <el-table-column prop="username" label="创建人" width="110"/>
       <el-table-column prop="create_time" label="创建时间" min-width="160">
         <template #default="scope">
           {{ dateTools.rTime(scope.row.create_time) }}
@@ -128,7 +149,7 @@
       </el-table-column>
       <el-table-column label="操作" width="100">
         <template #default="scope">
-          <el-button @click="handleEditSuite(scope.row)" size="small" icon="Edit" plain type="primary">编辑</el-button>
+          <el-button @click="handleEditAsset(scope.row)" size="small" icon="Edit" plain type="primary">编辑</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -139,12 +160,23 @@
 import { ref, computed, watch } from 'vue'
 import { Grid } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
-import http from '@/api/index'
+import http from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import dateTools from '@/tools/dateTools'
 import PageCard from '@/components/PageCard.vue'
 import CatalogTree from '@/components/CatalogTree.vue'
 import { collectCatalogSubtreeIds } from '@/api/modules/catalog'
+
+const ASSET_TYPE_META = {
+  ui_case: { label: 'UI 用例', tag: 'success', group: 'web' },
+  ui_suite: { label: 'UI 套件', tag: 'success', group: 'web' },
+  ui_task: { label: 'UI 计划', tag: 'success', group: 'web' },
+  api_def: { label: '接口', tag: 'primary', group: 'api' },
+  api_case: { label: '接口用例', tag: 'primary', group: 'api' },
+  api_suite: { label: '接口套件', tag: 'primary', group: 'api' },
+  api_plan: { label: '接口计划', tag: 'primary', group: 'api' },
+  perf_scene: { label: '性能场景', tag: 'warning', group: 'perf' },
+}
 
 const router = useRouter()
 const proStore = ProjectStore()
@@ -190,6 +222,9 @@ const summaryStats = computed(() => {
     caseCount: rows.reduce((sum, row) => sum + (row.case_count ?? 0), 0),
     uiCaseCount: rows.reduce((sum, row) => sum + (row.ui_case_count ?? 0), 0),
     suiteCount: rows.reduce((sum, row) => sum + (row.suite_count ?? row.suites ?? 0), 0),
+    uiTaskCount: rows.reduce((sum, row) => sum + (row.ui_task_count ?? 0), 0),
+    apiPlanCount: rows.reduce((sum, row) => sum + (row.api_plan_count ?? 0), 0),
+    perfSceneCount: rows.reduce((sum, row) => sum + (row.perf_scene_count ?? 0), 0),
   }
 })
 
@@ -198,33 +233,94 @@ const handleCatalogChange = () => {
 }
 
 const showAssets = ref(false)
-const suiteList = ref([])
-const filteredSuiteList = ref([])
+const assetList = ref([])
+const filteredAssetList = ref([])
 const currentCatalog = ref(null)
-const suiteTypeFilter = ref('all')
+const assetGroupFilter = ref('all')
+const assetsLoading = ref(false)
 
-const filterSuites = () => {
-  if (suiteTypeFilter.value === 'all') {
-    filteredSuiteList.value = suiteList.value
+const assetCountByGroup = computed(() => ({
+  web: assetList.value.filter(a => a.group === 'web').length,
+  api: assetList.value.filter(a => a.group === 'api').length,
+  perf: assetList.value.filter(a => a.group === 'perf').length,
+}))
+
+const mapAsset = (item) => {
+  const meta = ASSET_TYPE_META[item.asset_type] || { label: '未知', tag: 'info', group: 'web' }
+  return {
+    id: item.id,
+    name: item.name,
+    assetType: item.asset_type,
+    typeLabel: meta.label,
+    typeTag: meta.tag,
+    group: meta.group,
+    username: item.username || item.create_by || '—',
+    create_time: item.create_time,
+    api_id: item.api_id,
+  }
+}
+
+const filterAssets = () => {
+  if (assetGroupFilter.value === 'all') {
+    filteredAssetList.value = assetList.value
   } else {
-    filteredSuiteList.value = suiteList.value.filter(suite => suite.suite_type === suiteTypeFilter.value)
+    filteredAssetList.value = assetList.value.filter(
+      asset => asset.group === assetGroupFilter.value
+    )
   }
 }
 
 const openAssets = async (catalog) => {
   currentCatalog.value = catalog
-  const response = await http.catalogApi.getDetail(catalog.id)
-  suiteList.value = response.data?.suites || []
-  suiteTypeFilter.value = 'all'
-  filterSuites()
   showAssets.value = true
+  assetsLoading.value = true
+  assetGroupFilter.value = 'all'
+  assetList.value = []
+
+  try {
+    const response = await http.catalogApi.getAssets(catalog.id, {
+      project_id: proStore.projectInfo.id,
+      include_children: false,
+    })
+    if (response.status === 200) {
+      assetList.value = (response.data?.items || []).map(mapAsset)
+    }
+    filterAssets()
+  } finally {
+    assetsLoading.value = false
+  }
 }
 
-const handleEditSuite = (suite) => {
-  if (suite.suite_type === 'api') {
-    router.push(`/api-suite/${suite.id}`)
-  } else {
-    router.push({ name: 'editSuite', params: { id: suite.id } })
+const handleEditAsset = (asset) => {
+  const id = String(asset.id)
+  switch (asset.assetType) {
+    case 'ui_case':
+      router.push({ name: 'editCase', params: { id } })
+      break
+    case 'ui_suite':
+      router.push({ name: 'editSuite', params: { id } })
+      break
+    case 'ui_task':
+      router.push({ name: 'editTask', params: { id } })
+      break
+    case 'api_def':
+      router.push({ name: 'apiModule', query: { api_id: id } })
+      break
+    case 'api_case':
+      router.push({
+        name: 'apiCase',
+        query: { api_id: String(asset.api_id || ''), edit_case_id: id },
+      })
+      break
+    case 'api_suite':
+      router.push({ name: 'apiSuiteDetail', params: { suiteId: id } })
+      break
+    case 'api_plan':
+      router.push({ name: 'apiPlanEdit', params: { planId: id } })
+      break
+    case 'perf_scene':
+      router.push(`/perf-scene/edit/${id}`)
+      break
   }
 }
 </script>
@@ -244,7 +340,7 @@ const handleEditSuite = (suite) => {
 
 .stat-card {
   flex: 1;
-  min-width: 120px;
+  min-width: 100px;
   padding: 12px 16px;
   border-radius: 8px;
   background: var(--el-fill-color-light);
@@ -278,6 +374,7 @@ const handleEditSuite = (suite) => {
 .catalog-table {
   flex: 1;
   min-width: 0;
+  overflow-x: auto;
 }
 
 .drawer-header {

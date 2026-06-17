@@ -183,10 +183,10 @@ class LLMClientFactory:
         if not api_base:
             api_base = DEFAULT_BASE_URLS.get(provider)
 
-        # 自动补全 /v1 后缀（OpenAI 兼容 API 需要）
+        # 自动补全版本后缀（OpenAI 兼容 API 通常为 /v1；讯飞 MaaS 等新服务使用 /v2）
         if api_base:
             api_base = api_base.rstrip("/")
-            if not api_base.endswith("/v1"):
+            if not api_base.endswith(("/v1", "/v2")):
                 api_base += "/v1"
 
         # 目前所有支持的供应商均使用 OpenAI 风格协议

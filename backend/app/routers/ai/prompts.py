@@ -49,8 +49,11 @@ async def list_prompts(
         })
 
     # 补充预置模板中尚未写入数据库的
-    for code, data in PromptManager.DEFAULT_TEMPLATES.items():
+    for code in PromptManager.DEFAULT_TEMPLATES:
         if code not in db_codes:
+            data = PromptManager._resolve_default_template(code)
+            if not data:
+                continue
             result.append({
                 "id": None,
                 "code": code,

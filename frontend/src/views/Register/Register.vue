@@ -91,37 +91,13 @@
               placeholder="请输入邮箱" 
               clearable/>
           </el-form-item>
-          <el-form-item prop="admin_username">
+          <el-form-item prop="invite_code">
             <el-input 
-              prefix-icon="User" 
-              v-model="registerFrom.admin_username"
+              prefix-icon="Ticket" 
+              v-model="registerFrom.invite_code"
               autocomplete="off" 
-              placeholder="请输入超管账号（必填）" 
+              placeholder="请输入邀请码（必填）" 
               clearable/>
-          </el-form-item>
-          <el-form-item prop="admin_password">
-            <el-input 
-              prefix-icon="Lock" 
-              :type="showPassword3 ? 'text' : 'password'" 
-              v-model="registerFrom.admin_password"
-              autocomplete="off" 
-              placeholder="请输入超管密码（必填）" 
-              clearable>
-              <template #suffix>
-                <el-icon @click="showPassword3 = !showPassword3" style="cursor: pointer;">
-                  <component :is="showPassword3 ? 'View':'Hide' "/>
-                </el-icon>
-              </template>
-            </el-input>
-          </el-form-item>
-          <el-form-item prop="roles">
-            <el-select 
-              v-model="registerFrom.roles" 
-              multiple 
-              placeholder="请选择关联角色（可选）"
-              clearable>
-              <el-option v-for="role in roleList" :key="role.id" :label="role.name" :value="role.id"/>
-            </el-select>
           </el-form-item>
           <div class="action-buttons">
             <el-button @click="resetForm(registerFormRef)" icon="CircleClose">
@@ -175,7 +151,6 @@ const router = useRouter()
 // 定义密码是否显示
 const showPassword1 = ref(false)
 const showPassword2 = ref(false)
-const showPassword3 = ref(false)
 // 登录的表单数据
 const registerFrom = reactive({
   id: 0,
@@ -185,16 +160,7 @@ const registerFrom = reactive({
   email: "",
   mobile: "",
   nickname: "",
-  is_superuser: false,
-  roles: [],
-  admin_username: "",
-  admin_password: ""
-})
-// 分页数据
-let pageConfig = reactive({
-  page: 1,
-  size: 10,
-  total: 0
+  invite_code: ""
 })
 // 校验账号密码
 const registerRules = reactive({
@@ -204,8 +170,7 @@ const registerRules = reactive({
   nickname: [{required: true, message: '用户昵称不能为空！', trigger: 'blur'}],
   mobile: [{required: true, message: '手机号不能为空！', trigger: 'blur'}],
   email: [{required: true, message: '用户邮箱不能为空！', trigger: 'blur'}],
-  admin_username: [{required: true, message: '超管账号不能为空！', trigger: 'blur'}],
-  admin_password: [{required: true, message: '超管密码不能为空！', trigger: 'blur'}],
+  invite_code: [{required: true, message: '邀请码不能为空！', trigger: 'blur'}],
 })
 
 // 表单引用对象
@@ -237,22 +202,9 @@ function registerSubmit(elFrom) {
     }
   })
 }
-// 获取角色列表方法
-const roleList = ref([])
-
-const getRoleList = async () => {
-  const response = await http.roleApi.getRoleList(pageConfig)
-  if (response.status === 200) {
-    pageConfig.total = response.data.total
-    roleList.value = response.data.data
-  }
-}
 // 挂载数据，初始化数据
 onMounted(async () => {
   await refreshPageLook()
-  if (uStore.token) {
-    await getRoleList().catch(() => {})
-  }
 })
 
 watch(() => uStore.uiTheme, () => {
@@ -266,7 +218,7 @@ function resetForm(elForm) {
 
 // 当账号密码等为空时，禁止点击注册按钮
 const isClick = computed(() => {
-  return !(registerFrom.username !== '' && registerFrom.password !== '' && registerFrom.password_confirm !== '' && registerFrom.nickname !== '' && registerFrom.mobile !== '' && registerFrom.email !== '' && registerFrom.admin_username !== '' && registerFrom.admin_password !== '')
+  return !(registerFrom.username !== '' && registerFrom.password !== '' && registerFrom.password_confirm !== '' && registerFrom.nickname !== '' && registerFrom.mobile !== '' && registerFrom.email !== '' && registerFrom.invite_code !== '')
 })
 </script>
 

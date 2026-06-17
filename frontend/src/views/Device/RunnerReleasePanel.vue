@@ -1,17 +1,14 @@
 <template>
-  <el-alert
-    v-if="loaded"
-    class="runner-release-alert"
-    type="info"
-    :closable="false"
-    show-icon
-  >
-    <template #title>
-      <span>BrickCore 执行器客户端</span>
-      <el-tag v-if="release.runner_client_version_latest" size="small" style="margin-left: 8px">
-        推荐版本 v{{ release.runner_client_version_latest }}
-      </el-tag>
-    </template>
+  <el-collapse v-if="loaded" v-model="activeNames" class="runner-release-panel">
+    <el-collapse-item name="release">
+      <template #title>
+        <span class="collapse-title">
+          BrickCore 执行器客户端
+          <el-tag v-if="release.runner_client_version_latest" size="small" type="success" style="margin-left: 8px">
+            推荐版本 v{{ release.runner_client_version_latest }}
+          </el-tag>
+        </span>
+      </template>
     <div class="release-body">
       <p v-if="hasAnyDownload">
         <template v-if="release.external_download_available">
@@ -56,7 +53,8 @@
         平台下载由浏览器下载管理器接管，可在地址栏下方或「下载」面板查看进度、暂停或取消；切换页面或刷新本页通常不会中断下载。
       </p>
     </div>
-  </el-alert>
+    </el-collapse-item>
+  </el-collapse>
 </template>
 
 <script setup>
@@ -69,6 +67,7 @@ import { UserStore } from '@/stores/module/UserStore'
 const router = useRouter()
 const uStore = UserStore()
 const loaded = ref(false)
+const activeNames = ref([])
 const release = ref({
   runner_client_version_latest: '',
   package_available: false,
@@ -150,8 +149,17 @@ onMounted(loadRelease)
 </script>
 
 <style scoped>
-.runner-release-alert {
+.runner-release-panel {
   margin-bottom: 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.collapse-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
 }
 .release-body p {
   margin: 0 0 10px;

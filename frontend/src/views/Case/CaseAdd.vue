@@ -88,33 +88,53 @@
               <el-option label="P3 - 低" value="P3" />
             </el-select>
           </el-form-item>
+
+          <el-form-item label="用例描述">
+            <el-input
+              v-model="caseInfo.description"
+              type="textarea"
+              :rows="4"
+              maxlength="4000"
+              show-word-limit
+              placeholder="可选：功能背景、操作路径与预期结果（供 AI 优化步骤使用）"
+            />
+          </el-form-item>
           
           <el-form-item label="创建人">
             <el-input v-model="caseInfo.username" disabled />
           </el-form-item>
         </el-form>
+
+        <CaseUsedVarsPanel :steps="caseInfo.steps" />
         
         <!-- AI 生成/录制步骤按钮 -->
         <div class="ai-gen-bar">
           <el-button type="warning" @click="aiDialogVisible = true" icon="MagicStick">🤖 AI 生成步骤</el-button>
           <el-button type="success" @click="recordDialogVisible = true" icon="VideoCamera">🎬 AI 录制步骤</el-button>
+          <el-button type="primary" plain @click="fragmentPickerVisible = true" icon="Collection">插入片段</el-button>
         </div>
 
         <!-- 步骤编辑器 -->
         <div class="steps-section">
           <div class="section-title">
             <span>执行步骤</span>
-            <VarInsertButton :show-env-edit="false" label="插入变量" />
-            <el-text type="info" size="small">拖拽左侧操作到此处；步骤参数可用 <code v-pre>${{变量名}}</code></el-text>
+            <el-text type="info" size="small">编辑步骤时在弹窗内插入变量/工具/标签</el-text>
           </div>
           <StepEditor v-model:steps="caseInfo.steps" />
         </div>
+
+        <FragmentPickerDialog v-model="fragmentPickerVisible" @insert="onFragmentInsert" />
 
         <!-- AI 生成弹窗 -->
         <UiCaseGenerator v-model="aiDialogVisible" @apply="handleAiApply" />
         
         <!-- AI 录制弹窗 -->
-        <UiCaseRecorder v-model="recordDialogVisible" @apply="handleAiApply" />
+        <UiCaseRecorder
+          v-model="recordDialogVisible"
+          :initial-description="recordingDescription"
+          :initial-url="recordingInitialUrl"
+          @apply="handleAiApply"
+        />
         
         <!-- 底部按钮 -->
         <div class="action-bar">
@@ -139,12 +159,14 @@ import { VueDraggable } from 'vue-draggable-plus'
 import { StepEditor } from '@/components/StepEditor'
 import UiCaseGenerator from '@/views/AI/components/UiCaseGenerator.vue'
 import UiCaseRecorder from '@/views/AI/components/UiCaseRecorder.vue'
-import VarInsertButton from '@/components/VarInsertButton.vue'
+import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
+import CaseUsedVarsPanel from '@/components/CaseUsedVarsPanel.vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
+import { resolveCaseDescriptionForContext, extractOpenUrlFromSteps, normalizeRecorderApplyPayload } from '@/utils/caseDescription.js'
 import { UserStore } from '@/stores/module/UserStore'
 import http from '@/api/index'
-import { ElNotification } from 'element-plus'
+import { ElNotification, ElMessage } from 'element-plus'
 import ActionGroup from '@/datas/ActionGroup.js'
 import {
   Rank, Check, Close,
@@ -154,7 +176,7 @@ import {
   FullScreen, View, Timer,
   ArrowDown, ArrowUp, Delete,
   Document, Edit, Clock, Search,
-  MessageBox, MoreFilled, Share
+  MessageBox, MoreFilled, Share, Collection
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -162,6 +184,8 @@ const router = useRouter()
 const proStore = ProjectStore()
 const varInsertEnvId = ref(proStore.envList[0]?.id || null)
 provide('varInsertEnvId', varInsertEnvId)
+const fragmentPickerVisible = ref(false)
+
 const userStore = UserStore()
 
 const formRef = ref()
@@ -208,6 +232,7 @@ const caseInfo = reactive({
   catalog_id: null,
   username: userStore.userInfo.username,
   project_id: proStore.projectInfo.id,
+  description: '',
   steps: [
     {
       id: `step_${Date.now()}`,
@@ -219,6 +244,9 @@ const caseInfo = reactive({
     }
   ]
 })
+
+const recordingDescription = computed(() => resolveCaseDescriptionForContext(caseInfo))
+const recordingInitialUrl = computed(() => extractOpenUrlFromSteps(caseInfo.steps))
 
 // 克隆关键字（拖拽时）
 function cloneKeyword(keyword) {
@@ -267,136 +295,30 @@ function goBack() {
 }
 
 // AI 生成步骤应用
-function handleAiApply(steps) {
-  if (steps && steps.length > 0) {
-    // 如果当前只有默认的打开浏览器步骤，则替换；否则追加
-    if (caseInfo.steps.length === 1 && caseInfo.steps[0].method === 'open_browser') {
-      caseInfo.steps = steps
-    } else {
-      caseInfo.steps = [...caseInfo.steps, ...steps]
-    }
+function onFragmentInsert(refStep) {
+  if (!refStep) return
+  caseInfo.steps = [...(caseInfo.steps || []), refStep]
+  ElMessage.success(`已插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
+}
+
+function handleAiApply(payload) {
+  const { steps, description: desc } = normalizeRecorderApplyPayload(payload)
+  if (!steps?.length) return
+  // 如果当前只有默认的打开浏览器步骤，则替换；否则追加
+  if (caseInfo.steps.length === 1 && caseInfo.steps[0].method === 'open_browser') {
+    caseInfo.steps = JSON.parse(JSON.stringify(steps))
+  } else {
+    caseInfo.steps = [...caseInfo.steps, ...JSON.parse(JSON.stringify(steps))]
+  }
+  if (desc) {
+    caseInfo.description = desc
+    ElNotification.success(`已应用 ${steps.length} 个步骤，并同步测试描述到用例描述`)
+  } else {
     ElNotification.success(`已应用 ${steps.length} 个步骤`)
   }
 }
 </script>
 
 <style scoped lang="scss">
-.case-edit-container {
-  height: calc(100vh - 50px);
-}
-
-.keyword-sidebar {
-  background: white;
-  border-right: 1px solid var(--el-border-color);
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.sidebar-header {
-  padding: 16px;
-  border-bottom: 1px solid var(--el-border-color);
-  flex-shrink: 0;
-  
-  h3 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 500;
-  }
-}
-
-.keyword-list {
-  flex: 1;
-  padding: 12px;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.keyword-items {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.keyword-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-  background: var(--el-fill-color-light);
-  border: 1px solid var(--el-border-color);
-  border-radius: 6px;
-  cursor: grab;
-  transition: all 0.2s;
-  
-  &:hover {
-    border-color: var(--el-color-primary);
-    background: var(--el-color-primary-light-9);
-  }
-  
-  &:active {
-    cursor: grabbing;
-  }
-  
-  .drag-icon {
-    margin-left: auto;
-    color: var(--el-text-color-secondary);
-  }
-}
-
-.case-main {
-  padding: 20px 20px 60px 20px;
-  background: var(--el-fill-color-light);
-  overflow-y: auto;
-  height: 100%;
-}
-
-.edit-card {
-  min-height: auto;
-  margin-bottom: 20px;
-}
-
-.card-header {
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--el-border-color);
-  
-  h2 {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 500;
-  }
-}
-
-.case-form {
-  max-width: 600px;
-}
-
-.steps-section {
-  margin-top: 24px;
-  
-  .section-title {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-    
-    span:first-child {
-      font-weight: 500;
-      font-size: 16px;
-    }
-  }
-}
-
-.action-bar {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid var(--el-border-color);
-  display: flex;
-  gap: 12px;
-}
-
-.draggable-source {
-  min-height: 200px;
-}
+@use '@/styles/case-step-editor-layout.scss';
 </style>

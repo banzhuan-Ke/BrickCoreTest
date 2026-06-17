@@ -1,0 +1,163 @@
+/* 用例/片段/套件编辑页 — 左侧关键字 + 右侧步骤编辑器 共用布局 */
+.case-edit-container {
+  height: calc(100vh - 50px);
+}
+
+.keyword-sidebar {
+  background: white;
+  border-right: 1px solid var(--el-border-color);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sidebar-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--el-border-color);
+  flex-shrink: 0;
+
+  h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 500;
+  }
+}
+
+.keyword-list {
+  flex: 1;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.keyword-collapse {
+  border: none;
+
+  :deep(.el-collapse-item__header) {
+    padding: 0 12px;
+    font-weight: 500;
+    border-bottom: 1px solid var(--el-border-color-light);
+  }
+
+  :deep(.el-collapse-item__content) {
+    padding: 8px;
+  }
+
+  :deep(.el-collapse-item__wrap) {
+    border-bottom: none;
+  }
+}
+
+.group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .el-icon {
+    color: var(--el-color-primary);
+  }
+}
+
+.keyword-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.keyword-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  cursor: grab;
+  transition: all 0.2s;
+  font-size: 13px;
+
+  &:hover {
+    border-color: var(--el-color-primary);
+    background: var(--el-color-primary-light-9);
+  }
+
+  &:active {
+    cursor: grabbing;
+  }
+
+  .el-icon:first-child {
+    color: var(--el-color-primary);
+    font-size: 14px;
+  }
+
+  .drag-icon {
+    margin-left: auto;
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+  }
+}
+
+.case-main {
+  padding: 20px 20px 60px 20px;
+  background: var(--el-fill-color-light);
+  overflow-y: auto;
+  height: 100%;
+}
+
+.edit-card {
+  min-height: auto;
+  margin-bottom: 20px;
+}
+
+.card-header {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--el-border-color);
+
+  h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 500;
+  }
+}
+
+.case-form {
+  max-width: 600px;
+}
+
+.ai-gen-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 16px 0 8px;
+}
+
+.steps-section {
+  margin-top: 24px;
+
+  .section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+
+    span:first-child {
+      font-weight: 500;
+      font-size: 16px;
+    }
+  }
+}
+
+.action-bar {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--el-border-color);
+  display: flex;
+  gap: 12px;
+}
+
+.draggable-source {
+  min-height: 200px;
+}

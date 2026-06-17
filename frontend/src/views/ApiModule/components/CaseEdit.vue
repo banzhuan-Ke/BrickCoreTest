@@ -109,27 +109,34 @@
         />
       </el-form-item>
 
+      <ApiCaseUsedVarsPanel :case-form="form" />
+
       <div class="var-toolbar">
-        <el-select
-          v-model="refEnvId"
-          placeholder="参考环境"
-          clearable
-          size="small"
-          style="width: 160px"
-        >
-          <el-option
-            v-for="env in proStore.envList"
-            :key="env.id"
-            :label="env.name"
-            :value="env.id"
+        <div class="var-toolbar-actions">
+          <el-select
+            v-model="refEnvId"
+            placeholder="参考环境"
+            clearable
+            size="small"
+            style="width: 160px"
+          >
+            <el-option
+              v-for="env in proStore.envList"
+              :key="env.id"
+              :label="env.name"
+              :value="env.id"
+            />
+          </el-select>
+          <VarInsertButton
+            :env-id="refEnvId"
+            :extra-vars="extractorVarNames"
+            hint-text="不含工厂标签；标签与内联工具请用右侧按钮。"
+            @edit-env-vars="envVarEditVisible = true"
           />
-        </el-select>
-        <VarInsertButton
-          :env-id="refEnvId"
-          :extra-vars="extractorVarNames"
-          @edit-env-vars="envVarEditVisible = true"
-        />
-        <span class="var-toolbar-hint">聚焦输入框后插入 <code v-pre>${{变量名}}</code>；选环境后可引用环境变量</span>
+          <ToolInsertButton :extra-vars="extractorVarNames" />
+          <el-button type="info" link size="small" @click="tagPickerVisible = true">数据工厂标签</el-button>
+        </div>
+        <span class="var-toolbar-hint">先点击下方输入框再插入；变量 <code v-pre>${{名}}</code> / 标签 <code v-pre>${{df:标签}}</code> / 工具 <code v-pre>${{dt:md5|text=@a}}</code></span>
       </div>
 
       <EnvVarQuickEdit v-model="envVarEditVisible" :env-id="refEnvId" />
@@ -188,6 +195,7 @@
           </template>
           <div class="section-actions">
             <el-button type="info" link size="small" @click="copyApiParams" :disabled="!form.api_id" icon="CopyDocument">从接口复制</el-button>
+            <el-button type="info" link size="small" @click="tagPickerVisible = true" icon="Collection">数据工厂标签</el-button>
             <el-button type="primary" link size="small" @click="addParam" icon="Plus">添加</el-button>
           </div>
           <el-table :data="form.request_params" size="small" border class="config-table">
@@ -286,11 +294,11 @@
               <el-table-column label="值 / 文件" min-width="280">
                 <template #default="{ $index }">
                   <div class="file-field-cell">
-                    <template v-if="form.request_body_fields[$index].field_type === 'file'">
-                      <el-button size="small" @click="triggerBodyFilePick($index)">选择并上传文件</el-button>
-                      <span v-if="form.request_body_fields[$index].file_name" class="file-meta-name">{{ form.request_body_fields[$index].file_name }}</span>
-                      <input :ref="(el) => setBodyFileInput(el, $index)" class="hidden-file-input" type="file" @change="(e) => handleBodyFileChange(e, $index)" />
-                    </template>
+                    <ApiTestFilePicker
+                      v-if="form.request_body_fields[$index].field_type === 'file'"
+                      :model-value="form.request_body_fields[$index]"
+                      @update:model-value="(v) => onBodyFieldFileUpdate($index, v)"
+                    />
                     <el-input v-else v-model="form.request_body_fields[$index].value" size="small" placeholder="文本值" />
                   </div>
                 </template>
@@ -318,6 +326,9 @@
           </div>
         </el-collapse-item>
       </el-collapse>
+
+      <div v-if="isWsApi" class="section-title"><span>WebSocket 步骤</span></div>
+      <WsStepsEditor v-if="isWsApi" v-model="form.ws_steps" />
       
       <!-- 断言配置 -->
       <div class="section-title">
@@ -352,6 +363,11 @@
               <el-option label="Header" value="header"/>
               <el-option label="包含" value="contains"/>
               <el-option label="不包含" value="not_contains"/>
+              <template v-if="isWsApi">
+                <el-option label="WS-消息包含" value="ws_contains"/>
+                <el-option label="WS-JSON路径" value="ws_json_path"/>
+                <el-option label="WS-消息条数" value="ws_message_count"/>
+              </template>
             </el-select>
           </template>
         </el-table-column>
@@ -699,10 +715,16 @@
       <el-button type="primary" @click="confirmAddGenerated" :disabled="genDialog.checkedItems.filter(v => v).length === 0">添加选中断言</el-button>
     </template>
   </el-dialog>
+
+  <DataFactoryTagPicker
+    v-model="tagPickerVisible"
+    :project-id="proStore.projectInfo?.id"
+    @insert="onDfTagInsert"
+  />
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, nextTick, onBeforeUpdate, provide } from 'vue'
+import { ref, reactive, computed, watch, nextTick, provide } from 'vue'
 import { ElMessage } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
@@ -710,11 +732,17 @@ import http from '@/api/index'
 
 import { catalogApi, buildCatalogTree } from '@/api/modules/catalog'
 import VarInsertButton from '@/components/VarInsertButton.vue'
+import ApiCaseUsedVarsPanel from '@/components/ApiCaseUsedVarsPanel.vue'
+import ToolInsertButton from '@/components/ToolInsertButton.vue'
 import EnvVarQuickEdit from './EnvVarQuickEdit.vue'
 import DbAssertionsEditor from './DbAssertionsEditor.vue'
 import AssertionGroupsEditor from './AssertionGroupsEditor.vue'
 import JsonTextarea from '@/components/JsonTextarea.vue'
 import HeaderEditorPanel from '@/components/HeaderEditorPanel.vue'
+import DataFactoryTagPicker from './DataFactoryTagPicker.vue'
+import WsStepsEditor from './WsStepsEditor.vue'
+import ApiTestFilePicker from '@/components/ApiTestFilePicker.vue'
+import { insertVarRef } from '@/utils/varInsert.js'
 import { buildAssertionsFromJson } from '@/utils/assertionSuggest'
 
 const props = defineProps({
@@ -744,6 +772,19 @@ const loadCatalogTree = async () => {
 }
 const formRef = ref()
 const saving = ref(false)
+const tagPickerVisible = ref(false)
+
+async function onDfTagInsert(refStr) {
+  const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
+  const name = m ? m[1] : refStr
+  const result = await insertVarRef(name)
+  if (result?.ok) {
+    ElMessage.success(result.mode === 'copy' ? `已复制 ${refStr}，请粘贴到输入框` : `已插入 ${refStr}`)
+    return
+  }
+  form.request_params.push({ name: '', value: refStr, type: 'string', required: false, description: '' })
+  ElMessage.success(`已添加到请求参数：${refStr}`)
+}
 const apiLoading = ref(false)
 const filteredApis = ref([])
 const activeCollapse = ref(['headers', 'params'])
@@ -800,7 +841,14 @@ const selectedApi = computed(() => {
 
 
 // 是否显示请求体覆盖区域
+const isWsApi = computed(() => {
+  if (selectedApi.value?.protocol === 'websocket') return true
+  if (props.data?.api_protocol === 'websocket') return true
+  return false
+})
+
 const showBodySection = computed(() => {
+  if (isWsApi.value) return false
   if (!selectedApi.value) return false
   const method = selectedApi.value.method?.toUpperCase()
   return ['POST', 'PUT', 'PATCH'].includes(method)
@@ -915,6 +963,7 @@ const form = reactive({
   request_body: '',
   request_body_type: 'json',
   request_body_fields: [],
+  ws_steps: [],
   assertions: [],
   assertion_groups: [],
   extractors: [],
@@ -944,6 +993,7 @@ const resetForm = () => {
   form.request_body = ''
   form.request_body_type = 'json'
   form.request_body_fields = []
+  form.ws_steps = []
   form.assertions = []
   form.assertion_groups = []
   assertionMode.value = 'flat'
@@ -1026,6 +1076,7 @@ watch(() => props.data, (val) => {
       file_bucket: f.file_bucket || '',
       description: f.description || ''
     })) : []
+    form.ws_steps = Array.isArray(val.ws_steps) ? val.ws_steps.map(s => ({ ...s })) : []
     form.assertions = val.assertions?.map(a => ({ ...a })) || []
     form.assertion_groups = Array.isArray(val.assertion_groups)
       ? val.assertion_groups.map(g => ({
@@ -1385,15 +1436,9 @@ const removeDataRow = (index) => {
   form.data_set.splice(index, 1)
 }
 
-const bodyFileInputs = ref([])
-
-const setBodyFileInput = (el, index) => {
-  if (el) bodyFileInputs.value[index] = el
+const onBodyFieldFileUpdate = (index, patch) => {
+  Object.assign(form.request_body_fields[index], patch)
 }
-
-onBeforeUpdate(() => {
-  bodyFileInputs.value = []
-})
 
 const addBodyField = () => {
   form.request_body_fields.push({
@@ -1422,30 +1467,6 @@ const onBodyFieldTypeChange = (index) => {
     field.file_bucket = ''
   } else {
     field.value = ''
-  }
-}
-
-const triggerBodyFilePick = (index) => {
-  const input = bodyFileInputs.value[index]
-  input?.click()
-}
-
-const handleBodyFileChange = async (event, index) => {
-  const file = event.target.files?.[0]
-  if (!file) return
-  try {
-    const res = await http.apiModuleApi.uploadBodyFile(file)
-    const data = res.data
-    form.request_body_fields[index].file_name = data.file_name
-    form.request_body_fields[index].mime_type = data.mime_type || file.type || 'application/octet-stream'
-    form.request_body_fields[index].file_bucket = data.file_bucket
-    form.request_body_fields[index].file_key = data.file_key
-    form.request_body_fields[index].value = ''
-    ElMessage.success('文件上传成功')
-  } catch (error) {
-    ElMessage.error('文件上传失败: ' + (error.response?.data?.detail || error.message))
-  } finally {
-    event.target.value = ''
   }
 }
 
@@ -1598,18 +1619,28 @@ const handleSave = async () => {
 
 .var-toolbar {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   margin-bottom: 12px;
   padding: 8px 12px;
   background: var(--el-fill-color-light);
   border-radius: 6px;
 }
 
+.var-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  width: 100%;
+  overflow-x: auto;
+}
+
 .var-toolbar-hint {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  line-height: 1.5;
 }
 
 .section-title {

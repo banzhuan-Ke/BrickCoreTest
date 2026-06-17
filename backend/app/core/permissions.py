@@ -35,6 +35,7 @@ UI_CRON_EDIT = "ui_cron:edit"
 
 # UI 执行记录
 UI_RECORD_VIEW = "ui_record:view"
+UI_RECORD_EDIT = "ui_record:edit"
 
 # 设备管理
 DEVICE_VIEW = "device:view"
@@ -105,6 +106,10 @@ MCP_CONFIG_EDIT = "mcp_config:edit"
 LOGIN_PAGE_CONFIG_VIEW = "login_page_config:view"
 LOGIN_PAGE_CONFIG_EDIT = "login_page_config:edit"
 
+# 平台全局设置
+PLATFORM_SETTINGS_VIEW = "platform_settings:view"
+PLATFORM_SETTINGS_EDIT = "platform_settings:edit"
+
 # 推送记录
 NOTIFICATION_LOG_VIEW = "notification_log:view"
 NOTIFICATION_LOG_EDIT = "notification_log:edit"
@@ -157,6 +162,7 @@ PERMISSIONS = [
             {"label": "定时任务-查看", "value": UI_CRON_VIEW},
             {"label": "定时任务-编辑", "value": UI_CRON_EDIT},
             {"label": "执行记录-查看", "value": UI_RECORD_VIEW},
+            {"label": "执行记录-编辑", "value": UI_RECORD_EDIT},
             {"label": "设备管理-查看", "value": DEVICE_VIEW},
             {"label": "设备管理-编辑", "value": DEVICE_EDIT},
         ]
@@ -223,6 +229,8 @@ PERMISSIONS = [
             {"label": "MCP配置-编辑", "value": MCP_CONFIG_EDIT},
             {"label": "登录页配置-查看", "value": LOGIN_PAGE_CONFIG_VIEW},
             {"label": "登录页配置-编辑", "value": LOGIN_PAGE_CONFIG_EDIT},
+            {"label": "平台设置-查看", "value": PLATFORM_SETTINGS_VIEW},
+            {"label": "平台设置-编辑", "value": PLATFORM_SETTINGS_EDIT},
             {"label": "推送记录-查看", "value": NOTIFICATION_LOG_VIEW},
             {"label": "推送记录-编辑", "value": NOTIFICATION_LOG_EDIT},
             {"label": "文档中心-查看", "value": DOCS_VIEW},
@@ -240,7 +248,7 @@ ALL_PERMISSIONS = [
     UI_SUITE_VIEW, UI_SUITE_EDIT, UI_SUITE_EXECUTE,
     UI_TASK_VIEW, UI_TASK_EDIT, UI_TASK_EXECUTE,
     UI_CRON_VIEW, UI_CRON_EDIT,
-    UI_RECORD_VIEW,
+    UI_RECORD_VIEW, UI_RECORD_EDIT,
     DEVICE_VIEW, DEVICE_EDIT,
     API_MANAGE_VIEW, API_MANAGE_EDIT,
     API_CASE_VIEW, API_CASE_EDIT, API_CASE_EXECUTE,
@@ -258,26 +266,23 @@ ALL_PERMISSIONS = [
     SMTP_CONFIG_VIEW, SMTP_CONFIG_EDIT,
     MCP_CONFIG_VIEW, MCP_CONFIG_EDIT,
     LOGIN_PAGE_CONFIG_VIEW, LOGIN_PAGE_CONFIG_EDIT,
+    PLATFORM_SETTINGS_VIEW, PLATFORM_SETTINGS_EDIT,
     NOTIFICATION_LOG_VIEW, NOTIFICATION_LOG_EDIT,
     DOCS_VIEW, DOCS_EDIT,
     PERF_SCENE_VIEW, PERF_SCENE_EDIT, PERF_SCENE_EXECUTE,
+    PERF_CRON_VIEW, PERF_CRON_EDIT,
+    PERF_WORKER_VIEW,
     PERF_RECORD_VIEW,
     AI_TEST_VIEW, AI_TEST_EXECUTE,
     AI_CONFIG_VIEW, AI_CONFIG_EDIT,
 ]
 
-
 async def get_user_permissions(user) -> list:
-    """获取用户合并后的权限列表（admin/管理员自动拥有全部权限）"""
-    from app.models.sys import Role
+    """获取用户合并后的权限列表。无角色返回空列表。"""
     roles = await user.roles.all()
     if not roles:
-        return ALL_PERMISSIONS
-    # admin/管理员角色自动拥有全部权限（兼容新增权限）
-    for role in roles:
-        if role.name and ("admin" in role.name.lower() or "管理" in role.name):
-            return ALL_PERMISSIONS
-    perms = set()
+        return []
+    perms: set[str] = set()
     for role in roles:
         perms.update(role.permissions or [])
-    return sorted(perms) if perms else ALL_PERMISSIONS
+    return sorted(perms)

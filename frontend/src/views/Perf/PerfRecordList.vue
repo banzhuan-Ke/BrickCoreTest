@@ -131,6 +131,7 @@
                 @click="handleStop(row)"
               >停止</el-button>
               <el-button
+                v-if="row.status !== 'running' && row.status !== 'pending'"
                 type="primary"
                 size="small"
                 :icon="Document"
@@ -284,7 +285,7 @@ const getModeType = (mode) => {
 }
 
 const getModeLabel = (mode) => {
-  const map = { fixed: '固定', loop: '循环', stepping: '梯度' }
+  const map = { fixed: '固定', loop: '循环', stepping: '梯度', stream_burst: '流式阶段', sse_burst: '流式阶段' }
   return map[mode] || mode
 }
 
@@ -324,10 +325,11 @@ const fetchRunningProgress = async () => {
     runningRows.map(async (row) => {
       try {
         const res = await perfExecApi.getStatus(row.id)
-        const progress = res.progress
-        if (progress) {
+        const progress = (res.data || res).progress
+          if (progress) {
           let text = ''
-          if (progress.mode === 'loop') {
+          const countModes = ['loop', 'journey_loop', 'stream_burst', 'sse_burst']
+          if (countModes.includes(progress.mode)) {
             text = `${progress.current}/${progress.total}`
           } else {
             text = `${progress.current}s/${progress.total}s`

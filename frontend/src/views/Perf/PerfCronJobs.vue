@@ -23,10 +23,16 @@
     
     <!-- 任务列表 -->
     <el-table :data="jobList" v-loading="loading" border>
-      <el-table-column type="index" width="50" />
+      <el-table-column type="index" :index="tableRowIndex" width="50" />
       <el-table-column prop="name" label="任务名称" min-width="150" />
       <el-table-column prop="scene_name" label="关联场景" min-width="150" />
       <el-table-column prop="env_name" label="执行环境" width="120" />
+      <el-table-column label="执行方式" width="100">
+        <template #default="{ row }">
+          <el-tag v-if="row.use_workers" type="warning" size="small">Worker</el-tag>
+          <el-tag v-else type="info" size="small">本机</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="任务类型" width="110">
         <template #default="{ row }">
           <el-tag v-if="row.run_type === 'Interval'" type="primary">间隔执行</el-tag>
@@ -206,6 +212,14 @@
         <el-form-item label="是否启用">
           <el-switch v-model="form.state" />
         </el-form-item>
+
+        <el-form-item label="分布式 Worker">
+          <el-switch v-model="form.use_workers" />
+          <div style="margin-top: 6px; color: #909399; font-size: 12px; line-height: 1.6;">
+            开启后优先分发到在线 Worker 执行；若无可用 Worker 则自动回退本机。
+            适合 Backend 配置较弱的服务器。
+          </div>
+        </el-form-item>
       </el-form>
       
       <template #footer>
@@ -223,7 +237,7 @@
       destroy-on-close
     >
       <el-table :data="recordList" v-loading="recordLoading" border stripe>
-        <el-table-column type="index" width="60" />
+        <el-table-column type="index" :index="recordTableRowIndex" width="60" />
         <el-table-column prop="scene_name" label="场景名称" min-width="150" show-overflow-tooltip />
         <el-table-column prop="status" label="状态" width="90">
           <template #default="{ row }">
@@ -294,6 +308,7 @@ import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { perfCronApi, perfSceneApi, perfRecordApi } from '@/api/modules/perf'
+import { makeTableRowIndex, makeTableRowIndexRefs } from '@/utils/tableIndex'
 
 const route = useRoute()
 const router = useRouter()
@@ -306,6 +321,7 @@ const jobList = ref([])
 const total = ref(0)
 const page = ref(1)
 const size = ref(20)
+const tableRowIndex = makeTableRowIndexRefs(page, size)
 
 const filter = reactive({
   run_type: null,
@@ -328,7 +344,8 @@ const form = reactive({
   interval: 3600,
   run_date: '',
   crontabStr: '0 2 * * *',
-  state: true
+  state: true,
+  use_workers: false
 })
 
 const rules = {
@@ -448,7 +465,8 @@ const resetForm = () => {
     interval: 3600,
     run_date: '',
     crontabStr: '0 2 * * *',
-    state: true
+    state: true,
+    use_workers: false
   })
   isEdit.value = false
   currentId.value = null
@@ -483,7 +501,8 @@ const handleEdit = (row) => {
     interval: row.interval || 3600,
     run_date: row.run_date || '',
     crontabStr: formatCron(row.crontab),
-    state: row.state
+    state: row.state,
+    use_workers: !!row.use_workers
   })
   
   dialogVisible.value = true
@@ -501,7 +520,8 @@ const handleSubmit = async () => {
       scene_id: form.scene_id,
       env_id: form.env_id,
       run_type: form.run_type,
-      state: form.state
+      state: form.state,
+      use_workers: form.use_workers
     }
     
     // 根据执行类型填充对应参数
@@ -562,6 +582,8 @@ const recordPage = reactive({
   size: 10,
   total: 0
 })
+
+const recordTableRowIndex = makeTableRowIndex(recordPage)
 
 const handleShowRecords = async (row) => {
   selectedJob.value = row

@@ -3,8 +3,9 @@
     <el-autocomplete
       v-model="inputValue"
       :fetch-suggestions="fetchSuggestions"
+      :trigger-on-focus="true"
       clearable
-      placeholder="输入或选择定位表达式"
+      placeholder="点击展开候选定位（可输入搜索）"
       style="width: 100%"
       @select="handleSelect"
       @blur="commitValue"
@@ -20,7 +21,8 @@
             • get_by_role: <code>get_by_role=button, 提交</code><br/>
             • get_by_label: <code>get_by_label=用户名</code><br/>
             • get_by_placeholder: <code>get_by_placeholder=请输入</code><br/>
-            • iframe 嵌套: <code>iframe||#id</code>
+            • iframe 嵌套: <code>iframe||#id</code><br/>
+            • 区域链式: <code>header >> get_by_text=设置</code>
           </div>
         </template>
         <el-link type="primary" :underline="false" style="font-size: 12px">
@@ -90,30 +92,24 @@ const DEFAULT_TEMPLATES = [
   { label: '模板: //tag（XPath 定位）', value: '//' },
 ]
 
-const candidateOptions = computed(() => {
+function labelForCandidate(cand) {
+  if (cand.startsWith('[data-testid=')) return `testid 定位: ${cand}`
+  if (cand.startsWith('#')) return `ID 定位: ${cand}`
+  if (cand.startsWith('get_by_role=')) return `角色定位: ${cand}`
+  if (cand.startsWith('get_by_text=')) return `文本定位: ${cand}`
+  if (cand.startsWith('get_by_label=')) return `标签定位: ${cand}`
+  if (cand.startsWith('get_by_placeholder=')) return `placeholder 定位: ${cand}`
+  if (cand.startsWith('//')) return `XPath: ${cand}`
+  if (cand.includes('.')) return `class 定位: ${cand}`
+  return `定位: ${cand}`
+}
+
+function buildMetaFallbackOptions(m) {
   const opts = []
-  const m = props.meta || {}
-
-  const engineCandidates = m.candidates || []
-  if (engineCandidates.length > 0) {
-    engineCandidates.forEach((cand) => {
-      let label = cand
-      if (cand.startsWith('[data-testid=')) label = `testid 定位: ${cand}`
-      else if (cand.startsWith('#')) label = `ID 定位: ${cand}`
-      else if (cand.startsWith('get_by_role=')) label = `角色定位: ${cand}`
-      else if (cand.startsWith('get_by_text=')) label = `文本定位: ${cand}`
-      else if (cand.startsWith('get_by_label=')) label = `标签定位: ${cand}`
-      else if (cand.startsWith('get_by_placeholder=')) label = `placeholder 定位: ${cand}`
-      else if (cand.startsWith('//')) label = `XPath: ${cand}`
-      else if (cand.includes('.')) label = `class 定位: ${cand}`
-      else label = `定位: ${cand}`
-      opts.push({ label, value: cand })
-    })
-    return opts
-  }
-
   const tag = (m.tag || '').toLowerCase()
-  const text = (m.text || '').trim()
+  const text = (m.accessibleName || m.text || '').trim()
+  const region = (m.region || '').trim()
+  const matchIndex = Number(m.matchIndex) || 0
   const id = (m.id || '').trim()
   const name = (m.name || '').trim()
   const cls = (m.class || '').trim()
@@ -130,8 +126,9 @@ const candidateOptions = computed(() => {
   if (id) {
     opts.push({ label: `ID 定位: #${id}`, value: `#${id}` })
   }
-  if (role && text && !isCommonShortText && text.length < 30 && !/^\d+$/.test(text)) {
-    opts.push({ label: `角色定位: get_by_role=${role}, ${text}`, value: `get_by_role=${role}, ${text}` })
+  if (role && text && text.length < 30 && !/^\d+$/.test(text)) {
+    const roleLabel = isCommonShortText ? `角色定位(常见词慎用): get_by_role=${role}, ${text}` : `角色定位: get_by_role=${role}, ${text}`
+    opts.push({ label: roleLabel, value: `get_by_role=${role}, ${text}` })
   }
   if (cls) {
     const classList = cls.split(/\s+/).filter(c => c && !c.startsWith('ng-') && !c.startsWith('v-') && c.length < 30)
@@ -150,13 +147,15 @@ const candidateOptions = computed(() => {
   }
   if (placeholder && ['input', 'textarea'].includes(tag)) {
     opts.push({ label: `placeholder 定位: ${tag}[placeholder="${placeholder}"]`, value: `${tag}[placeholder="${placeholder}"]` })
+    opts.push({ label: `get_by_placeholder: get_by_placeholder=${placeholder}`, value: `get_by_placeholder=${placeholder}` })
   }
   if (title) {
     const prefix = tag || '*'
     opts.push({ label: `title 定位: ${prefix}[title="${title}"]`, value: `${prefix}[title="${title}"]` })
   }
-  if (text && text.length < 30 && !/^\d+$/.test(text) && !isCommonShortText) {
-    opts.push({ label: `文本定位: get_by_text=${text}`, value: `get_by_text=${text}` })
+  if (text && text.length < 30 && !/^\d+$/.test(text)) {
+    const textLabel = isCommonShortText ? `文本定位(常见词慎用): get_by_text=${text}` : `文本定位: get_by_text=${text}`
+    opts.push({ label: textLabel, value: `get_by_text=${text}` })
   }
   if (tag && text) {
     const classPart = cls ? `[@class='${cls.split(/\s+/)[0]}']` : ''
@@ -165,6 +164,40 @@ const candidateOptions = computed(() => {
       value: `//${tag}${classPart}[contains(text(),'${text}')]`
     })
   }
+  if (region && text) {
+    opts.push({ label: `区域+文本: ${region} >> get_by_text=${text}`, value: `${region} >> get_by_text=${text}` })
+    if (role) {
+      opts.push({ label: `区域+角色: ${region} >> get_by_role=${role}, ${text}`, value: `${region} >> get_by_role=${role}, ${text}` })
+    }
+    opts.push({ label: `区域+has-text: ${region} ${tag}:has-text("${text}")`, value: `${region} ${tag}:has-text("${text}")` })
+  }
+  if (matchIndex > 1 && text) {
+    opts.push({
+      label: `提示: 页面上第 ${matchIndex} 个「${text}」，可设 params.index=${matchIndex}`,
+      value: `get_by_text=${text}`
+    })
+  }
+  return opts
+}
+
+const candidateOptions = computed(() => {
+  const m = props.meta || {}
+  const seen = new Set()
+  const opts = []
+
+  const pushOpt = (label, value) => {
+    if (!value || seen.has(value)) return
+    seen.add(value)
+    opts.push({ label, value })
+  }
+
+  ;(m.candidates || []).forEach((cand) => {
+    pushOpt(labelForCandidate(cand), cand)
+  })
+
+  buildMetaFallbackOptions(m).forEach((opt) => {
+    pushOpt(opt.label, opt.value)
+  })
 
   if (opts.length === 0) {
     return DEFAULT_TEMPLATES
@@ -173,9 +206,12 @@ const candidateOptions = computed(() => {
 })
 
 function fetchSuggestions(queryString, cb) {
-  const q = (queryString || '').toLowerCase()
+  const q = (queryString || '').toLowerCase().trim()
+  const model = (props.modelValue || '').toLowerCase().trim()
+  // 聚焦已有 locator 时展示全部候选；仅当用户主动改字搜索时才过滤
+  const showAll = !q || q === model
   const list = candidateOptions.value
-    .filter(opt => !q || opt.label.toLowerCase().includes(q) || opt.value.toLowerCase().includes(q))
+    .filter(opt => showAll || opt.label.toLowerCase().includes(q) || opt.value.toLowerCase().includes(q))
     .map(opt => ({ value: opt.value, label: opt.label }))
   cb(list)
 }

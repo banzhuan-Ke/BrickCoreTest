@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core import config as settings
+from app.core.runner_notices import merge_notices_into_release
 
 PACKAGE_FILENAME = os.getenv("RUNNER_CLIENT_PACKAGE_FILENAME", "BrickCoreRunner.zip")
 
@@ -24,7 +25,7 @@ def build_client_release_info(request_base_url: str = "") -> dict[str, Any]:
     package = runner_package_path()
     available = package.is_file()
     size_bytes = package.stat().st_size if available else 0
-    return {
+    base = {
         "runner_engine_version": settings.RUNNER_ENGINE_VERSION,
         "runner_client_version_min": settings.RUNNER_CLIENT_VERSION_MIN,
         "runner_client_version_latest": settings.RUNNER_CLIENT_VERSION_LATEST,
@@ -41,3 +42,4 @@ def build_client_release_info(request_base_url: str = "") -> dict[str, Any]:
         "storage_mode": "presigned" if settings.STORAGE_TYPE.lower() == "minio" else settings.STORAGE_TYPE,
         "middleware_isolation": settings.RUNNER_MIDDLEWARE_ISOLATION,
     }
+    return merge_notices_into_release(base)

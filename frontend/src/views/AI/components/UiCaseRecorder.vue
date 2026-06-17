@@ -160,6 +160,8 @@
             v-model="description"
             type="textarea"
             :rows="4"
+            maxlength="4000"
+            show-word-limit
             :placeholder="DESCRIPTION_PLACEHOLDER"
             style="width: 100%"
           />
@@ -194,7 +196,7 @@
         </el-form-item>
         <el-checkbox v-model="optimizeOptions.append_assertions">补充断言（基于描述中的预期）</el-checkbox>
         <el-checkbox v-model="optimizeOptions.use_page_context" :disabled="!optimizeOptions.append_assertions">
-          使用录制页面文本辅助定位
+          使用录制页面文本辅助断言定位
         </el-checkbox>
       </div>
       <div class="optimize-section" v-if="!optimizedSteps.length">
@@ -216,6 +218,16 @@
         <el-button type="warning" size="small" :loading="optimizing" @click="handleOptimize" style="margin-left: 12px;">
           重新优化
         </el-button>
+        <el-button
+          v-if="stepVersion === 'optimized'"
+          type="primary"
+          size="small"
+          link
+          style="margin-left: 8px"
+          @click="handleRestoreMetaFromOriginal"
+        >
+          从原始步骤恢复 meta
+        </el-button>
       </div>
 
       <!-- 步骤列表 -->
@@ -228,7 +240,7 @@
         >
           <template #title>
             <span style="font-size: 13px">
-              定位表达式支持多种语法：CSS（<code>#id</code> <code>.class</code>）、XPath（<code>//div</code>）、<code>get_by_text=文本</code>、<code>get_by_role=button, 名称</code> 等。点击下拉框可切换候选定位器，也可手动输入。
+              定位支持 CSS、XPath、<code>get_by_text</code>、<code>get_by_role</code>、<code>header &gt;&gt; get_by_text=设置</code> 等区域链式。录制时浏览器会高亮将录制的元素；黄色/红色「质量」标签请导入前核对。
             </span>
           </template>
         </el-alert>
@@ -238,12 +250,31 @@
             <el-icon><Plus /></el-icon> 添加步骤
           </el-button>
         </h5>
-        <el-table :data="currentSteps" size="small" border class="steps-table">
+        <el-alert
+          v-if="riskStepsCount > 0"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 8px"
+          :title="`有 ${riskStepsCount} 个步骤存在定位风险，导入前请展开「质量」列核对`"
+        />
+        <el-table :data="currentSteps" size="small" border class="steps-table" :row-class-name="stepRowClassName">
           <el-table-column type="index" width="40" />
           <el-table-column label="操作" width="100">
             <template #default="{ row }">
               <el-tag size="small" :type="stepTagType(row.method)">{{ row.keyword }}</el-tag>
               <el-tag v-if="row.meta?.ai_inferred_assertion" size="small" type="warning" style="margin-left: 4px;">AI断言</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="质量" width="88" align="center">
+            <template #default="{ row }">
+              <el-tooltip v-if="row.meta?.quality?.reasons?.length" placement="top">
+                <template #content>
+                  <div v-for="(r, i) in row.meta.quality.reasons" :key="i">{{ r }}</div>
+                </template>
+                <el-tag size="small" :type="qualityTagType(row)">{{ qualityLabel(row) }}</el-tag>
+              </el-tooltip>
+              <el-tag v-else size="small" type="success">正常</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="描述" min-width="180">
@@ -259,6 +290,11 @@
                 :meta="row.meta || {}"
               />
               <span v-else style="color: #999; font-size: 12px">-</span>
+              <div v-if="row.meta?.accessibleName || row.meta?.region" class="locator-meta-hint">
+                <span v-if="row.meta?.region">区域: {{ row.meta.region }}</span>
+                <span v-if="row.meta?.accessibleName">捕获: {{ row.meta.accessibleName }}</span>
+                <span v-if="row.meta?.matchIndex > 1">第 {{ row.meta.matchIndex }} 个相似</span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column label="其他参数" min-width="160">
@@ -371,6 +407,19 @@ const form = reactive({
 // 测试描述（移到结果态，用于 AI 优化上下文）
 const description = ref('')
 
+function ensureDescriptionPrefilled() {
+  if ((description.value || '').trim()) return
+  const initial = (props.initialDescription || '').trim()
+  if (initial) description.value = initial
+}
+
+function resolveStartDescription() {
+  const current = (description.value || '').trim()
+  if (current) return current.slice(0, 4000)
+  const initial = (props.initialDescription || '').trim()
+  return initial ? initial.slice(0, 4000) : undefined
+}
+
 // 在线设备列表
 const { onlineDevices, loadingDevices, deviceLoadError, loadOnlineDevices } = useOnlineDevices()
 
@@ -403,7 +452,67 @@ const optimizeOptions = reactive({
 const lastOptimizeStats = reactive({
   trimmed_count: 0,
   assertions_count: 0,
+  locators_picked: 0,
+  locators_ai_picked: 0,
+  locators_rule_picked: 0,
+  risk_steps_count: 0,
 })
+
+const riskStepsCount = computed(() => {
+  return currentSteps.value.filter(s => {
+    const level = s.meta?.quality?.level
+    return level === 'warn' || level === 'risk'
+  }).length
+})
+
+function qualityTagType(row) {
+  const level = row.meta?.quality?.level
+  if (level === 'risk') return 'danger'
+  if (level === 'warn') return 'warning'
+  return 'success'
+}
+
+function qualityLabel(row) {
+  const level = row.meta?.quality?.level
+  if (level === 'risk') return '风险'
+  if (level === 'warn') return '注意'
+  return '正常'
+}
+
+function stepRowClassName({ row }) {
+  const level = row.meta?.quality?.level
+  if (level === 'risk') return 'step-row-risk'
+  if (level === 'warn') return 'step-row-warn'
+  return ''
+}
+
+function normalizeDescKey(desc) {
+  return (desc || '').replace(/['"「」\s]/g, '')
+}
+
+function handleRestoreMetaFromOriginal() {
+  if (!steps.value.length || !optimizedSteps.value.length) {
+    ElMessage.warning('无原始步骤可恢复')
+    return
+  }
+  const origMap = new Map()
+  steps.value.forEach(s => {
+    const key = `${s.method}|${normalizeDescKey(s.desc)}`
+    origMap.set(key, s.meta || {})
+    origMap.set(`${s.method}|${s.params?.locator || ''}`, s.meta || {})
+  })
+  let count = 0
+  optimizedSteps.value.forEach(s => {
+    const meta =
+      origMap.get(`${s.method}|${normalizeDescKey(s.desc)}`) ||
+      origMap.get(`${s.method}|${s.params?.locator || ''}`)
+    if (meta && Object.keys(meta).length) {
+      s.meta = JSON.parse(JSON.stringify(meta))
+      count++
+    }
+  })
+  ElMessage.success(count ? `已恢复 ${count} 步的 meta/候选定位` : '未找到可匹配的 meta')
+}
 const stepParamsJson = ref([])
 const optimizedStepParamsJson = ref([])
 
@@ -432,6 +541,7 @@ const handleStart = async () => {
       device_id: form.device_id,
       use_ai_optimize: form.use_ai_optimize,
       hover_delay_ms: form.hover_delay_ms,
+      description: resolveStartDescription(),
     })
     // axios response: res.status = HTTP 状态码, res.data = StandardResponse
     if (res.status === 200 && res.data?.code === 200) {
@@ -490,6 +600,7 @@ const waitForResult = async () => {
           steps.value = data.steps || []
           optimizedSteps.value = data.optimized_steps || []
           syncStepParamsJson()
+          ensureDescriptionPrefilled()
           state.value = 'result'
           return
         }
@@ -522,6 +633,7 @@ const startPolling = () => {
           steps.value = data.steps || []
           optimizedSteps.value = data.optimized_steps || []
           syncStepParamsJson()
+          ensureDescriptionPrefilled()
           stopPolling()
           stopElapsedTimer()
           state.value = 'result'
@@ -631,15 +743,26 @@ const handleOptimize = async () => {
       optimizedSteps.value = d.optimized_steps || []
       lastOptimizeStats.trimmed_count = d.trimmed_count || 0
       lastOptimizeStats.assertions_count = d.assertions_count || 0
+      lastOptimizeStats.locators_picked = d.locators_picked || d.locators_restored || 0
+      lastOptimizeStats.locators_ai_picked = d.locators_ai_picked || 0
+      lastOptimizeStats.locators_rule_picked = d.locators_rule_picked || 0
+      lastOptimizeStats.risk_steps_count = d.risk_steps_count || 0
       optimizedStepParamsJson.value = optimizedSteps.value.map(s => {
         const { locator, ...rest } = s.params || {}
         return JSON.stringify(rest, null, 2)
       })
       stepVersion.value = 'optimized'
-      const msg = lastOptimizeStats.assertions_count
-        ? `优化完成：精简 ${lastOptimizeStats.trimmed_count} 步 + 断言 ${lastOptimizeStats.assertions_count} 条`
-        : 'AI 优化完成'
-      ElMessage.success(msg)
+      const parts = ['AI 优化完成']
+      if (lastOptimizeStats.trimmed_count) parts.push(`精简 ${lastOptimizeStats.trimmed_count} 步`)
+      if (lastOptimizeStats.assertions_count) parts.push(`断言 ${lastOptimizeStats.assertions_count} 条`)
+      if (lastOptimizeStats.locators_picked) {
+        const pickParts = []
+        if (lastOptimizeStats.locators_ai_picked) pickParts.push(`AI 选 ${lastOptimizeStats.locators_ai_picked}`)
+        if (lastOptimizeStats.locators_rule_picked) pickParts.push(`规则优选 ${lastOptimizeStats.locators_rule_picked}`)
+        parts.push(`定位${pickParts.length ? pickParts.join('、') : `优选 ${lastOptimizeStats.locators_picked}`}`)
+      }
+      if (lastOptimizeStats.risk_steps_count) parts.push(`${lastOptimizeStats.risk_steps_count} 步需核对`)
+      ElMessage.success(parts.join('，'))
     } else {
       ElMessage.error(res.data?.message || 'AI 优化失败')
     }
@@ -650,13 +773,28 @@ const handleOptimize = async () => {
   }
 }
 
-const handleApply = () => {
+const handleApply = async () => {
   const targetSteps = stepVersion.value === 'optimized' ? optimizedSteps.value : steps.value
   if (targetSteps.length === 0) {
     ElMessage.warning('没有可应用的步骤')
     return
   }
-  emit('apply', JSON.parse(JSON.stringify(targetSteps)))
+  const risks = targetSteps.filter(s => s.meta?.quality?.level === 'risk')
+  if (risks.length > 0) {
+    try {
+      await ElMessageBox.confirm(
+        `有 ${risks.length} 个步骤标记为「风险」（描述与捕获元素可能不一致），仍要导入吗？`,
+        '定位风险确认',
+        { type: 'warning', confirmButtonText: '仍要导入', cancelButtonText: '返回修改' }
+      )
+    } catch {
+      return
+    }
+  }
+  emit('apply', {
+    steps: JSON.parse(JSON.stringify(targetSteps)),
+    description: (description.value || '').trim(),
+  })
   visible.value = false
   resetState()
 }
@@ -817,11 +955,31 @@ onUnmounted(() => {
       font-size: 12px;
       margin-right: 8px;
     }
+
     .action-detail {
       color: #666;
       font-size: 13px;
       word-break: break-all;
     }
+  }
+}
+
+.steps-table {
+  :deep(.step-row-risk) {
+    background-color: #fef0f0;
+  }
+  :deep(.step-row-warn) {
+    background-color: #fdf6ec;
+  }
+}
+
+.locator-meta-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #909399;
+  line-height: 1.5;
+  span + span {
+    margin-left: 8px;
   }
 }
 

@@ -40,6 +40,8 @@ RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua
 # 使用国内镜像安装 Playwright 浏览器（只装 Chromium，节省空间）
 # 注意：系统依赖已在上面手动安装，不需要 playwright install-deps（Debian Trixie 部分包名不兼容）
 ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
+# browser-use 默认会下载 uBlock 等扩展，国内云环境易长时间卡住
+ENV BROWSER_USE_DISABLE_EXTENSIONS=1
 RUN playwright install chromium
 
 # 复制代码与内置文档

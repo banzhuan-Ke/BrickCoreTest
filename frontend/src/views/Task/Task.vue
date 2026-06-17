@@ -36,9 +36,16 @@
             <div>暂无数据</div>
           </div>
         </template>
-        <el-table-column label="序号" type="index" width="90"/>
+        <el-table-column label="序号" type="index" :index="tableRowIndex" width="90"/>
         <el-table-column prop="name" label="计划名称" show-overflow-tooltip width="150"/>
         <el-table-column prop="suites_count" label="套件数量"/>
+        <el-table-column prop="parallel" label="执行模式" width="100">
+          <template #default="scope">
+            <el-tag size="small" :type="scope.row.parallel ? 'warning' : 'info'">
+              {{ scope.row.parallel ? '并行' : '串行' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="run_count" label="执行次数"/>
         <el-table-column prop="status" label="最近执行状态">
           <template #default="scope">
@@ -60,7 +67,7 @@
         </el-table-column>
         <el-table-column label="操作" width="400">
           <template #default="scope">
-            <el-button type="warning" plain @click="clickRun(scope.row.id)" icon="Promotion">运行</el-button>
+            <el-button v-if="canExecute" type="warning" plain @click="clickRun(scope.row.id)" icon="Promotion">运行</el-button>
             <el-button type="success" plain @click="showRunRecord(scope.row)" icon="View">报告</el-button>
             <el-button type="primary" plain @click="router.push({name: 'editTask',params:{id: scope.row.id}})"
                        icon="Edit">编辑
@@ -121,93 +128,164 @@
   </el-dialog>
 
   <!-- 运行计划的弹框-->
-  <el-dialog v-model="showRunDlg" title="计划运行配置" width="520px" center destroy-on-close>
-    <div class="run-config-container">
-      <!-- 运行环境 -->
-      <div class="config-section">
-        <div class="section-title"><el-icon><OfficeBuilding /></el-icon><span>运行环境</span></div>
-        <div class="env-cards">
-          <div v-for="env in proStore.envList" :key="env.id"
-               :class="['env-card', { active: runParams.env_id === env.id }]"
-               @click="runParams.env_id = env.id">
-            <div class="env-name">{{ env.name }}</div>
-            <div class="env-host">{{ env.host }}</div>
-          </div>
-        </div>
-      </div>
-      <!-- 浏览器选择 -->
-      <div class="config-section">
-        <div class="section-title"><el-icon><Monitor /></el-icon><span>选择浏览器</span></div>
-        <div class="browser-options">
-          <div :class="['browser-item', { active: runParams.browser_type === 'chromium' }]"
-               @click="runParams.browser_type = 'chromium'">
-            <el-icon class="browser-icon" :size="28"><ChromeFilled /></el-icon>
-            <span>Chrome</span>
-          </div>
-          <div :class="['browser-item', { active: runParams.browser_type === 'firefox' }]"
-               @click="runParams.browser_type = 'firefox'">
-            <el-icon class="browser-icon" :size="28"><Compass /></el-icon>
-            <span>Firefox</span>
-          </div>
-          <div :class="['browser-item', { active: runParams.browser_type === 'webkit' }]"
-               @click="runParams.browser_type = 'webkit'">
-            <el-icon class="browser-icon" :size="28"><Apple /></el-icon>
-            <span>Safari</span>
-          </div>
-        </div>
-      </div>
-      <!-- 运行模式 -->
-      <div class="config-section">
-        <div class="section-title"><el-icon><SetUp /></el-icon><span>运行模式</span></div>
-        <div class="mode-options">
-          <div :class="['mode-item', { active: runParams.config === 'False' }]"
-               @click="runParams.config = 'False'">
-            <el-icon :size="24"><View /></el-icon>
-            <span>界面模式</span>
-            <small>显示浏览器界面</small>
-          </div>
-          <div :class="['mode-item', { active: runParams.config === 'True' }]"
-               @click="runParams.config = 'True'">
-            <el-icon :size="24"><Hide /></el-icon>
-            <span>无头模式</span>
-            <small>后台运行更高效</small>
-          </div>
-        </div>
-      </div>
-      <!-- 运行设备 -->
-      <div class="config-section">
-        <div class="section-title"><el-icon><Cpu /></el-icon><span>执行设备</span></div>
-        <el-select 
-          v-model="runParams.device_id" 
-          placeholder="请选择执行设备" 
-          style="width: 100%"
-          size="large"
-        >
-          <el-option
-            v-for="device in deviceList"
-            :key="device.id"
-            :label="device.name || device.username"
-            :value="device.id"
+  <el-dialog v-model="showRunDlg" title="计划运行配置" width="720px" destroy-on-close>
+    <el-form label-width="88px" class="ui-run-config-form">
+      <el-form-item label="运行环境" required>
+        <UiRunEnvSelect v-model="runParams.env_id" />
+      </el-form-item>
+      <el-form-item label="浏览器" required>
+        <div class="ui-run-segment-group">
+          <div
+            :class="['ui-run-segment', 'ui-run-segment--grow', { active: runParams.browser_type === 'chromium' }]"
+            @click="runParams.browser_type = 'chromium'"
           >
-            <div class="device-option">
-              <span class="device-name">{{ device.name || device.username }}</span>
-              <span class="device-ip">{{ device.ip }}</span>
-              <el-tag v-if="device.status === 'online' || device.status === '在线'" type="success" size="small">在线</el-tag>
-              <el-tag v-else type="info" size="small">离线</el-tag>
-            </div>
-          </el-option>
-        </el-select>
+            <el-icon><ChromeFilled /></el-icon><span>Chrome</span>
+          </div>
+          <div
+            :class="['ui-run-segment', 'ui-run-segment--grow', { active: runParams.browser_type === 'firefox' }]"
+            @click="runParams.browser_type = 'firefox'"
+          >
+            <el-icon><Compass /></el-icon><span>Firefox</span>
+          </div>
+          <div
+            :class="['ui-run-segment', 'ui-run-segment--grow', { active: runParams.browser_type === 'webkit' }]"
+            @click="runParams.browser_type = 'webkit'"
+          >
+            <el-icon><Apple /></el-icon><span>Safari</span>
+          </div>
+        </div>
+      </el-form-item>
+      <el-form-item label="运行模式" required>
+        <div class="ui-run-segment-group">
+          <div
+            :class="['ui-run-segment', 'ui-run-segment--grow', { active: !runParams.headless }]"
+            @click="runParams.headless = false"
+          >
+            <el-icon><View /></el-icon><span>界面模式</span>
+          </div>
+          <div
+            :class="['ui-run-segment', 'ui-run-segment--grow', { active: runParams.headless }]"
+            @click="runParams.headless = true"
+          >
+            <el-icon><Hide /></el-icon><span>无头模式</span>
+          </div>
+        </div>
+      </el-form-item>
+      <el-form-item v-if="healRunOptions?.locator_heal_enabled" label="AI 自愈">
+        <div v-if="healRunOptions.locator_heal_allow_run_override" class="ui-run-segment-group">
+          <div
+            :class="['ui-run-segment', 'ui-run-segment--grow', { active: runParams.ai_heal_enabled === true }]"
+            @click="runParams.ai_heal_enabled = true"
+          >
+            <span>开启</span>
+          </div>
+          <div
+            :class="['ui-run-segment', 'ui-run-segment--grow', { active: runParams.ai_heal_enabled === false }]"
+            @click="runParams.ai_heal_enabled = false"
+          >
+            <span>关闭</span>
+          </div>
+        </div>
+        <el-alert
+          v-else
+          type="info"
+          :closable="false"
+          show-icon
+          :title="`本次将按项目默认：${healRunOptions.locator_heal_default_on_execute ? '开启' : '关闭'}自愈`"
+        />
+      </el-form-item>
+      <el-form-item label="执行设备" required>
+        <template v-if="runTaskParallel">
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            class="ui-run-parallel-hint"
+            title="并行模式：按权重分配套件；同一执行器可同时跑多个 Browser（受并发数限制）。"
+          />
+          <el-table :data="runDeviceRows" size="small" class="ui-run-device-table" border table-layout="fixed">
+            <el-table-column label="选用" width="52" align="center" fixed="left">
+              <template #default="{ row }">
+                <el-checkbox v-model="row.selected" />
+              </template>
+            </el-table-column>
+            <el-table-column label="执行器" min-width="168">
+              <template #default="{ row }">
+                <div class="ui-run-device-table__name">{{ row.name || row.username }}</div>
+                <div class="ui-run-device-table__ip">{{ row.ip }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="68" align="center">
+              <template #default="{ row }">
+                <el-tag v-if="row.status === 'online' || row.status === '在线'" type="success" size="small">在线</el-tag>
+                <el-tag v-else type="info" size="small">离线</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="权重" width="108" align="center">
+              <template #default="{ row }">
+                <el-input-number
+                  v-model="row.weight"
+                  :min="1"
+                  :max="100"
+                  size="small"
+                  :disabled="!row.selected"
+                  controls-position="right"
+                  class="ui-run-device-table__number"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="并发" width="108" align="center">
+              <template #default="{ row }">
+                <el-input-number
+                  v-model="row.concurrency"
+                  :min="1"
+                  :max="20"
+                  size="small"
+                  :disabled="!row.selected"
+                  controls-position="right"
+                  class="ui-run-device-table__number"
+                />
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+        <template v-else>
+          <el-select v-model="runParams.device_id" placeholder="请选择执行设备" style="width: 100%">
+            <el-option
+              v-for="device in deviceList"
+              :key="device.id"
+              :label="device.name || device.username"
+              :value="device.id"
+            >
+              <div class="ui-run-device-option">
+                <span class="ui-run-device-option__name">{{ device.name || device.username }}</span>
+                <span class="ui-run-device-option__ip">{{ device.ip }}</span>
+                <el-tag v-if="device.status === 'online' || device.status === '在线'" type="success" size="small">在线</el-tag>
+                <el-tag v-else type="info" size="small">离线</el-tag>
+              </div>
+            </el-option>
+          </el-select>
+          <div class="ui-run-concurrency-row">
+            <span class="ui-run-concurrency-row__label">并发数</span>
+            <el-input-number v-model="runParams.concurrency" :min="1" :max="20" size="small" controls-position="right" />
+            <span class="ui-run-concurrency-row__tip">同一执行器同时运行的套件数上限</span>
+          </div>
+        </template>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <div class="ui-run-dialog-footer">
+        <el-button @click="showRunDlg = false">取消</el-button>
+        <el-button type="primary" @click="runTask()" icon="Promotion" :loading="running">开始运行</el-button>
       </div>
-    </div>
-    <div class="dialog-footer">
-      <el-button type="primary" size="large" @click="runTask()" icon="Promotion" :loading="running">开始运行</el-button>
-    </div>
+    </template>
   </el-dialog>
 </template>
 
 <script setup>
-import {ref, reactive} from 'vue'
-import {Calendar, OfficeBuilding, Monitor, SetUp, View, Hide, Cpu, ChromeFilled, Compass, Apple, Promotion, Search, RefreshRight} from "@element-plus/icons-vue"
+import {ref, reactive, computed, onMounted, watch} from 'vue'
+import {Calendar, ChromeFilled, Compass, Apple, Promotion, Search, RefreshRight, View, Hide} from "@element-plus/icons-vue"
+import { aiConfigApi } from '@/api/modules/ai.js'
 import {ProjectStore} from '@/stores/module/ProjectStore'
 import http from '@/api/index'
 import dateTools from '@/tools/dateTools'
@@ -216,13 +294,18 @@ import TaskRunRecord from "./componets/TaskRecord.vue"
 import PageCard from "@/components/PageCard.vue"
 import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
-import {useRouter} from "vue-router"
+import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
+import {useRouter, useRoute} from "vue-router"
 import {UserStore} from "@/stores/module/UserStore.js"
+import { makeTableRowIndex } from '@/utils/tableIndex'
 
 const router = useRouter()
+const route = useRoute()
 
 const proStore = ProjectStore()
 const uStore = UserStore()
+const canExecute = computed(() => uStore.hasPermission('ui_task:execute'))
+const healRunOptions = ref(null)
 
 // 本地任务列表和分页
 const taskList = ref([])
@@ -231,6 +314,7 @@ const pageConfig = reactive({
   size: 10,
   total: 0
 })
+const tableRowIndex = makeTableRowIndex(pageConfig)
 const searchForm = reactive({
   name: '',
   catalog_id: null,
@@ -253,7 +337,24 @@ const getTaskList = async () => {
     pageConfig.total = res.data.total
   }
 }
-getTaskList()
+onMounted(() => {
+  const qName = route.query.name
+  if (qName && typeof qName === 'string') {
+    searchForm.name = qName
+  }
+  getTaskList()
+})
+
+watch(
+  () => route.query.name,
+  (qName) => {
+    if (qName && typeof qName === 'string') {
+      searchForm.name = qName
+      pageConfig.page = 1
+      getTaskList()
+    }
+  },
+)
 
 const handleSearch = () => {
   pageConfig.page = 1
@@ -374,6 +475,17 @@ const running = ref(false)
 
 // 设备列表
 const deviceList = ref([])
+const runTaskParallel = ref(false)
+const runDeviceRows = ref([])
+
+const syncRunDeviceRows = () => {
+  runDeviceRows.value = (deviceList.value || []).map((d) => ({
+    ...d,
+    selected: true,
+    weight: 1,
+    concurrency: 3,
+  }))
+}
 
 // 获取设备列表
 const getDeviceList = async () => {
@@ -381,6 +493,7 @@ const getDeviceList = async () => {
     const res = await http.deviceApi.getList({ status: '在线' })
     if (res.status === 200) {
       deviceList.value = res.data || []
+      syncRunDeviceRows()
     }
   } catch (error) {
     console.error('获取设备列表失败:', error)
@@ -394,19 +507,47 @@ const runParams = reactive({
   device_id: '',
   task_id: 1,
   username: uStore.userInfo.username,
-  config: 'False'
+  headless: false,
+  ai_heal_enabled: true,
+  concurrency: 3,
 })
+
+const loadHealRunOptions = async () => {
+  const pid = proStore.projectInfo?.id
+  if (!pid) {
+    healRunOptions.value = null
+    return
+  }
+  try {
+    const res = await aiConfigApi.getExecutionSettings(pid)
+    if (res.data?.code === 200) {
+      healRunOptions.value = res.data.data || null
+      runParams.ai_heal_enabled = healRunOptions.value?.locator_heal_default_on_execute ?? true
+    }
+  } catch {
+    healRunOptions.value = null
+  }
+}
 
 // 点击运行计划
 const clickRun = async (task_id) => {
-  // 重置运行参数
   runParams.env_id = ''
   runParams.browser_type = 'chromium'
   runParams.device_id = ''
   runParams.task_id = task_id
   runParams.username = uStore.userInfo.username
-  runParams.config = 'False'
-  // 获取设备列表
+  runParams.headless = false
+  runParams.ai_heal_enabled = true
+  runParams.concurrency = 3
+  runTaskParallel.value = false
+  await loadHealRunOptions()
+  try {
+    const detail = await http.taskApi.getTaskDetail(task_id)
+    runTaskParallel.value = !!detail.data?.parallel
+  } catch {
+    const row = taskList.value.find((t) => t.id === task_id)
+    runTaskParallel.value = !!row?.parallel
+  }
   await getDeviceList()
   showRunDlg.value = true
 }
@@ -422,20 +563,45 @@ async function runTask() {
     ElMessage.warning('请选择浏览器')
     return
   }
-  if (!runParams.device_id) {
+  let payload = { ...runParams }
+    if (runTaskParallel.value) {
+    const selected = runDeviceRows.value.filter((r) => r.selected && (r.status === '在线' || r.status === 'online'))
+    if (!selected.length) {
+      ElMessage.warning('请至少选择一个在线执行器')
+      return
+    }
+    payload = {
+      ...payload,
+      device_id: null,
+      config: runParams.headless,
+      devices: selected.map((r) => ({
+        device_id: r.id,
+        weight: r.weight || 1,
+        concurrency: r.concurrency || 1,
+      })),
+    }
+  } else if (!runParams.device_id) {
     ElMessage.warning('请选择执行设备')
     return
+  } else {
+    payload.config = runParams.headless
+    payload.concurrency = runParams.concurrency || 1
   }
-  
+  if (healRunOptions.value?.locator_heal_allow_run_override) {
+    payload.ai_heal_enabled = runParams.ai_heal_enabled
+  }
+
   running.value = true
   try {
-    const response = await http.runnerApi.runTask(runParams.task_id, runParams)
+    const response = await http.runnerApi.runTask(runParams.task_id, payload)
     showRunDlg.value = false
     if (response.status === 201) {
+      const dispatched = response.data?.dispatched !== false
       ElNotification({
-        title: '计划已提交运行！',
-        type: 'success',
-        duration: 1500
+        title: dispatched ? '计划已提交运行！' : '记录已创建',
+        message: response.data?.msg || (dispatched ? undefined : '暂无在线执行器，请稍后重试'),
+        type: dispatched ? 'success' : 'warning',
+        duration: 2500
       })
       // 刷新页面数据
       await getTaskList()
@@ -457,326 +623,5 @@ const editDlg = ref(false)
 </script>
 
 <style scoped lang="scss">
-// 运行配置弹窗样式
-.run-config-container {
-  padding: 10px 0;
-}
-
-.config-section {
-  margin-bottom: 24px;
-
-  &:last-child {
-    margin-bottom: 0;
-  }
-}
-
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #303133;
-  margin-bottom: 12px;
-
-  .el-icon {
-    font-size: 16px;
-    color: #409eff;
-  }
-}
-
-// 环境卡片
-.env-cards {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  max-height: 160px;
-  overflow-y: auto;
-}
-
-.env-card {
-  position: relative;
-  width: calc(50% - 5px);
-  padding: 12px;
-  border: 2px solid #e4e7ed;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s;
-  background: #fff;
-
-  &:hover {
-    border-color: #c0c4cc;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-  }
-
-  &.active {
-    border-color: #409eff;
-    background: #f5f9ff;
-  }
-
-  .env-name {
-    font-size: 14px;
-    font-weight: 500;
-    color: #303133;
-    margin-bottom: 4px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .env-host {
-    font-size: 12px;
-    color: #909399;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-}
-
-// 浏览器选项
-.browser-options {
-  display: flex;
-  gap: 12px;
-}
-
-.browser-item {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 12px 8px;
-  border: 2px solid #e4e7ed;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s;
-  background: #fff;
-
-  &:hover {
-    border-color: #c0c4cc;
-  }
-
-  &.active {
-    border-color: #409eff;
-    background: #f5f9ff;
-  }
-
-  .browser-icon {
-    margin-bottom: 6px;
-    color: #606266;
-  }
-
-  &.active .browser-icon {
-    color: #409eff;
-  }
-
-  span {
-    font-size: 13px;
-    color: #606266;
-  }
-
-  &.active span {
-    color: #409eff;
-  }
-}
-
-// 运行方式选项
-.mode-options {
-  display: flex;
-  gap: 12px;
-}
-
-.mode-item {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 16px 12px;
-  border: 2px solid #e4e7ed;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s;
-  background: #fff;
-
-  &:hover {
-    border-color: #c0c4cc;
-  }
-
-  &.active {
-    border-color: #409eff;
-    background: #f5f9ff;
-
-    .el-icon {
-      color: #409eff;
-    }
-
-    span {
-      color: #409eff;
-    }
-  }
-
-  .el-icon {
-    font-size: 24px;
-    color: #909399;
-    margin-bottom: 6px;
-  }
-
-  span {
-    font-size: 14px;
-    font-weight: 500;
-    color: #303133;
-  }
-
-  small {
-    font-size: 12px;
-    color: #909399;
-    margin-top: 2px;
-  }
-}
-
-// 设备选择触发器
-.device-select-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 16px;
-  border: 2px dashed #dcdfe6;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s;
-  color: #606266;
-
-  &:hover {
-    border-color: #409eff;
-    color: #409eff;
-    background: #f5f9ff;
-  }
-}
-
-// 已选择设备卡片
-.device-selected-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border: 2px solid #409eff;
-  border-radius: 8px;
-  background: #f5f9ff;
-  cursor: pointer;
-
-  .device-info {
-    flex: 1;
-
-    .device-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 4px;
-
-      .device-name {
-        font-size: 15px;
-        font-weight: 500;
-        color: #303133;
-      }
-    }
-
-    .device-ip {
-      font-size: 13px;
-      color: #606266;
-    }
-  }
-}
-
-// 设备选择列表
-.device-select-list {
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.device-select-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border: 2px solid #e4e7ed;
-  border-radius: 8px;
-  margin-bottom: 8px;
-  cursor: pointer;
-  transition: all 0.3s;
-
-  &:hover {
-    border-color: #c0c4cc;
-    background: #f5f7fa;
-  }
-
-  &.active {
-    border-color: #409eff;
-    background: #f5f9ff;
-  }
-
-  .device-select-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: 8px;
-    background: #ecf5ff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #409eff;
-    font-size: 20px;
-  }
-
-  .device-select-info {
-    flex: 1;
-
-    .device-select-name {
-      font-size: 14px;
-      font-weight: 500;
-      color: #303133;
-      margin-bottom: 4px;
-    }
-
-    .device-select-meta {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-
-      .device-ip {
-        font-size: 12px;
-        color: #909399;
-      }
-    }
-  }
-
-  .device-selected-check {
-    color: #409eff;
-    font-size: 20px;
-  }
-}
-
-// 设备下拉选项样式
-.device-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-
-  .device-name {
-    flex: 1;
-    font-size: 14px;
-  }
-
-  .device-ip {
-    font-size: 12px;
-    color: #909399;
-  }
-}
-
-// 弹窗底部
-.dialog-footer {
-  text-align: center;
-  padding-top: 10px;
-  border-top: 1px solid #e4e7ed;
-  margin-top: 10px;
-}
+@use '@/style/ui-run-config.scss';
 </style>

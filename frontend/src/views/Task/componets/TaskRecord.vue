@@ -9,7 +9,7 @@
         <div>暂无数据</div>
       </div>
     </template>
-    <el-table-column label="序号" type="index" width="90"/>
+    <el-table-column label="序号" type="index" :index="tableRowIndex" width="90"/>
     <el-table-column prop="task_name" label="计划名称" min-width='100' show-overflow-tooltip/>
     <el-table-column label="浏览器" prop="browser">
       <template #default="scope">
@@ -64,22 +64,40 @@
     <el-table-column prop="duration" label="执行耗时">
       <template #default="scope">
         <!-- 保留两位小数-->
-        {{ scope.row.duration.toFixed(2) }}秒
+        {{ (scope.row.duration ?? 0).toFixed(2) }}秒
       </template>
     </el-table-column>
-    <el-table-column label="操作" width="260px">
+    <el-table-column label="操作" width="160" fixed="right">
       <template #default="scope">
-        <el-button
-          v-if="['执行中', '等待执行'].includes(scope.row.status)"
-          @click="clickStop(scope.row.id)"
-          type="warning"
-          plain
-          icon="VideoPause"
-        >停止</el-button>
-        <el-button @click="showReport(scope.row.id)" type="success" plain icon="View">报告</el-button>
-        <el-tooltip class="box-item" effect="dark" content="将删除计划、套件、用例运行记录" placement="bottom">
-          <el-button @click="clickDelete(scope.row.id)" plain type="danger" icon="Delete">删除</el-button>
-        </el-tooltip>
+        <div class="op-btns">
+          <el-button
+            v-if="isPlanStoppable(scope.row.status)"
+            type="warning"
+            size="small"
+            title="停止执行"
+            @click="clickStop(scope.row.id)"
+          >
+            <el-icon><VideoPause /></el-icon>
+          </el-button>
+          <el-button
+            v-if="scope.row.status === '执行完成' || scope.row.status === '已停止'"
+            type="warning"
+            size="small"
+            title="再次执行"
+            :loading="rerunId === scope.row.id"
+            @click="clickRerun(scope.row)"
+          >
+            <el-icon><RefreshRight /></el-icon>
+          </el-button>
+          <el-button type="success" size="small" title="查看报告" @click="showReport(scope.row.id)">
+            <el-icon><View /></el-icon>
+          </el-button>
+          <el-tooltip effect="dark" content="仅删除记录，不会停止正在执行的用例" placement="top">
+            <el-button type="danger" size="small" title="删除记录" @click="clickDelete(scope.row.id)">
+              <el-icon><Delete /></el-icon>
+            </el-button>
+          </el-tooltip>
+        </div>
       </template>
     </el-table-column>
   </el-table>
@@ -99,12 +117,14 @@
 
 <script setup>
 import {ref, reactive, watch} from 'vue'
-import {List} from "@element-plus/icons-vue"
+import {List, RefreshRight} from "@element-plus/icons-vue"
 import http from '@/api/index'
 import {ProjectStore} from "@/stores/module/ProjectStore.js"
+import {UserStore} from "@/stores/module/UserStore.js"
 import dateTools from '@/tools/dateTools'
 import {ElMessageBox, ElMessage, ElNotification} from 'element-plus'
 import {useRouter} from 'vue-router'
+import { makeTableRowIndex } from '@/utils/tableIndex'
 
 const router = useRouter()
 // 定义props
@@ -116,8 +136,10 @@ const props = defineProps({
 })
 
 const proStore = ProjectStore()
+const uStore = UserStore()
 // 获取运行记录列表数据
 const RunRecordList = ref([])
+const rerunId = ref(null)
 
 const pageConfig = reactive({
   task_id: 0,
@@ -126,6 +148,8 @@ const pageConfig = reactive({
   total: 0,
   project_id: proStore.projectInfo.id
 })
+
+const tableRowIndex = makeTableRowIndex(pageConfig)
 
 // 获取运行记录数据
 const getRunRecordList = async () => {
@@ -144,6 +168,40 @@ watch(() => props.task_id, (newVal, oldVal) => {
 })
 
 // 路由跳转到报告页面（默认图表模式）
+const clickRerun = async (row) => {
+  const env = row.env || {}
+  const envId = env.environment_id || env.env_id || env.id
+  if (!envId) {
+    ElMessage.warning('该记录缺少环境信息，无法重跑')
+    return
+  }
+  if (!env.device_id && !row.device_id) {
+    ElMessage.warning('该记录缺少执行器信息，请从计划页重新选择执行器运行')
+    return
+  }
+  rerunId.value = row.id
+  try {
+    const payload = {
+      env_id: envId,
+      browser_type: env.browser || env.browser_type || 'chromium',
+      headless: env.headless ?? false,
+      device_id: env.device_id || row.device_id || null,
+      config: env.headless ?? false,
+      concurrency: env.concurrency || 1,
+      username: uStore.userInfo?.username || row.username,
+    }
+    const res = await http.runnerApi.runTask(row.task_id || props.task_id, payload)
+    if (res.status === 201) {
+      ElMessage.success(res.data?.msg || '计划已重新提交执行')
+      await getRunRecordList()
+    }
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '再次执行失败')
+  } finally {
+    rerunId.value = null
+  }
+}
+
 const showReport = (id) => {
   router.push({
     name: 'taskReport',
@@ -152,10 +210,16 @@ const showReport = (id) => {
   })
 }
 
+const isPlanStoppable = (status) => ['执行中', '等待执行', 'running', 'pending'].includes(status)
+
 // 停止计划执行
 const clickStop = async (record_id) => {
   try {
-    await ElMessageBox.confirm('确定停止当前 UI 计划执行吗？执行器将收到中断信号。', '停止执行', { type: 'warning' })
+    await ElMessageBox.confirm(
+      '确定停止当前 UI 计划执行吗？执行器将收到中断信号。删除记录不会停止执行，请使用停止。',
+      '停止执行',
+      { type: 'warning' }
+    )
     await http.runnerApi.stopPlan(record_id)
     ElMessage.success('停止信号已发送')
     await getRunRecordList()
@@ -203,4 +267,11 @@ const clickDelete = async (record_id) => {
 </script>
 
 <style scoped>
+.op-btns {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
 </style>

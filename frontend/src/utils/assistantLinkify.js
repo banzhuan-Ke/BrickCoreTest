@@ -115,6 +115,36 @@ const RULES = [
     route: (id) => `#/case/edit/${id}`
   },
   {
+    pattern: /template_id\s*=\s*(\d+)/gi,
+    pickId: (a) => a[1],
+    route: (id) => `#/api-data-factory?template_id=${id}`
+  },
+  {
+    pattern: /datasource_id\s*=\s*(\d+)/gi,
+    pickId: (a) => a[1],
+    route: (id) => `#/api-data-factory?datasource_id=${id}`
+  },
+  {
+    pattern: /set_id\s*=\s*(\d+)/gi,
+    pickId: (a) => a[1],
+    route: (id) => `#/ai-qa-eval?set_id=${id}`
+  },
+  {
+    pattern: /(?:SQL模板|SQL 模板|数据模板)\s*[（(]?\s*id\s*=\s*(\d+)\s*[）)]?/gi,
+    pickId: (a) => a[1],
+    route: (id) => `#/api-data-factory?template_id=${id}`
+  },
+  {
+    pattern: /(?:数据源|数据工厂数据源)\s*[（(]?\s*id\s*=\s*(\d+)\s*[）)]?/gi,
+    pickId: (a) => a[1],
+    route: (id) => `#/api-data-factory?datasource_id=${id}`
+  },
+  {
+    pattern: /(?:评测集|问答评测集)\s*[（(]?\s*id\s*=\s*(\d+)\s*[）)]?/gi,
+    pickId: (a) => a[1],
+    route: (id) => `#/ai-qa-eval?set_id=${id}`
+  },
+  {
     pattern: /(?:接口执行记录|执行记录)\s*[（(]?\s*id\s*=\s*(\d+)\s*[）)]?/gi,
     pickId: (a) => a[1],
     route: (id) => `#/api-module/report/${id}`
