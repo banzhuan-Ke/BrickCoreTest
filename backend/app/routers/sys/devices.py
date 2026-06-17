@@ -10,6 +10,7 @@ from app.core import config as settings
 from redis.asyncio import Redis
 import json
 from app.core.mq_producer import MQProducer
+from app.core.runner_device_control import STOPPED_STATUS, force_stop_runner_device
 from app.core.runner_middleware import revoke_device_middleware
 
 # 创建路由对象
@@ -21,6 +22,11 @@ router = APIRouter(prefix="/devices", tags=["设备管理"])
 async def register_device(item: DeviceSchemas):
     # 检查设备是否存在且未被删除
     device = await Device.get_or_none(id=item.id, is_del=False)
+    if device and device.status == STOPPED_STATUS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="设备已被管理员停止，请在 Runner 客户端重新上线",
+        )
     if device:
         # 同步更新所有字段（name/ip/hostname/version 等可能已变更）
         update_data = item.model_dump(exclude_none=True, exclude={"id", "create_time"})
@@ -91,6 +97,35 @@ async def delete_device(device_id: str, user_info: dict = Depends(is_authenticat
     # 逻辑删除：设置is_del=True
     device.is_del = True
     await device.save()
+
+
+@router.post(
+    "/{device_id}/stop",
+    summary="停止 Runner 设备",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permissions(DEVICE_EDIT))],
+)
+async def stop_runner_device(device_id: str, user_info: dict = Depends(is_authenticated)):
+    """
+    强制停止在线 Runner：吊销会话与 MQ/Redis 凭证，停止画面/日志上报。
+    执行器端须重新「上线」后才能继续使用。
+    """
+    device = await Device.get_or_none(id=device_id, is_del=False)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="设备不存在或已被删除")
+    if device.status == STOPPED_STATUS:
+        return {"ok": True, "device_id": device_id, "status": STOPPED_STATUS, "message": "设备已处于停止状态"}
+    if device.status not in ("在线", "执行中"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="仅可停止在线或执行中的设备")
+
+    await force_stop_runner_device(device)
+    logging.info("管理员 %s 已停止 Runner 设备 %s", user_info.get("username"), device_id)
+    return {
+        "ok": True,
+        "device_id": device_id,
+        "status": STOPPED_STATUS,
+        "message": "设备已停止，Runner 需重新上线后方可使用",
+    }
 
 
 # websocket接口（只允许未删除的设备连接）

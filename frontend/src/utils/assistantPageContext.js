@@ -23,12 +23,17 @@ export function buildAssistantPageContext(route) {
       break
     case 'apiPlanEdit':
       ctx.plan_id = parseId(p.planId)
+      ctx.page_hint = 'api_plans'
       break
     case 'editCase':
       ctx.ui_case_id = parseId(p.id)
       break
     case 'editTask':
       ctx.task_id = parseId(p.id)
+      break
+    case 'editSuite':
+      ctx.ui_suite_id = parseId(p.id)
+      ctx.page_hint = 'ui_suites'
       break
     case 'apiReport':
       ctx.api_run_record_id = parseId(p.recordId)
@@ -41,6 +46,7 @@ export function buildAssistantPageContext(route) {
       break
     case 'perfSceneEdit':
       ctx.perf_scene_id = parseId(p.id)
+      ctx.page_hint = 'perf_scenes'
       break
     case 'perfReport':
       ctx.perf_record_id = parseId(p.recordId)
@@ -57,6 +63,18 @@ export function buildAssistantPageContext(route) {
     case 'apiRunRecords':
       ctx.page_hint = 'api_run_records'
       break
+    case 'apiPlan':
+      ctx.page_hint = 'api_plans'
+      break
+    case 'apiMock':
+      ctx.page_hint = 'mock_apis'
+      break
+    case 'apiDataFactory':
+      ctx.page_hint = 'data_factory'
+      break
+    case 'apiCron':
+      ctx.page_hint = 'cron_jobs'
+      break
     case 'aiRequirements':
     case 'aiTestAnalysis':
       ctx.page_hint = 'requirements'
@@ -64,12 +82,38 @@ export function buildAssistantPageContext(route) {
     case 'aiFunctionalCases':
       ctx.page_hint = 'functional_cases'
       break
+    case 'aiQaEval':
+      ctx.page_hint = 'qa_eval'
+      break
     case 'caseList':
     case 'taskList':
       ctx.page_hint = 'ui_cases'
       break
+    case 'suiteList':
+    case 'addSuite':
+      ctx.page_hint = 'ui_suites'
+      break
     case 'recordList':
       ctx.page_hint = 'ui_run_records'
+      break
+    case 'cronjob':
+      ctx.page_hint = 'cron_jobs'
+      break
+    case 'device':
+      ctx.page_hint = 'online_devices'
+      break
+    case 'perfSceneList':
+    case 'perfSceneAdd':
+      ctx.page_hint = 'perf_scenes'
+      break
+    case 'perfRecordList':
+      ctx.page_hint = 'perf_scenes'
+      break
+    case 'perfCronJobs':
+      ctx.page_hint = 'cron_jobs'
+      break
+    case 'perfWorkerList':
+      ctx.page_hint = 'perf_workers'
       break
     default:
       break
@@ -81,6 +125,8 @@ export function buildAssistantPageContext(route) {
   if (!ctx.requirement_id && q.req_id) ctx.requirement_id = parseId(q.req_id)
   if (!ctx.suite_id && q.suite_id) ctx.suite_id = parseId(q.suite_id)
   if (!ctx.task_id && q.task_id) ctx.task_id = parseId(q.task_id)
+  if (!ctx.template_id && q.template_id) ctx.template_id = parseId(q.template_id)
+  if (!ctx.datasource_id && q.datasource_id) ctx.datasource_id = parseId(q.datasource_id)
 
   return ctx
 }
@@ -90,9 +136,14 @@ export function formatPageContextLabel(ctx) {
   const parts = [ctx.page_label]
   if (ctx.api_id) parts.push(`接口#${ctx.api_id}`)
   if (ctx.suite_id) parts.push(`套件#${ctx.suite_id}`)
+  if (ctx.plan_id) parts.push(`计划#${ctx.plan_id}`)
   if (ctx.requirement_id) parts.push(`需求#${ctx.requirement_id}`)
-  if (ctx.task_id) parts.push(`计划#${ctx.task_id}`)
+  if (ctx.task_id) parts.push(`UI计划#${ctx.task_id}`)
   if (ctx.ui_case_id) parts.push(`用例#${ctx.ui_case_id}`)
+  if (ctx.ui_suite_id) parts.push(`UI套件#${ctx.ui_suite_id}`)
   if (ctx.api_run_record_id) parts.push(`执行记录#${ctx.api_run_record_id}`)
+  if (ctx.perf_scene_id) parts.push(`压测场景#${ctx.perf_scene_id}`)
+  if (ctx.template_id) parts.push(`SQL模板#${ctx.template_id}`)
+  if (ctx.datasource_id) parts.push(`数据源#${ctx.datasource_id}`)
   return parts.join(' · ')
 }

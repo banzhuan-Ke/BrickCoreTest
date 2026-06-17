@@ -8,6 +8,7 @@ from typing import Any, Literal, Optional
 
 from fastapi import HTTPException
 
+from app.core.ui_result_extract import extract_ui_case_failure_summary
 from app.models.http import ApiPlanRunRecord, ApiRunRecord, ApiSuiteRunRecord
 from app.models.ui import UiCaseExecution, UiPlanExecution, UiSuiteExecution
 
@@ -119,13 +120,18 @@ async def build_report_execution_data(
         for ce in case_execs:
             if ce.status not in UI_FAIL_STATUSES:
                 continue
-            rd = ce.result_data if isinstance(ce.result_data, dict) else {}
+            summary = extract_ui_case_failure_summary(ce.result_data)
             failed_cases.append(
                 {
-                    "case_name": rd.get("name") or (ce.case.name if ce.case else "未知"),
+                    "case_name": summary.get("case_name") or (ce.case.name if ce.case else "未知"),
                     "status": ce.status,
                     "execution_id": ce.id,
-                    "error_hint": (rd.get("error") or rd.get("message") or "")[:300],
+                    "error_hint": summary.get("error_hint") or "",
+                    "failed_step_index": summary.get("failed_step_index"),
+                    "failed_step_keyword": summary.get("failed_step_keyword") or "",
+                    "log_error_excerpt": summary.get("log_error_excerpt") or "",
+                    "has_screenshot": summary.get("has_screenshot"),
+                    "data_complete": summary.get("data_complete"),
                 }
             )
         total = rec.case_count or len(case_execs)
@@ -153,6 +159,21 @@ async def build_report_execution_data(
         for se in suite_execs:
             if (se.fail or 0) + (se.error or 0) <= 0:
                 continue
+            suite_failed_cases = []
+            case_execs = await UiCaseExecution.filter(
+                suite_execution_id=se.id, is_del=False, status__in=list(UI_FAIL_STATUSES)
+            ).prefetch_related("case").order_by("id").limit(5)
+            for ce in case_execs:
+                summary = extract_ui_case_failure_summary(ce.result_data)
+                suite_failed_cases.append(
+                    {
+                        "case_name": summary.get("case_name") or (ce.case.name if ce.case else "未知"),
+                        "execution_id": ce.id,
+                        "status": ce.status,
+                        "error_hint": summary.get("error_hint") or "",
+                        "failed_step_keyword": summary.get("failed_step_keyword") or "",
+                    }
+                )
             failed_suites.append(
                 {
                     "suite_name": se.suite.name if se.suite else "未知",
@@ -160,6 +181,7 @@ async def build_report_execution_data(
                     "error": se.error,
                     "pass_rate": se.pass_rate,
                     "suite_execution_id": se.id,
+                    "failed_case_samples": suite_failed_cases,
                 }
             )
         total = rec.case_count or 0
@@ -253,13 +275,13 @@ async def collect_failure_targets(
             status__in=list(UI_FAIL_STATUSES),
         ).order_by("id").limit(limit)
         for ce in case_execs:
-            rd = ce.result_data if isinstance(ce.result_data, dict) else {}
+            summary = extract_ui_case_failure_summary(ce.result_data)
             targets.append(
                 {
                     "target_type": "ui",
                     "target_id": ce.id,
-                    "case_name": rd.get("name") or (ce.case.name if ce.case else "未知用例"),
-                    "error_msg": (rd.get("error") or rd.get("message") or "")[:200],
+                    "case_name": summary.get("case_name") or (ce.case.name if ce.case else "未知用例"),
+                    "error_msg": (summary.get("error_hint") or summary.get("log_error_excerpt") or "")[:200],
                 }
             )
         return targets
@@ -280,13 +302,13 @@ async def collect_failure_targets(
             for ce in case_execs:
                 if len(targets) >= limit:
                     break
-                rd = ce.result_data if isinstance(ce.result_data, dict) else {}
+                summary = extract_ui_case_failure_summary(ce.result_data)
                 targets.append(
                     {
                         "target_type": "ui",
                         "target_id": ce.id,
-                        "case_name": rd.get("name") or (ce.case.name if ce.case else "未知用例"),
-                        "error_msg": (rd.get("error") or rd.get("message") or "")[:200],
+                        "case_name": summary.get("case_name") or (ce.case.name if ce.case else "未知用例"),
+                        "error_msg": (summary.get("error_hint") or summary.get("log_error_excerpt") or "")[:200],
                     }
                 )
         return targets
@@ -327,13 +349,13 @@ async def fetch_recent_failures(project_id: int, limit: int = 8) -> list[dict[st
     for ce in ui_records:
         if not ce.case or int(ce.case.project_id) != project_id:
             continue
-        rd = ce.result_data if isinstance(ce.result_data, dict) else {}
+        summary = extract_ui_case_failure_summary(ce.result_data)
         rows.append(
             {
                 "target_type": "ui",
                 "target_id": ce.id,
-                "case_name": rd.get("name") or ce.case.name,
-                "error_msg": (rd.get("error") or rd.get("message") or "")[:120],
+                "case_name": summary.get("case_name") or ce.case.name,
+                "error_msg": (summary.get("error_hint") or summary.get("log_error_excerpt") or "")[:120],
                 "status": ce.status,
                 "run_at": ce.start_time.strftime("%Y-%m-%d %H:%M:%S") if ce.start_time else "",
                 "sort_ts": ce.start_time.timestamp() if ce.start_time else 0,

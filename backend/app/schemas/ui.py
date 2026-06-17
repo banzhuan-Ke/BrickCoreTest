@@ -19,6 +19,7 @@ class CaseSchemas(BaseModel):
     level: str = Field(default="P2", description="用例等级 P0/P1/P2/P3")
     source_functional_case_id: Optional[int] = Field(default=None, description="来源功能用例库ID")
     source_functional_case_title: Optional[str] = Field(default=None, description="来源功能用例标题")
+    description: Optional[str] = Field(default=None, description="用例描述")
     username: str = Field(description="创建人")
     is_del: bool = Field(description="是否删除", default=False)
     catalog_id: Optional[int] = Field(default=None, description="所属目录id")
@@ -32,6 +33,7 @@ class AddCaseForm(BaseModel):
     steps: list = Field(description="用例执行步骤")
     source_functional_case_id: Optional[int] = Field(default=None, description="来源功能用例库ID")
     source_functional_case_title: Optional[str] = Field(default=None, max_length=500, description="来源功能用例标题")
+    description: Optional[str] = Field(default=None, max_length=4000, description="用例描述")
     username: str = Field(description="创建人")
     is_del: bool = Field(description="是否删除", default=False)
     catalog_id: Optional[int] = Field(default=None, description="所属目录id")
@@ -43,6 +45,7 @@ class UpdateCaseForm(BaseModel):
     level: str | None = Field(default=None, description="用例等级 P0/P1/P2/P3")
     steps: list | None = Field(default=None, description="用例执行步骤")
     catalog_id: int | None = Field(default=None, description="所属目录id")
+    description: str | None = Field(default=None, max_length=4000, description="用例描述")
     is_del: bool = Field(description="是否删除", default=False)
 
 
@@ -61,6 +64,10 @@ class SuiteSchemas(BaseModel):
     teardown_sql_ids: list = Field(default_factory=list, description="后置 SQL 模板 ID 列表")
     db_assertions: list = Field(default_factory=list, description="套件级数据库断言")
     suite_type: str = Field(description="套件类型")
+    stop_on_failure: bool = Field(default=False, description="用例失败时停止后续用例")
+    propagate_variables: bool = Field(
+        default=False, description="是否将链路用例变量传递给后续链路用例"
+    )
     username: str = Field(description="创建人")
     is_del: bool = Field(description="是否删除", default=False)
 
@@ -78,6 +85,10 @@ class AddSuiteForm(BaseModel):
     teardown_sql_ids: list = Field(default_factory=list, description="后置 SQL 模板 ID 列表")
     db_assertions: list = Field(default_factory=list, description="套件级数据库断言")
     suite_type: str = Field(description="套件类型")
+    stop_on_failure: bool = Field(default=False, description="用例失败时停止后续用例")
+    propagate_variables: bool = Field(
+        default=False, description="是否将链路用例变量传递给后续链路用例"
+    )
     username: str = Field(description="创建人")
 
 
@@ -90,6 +101,10 @@ class UpdateSuiteForm(BaseModel):
     teardown_sql_ids: list | None = Field(default=None, description="后置 SQL 模板 ID 列表")
     db_assertions: list | None = Field(default=None, description="套件级数据库断言")
     suite_type: str | None = Field(default=None, description="套件类型")
+    stop_on_failure: bool | None = Field(default=None, description="用例失败时停止后续用例")
+    propagate_variables: bool | None = Field(
+        default=None, description="是否将链路用例变量传递给后续链路用例"
+    )
     is_del: bool | None = Field(default=None, description="是否删除（逻辑删除控制）")
 
 
@@ -100,6 +115,7 @@ class StepSchemas(BaseModel):
     cases_id: int = Field(description="所属用例")
     sort: int = Field(description="用例执行顺序")
     skip: bool = Field(description="是否跳过")
+    run_mode: str = Field(default="standalone", description="运行模式：chain|standalone")
     is_del: bool = Field(description="是否删除", default=False)
 
     class Config:
@@ -122,6 +138,8 @@ class SuiteCaseSortItem(BaseModel):
     """套件用例排序项"""
     cases_id: int = Field(description="用例ID")
     sort: int = Field(description="执行顺序")
+    skip: bool | None = Field(default=None, description="是否跳过")
+    run_mode: str | None = Field(default=None, description="运行模式：chain|standalone")
 
 
 class UpdateSuiteCaseSortForm(BaseModel):
@@ -140,6 +158,7 @@ class TaskSchemas(BaseModel):
     project_id: int = Field(description="所属项目")
     catalog_id: Optional[int] = Field(default=None, description="所属目录id")
     username: str = Field(description="创建人")
+    parallel: bool = Field(default=False, description="计划级并行执行")
     is_del: bool = Field(description="是否删除", default=False)
 
     class Config:
@@ -158,6 +177,7 @@ class UpdateTaskForm(BaseModel):
     """更新计划的表单"""
     name: str | None = Field(default=None, description="任务名称")
     catalog_id: int | None = Field(default=None, description="所属目录id")
+    parallel: bool | None = Field(default=None, description="计划级并行执行")
 
 
 class AddSuiteToTaskForm(BaseModel):
@@ -182,6 +202,7 @@ class TaskDetailSchemas(BaseModel):
     create_time: datetime = Field(description="创建时间")
     update_time: datetime = Field(description="更新时间")
     name: str = Field(description="任务名称")
+    parallel: bool = Field(default=False, description="计划级并行执行")
     suites: list[TaskToSuiteSchemas] = Field(description="任务中套件")
     username: str = Field(description="创建人")
     is_del: bool = Field(description="是否删除", default=False)
@@ -192,11 +213,19 @@ class TaskDetailSchemas(BaseModel):
 
 # ==================== Runner/Exec Schemas ====================
 
+class DeviceWeightItem(BaseModel):
+    device_id: str = Field(min_length=1, description="Runner 设备 ID")
+    weight: int = Field(default=1, ge=1, le=100, description="并行分发权重")
+    concurrency: int = Field(default=1, ge=1, le=20, description="该执行器同时运行的套件数上限")
+
+
 class RunForm(BaseModel):
     """用例运行表单"""
     env_id: int = Field(description="运行环境的ID")
     browser_type: Optional[str] = Field(default=None, description="浏览器类型")
-    device_id: Optional[str] = Field(default=None, description="设备ID")
+    device_id: Optional[str] = Field(default=None, description="设备ID（串行模式）")
+    devices: list[DeviceWeightItem] = Field(default_factory=list, description="并行模式多执行器及权重")
+    concurrency: int = Field(default=1, ge=1, le=20, description="串行模式单执行器并发套件数上限")
     config: bool = Field(default=True, description="是否启用无头模式")
     username: str = Field(description="创建人")
     ai_heal_enabled: Optional[bool] = Field(

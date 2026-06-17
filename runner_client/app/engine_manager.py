@@ -9,7 +9,15 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from runner_client.app.runtime_check import playwright_browsers_path_for_engine
+from runner_client.app.runtime_check import (
+    ensure_runner_venv_home,
+    format_runner_deps_error,
+    is_packaged_app,
+    probe_runner_imports,
+    playwright_browsers_path_for_engine,
+    runner_venv_python,
+)
+from runner_client.app.win_subprocess import engine_runner_subprocess_kwargs
 
 
 def app_root_dir() -> Path:
@@ -28,14 +36,26 @@ def playwright_browsers_dir() -> Path:
 
 
 def runner_python_executable() -> str:
+    """必须使用 runner/venv，禁止回退到客户端 Python（缺少 jsonpath_ng 等依赖）。"""
     runner_dir = repo_runner_dir()
-    if os.name == "nt":
-        venv_py = runner_dir / "venv" / "Scripts" / "python.exe"
-    else:
-        venv_py = runner_dir / "venv" / "bin" / "python"
+    venv_py = runner_venv_python(runner_dir)
     if venv_py.is_file():
         return str(venv_py)
-    return sys.executable
+    if is_packaged_app():
+        raise FileNotFoundError(
+            f"打包版缺少 Runner 运行时：{venv_py}\n请重新下载 BrickCoreRunner 安装包。"
+        )
+    raise FileNotFoundError(
+        f"找不到 Runner 引擎 venv：{venv_py}\n请先运行 runner_client\\start-client.bat。"
+    )
+
+
+def validate_runner_python_deps(runner_dir: Path) -> None:
+    ensure_runner_venv_home(runner_dir)
+    missing, detail = probe_runner_imports(runner_dir)
+    if not missing:
+        return
+    raise RuntimeError(format_runner_deps_error(runner_dir, missing, detail=detail))
 
 
 def build_engine_env(connect: dict[str, Any], device_name: str) -> dict[str, str]:
@@ -69,6 +89,17 @@ def build_engine_env(connect: dict[str, Any], device_name: str) -> dict[str, str
     browsers_path = playwright_browsers_path_for_engine(repo_runner_dir())
     if browsers_path:
         env["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
+
+    if is_packaged_app():
+        runner_dir = repo_runner_dir()
+        venv_dir = runner_dir / "venv"
+        path_prefix = [
+            str(p)
+            for p in (venv_dir, venv_dir / "Scripts", venv_dir / "DLLs")
+            if p.is_dir()
+        ]
+        if path_prefix:
+            env["PATH"] = os.pathsep.join(path_prefix + [env.get("PATH", "")])
 
     for key in (
         "DATABASE_HOST",
@@ -140,6 +171,8 @@ class EngineManager:
         if not (self.runner_dir / "main.py").is_file():
             raise FileNotFoundError(f"找不到 Runner 引擎: {self.runner_dir / 'main.py'}")
 
+        validate_runner_python_deps(self.runner_dir)
+        py_exe = runner_python_executable()
         env = build_engine_env(connect, device_name)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         # 仅从本次上线后写入的内容开始读取（保留文件中的历史记录）
@@ -148,13 +181,14 @@ class EngineManager:
         else:
             self._log_offset = 0
         self._out_queue = queue.Queue()
+        print(f"[client] runner python: {py_exe}", flush=True)
         self._proc = subprocess.Popen(
-            [runner_python_executable(), "main.py"],
+            [py_exe, "main.py"],
             cwd=str(self.runner_dir),
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            **engine_runner_subprocess_kwargs(),
         )
         self._reader = _OutputReader(self._proc, self._out_queue)
         self._reader.start()

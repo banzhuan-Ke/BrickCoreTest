@@ -95,52 +95,39 @@ const routes = [
             },
             {
                 path: '/notification-config',
-                name: 'notificationConfig',
-                component: () => import('../views/Project/NotificationConfig.vue'),
-                meta: {
-                    title: '通知配置',
-                    icon: 'Bell',
-                    permission: 'notification_config:view'
-                }
+                redirect: { path: '/platform-config', query: { tab: 'notify', sub: 'channels' } }
             },
             {
                 path: '/smtp-config',
-                name: 'smtpConfig',
-                component: () => import('../views/System/SmtpConfig.vue'),
-                meta: {
-                    title: 'SMTP配置',
-                    icon: 'Message',
-                    permission: 'smtp_config:view'
-                }
+                redirect: { path: '/platform-config', query: { tab: 'notify', sub: 'smtp' } }
             },
             {
                 path: '/mcp-config',
-                name: 'mcpConfig',
-                component: () => import('../views/System/McpConfig.vue'),
-                meta: {
-                    title: 'MCP配置',
-                    icon: 'Connection',
-                    permission: 'mcp_config:view'
-                }
+                redirect: { path: '/platform-config', query: { tab: 'mcp' } }
             },
             {
                 path: '/login-page-config',
-                name: 'loginPageConfig',
-                component: () => import('../views/System/LoginPageConfig.vue'),
-                meta: {
-                    title: '登录页配置',
-                    icon: 'Picture',
-                    permission: 'login_page_config:view'
-                }
+                redirect: { path: '/platform-config', query: { tab: 'login' } }
             },
             {
                 path: '/runner-release-config',
-                name: 'runnerReleaseConfig',
-                component: () => import('../views/System/RunnerReleaseConfig.vue'),
+                redirect: { path: '/platform-config', query: { tab: 'runner' } }
+            },
+            {
+                path: '/platform-config',
+                name: 'platformConfig',
+                component: () => import('../views/System/PlatformConfig.vue'),
                 meta: {
-                    title: '执行器发布',
-                    icon: 'Download',
-                    permission: 'device:edit'
+                    title: '平台配置',
+                    icon: 'Setting',
+                    anyPermissions: [
+                        'ai_config:view',
+                        'smtp_config:view',
+                        'notification_config:view',
+                        'mcp_config:view',
+                        'login_page_config:view',
+                        'device:edit'
+                    ]
                 }
             },
             {
@@ -171,6 +158,16 @@ const routes = [
                     title: '接口用例',
                     icon: 'Document',
                     permission: 'api_case:view'
+                }
+            },
+            {
+                path: '/api-test-files',
+                name: 'apiTestFileList',
+                component: () => import('../views/ApiModule/ApiTestFileList.vue'),
+                meta: {
+                    title: '测试文件',
+                    icon: 'FolderOpened',
+                    permission: 'api_manage:view'
                 }
             },
             {
@@ -314,6 +311,46 @@ const routes = [
                 }
             },
             {
+                path: '/ui-fragments',
+                name: 'uiFragmentList',
+                component: () => import('../views/Case/UiFragmentList.vue'),
+                meta: {
+                    title: '步骤片段',
+                    icon: 'Collection',
+                    permission: 'ui_case:view'
+                }
+            },
+            {
+                path: '/ui-fragments/new',
+                name: 'uiFragmentNew',
+                component: () => import('../views/Case/UiFragmentEdit.vue'),
+                meta: {
+                    title: '新建片段',
+                    icon: 'Plus',
+                    permission: 'ui_case:edit'
+                }
+            },
+            {
+                path: '/ui-fragments/edit/:id',
+                name: 'uiFragmentEdit',
+                component: () => import('../views/Case/UiFragmentEdit.vue'),
+                meta: {
+                    title: '编辑片段',
+                    icon: 'Edit',
+                    permission: 'ui_case:edit'
+                }
+            },
+            {
+                path: '/ui-test-files',
+                name: 'uiTestFileList',
+                component: () => import('../views/Case/UiTestFileList.vue'),
+                meta: {
+                    title: '测试文件',
+                    icon: 'FolderOpened',
+                    permission: 'ui_case:view'
+                }
+            },
+            {
                 path: '/suite',
                 name: 'suiteList',
                 component: () => import('../views/Suite/Suite.vue'),
@@ -454,24 +491,64 @@ const routes = [
                 }
             },
             {
-                path: '/ai-test-analysis',
-                name: 'aiTestAnalysis',
-                component: () => import('../views/AI/AiTestAnalysis.vue'),
+                path: '/ai-testing',
+                component: () => import('../views/AI/testing/AiTestingLayout.vue'),
                 meta: {
-                    title: '测试分析',
-                    icon: 'Share',
+                    title: '需求测试中心',
+                    icon: 'Cpu',
+                    permission: 'ai_test:view'
+                },
+                children: [
+                    {
+                        path: '',
+                        name: 'aiTestingHub',
+                        component: () => import('../views/AI/testing/AiTestingRequirementList.vue'),
+                        meta: { title: '需求测试中心', permission: 'ai_test:view' }
+                    },
+                    {
+                        path: 'test-points',
+                        redirect: '/ai-testing'
+                    },
+                    {
+                        path: 'schemes',
+                        redirect: '/ai-testing'
+                    }
+                ]
+            },
+            {
+                path: '/ai-testing/requirements/:reqId',
+                name: 'aiTestingWorkspace',
+                component: () => import('../views/AI/testing/AiRequirementWorkspace.vue'),
+                props: route => ({ reqId: route.params.reqId }),
+                meta: {
+                    title: '需求工作台',
                     permission: 'ai_test:view'
                 }
             },
             {
+                path: '/ai-test-analysis',
+                redirect: to => ({
+                    path: to.query.reqId
+                        ? `/ai-testing/requirements/${to.query.reqId}`
+                        : '/ai-testing',
+                    query: {
+                        tab: to.query.pointId ? 'points' : 'mindmap',
+                        pointId: to.query.pointId
+                    }
+                })
+            },
+            {
                 path: '/ai-requirements',
-                name: 'aiRequirements',
-                component: () => import('../views/AI/AiRequirement.vue'),
-                meta: {
-                    title: '需求用例生成',
-                    icon: 'Document',
-                    permission: 'ai_test:view'
-                }
+                redirect: to => ({
+                    path: to.query.reqId
+                        ? `/ai-testing/requirements/${to.query.reqId}`
+                        : '/ai-testing',
+                    query: {
+                        tab: 'cases',
+                        pointId: to.query.pointId,
+                        sourceRef: to.query.sourceRef
+                    }
+                })
             },
             {
                 path: '/ai-functional-cases',
@@ -495,13 +572,7 @@ const routes = [
             },
             {
                 path: '/ai-config',
-                name: 'aiConfig',
-                component: () => import('../views/AI/AiConfig.vue'),
-                meta: {
-                    title: 'AI 模型配置',
-                    icon: 'Setting',
-                    permission: 'ai_config:view'
-                }
+                redirect: { path: '/platform-config', query: { tab: 'ai' } }
             },
             {
                 path: '/ai-usage',
@@ -522,6 +593,48 @@ const routes = [
                     icon: 'ChatLineRound',
                     permission: 'ai_test:view'
                 }
+            },
+            {
+                path: '/browser-lab',
+                component: () => import('../views/AI/browserLab/BrowserLabLayout.vue'),
+                meta: { title: '智能浏览器', icon: 'Monitor', permission: 'ai_test:view' },
+                redirect: '/browser-lab/cases',
+                children: [
+                    {
+                        path: 'cases',
+                        name: 'browserLabCases',
+                        component: () => import('../views/AI/browserLab/BrowserLabCases.vue'),
+                        meta: { title: '用例库', permission: 'ai_test:view' }
+                    },
+                    {
+                        path: 'run',
+                        name: 'browserLabRun',
+                        component: () => import('../views/AI/browserLab/BrowserLabRun.vue'),
+                        meta: { title: '执行任务', permission: 'ai_test:view' }
+                    },
+                    {
+                        path: 'records',
+                        name: 'browserLabRecords',
+                        component: () => import('../views/AI/browserLab/BrowserLabRecords.vue'),
+                        meta: { title: '执行记录', permission: 'ai_test:view' }
+                    }
+                ]
+            },
+            {
+                path: '/browser-lab/report/:taskId',
+                name: 'browserLabReport',
+                component: () => import('../views/AI/browserLab/BrowserLabReport.vue'),
+                meta: { title: '执行报告', permission: 'ai_test:view' }
+            },
+            {
+                path: '/browser-lab/gif/:taskId',
+                name: 'browserLabGifPreview',
+                component: () => import('../views/AI/browserLab/BrowserLabGifPreview.vue'),
+                meta: { title: '回放 GIF', permission: 'ai_test:view' }
+            },
+            {
+                path: '/ai-browser-lab',
+                redirect: '/browser-lab/run'
             },
             {
                 path: '/perf-scenes',
@@ -636,7 +749,14 @@ router.beforeEach(async (to, from, next) => {
         uStore.permissions = []
     }
     // 路由权限校验（无权限时回登录页并提示）
-    if (to.meta.permission && !uStore.hasPermission(to.meta.permission)) {
+    const anyPerms = to.meta.anyPermissions
+    if (anyPerms?.length) {
+        const ok = anyPerms.some((p) => uStore.hasPermission(p))
+        if (!ok) {
+            NProgress.done()
+            return next({ name: 'login', query: { msg: 'no_permission' } })
+        }
+    } else if (to.meta.permission && !uStore.hasPermission(to.meta.permission)) {
         NProgress.done()
         return next({name: 'login', query: {msg: 'no_permission'}})
     }

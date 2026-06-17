@@ -2,15 +2,26 @@
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Query, status, Body, Depends, Depends
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, HTTPException, Query, status, Body, Depends
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from app.models.perf import PerfRecord, PerfScene
 from app.core.auth import require_permissions
 from app.core.notification import NotificationService
 from app.core.permissions import PERF_RECORD_VIEW
-from app.routers.perf.report_utils import build_report_payload
+from app.routers.perf.report_utils import (
+    build_report_payload,
+    build_config_summary,
+    enrich_case_aggregations,
+    paginate_perf_request_items,
+    render_perf_html_chart_parts,
+    render_perf_html_errors,
+    render_perf_html_status_codes,
+    render_perf_html_stream_sections,
+    render_perf_html_request_traces,
+)
+from app.core.stream_phase import detail_to_excel_row, is_stream_burst_mode, normalize_perf_mode, migrate_legacy_detail
 
 router = APIRouter(prefix="/records", tags=["性能测试记录"])
 
@@ -44,7 +55,11 @@ async def get_records(
     if start_date:
         query = query.filter(started_at__gte=start_date)
     if end_date:
-        query = query.filter(started_at__lte=end_date)
+        try:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            query = query.filter(started_at__lte=end_dt)
+        except ValueError:
+            query = query.filter(started_at__lte=end_date)
 
     total = await query.count()
     records = await query.order_by("-id").offset((page - 1) * size).limit(size).all()
@@ -98,6 +113,23 @@ async def get_record_detail(record_id: int):
     return build_report_payload(record, scene, previous)
 
 
+@router.get("/{record_id}/request-items", summary="分页获取请求明细（报告懒加载）",
+            dependencies=[Depends(require_permissions(PERF_RECORD_VIEW))])
+async def get_request_items(
+    record_id: int,
+    kind: str = Query("stream", description="stream=流式阶段明细, http=HTTP请求trace"),
+    status: str = Query("all", description="all|success|fail"),
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=100),
+):
+    record = await PerfRecord.get_or_none(id=record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    if kind not in ("stream", "http"):
+        raise HTTPException(status_code=400, detail="kind 须为 stream 或 http")
+    return paginate_perf_request_items(record, kind=kind, status=status, page=page, size=size)
+
+
 @router.post("/batch-delete", summary="批量删除执行记录", status_code=status.HTTP_204_NO_CONTENT)
 async def batch_delete_records(record_ids: List[int]):
     """批量删除性能测试执行记录"""
@@ -148,6 +180,69 @@ async def export_perf_report(record_id: int):
     )
 
 
+@router.get("/{record_id}/export-excel", summary="导出SSE阶段压测Excel报告")
+async def export_perf_excel(record_id: int):
+    """导出 SSE 问答阶段压测明细与汇总 Excel（双 sheet）。"""
+    record = await PerfRecord.get_or_none(id=record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+
+    mode = normalize_perf_mode((record.config_snapshot or {}).get("mode"))
+    details = [migrate_legacy_detail(d) for d in (record.request_details or [])]
+    if not details or not is_stream_burst_mode(mode):
+        raise HTTPException(status_code=400, detail="该记录无流式阶段压测明细，请使用流式阶段压测模式执行")
+
+    from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
+    import io
+
+    wb = Workbook()
+    detail_ws = wb.active
+    detail_ws.title = "详细结果"
+
+    detail_rows = [detail_to_excel_row(i, d) for i, d in enumerate(details, 1)]
+    if detail_rows:
+        headers = list(detail_rows[0].keys())
+        detail_ws.append(headers)
+        for row in detail_rows:
+            detail_ws.append([row.get(h, "") for h in headers])
+        for col_idx, _ in enumerate(headers, 1):
+            detail_ws.column_dimensions[get_column_letter(col_idx)].width = min(30, 16)
+
+    summary_ws = wb.create_sheet("汇总")
+    phase_metrics = record.phase_metrics or {}
+    metrics = phase_metrics.get("metrics") or []
+    if metrics:
+        summary_headers = ["指标", "并发数", "正常请求数", "异常量", "异常率(%)", "平均数(s)", "中位数(s)", "90%百分位(s)", "95%百分位(s)", "99%百分位(s)", "最小值(s)", "最大值(s)"]
+        summary_ws.append(summary_headers)
+        for m in metrics:
+            summary_ws.append([
+                m.get("label", ""),
+                m.get("total_requests", ""),
+                m.get("normal_count", ""),
+                m.get("abnormal_count", ""),
+                f"{m.get('error_rate', 0):.2f}%",
+                m.get("mean", "N/A"),
+                m.get("median", "N/A"),
+                m.get("p90", "N/A"),
+                m.get("p95", "N/A"),
+                m.get("p99", "N/A"),
+                m.get("min", "N/A"),
+                m.get("max", "N/A"),
+            ])
+        for col_idx in range(1, len(summary_headers) + 1):
+            summary_ws.column_dimensions[get_column_letter(col_idx)].width = 16
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    filename = f"sse_phase_report_{record_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @router.get("/{record_id}/report", summary="执行报告数据")
 async def get_record_report(record_id: int):
     """获取性能测试报告数据（用于前端 echarts）"""
@@ -157,10 +252,11 @@ async def get_record_report(record_id: int):
 def _generate_perf_html_report(record: PerfRecord, scene) -> str:
     """生成性能测试 HTML 报告"""
     scene_name = scene.name if scene else "未知场景"
-    mode = record.config_snapshot.get("mode", "fixed") if record.config_snapshot else "fixed"
-    mode_label = {"fixed": "固定模式", "loop": "循环模式", "stepping": "梯度模式"}.get(mode, mode)
-    dist_mode = record.config_snapshot.get("distribution_mode", "weighted_random") if record.config_snapshot else "weighted_random"
-    dist_label = "固定比例" if dist_mode == "fixed_ratio" else "随机权重"
+    config = record.config_snapshot or {}
+    cfg_summary = build_config_summary(config, record.distribution_info or {})
+    mode_label = cfg_summary.get("mode_label", config.get("mode", "fixed"))
+    dist_label = cfg_summary.get("distribution_mode_label", "随机权重")
+    mode = cfg_summary.get("mode", config.get("mode", "fixed"))
     
     status_class = "status-success" if record.status == "success" else "status-fail" if record.status == "failed" else "status-running"
     status_text = {"success": "成功", "failed": "失败", "running": "执行中", "stopped": "已停止", "pending": "等待中"}.get(record.status, record.status)
@@ -186,7 +282,8 @@ def _generate_perf_html_report(record: PerfRecord, scene) -> str:
     
     # 构建接口维度表格
     case_rows = ""
-    for cid, agg in (record.case_aggregations or {}).items():
+    case_aggs = enrich_case_aggregations(record.case_aggregations, record.duration or 0)
+    for cid, agg in case_aggs.items():
         case_rows += f"""
         <tr>
             <td>{agg.get('name', '未知')}</td>
@@ -206,44 +303,12 @@ def _generate_perf_html_report(record: PerfRecord, scene) -> str:
     
     if not case_rows:
         case_rows = '<tr><td colspan="13" style="text-align:center;color:#999;">无接口数据</td></tr>'
-    
-    # 构建错误分类表格
-    err_type_rows = ""
-    bd = record.error_breakdown or {}
-    by_type = bd.get("by_type", {})
-    total_fail = record.fail_count or 1
-    type_map = {
-        "timeout": "请求超时", "connection_error": "连接错误", "network_error": "网络错误",
-        "server_error": "服务端错误(5xx)", "client_error": "客户端错误(4xx)",
-        "assertion_failed": "断言失败", "unknown": "未知错误"
-    }
-    for etype, count in sorted(by_type.items(), key=lambda x: -x[1]):
-        pct = round(count / total_fail * 100, 1) if total_fail > 0 else 0
-        err_type_rows += f"""
-        <tr>
-            <td>{type_map.get(etype, etype)}</td>
-            <td>{count}</td>
-            <td>{pct}%</td>
-        </tr>"""
-    
-    if not err_type_rows:
-        err_type_rows = '<tr><td colspan="3" style="text-align:center;color:#999;">无错误数据</td></tr>'
-    
-    # 失败采样
-    sample_rows = ""
-    samples = bd.get("failed_samples", [])[:50]
-    for idx, s in enumerate(samples, 1):
-        sample_rows += f"""
-        <tr>
-            <td>{idx}</td>
-            <td>{s.get('case_name', '未知')}</td>
-            <td>{s.get('status_code', 0)}</td>
-            <td>{round(s.get('response_time', 0), 2)} ms</td>
-            <td style="color:#f56c6c;max-width:400px;overflow:hidden;text-overflow:ellipsis;">{s.get('error_msg', '') or '-'}</td>
-        </tr>"""
-    
-    if not sample_rows:
-        sample_rows = '<tr><td colspan="5" style="text-align:center;color:#999;">无失败采样</td></tr>'
+
+    chart_sections, chart_scripts = render_perf_html_chart_parts(record)
+    stream_html = render_perf_html_stream_sections(record)
+    status_code_html = render_perf_html_status_codes(record)
+    error_html = render_perf_html_errors(record)
+    request_traces_html = render_perf_html_request_traces(record)
     
     html = f'''<!DOCTYPE html>
 <html lang="zh-CN">
@@ -283,6 +348,32 @@ tr:hover {{ background:#fafafa; }}
 .config-item {{ background:#f8f9fa; padding:12px 16px; border-radius:8px; }}
 .config-item .label {{ font-size:12px; color:#999; margin-bottom:4px; }}
 .config-item .value {{ font-size:15px; font-weight:600; color:#333; }}
+.chart-box {{ width:100%; height:420px; }}
+.chart-hint {{ font-size:12px; color:#999; margin-top:8px; text-align:center; }}
+.table-scroll {{ overflow-x:auto; -webkit-overflow-scrolling:touch; }}
+.stream-detail-scroll table.stream-detail-table {{ width:max-content; min-width:100%; table-layout:auto; }}
+.stream-detail-table th,
+.stream-detail-table td {{ vertical-align:top; }}
+.stream-detail-table .col-narrow {{ white-space:nowrap; text-align:center; padding:8px 10px; }}
+.stream-detail-table .col-time {{ white-space:nowrap; text-align:center; padding:8px 10px; font-size:12px; }}
+.stream-detail-table th.col-narrow,
+.stream-detail-table th.col-time {{ white-space:nowrap; }}
+.stream-detail-table th.col-text {{ white-space:nowrap; min-width:80px; max-width:none; text-align:center; }}
+.stream-detail-table .col-text {{ text-align:left; min-width:200px; max-width:520px; white-space:normal; word-break:break-word; overflow-wrap:anywhere; line-height:1.45; padding:8px 10px; vertical-align:top; }}
+.stream-cell-pre {{ margin:0; padding:0; background:transparent; border:none; font-family:inherit; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere; max-height:none; text-align:left; }}
+.section-fold {{ margin:16px 0; border:1px solid #eee; border-radius:10px; background:#fff; box-shadow:0 2px 8px rgba(0,0,0,0.04); }}
+.section-fold summary {{ cursor:pointer; padding:14px 18px; font-weight:600; color:#333; list-style-position:inside; }}
+.section-fold summary::-webkit-details-marker {{ color:#667eea; }}
+.section-fold > .section {{ margin:0; border:none; box-shadow:none; border-top:1px solid #f0f0f0; border-radius:0 0 10px 10px; }}
+.text-left {{ text-align:left; max-width:360px; word-break:break-word; }}
+.error-cell {{ color:#f56c6c; text-align:left; max-width:420px; word-break:break-word; }}
+.trace-details {{ margin:6px 0; text-align:left; }}
+.trace-details summary {{ cursor:pointer; color:#667eea; font-size:13px; padding:4px 0; }}
+.trace-block {{ margin:8px 0; }}
+.trace-label {{ font-size:12px; font-weight:600; color:#606266; margin-bottom:4px; }}
+.trace-pre {{ margin:0; padding:8px 10px; background:#f5f7fa; border:1px solid #ebeef5; border-radius:4px; font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-all; max-height:220px; overflow:auto; text-align:left; }}
+.trace-pre.trace-pre-full {{ max-height:none; overflow:visible; }}
+.trace-detail-row td {{ background:#fafafa; padding:8px 12px; }}
 .footer {{ text-align:center; color:#999; font-size:12px; margin-top:30px; padding:20px; }}
 @media print {{ body {{ background:white; }} .section {{ box-shadow:none; border:1px solid #eee; }} }}
 </style>
@@ -307,6 +398,11 @@ tr:hover {{ background:#fafafa; }}
       <div class="metric-card warning"><div class="metric-value">{round(record.p95_response_time, 2)} ms</div><div class="metric-label">P95 响应时间</div></div>
       <div class="metric-card {'danger' if record.error_rate > 5 else 'info'}"><div class="metric-value">{round(record.error_rate, 2)}%</div><div class="metric-label">错误率</div></div>
     </div>
+  </div>
+
+  <details class="section-fold">
+    <summary>更多指标（请求统计 / 延迟分位 / 网络吞吐）</summary>
+    <div class="section">
     <div class="mini-metrics">
       <div class="metric-card mini"><div class="metric-value">{record.total_requests}</div><div class="metric-label">总请求</div></div>
       <div class="metric-card mini"><div class="metric-value">{record.success_count}</div><div class="metric-label">成功</div></div>
@@ -321,26 +417,35 @@ tr:hover {{ background:#fafafa; }}
       <div class="metric-card mini"><div class="metric-value">{round(record.sent_kb_per_sec, 2)} KB/s</div><div class="metric-label">Sent</div></div>
       <div class="metric-card mini"><div class="metric-value">{round(record.duration, 2)} s</div><div class="metric-label">执行时长</div></div>
     </div>
-  </div>
+    </div>
+  </details>
 
   <div class="section">
     <h2>配置信息</h2>
     <div class="config-grid">
-      <div class="config-item"><div class="label">并发用户数</div><div class="value">{record.config_snapshot.get('concurrent_users', '-') if record.config_snapshot else '-'}</div></div>
-      <div class="config-item"><div class="label">Ramp-up</div><div class="value">{record.config_snapshot.get('ramp_up_seconds', 0)}s</div></div>
-      <div class="config-item"><div class="label">目标Host</div><div class="value">{record.config_snapshot.get('target_host', '默认') if record.config_snapshot else '默认'}</div></div>
-      <div class="config-item"><div class="label">持续时间/循环</div><div class="value">{record.config_snapshot.get('duration_seconds', record.config_snapshot.get('loop_count', '-')) if record.config_snapshot else '-'}{'s' if mode == 'fixed' else '次' if mode == 'loop' else ''}</div></div>
+      <div class="config-item"><div class="label">并发用户数</div><div class="value">{config.get('concurrent_users', '-')}</div></div>
+      <div class="config-item"><div class="label">Ramp-up</div><div class="value">{config.get('ramp_up_seconds', 0)}s</div></div>
+      <div class="config-item"><div class="label">目标Host</div><div class="value">{config.get('target_host') or '默认'}</div></div>
+      <div class="config-item"><div class="label">持续时间/循环</div><div class="value">{cfg_summary.get('duration_label', '-')}</div></div>
       <div class="config-item"><div class="label">分配模式</div><div class="value">{dist_label}</div></div>
     </div>
   </div>
 
-  <div class="section">
-    <h2>性能趋势（每秒采样）</h2>
+  {chart_sections}
+
+  {stream_html}
+
+  <details class="section-fold">
+    <summary>性能趋势（每秒采样）</summary>
+    <div class="section">
     <table>
       <thead><tr><th>时间(s)</th><th>QPS</th><th>平均RT(ms)</th><th>错误率(%)</th><th>累计请求</th></tr></thead>
       <tbody>{ts_rows}</tbody>
     </table>
-  </div>
+    </div>
+  </details>
+
+  {status_code_html}
 
   <div class="section">
     <h2>接口维度详情</h2>
@@ -350,24 +455,13 @@ tr:hover {{ background:#fafafa; }}
     </table>
   </div>
 
-  <div class="section">
-    <h2>错误分类统计</h2>
-    <table>
-      <thead><tr><th>错误类型</th><th>次数</th><th>占比</th></tr></thead>
-      <tbody>{err_type_rows}</tbody>
-    </table>
-  </div>
+  {error_html}
 
-  <div class="section">
-    <h2>失败请求采样（前{len(samples)}条）</h2>
-    <table>
-      <thead><tr><th>#</th><th>用例名称</th><th>状态码</th><th>响应时间</th><th>错误详情</th></tr></thead>
-      <tbody>{sample_rows}</tbody>
-    </table>
-  </div>
+  {request_traces_html}
 
   <div class="footer">BrickCore 性能测试报告 &nbsp;|&nbsp; 生成时间：{generate_time}</div>
 </div>
+{chart_scripts}
 </body>
 </html>'''
     return html

@@ -14,8 +14,13 @@
             <div>暂无数据</div>
           </div>
         </template>
-        <el-table-column label="序号" type="index" width="90"/>
-        <el-table-column prop="name" label="角色名称"/>
+        <el-table-column label="序号" type="index" :index="tableRowIndex" width="90"/>
+        <el-table-column prop="name" label="角色名称">
+          <template #default="scope">
+            {{ scope.row.name }}
+            <el-tag v-if="scope.row.is_system" type="info" size="small" style="margin-left: 6px">系统</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="description" label="角色描述"/>
         <el-table-column label="权限数量" width="100">
           <template #default="scope">
@@ -36,7 +41,13 @@
           <template #default="scope">
             <template v-if="uStore.hasPermission('role:edit')">
               <el-button type="primary" icon="Edit" @click="EditDialog(scope.row)" plain>编辑</el-button>
-              <el-button @click="deleteRole(scope.row.id)" icon="Delete" type="danger" plain>删除</el-button>
+              <el-button
+                v-if="!scope.row.is_system"
+                @click="deleteRole(scope.row.id)"
+                icon="Delete"
+                type="danger"
+                plain
+              >删除</el-button>
             </template>
             <span v-else>-</span>
           </template>
@@ -59,7 +70,7 @@
   <el-dialog v-model="createDialog" :title="isEdit ? '编辑角色' : '添加角色'" width="700" center destroy-on-close>
     <el-form :model="create" :rules="formDataRules" ref="formDataRef" label-width="auto" style="max-width: 650px">
       <el-form-item label="角色名称：" prop="name">
-        <el-input v-model="create.name" placeholder="请输入角色名称" clearable/>
+        <el-input v-model="create.name" placeholder="请输入角色名称" clearable :disabled="isEdit && editingSystemRole"/>
       </el-form-item>
       <el-form-item label="角色描述：" prop="description">
         <el-input v-model="create.description" placeholder="请输入角色描述" clearable/>
@@ -94,6 +105,7 @@ import {ElNotification, ElMessageBox, ElMessage} from "element-plus"
 import dateTools from "@/tools/dateTools.js"
 import PageCard from "@/components/PageCard.vue"
 import {UserStore} from '@/stores/module/UserStore'
+import { makeTableRowIndex } from '@/utils/tableIndex'
 
 const uStore = UserStore()
 
@@ -104,6 +116,8 @@ let pageConfig = reactive({
   total: 0
 })
 
+const tableRowIndex = makeTableRowIndex(pageConfig)
+
 // 角色列表
 let roleList = ref([])
 // 权限树数据
@@ -112,6 +126,7 @@ let permissionTree = ref([])
 const permTreeRef = ref()
 // 是否为编辑模式
 const isEdit = ref(false)
+const editingSystemRole = ref(false)
 // 新建/编辑角色信息
 let create = reactive({
   id: 0,
@@ -157,6 +172,7 @@ const formDataRef = ref()
 // 点击添加按钮
 function ClickAdd() {
   isEdit.value = false
+  editingSystemRole.value = false
   // 重置表单数据
   Object.assign(create, {
     id: 0,
@@ -175,6 +191,7 @@ function ClickAdd() {
 // 点击编辑按钮
 function EditDialog(row) {
   isEdit.value = true
+  editingSystemRole.value = !!row.is_system
   createDialog.value = true
   nextTick(() => {
     create.id = row.id

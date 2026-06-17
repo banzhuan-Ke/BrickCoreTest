@@ -109,6 +109,20 @@ def build_full_ui_description(fc: AiFunctionalCase, ctx: UiGenerationContext) ->
     return text[:DESCRIPTION_MAX_LEN]
 
 
+def build_case_description_from_functional(
+    fc: AiFunctionalCase,
+    ctx: UiGenerationContext | None = None,
+) -> str:
+    """Web 用例描述：功能用例标题/步骤/预期 + 可选页面与补充说明。"""
+    parts: list[str] = [build_ui_description(fc)]
+    if ctx:
+        if ctx.page_url:
+            parts.append(f"【目标页面】{ctx.page_url}")
+        if ctx.extra_context:
+            parts.append(f"【细节补充】\n{ctx.extra_context}")
+    return "\n\n".join(p for p in parts if p.strip())[:DESCRIPTION_MAX_LEN]
+
+
 async def load_login_prefix_steps(project_id: int, login_ui_case_id: int) -> list:
     login_case = await Case.get_or_none(
         id=login_ui_case_id, project_id=project_id, is_del=False
@@ -449,6 +463,9 @@ async def import_functional_cases_to_ui(
 
         case_name = (raw.get("case_name") or "").strip() or truncate_case_name(fc.title)
         level = (raw.get("level") or "").strip() or priority_to_level(fc.priority)
+        case_description = (raw.get("case_description") or "").strip()
+        if not case_description:
+            case_description = build_case_description_from_functional(fc, ctx)
 
         try:
             final_steps, prefix_n = await finalize_ui_steps(project_id, steps, ctx)
@@ -459,6 +476,7 @@ async def import_functional_cases_to_ui(
                 level=level,
                 source_functional_case_id=fc.id,
                 source_functional_case_title=(fc.title or "")[:500],
+                description=case_description or None,
                 username=username,
                 is_del=False,
             )

@@ -155,9 +155,9 @@
           <span class="card-header-title">推荐流程</span>
         </template>
         <div class="flow-steps">
-          <span class="flow-step clickable" @click="router.push('/ai-requirements')">上传需求</span>
+          <span class="flow-step clickable" @click="router.push('/ai-testing')">上传需求</span>
           <el-icon><ArrowRight /></el-icon>
-          <span class="flow-step clickable" @click="router.push('/ai-test-analysis')">测试分析</span>
+          <span class="flow-step clickable" @click="router.push('/ai-testing')">测试分析</span>
           <el-icon><ArrowRight /></el-icon>
           <span class="flow-step">测试点 / 方案</span>
           <el-icon><ArrowRight /></el-icon>
@@ -212,7 +212,7 @@
             <template #header>
               <div class="recent-header">
                 <span class="card-header-title">最近需求</span>
-                <el-button link type="primary" @click="router.push('/ai-requirements')">查看全部</el-button>
+                <el-button link type="primary" @click="router.push('/ai-testing')">查看全部</el-button>
               </div>
             </template>
             <el-table
@@ -235,7 +235,7 @@
               </el-table-column>
             </el-table>
             <el-empty v-else description="暂无需求文档" :image-size="64">
-              <el-button type="primary" @click="router.push('/ai-requirements')">去上传</el-button>
+              <el-button type="primary" @click="router.push('/ai-testing')">去上传</el-button>
             </el-empty>
           </el-card>
         </el-col>
@@ -419,28 +419,28 @@ const statCards = computed(() => [
     key: 'req',
     label: '需求文档',
     value: stats.value.requirement_total ?? 0,
-    path: '/ai-requirements',
+    path: '/ai-testing',
     class: ''
   },
   {
     key: 'point',
     label: '测试点',
     value: stats.value.test_point_total ?? 0,
-    path: '/ai-test-analysis',
+    path: '/ai-testing',
     class: 'stat-card--points'
   },
   {
     key: 'case',
     label: '工作区用例',
     value: stats.value.case_total ?? 0,
-    path: '/ai-requirements',
+    path: '/ai-testing',
     class: 'stat-card--cases'
   },
   {
     key: 'scheme',
     label: '测试方案',
     value: stats.value.scheme_total ?? 0,
-    path: '/ai-test-analysis',
+    path: '/ai-testing',
     class: 'stat-card--scheme'
   },
   {
@@ -464,7 +464,7 @@ const primaryEntries = computed(() => [
   {
     name: '上传需求',
     desc: 'PDF / Word → 功能用例',
-    path: '/ai-requirements',
+    path: '/ai-testing',
     icon: Upload,
     color: 'linear-gradient(135deg, #409eff 0%, #337ecc 100%)',
     disabled: !canAiTest.value
@@ -472,7 +472,7 @@ const primaryEntries = computed(() => [
   {
     name: '测试分析',
     desc: '测试点 · 方案 · 导图',
-    path: '/ai-test-analysis',
+    path: '/ai-testing',
     icon: Share,
     color: 'linear-gradient(135deg, #67c23a 0%, #529b2e 100%)',
     disabled: !canAiTest.value
@@ -480,7 +480,7 @@ const primaryEntries = computed(() => [
   {
     name: '需求用例',
     desc: '编辑 · 导出禅道',
-    path: '/ai-requirements',
+    path: '/ai-testing',
     icon: Document,
     color: 'linear-gradient(135deg, #e6a23c 0%, #cf9236 100%)',
     disabled: !canAiTest.value
@@ -627,11 +627,11 @@ const initTrendChart = () => {
 }
 
 const openAnalysis = (row) => {
-  router.push({ path: '/ai-test-analysis', query: { reqId: String(row.id) } })
+  router.push({ name: 'aiTestingWorkspace', params: { reqId: String(row.id) }, query: { tab: 'mindmap' } })
 }
 
 const openCases = (row) => {
-  router.push({ path: '/ai-requirements', query: { reqId: String(row.id) } })
+  router.push({ name: 'aiTestingWorkspace', params: { reqId: String(row.id) }, query: { tab: 'cases' } })
 }
 
 const openRunningJob = (job) => {

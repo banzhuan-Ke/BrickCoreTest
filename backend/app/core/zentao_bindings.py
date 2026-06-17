@@ -3,12 +3,19 @@
 """
 from typing import Any, Optional
 
+from app.core.export_profile import (
+    EXPORT_PROFILE_GENERIC,
+    EXPORT_PROFILE_ZENTAO,
+    get_export_profile_from_bindings,
+    normalize_export_profile,
+)
 from app.models.sys import Project
 
 # 存在 project.global_vars 中的键
 ZENTAO_GLOBAL_VARS_KEY = "zentao_export"
 
 DEFAULT_BINDINGS = {
+    "export_profile": EXPORT_PROFILE_ZENTAO,
     "product": "",
     "module": "",
     "related_story": "",
@@ -33,11 +40,17 @@ def normalize_bindings(raw: Optional[dict]) -> dict:
             if key == "priority_smoke_values":
                 val = raw[key]
                 base[key] = list(val) if isinstance(val, list) else ["1"]
+            elif key == "export_profile":
+                base[key] = normalize_export_profile(raw[key])
             else:
                 base[key] = str(raw[key]).strip() if key != "priority_smoke_values" else base[key]
     if isinstance(raw.get("priority_smoke_values"), list):
         base["priority_smoke_values"] = [str(x) for x in raw["priority_smoke_values"]]
     return base
+
+
+def get_export_profile(bindings: Optional[dict]) -> str:
+    return get_export_profile_from_bindings(bindings)
 
 
 def get_project_bindings(project: Project) -> dict:
@@ -83,11 +96,18 @@ def resolve_stage(priority: str, bindings: Optional[dict] = None) -> str:
 def validate_bindings(bindings: dict, *, for_action: str = "操作") -> list[str]:
     """返回缺失字段中文名列表；空列表表示通过"""
     b = normalize_bindings(bindings)
+    if get_export_profile(b) == EXPORT_PROFILE_GENERIC:
+        return []
     missing = []
     for key, label in BINDING_FIELD_LABELS.items():
         if not (b.get(key) or "").strip():
             missing.append(label)
     return missing
+
+
+def validate_bindings_for_export(bindings: dict) -> list[str]:
+    """按导出目标校验绑定：通用模式不要求禅道三项。"""
+    return validate_bindings(bindings)
 
 
 def bindings_for_export(bindings: dict) -> dict:

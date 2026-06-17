@@ -13,7 +13,7 @@ from app.core.mcp_config_service import (
     save_mcp_config,
 )
 from app.core.permissions import MCP_CONFIG_EDIT, MCP_CONFIG_VIEW
-from app.mcp.server import build_client_config
+from app.mcp.server import MCP_DANGEROUS_OPS, MCP_TOOL_GROUPS, build_client_config, get_registered_tool_count
 
 router = APIRouter(prefix="/mcp", tags=["MCP"], dependencies=[Depends(is_authenticated)])
 
@@ -36,16 +36,10 @@ async def _build_info_payload(request: Request) -> dict:
         "config_source": cfg.source,
         "transport": "streamable-http",
         "auth_hint": "Authorization: Bearer <JWT 或 MCP API Key>，也可使用 X-MCP-API-Key 头",
+        "tool_count": get_registered_tool_count(),
+        "tool_groups": list(MCP_TOOL_GROUPS),
         "client_config": build_client_config(base or "http://localhost:8000", cfg.api_key),
-        "dangerous_ops": [
-            "preview_trigger_generate → confirm_trigger_generate",
-            "preview_run_api_suite → confirm_run_api_suite",
-            "preview_run_api_plan → confirm_run_api_plan",
-            "preview_run_ui_task → confirm_run_ui_task",
-            "preview_run_ui_suite → confirm_run_ui_suite",
-            "preview_run_perf_scene → confirm_run_perf_scene",
-            "preview_analyze_failure → confirm_analyze_failure",
-        ],
+        "dangerous_ops": list(MCP_DANGEROUS_OPS),
     }
 
 

@@ -15,21 +15,30 @@ from app.routers.sys.envs import router as environment_router
 from app.routers.sys.catalogs import router as catalog_router
 from app.routers.sys.files import router as files_router
 from app.routers.sys.dashboard import router as dashboard_router
+from app.routers.sys.asset_favorites import router as asset_favorites_router
+from app.routers.sys.search import router as search_router
 from app.routers.sys.operation_logs import router as operation_log_router
 from app.routers.sys.notifications import router as notification_router, internal_router as notification_internal_router
 from app.routers.sys.docs import router as docs_router
 from app.routers.sys.mcp_info import router as mcp_info_router
 from app.routers.sys.runner_release_config import router as runner_release_config_router
 from app.routers.sys.login_page_config import router as login_page_config_router
+from app.routers.sys.platform_settings import router as platform_settings_router
+from app.routers.sys.invite_codes import router as invite_code_router
+from app.routers.sys.project_members import router as project_member_router
+from app.core.project_access_deps import optional_project_access_check
 from app.routers.ui.cases import router as case_router
+from app.routers.ui.fragments import router as ui_fragment_router
 from app.routers.ui.suites import router as suite_router
 from app.routers.ui.tasks import router as task_router
 from app.routers.ui.records import router as runner_router
 from app.routers.ui.exec import router as ui_exec_router
+from app.routers.ui.files import router as ui_files_router
 from app.routers.sys.devices import router as device_router
 from app.routers.runner import router as runner_client_router
 from app.routers.schedule.jobs import router as cronjob_router
 from app.routers.http.apis import router as api_definition_router
+from app.routers.http.api_files import router as api_files_router
 from app.routers.http.cases import router as api_case_router
 from app.routers.http.suites import router as api_suite_router
 from app.routers.http.records import router as api_records_router
@@ -149,6 +158,17 @@ async def _core_lifespan(app: FastAPI):
             logging.getLogger(__name__).warning(
                 "MinIO bucket 自动初始化失败（MinIO 未就绪时可忽略，首次上传会重试）: %s", exc
             )
+        from app.core.role_seed import ensure_default_roles
+        from app.core.project_access import backfill_project_members
+
+        try:
+            await ensure_default_roles()
+        except Exception as exc:
+            logging.getLogger(__name__).warning("系统角色种子初始化失败: %s", exc)
+        try:
+            await backfill_project_members()
+        except Exception as exc:
+            logging.getLogger(__name__).warning("项目成员回填失败: %s", exc)
         yield
     finally:
         scheduler.shutdown()
@@ -264,22 +284,29 @@ register_tortoise(app, config=settings.TORTOISE_ORM, modules={"models": ["models
                   generate_schemas=False)
 
 # 注册路由
+_project_access_dep = [Depends(optional_project_access_check)]
+
 app.include_router(user_router, prefix="/sys")
 app.include_router(role_router, prefix="/sys")
 app.include_router(project_router, prefix="/sys")
-app.include_router(environment_router, prefix="/sys")
-app.include_router(catalog_router, prefix="/sys")
+app.include_router(project_member_router, prefix="/sys")
+app.include_router(environment_router, prefix="/sys", dependencies=_project_access_dep)
+app.include_router(catalog_router, prefix="/sys", dependencies=_project_access_dep)
 app.include_router(files_router, prefix="/sys")
 app.include_router(device_router, prefix="/sys")
 app.include_router(runner_client_router)
 app.include_router(dashboard_router, prefix="/sys")
+app.include_router(asset_favorites_router, prefix="/sys")
+app.include_router(search_router, prefix="/sys")
 app.include_router(operation_log_router, prefix="/sys")
-app.include_router(notification_router, prefix="/sys")
+app.include_router(notification_router, prefix="/sys", dependencies=_project_access_dep)
 app.include_router(notification_internal_router, prefix="/sys")
 app.include_router(docs_router, prefix="/sys")
 app.include_router(mcp_info_router, prefix="/sys")
 app.include_router(runner_release_config_router, prefix="/sys")
 app.include_router(login_page_config_router, prefix="/sys")
+app.include_router(platform_settings_router, prefix="/sys")
+app.include_router(invite_code_router, prefix="/sys")
 
 if MCP_ENABLED:
     from app.mcp.server import get_mcp_asgi_app
@@ -287,29 +314,32 @@ if MCP_ENABLED:
     _mcp_asgi_app = get_mcp_asgi_app()
     app.mount(MCP_HTTP_PATH, _mcp_asgi_app)
 
-app.include_router(case_router, prefix="/ui")
-app.include_router(suite_router, prefix="/ui")
-app.include_router(task_router, prefix="/ui")
-app.include_router(runner_router, prefix="/ui")
-app.include_router(ui_exec_router, prefix="/ui")
+app.include_router(case_router, prefix="/ui", dependencies=_project_access_dep)
+app.include_router(ui_fragment_router, prefix="/ui", dependencies=_project_access_dep)
+app.include_router(suite_router, prefix="/ui", dependencies=_project_access_dep)
+app.include_router(task_router, prefix="/ui", dependencies=_project_access_dep)
+app.include_router(runner_router, prefix="/ui", dependencies=_project_access_dep)
+app.include_router(ui_exec_router, prefix="/ui", dependencies=_project_access_dep)
+app.include_router(ui_files_router, prefix="/ui", dependencies=_project_access_dep)
 
-app.include_router(cronjob_router, prefix="/schedule")
+app.include_router(cronjob_router, prefix="/schedule", dependencies=_project_access_dep)
 
-app.include_router(api_definition_router, prefix="/api-module")
-app.include_router(api_case_router, prefix="/api-module")
-app.include_router(api_suite_router, prefix="/api-module")
-app.include_router(api_records_router, prefix="/api-module")
-app.include_router(api_cron_router, prefix="/api-module")
-app.include_router(api_exec_router, prefix="/api-module")
-app.include_router(api_mock_router, prefix="/api-module")
-app.include_router(api_plan_router, prefix="/api-module")
-app.include_router(api_auth_config_router, prefix="/api-module")
-app.include_router(api_data_factory_router, prefix="/api-module")
-app.include_router(api_header_templates_router, prefix="/api-module")
-app.include_router(perf_router)
+app.include_router(api_definition_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_files_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_case_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_suite_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_records_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_cron_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_exec_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_mock_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_plan_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_auth_config_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_data_factory_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(api_header_templates_router, prefix="/api-module", dependencies=_project_access_dep)
+app.include_router(perf_router, dependencies=_project_access_dep)
 app.include_router(workers_public_router, prefix="/perf")
 ai_router.include_router(ai_assistant_router)
-app.include_router(ai_router)
+app.include_router(ai_router, dependencies=_project_access_dep)
 
 if __name__ == '__main__':
     uvicorn.run(app="app.main:app", host="0.0.0.0", port=8000, reload=False)

@@ -5,6 +5,8 @@ import io
 import re
 from typing import Any, Optional
 
+from app.core.zentao_case_types import normalize_zentao_case_type
+
 # 禅道导入默认列（与平台导出模板一致）
 ZENTAO_DEFAULT_COLUMNS = [
     "所属产品",
@@ -64,9 +66,9 @@ def format_numbered_cell(steps: list, field: str) -> str:
 
 
 def case_to_export_row(case: dict, defaults: Optional[dict] = None) -> dict[str, Any]:
-    """单条用例 → 导出行（一步骤一行记录，步骤/预期各占一列整格）"""
+    """单条用例 → 导出行，步骤/预期合并为单单元格（1.xxx\\n2.xxx）"""
     defaults = {**DEFAULT_EXPORT_DEFAULTS, **(defaults or {})}
-    from app.core.case_steps import align_steps_expects
+    from app.core.case_steps import align_steps_expects, normalize_corner_quotes
 
     steps = align_steps_expects(case.get("steps") or [])
     steps_text = format_numbered_cell(steps, "step")
@@ -97,11 +99,11 @@ def case_to_export_row(case: dict, defaults: Optional[dict] = None) -> dict[str,
         ).strip(),
         "用例标题": (case.get("title") or "").strip(),
         "用例编号": zentao_id,
-        "前置条件": (case.get("precondition") or "").strip(),
+        "前置条件": normalize_corner_quotes((case.get("precondition") or "").strip()),
         "步骤": steps_text,
         "预期": expects_text,
         "优先级": priority,
-        "用例类型": (case.get("type") or "功能测试").strip(),
+        "用例类型": normalize_zentao_case_type(case.get("type")),
         "适用阶段": stage,
     }
 

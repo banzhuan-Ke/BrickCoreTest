@@ -17,6 +17,7 @@ class Case(models.Model):
     source_functional_case_title = fields.CharField(
         max_length=500, null=True, description="来源功能用例标题快照"
     )
+    description = fields.TextField(null=True, description="用例描述（功能背景/步骤预期，供 AI 优化）")
     username = fields.CharField(max_length=50, description="创建人")
     is_del = fields.BooleanField(description="是否删除", default=False)
     catalog = fields.ForeignKeyField(
@@ -43,6 +44,10 @@ class Suite(models.Model):
     teardown_sql_ids = fields.JSONField(default=list, description="后置 SQL 模板 ID 列表")
     db_assertions = fields.JSONField(default=list, description="套件级数据库断言")
     suite_type = fields.CharField(max_length=50, description="套件类型", choices=[("1", "功能"), ("2", "场景")], default="1")
+    stop_on_failure = fields.BooleanField(default=False, description="用例失败时停止后续用例")
+    propagate_variables = fields.BooleanField(
+        default=False, description="是否将链路用例变量传递给后续链路用例"
+    )
     username = fields.CharField(max_length=50, description="创建人")
     is_del = fields.BooleanField(description="是否删除", default=False)
 
@@ -58,6 +63,11 @@ class Step(models.Model):
     cases = fields.ForeignKeyField("models.Case", related_name="suite_steps", description="所属用例")
     sort = fields.IntField(description="用例执行顺序", default=0)
     skip = fields.BooleanField(description="是否跳过", default=False)
+    run_mode = fields.CharField(
+        max_length=20,
+        default="standalone",
+        description="运行模式：chain=链路用例 standalone=独立用例",
+    )
     is_del = fields.BooleanField(description="是否删除", default=False)
 
     class Meta:
@@ -78,6 +88,7 @@ class Task(models.Model):
     )
     username = fields.CharField(max_length=50, description="创建人")
     is_del = fields.BooleanField(description="是否删除", default=False)
+    parallel = fields.BooleanField(default=False, description="计划级并行（按执行器权重分配套件）")
 
     class Meta:
         table = "task"
@@ -144,6 +155,26 @@ class UiSuiteExecution(models.Model):
         table_description = "测试套件运行记录"
 
 
+class UiStepFragment(models.Model):
+    """UI 可复用步骤片段"""
+    id = fields.IntField(pk=True, description="片段id", auto_increment=True)
+    name = fields.CharField(max_length=100, description="片段名称")
+    project = fields.ForeignKeyField("models.Project", related_name="ui_fragments", description="所属项目")
+    description = fields.CharField(max_length=500, null=True, description="片段描述")
+    steps = fields.JSONField(description="步骤 JSON", default=list)
+    tags = fields.CharField(max_length=200, null=True, description="分类标签，逗号分隔")
+    version = fields.IntField(description="版本号", default=1)
+    username = fields.CharField(max_length=50, description="创建人")
+    update_by = fields.CharField(max_length=50, null=True, description="最后更新人")
+    is_del = fields.BooleanField(description="是否删除", default=False)
+    create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    update_time = fields.DatetimeField(auto_now=True, description="更新时间")
+
+    class Meta:
+        table = "ui_step_fragment"
+        table_description = "UI步骤片段"
+
+
 class UiCaseExecution(models.Model):
     """测试用例运行记录"""
     id = fields.IntField(pk=True, description="用例执行id")
@@ -163,3 +194,22 @@ class UiCaseExecution(models.Model):
     class Meta:
         table = "ui_case_execution"
         table_description = "测试用例运行记录"
+
+
+class UiTestFile(models.Model):
+    """Web 自动化 input 文件上传测试素材（MinIO ui-test-files）"""
+    id = fields.IntField(pk=True, auto_increment=True)
+    project = fields.ForeignKeyField("models.Project", related_name="ui_test_files", description="所属项目")
+    file_name = fields.CharField(max_length=255, description="原始文件名")
+    file_key = fields.CharField(max_length=500, description="MinIO 对象键")
+    file_bucket = fields.CharField(max_length=100, description="MinIO bucket")
+    mime_type = fields.CharField(max_length=128, default="application/octet-stream", description="MIME 类型")
+    size = fields.IntField(default=0, description="文件大小（字节）")
+    username = fields.CharField(max_length=50, description="上传人")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+    create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    update_time = fields.DatetimeField(auto_now=True, description="更新时间")
+
+    class Meta:
+        table = "ui_test_file"
+        table_description = "UI自动化测试文件"

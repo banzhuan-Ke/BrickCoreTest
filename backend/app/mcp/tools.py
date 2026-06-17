@@ -1539,6 +1539,7 @@ async def tool_list_api_definitions(
             {
                 "id": api.id,
                 "name": api.name,
+                "protocol": getattr(api, "protocol", "http") or "http",
                 "method": api.method,
                 "path": api.path,
                 "description": (api.description or "")[:300],

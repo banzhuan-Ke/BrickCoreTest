@@ -214,7 +214,7 @@ export const aiRequirementApi = {
     async upload(file, name, projectId) {
         const form = new FormData()
         form.append('file', file)
-        form.append('project_id', projectId)
+        form.append('project_id', String(projectId))
         if (name) form.append('name', name)
         return await http.post('/ai/requirements/upload', form, { timeout: 120000 })
     },
@@ -223,6 +223,9 @@ export const aiRequirementApi = {
     },
     async getDetail(id, projectId) {
         return await http.get(`/ai/requirements/${id}`, { params: { project_id: projectId } })
+    },
+    async update(id, data, projectId) {
+        return await http.put(`/ai/requirements/${id}`, data, { params: { project_id: projectId } })
     },
     async delete(id, projectId) {
         return await http.delete(`/ai/requirements/${id}`, { params: { project_id: projectId } })
@@ -258,6 +261,16 @@ export const aiRequirementApi = {
             params: { project_id: projectId }
         })
     },
+    async listGenerateJobs(reqId, projectId, params = {}) {
+        return await http.get(`/ai/requirements/${reqId}/generate-jobs`, {
+            params: { project_id: projectId, ...params }
+        })
+    },
+    async deleteGenerateJob(jobId, projectId) {
+        return await http.delete(`/ai/requirements/generate-jobs/${jobId}`, {
+            params: { project_id: projectId }
+        })
+    },
     async getCases(id, projectId) {
         return await http.get(`/ai/requirements/${id}/cases`, { params: { project_id: projectId } })
     },
@@ -274,8 +287,8 @@ export const aiRequirementApi = {
             data: { case_ids: caseIds }
         })
     },
-    importToLibrary(reqId, caseIds, projectId) {
-        return aiFunctionalCaseApi.importToLibrary(reqId, caseIds, projectId)
+    importToLibrary(reqId, caseIds, projectId, options = {}) {
+        return aiFunctionalCaseApi.importToLibrary(reqId, caseIds, projectId, options)
     },
     exportXlsxUrl(id, projectId) {
         const base = import.meta.env.VITE_BASE_API || ''
@@ -378,6 +391,35 @@ export const aiTestAnalysisApi = {
             data,
             { params: { project_id: projectId }, timeout: 600000 }
         )
+    },
+    async createFromXmind(file, options = {}, projectId) {
+        const form = new FormData()
+        form.append('file', file)
+        form.append('project_id', String(projectId))
+        if (options.name?.trim()) form.append('name', options.name.trim())
+        form.append('batch_name', options.batch_name || '')
+        form.append('replace_batch', options.replace_batch ? 'true' : 'false')
+        return await http.post('/ai/test-analysis/requirements/create-from-xmind', form, {
+            params: { project_id: projectId },
+            timeout: 120000
+        })
+    },
+    async importTestPointsXmind(reqId, file, options = {}, projectId) {
+        const form = new FormData()
+        form.append('file', file)
+        form.append('batch_name', options.batch_name || '')
+        form.append('replace_batch', options.replace_batch ? 'true' : 'false')
+        return await http.post(
+            `/ai/test-analysis/requirements/${reqId}/test-points/import-xmind`,
+            form,
+            { params: { project_id: projectId }, timeout: 120000 }
+        )
+    },
+    async listProjectTestPoints(params = {}) {
+        return await http.get('/ai/test-analysis/test-points', { params })
+    },
+    async listProjectSchemes(params = {}) {
+        return await http.get('/ai/test-analysis/test-schemes', { params })
     },
     async updateTestPoint(reqId, pointId, data, projectId) {
         return await http.put(
@@ -517,21 +559,37 @@ export const aiFunctionalCaseApi = {
             params: { project_id: projectId }
         })
     },
+    async getFilterOptions(projectId) {
+        return await http.get('/ai/functional-cases/filter-options', {
+            params: { project_id: projectId }
+        })
+    },
     async deleteByImportBatch(importBatch, projectId) {
         return await http.delete('/ai/functional-cases/by-import-batch', {
             params: { project_id: projectId, import_batch: importBatch }
         })
     },
-    exportXlsxUrl(projectId, ids) {
+    exportXlsxUrl(projectId, options = {}) {
         const base = import.meta.env.VITE_BASE_API || ''
-        let url = `${base}/ai/functional-cases/export/xlsx?project_id=${projectId}`
-        if (ids?.length) url += `&ids=${ids.join(',')}`
-        return url
+        const params = new URLSearchParams({ project_id: String(projectId) })
+        const ids = options.ids
+        if (ids?.length) {
+            params.set('ids', ids.join(','))
+        } else {
+            const filters = options.filters || {}
+            Object.entries(filters).forEach(([key, value]) => {
+                if (value !== undefined && value !== null && value !== '') {
+                    params.set(key, String(value))
+                }
+            })
+        }
+        return `${base}/ai/functional-cases/export/xlsx?${params.toString()}`
     },
-    async importToLibrary(reqId, caseIds, projectId) {
+    async importToLibrary(reqId, caseIds, projectId, options = {}) {
+        const duplicateTitleMode = options.duplicateTitleMode || 'skip'
         return await http.post(
             `/ai/requirements/${reqId}/cases/import-to-library`,
-            { case_ids: caseIds },
+            { case_ids: caseIds, duplicate_title_mode: duplicateTitleMode },
             { params: { project_id: projectId } }
         )
     },
@@ -611,12 +669,16 @@ export const aiRecordApi = {
     async convert(id) {
         return await http.post(`/ai/record/${id}/convert`, {}, { timeout: 30000 })
     },
-    // AI 优化步骤
+    // AI 优化步骤（录制会话）
     async optimize(id, payload = {}) {
         const body = typeof payload === 'string'
             ? { description: payload }
             : payload
         return await http.post(`/ai/record/${id}/optimize`, body, { timeout: 120000 })
+    },
+    // AI 优化用例步骤（无需录制会话）
+    async optimizeSteps(payload = {}) {
+        return await http.post('/ai/record/optimize-steps', payload, { timeout: 120000 })
     },
     // 应用到用例
     async apply(id) {
@@ -801,6 +863,167 @@ export const qaEvalApi = {
         return await http.get(`/ai/qa-eval/runs/${runId}/export-answers`, {
             params: projectId != null ? { project_id: projectId } : {},
             responseType: 'blob'
+        })
+    }
+}
+
+// ========== 智能浏览器（browser-use） ==========
+export const browserLabApi = {
+    async listCases(projectId, params = {}) {
+        return await http.get('/ai/browser-lab/cases', {
+            params: { project_id: projectId, ...params }
+        })
+    },
+    async getCase(caseId, projectId) {
+        return await http.get(`/ai/browser-lab/cases/${caseId}`, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async createCase(data, projectId) {
+        return await http.post('/ai/browser-lab/cases', data, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async updateCase(caseId, data, projectId) {
+        return await http.put(`/ai/browser-lab/cases/${caseId}`, data, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async deleteCases(ids, projectId) {
+        return await http.delete('/ai/browser-lab/cases', {
+            params: projectId != null ? { project_id: projectId } : {},
+            data: { ids }
+        })
+    },
+    async runCase(caseId, projectId) {
+        return await http.post(`/ai/browser-lab/cases/${caseId}/run`, null, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 60000
+        })
+    },
+    async createTask(data, projectId) {
+        return await http.post('/ai/browser-lab/tasks', data, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 60000
+        })
+    },
+    async optimizeTaskText(data, projectId) {
+        return await http.post('/ai/browser-lab/optimize-task-text', data, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 120000
+        })
+    },
+    async listTasks(projectId, params = {}) {
+        return await http.get('/ai/browser-lab/tasks', {
+            params: { project_id: projectId, ...params }
+        })
+    },
+    async getTask(taskId, projectId) {
+        return await http.get(`/ai/browser-lab/tasks/${taskId}`, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async stopTask(taskId, projectId) {
+        return await http.post(`/ai/browser-lab/tasks/${taskId}/stop`, null, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async rerunTask(taskId, projectId) {
+        return await http.post(`/ai/browser-lab/tasks/${taskId}/rerun`, null, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 60000
+        })
+    },
+    async getTaskReport(taskId, projectId) {
+        return await http.get(`/ai/browser-lab/tasks/${taskId}/report`, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async deleteTask(taskId, projectId) {
+        return await http.delete(`/ai/browser-lab/tasks/${taskId}`, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async deleteTasks(ids, projectId) {
+        return await http.delete('/ai/browser-lab/tasks', {
+            params: projectId != null ? { project_id: projectId } : {},
+            data: { ids }
+        })
+    },
+    screenshotUrl(taskId, filename, projectId) {
+        const base = (import.meta.env.VITE_BASE_API || '').replace(/\/$/, '')
+        const q = projectId != null ? `?project_id=${projectId}` : ''
+        return `${base}/ai/browser-lab/tasks/${taskId}/screenshots/${filename}${q}`
+    },
+    async fetchScreenshotBlob(taskId, filename, projectId) {
+        const { UserStore } = await import('@/stores/module/UserStore.js')
+        const token = UserStore().token
+        const url = this.screenshotUrl(taskId, filename, projectId)
+        const res = await fetch(url, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+        })
+        if (!res.ok) throw new Error('截图加载失败')
+        return await res.blob()
+    },
+    gifUrl(taskId, projectId) {
+        const base = (import.meta.env.VITE_BASE_API || '').replace(/\/$/, '')
+        const q = projectId != null ? `?project_id=${projectId}` : ''
+        return `${base}/ai/browser-lab/tasks/${taskId}/gif${q}`
+    },
+    async fetchGifBlob(taskId, projectId) {
+        const { UserStore } = await import('@/stores/module/UserStore.js')
+        const token = UserStore().token
+        const url = this.gifUrl(taskId, projectId)
+        const res = await fetch(url, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+        })
+        if (!res.ok) throw new Error('GIF 加载失败')
+        return await res.blob()
+    },
+    streamTask(taskId, projectId, callbacks = {}) {
+        const { onEvent, onDone, onError } = callbacks
+        import('@/stores/module/UserStore.js').then(({ UserStore }) => {
+            const token = UserStore().token
+            const base = (import.meta.env.VITE_BASE_API || '').replace(/\/$/, '')
+            const q = projectId != null ? `?project_id=${projectId}` : ''
+            fetch(`${base}/ai/browser-lab/tasks/${taskId}/stream${q}`, {
+                headers: token ? { Authorization: `Bearer ${token}` } : {}
+            }).then(async (response) => {
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({ detail: '订阅失败' }))
+                    onError && onError(err.detail || err.message || '订阅失败')
+                    return
+                }
+                const reader = response.body.getReader()
+                const decoder = new TextDecoder()
+                let buffer = ''
+                while (true) {
+                    const { done, value } = await reader.read()
+                    if (done) break
+                    buffer += decoder.decode(value, { stream: true })
+                    const lines = buffer.split('\n')
+                    buffer = lines.pop()
+                    for (const line of lines) {
+                        const trimmed = line.trim()
+                        if (!trimmed.startsWith('data: ')) continue
+                        try {
+                            const data = JSON.parse(trimmed.slice(6))
+                            onEvent && onEvent(data)
+                            if (data.type === 'done') {
+                                onDone && onDone(data)
+                                return
+                            }
+                            if (data.type === 'error') {
+                                onError && onError(data.message)
+                                return
+                            }
+                        } catch (e) {
+                            console.warn('[browser-lab SSE]', e)
+                        }
+                    }
+                }
+                onDone && onDone({ type: 'done' })
+            }).catch((e) => onError && onError(e.message || String(e)))
         })
     }
 }

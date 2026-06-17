@@ -31,18 +31,21 @@ BUILTIN_DOC_ENTRIES: dict[str, tuple[str, str]] = {
     "ui-automation": ("docs-site/guide/ui-automation.md", "UI 自动化"),
     "runner-client": ("docs-site/guide/runner-client.md", "执行器使用说明"),
     "runner-packaging": ("docs-site/guide/runner-packaging.md", "执行器打包说明"),
+    "runner-troubleshooting": ("docs-site/guide/runner-troubleshooting.md", "Runner 排查指南"),
     "runner-linux-server": ("docs-site/guide/runner-linux-server.md", "Linux 无头 Runner"),
     "api-automation": ("docs-site/guide/api-automation.md", "接口自动化"),
     "data-factory": ("docs-site/guide/data-factory.md", "数据工厂"),
     "api-auth": ("docs-site/guide/api-auth.md", "Token 授权"),
     "perf-testing": ("docs-site/guide/perf-testing.md", "性能测试"),
     "ai-testing": ("docs-site/guide/ai-testing.md", "AI 测试"),
+    "browser-lab": ("docs-site/guide/browser-lab.md", "智能浏览器"),
     "platform-assistant": ("docs-site/guide/platform-assistant.md", "平台内 AI 助手"),
     "mcp-server": ("docs-site/guide/mcp-server.md", "MCP 外部接入"),
+    "docker-deploy": ("docs-site/guide/docker-deploy.md", "Docker 部署"),
     "system-admin": ("docs-site/guide/system-admin.md", "系统管理"),
 }
 
-# 社区版：隐藏无源码支撑的条目；打包页改标题
+# 公开部署：隐藏无源码支撑的条目；打包页改标题
 _CE_HIDDEN_DOC_IDS = frozenset({"runner-linux-server"})
 _CE_DOC_TITLE_OVERRIDES: dict[str, str] = {
     "runner-packaging": "执行器获取与发布",
@@ -67,16 +70,26 @@ BUILTIN_DOC_TREE: list[dict[str, Any]] = [
         "type": "group",
         "children": [
             {"id": "ui-automation", "title": "UI 自动化", "type": "builtin"},
-            {"id": "runner-client", "title": "执行器使用说明", "type": "builtin"},
-            {"id": "runner-packaging", "title": "执行器打包说明", "type": "builtin"},
-            {"id": "runner-linux-server", "title": "Linux 无头 Runner", "type": "builtin"},
             {"id": "api-automation", "title": "接口自动化", "type": "builtin"},
             {"id": "data-factory", "title": "数据工厂", "type": "builtin"},
             {"id": "api-auth", "title": "Token 授权", "type": "builtin"},
             {"id": "perf-testing", "title": "性能测试", "type": "builtin"},
             {"id": "ai-testing", "title": "AI 测试", "type": "builtin"},
+            {"id": "browser-lab", "title": "智能浏览器", "type": "builtin"},
             {"id": "platform-assistant", "title": "平台内 AI 助手", "type": "builtin"},
             {"id": "mcp-server", "title": "MCP 外部接入", "type": "builtin"},
+        ],
+    },
+    {
+        "id": "group-runner",
+        "title": "执行器与部署",
+        "type": "group",
+        "children": [
+            {"id": "runner-client", "title": "执行器使用说明", "type": "builtin"},
+            {"id": "runner-packaging", "title": "执行器打包说明", "type": "builtin"},
+            {"id": "runner-troubleshooting", "title": "Runner 排查指南", "type": "builtin"},
+            {"id": "runner-linux-server", "title": "Linux 无头 Runner", "type": "builtin"},
+            {"id": "docker-deploy", "title": "Docker 部署", "type": "builtin"},
         ],
     },
     {
@@ -162,7 +175,7 @@ def read_builtin_markdown(doc_id: str) -> tuple[str, str]:
 
 
 def _override_title(entry_id: str, default_title: str, overrides: dict[str, Any]) -> str:
-    # 社区版内置文档以 docs-site 文件为准，避免历史 DB 覆盖带入 Pro 正文/标题
+    # 公开部署以内置 docs-site 文件为准，避免历史 DB 覆盖带入旧正文/标题
     if is_community_edition():
         return default_title
     row = overrides.get(entry_id)

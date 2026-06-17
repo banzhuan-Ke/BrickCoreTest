@@ -27,9 +27,14 @@
 
 | 协议 | 端口 | 来源 | 说明 |
 |------|------|------|------|
-| TCP | **80** | 0.0.0.0/0（或你的办公 IP） | 访问平台页面（必开） |
-| TCP | 8000 | 可选 | 直连 API / Swagger 调试 |
+| TCP | **80** | 0.0.0.0/0（或办公网） | **平台页面 + API 反代（必开）** |
+| TCP | **25672** | Runner 测试机公网 IP | RabbitMQ，执行器上线后收任务 |
+| TCP | **26379** | Runner 测试机公网 IP | Redis，日志/实时画面 |
+| TCP | **9200** | Runner 测试机公网 IP | MinIO，UI 截图/视频上传 |
+| TCP | 8000 | 可选 | 直连 API / Swagger 调试（生产可不开放） |
 | TCP | 22 | 你的 IP | SSH（一般已有） |
+
+> `25672`、`26379`、`9200` 不要对 `0.0.0.0/0` 全网开放，仅放行信任的 Runner 机器 IP。
 
 记下实例 **公网 IP**（后文用 `<公网IP>` 表示），例如 `123.45.67.89`。
 
@@ -136,7 +141,7 @@ MINIO_PUBLIC_ENDPOINT: <公网IP>:9200
 
 例如公网 IP 为 `123.45.67.89` 则写 `123.45.67.89:9200`。
 
-Backend 启动时会自动创建 MinIO 默认 bucket（`test-results`、`api-test-files`、`ai-requirements`，名称随环境变量 `MINIO_BUCKET` 等）；Runner 首次上传截图时若目标 bucket 不存在也会自动创建，**无需**再手工建桶。  
+Backend 启动时会自动创建 MinIO 默认 bucket（`test-results`、`api-test-files`、`ui-test-files`、`ai-requirements`，名称随环境变量 `MINIO_BUCKET` 等）；Runner 首次上传截图时若目标 bucket 不存在也会自动创建，**无需**再手工建桶。  
 可稍后再改；改完执行 `docker compose up -d --build backend`。
 
 ### 步骤 6：启动全栈
@@ -213,6 +218,32 @@ curl -I http://127.0.0.1/
 | http://你的公网IP:9001 | MinIO 控制台 |
 
 登录：**admin** / **BrickCore123456**
+
+---
+
+## BrickCore Runner 桌面客户端（Windows 测试机）
+
+在同事 Windows 电脑安装 `BrickCoreRunner.zip` 后：
+
+| 步骤 | 配置 |
+|------|------|
+| 服务器地址 | **管理服务器环境** → 添加 `http://<公网IP>`（**勿写 `:8000`**） |
+| 登录 | 使用平台账号；探活 `GET /runner/health` 走 **80** 端口 |
+| 上线 | 需安全组对该机 IP 放行 **25672**（MQ）、**26379**（Redis） |
+| 跑 UI 用例 | 截图/录屏上传还需 **9200**（MinIO 预签名 PUT） |
+
+**误配提示**：填 `http://<IP>:8000` 会「无法访问服务器」——Docker 生产环境 API 经 Nginx **80** 反代，8000 通常未对公网开放。
+
+**测试机自检**：
+
+```powershell
+curl.exe http://<公网IP>/runner/health
+Test-NetConnection <公网IP> -Port 25672
+Test-NetConnection <公网IP> -Port 26379
+Test-NetConnection <公网IP> -Port 9200
+```
+
+详见 [执行器使用说明](runner-client.md)、[执行器打包](runner-packaging.md)（Pro 仓 `docs/其他文档/CE同步与发布手册.md` 有 Pro→CE 发布流程）。
 
 ---
 

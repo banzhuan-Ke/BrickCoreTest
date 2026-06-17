@@ -27,6 +27,10 @@ export const httpApi = {
     async delete(api_id) {
         return await http.delete(`/api-module/definition/${api_id}`)
     },
+    // 复制接口到其他项目
+    async copyToProject(api_id, data) {
+        return await http.post(`/api-module/definition/${api_id}/copy`, data)
+    },
     // 批量删除接口
     async batchDelete(api_ids) {
         return await http.post('/api-module/definition/batch-delete', api_ids)
@@ -44,6 +48,13 @@ export const httpApi = {
         const payload = { timeout: 30, ...data }
         const sec = Number(payload.timeout) || 30
         return await http.post('/api-module/debug', payload, {
+            timeout: sec * 1000 + 5000
+        })
+    },
+    async debugWs(data) {
+        const payload = { timeout: 30, ...data }
+        const sec = Number(payload.timeout) || 30
+        return await http.post('/api-module/ws/debug', payload, {
             timeout: sec * 1000 + 5000
         })
     },
@@ -106,8 +117,8 @@ export const httpCaseApi = {
         return await http.post('/api-module/case/batch-delete', case_ids)
     },
     // 复制用例
-    async copy(case_id) {
-        return await http.post(`/api-module/case/${case_id}/copy`)
+    async copy(case_id, data = null) {
+        return await http.post(`/api-module/case/${case_id}/copy`, data || {})
     },
     // 批量导出用例（返回 blob）
     async exportCases(data) {
@@ -363,5 +374,8 @@ export const httpMockApi = {
     },
     async toggle(id) {
         return await http.post(`/api-module/mock/${id}/toggle`)
+    },
+    async aiGenerate(data) {
+        return await http.post('/api-module/mock/ai-generate', data, { timeout: 120000 })
     }
 }

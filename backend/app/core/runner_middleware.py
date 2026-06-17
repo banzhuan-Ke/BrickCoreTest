@@ -18,7 +18,12 @@ logger = logging.getLogger(__name__)
 _RUNNER_MQ_TAG = "runner"
 _REDIS_COMMANDS = (
     "+ping",
+    "+select",
     "+publish",
+    "+subscribe",
+    "+unsubscribe",
+    "+psubscribe",
+    "+punsubscribe",
     "+rpush",
     "+ltrim",
     "+del",

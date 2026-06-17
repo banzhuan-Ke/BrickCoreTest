@@ -1,0 +1,156 @@
+.ui-run-config-form {
+  .el-form-item {
+    margin-bottom: 18px;
+  }
+
+  .el-form-item:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.ui-run-segment-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.ui-run-segment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  background: var(--el-fill-color-blank);
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+
+  small {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+  }
+
+  &:hover {
+    border-color: var(--el-color-primary-light-5);
+    color: var(--el-color-primary);
+  }
+
+  &.active {
+    border-color: var(--el-color-primary);
+    background: var(--el-color-primary-light-9);
+    color: var(--el-color-primary);
+    font-weight: 500;
+  }
+}
+
+.ui-run-segment--grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.ui-run-device-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.ui-run-device-option__name {
+  flex-shrink: 0;
+}
+
+.ui-run-device-option__ip {
+  flex: 1;
+  min-width: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-run-concurrency-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.ui-run-concurrency-row__label {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.ui-run-concurrency-row__tip {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-run-parallel-hint {
+  margin-bottom: 10px;
+}
+
+.ui-run-device-table {
+  width: 100%;
+
+  :deep(.el-table__cell) {
+    overflow: visible;
+    padding: 8px 6px;
+  }
+
+  :deep(.cell) {
+    overflow: visible;
+    padding: 0 4px;
+  }
+}
+
+.ui-run-device-table__name {
+  font-weight: 500;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-run-device-table__ip {
+  margin-top: 2px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-run-device-table__number {
+  width: 88px;
+  max-width: 100%;
+
+  :deep(.el-input__wrapper) {
+    padding-left: 8px;
+    padding-right: 28px;
+  }
+
+  :deep(.el-input-number__decrease),
+  :deep(.el-input-number__increase) {
+    width: 22px;
+  }
+}
+
+.ui-run-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}

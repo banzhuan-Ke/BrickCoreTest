@@ -389,6 +389,22 @@ const assertSteps = [
         method: "kw_assert_element_text",
         params: {
             locator: "",
+            text: "",
+            match_mode: "exact"
+        }
+    },
+    {
+        keyword: '断言元素文本包含',
+        method: "kw_assert_element_text_contains",
+        params: {
+            locator: "",
+            text: ""
+        }
+    },
+    {
+        keyword: '断言文本包含',
+        method: "kw_assert_text_contains",
+        params: {
             text: ""
         }
     },
@@ -479,6 +495,18 @@ const assertSteps = [
             locator: "",
             index: 1
         }
+    },
+    {
+        keyword: '数据库断言',
+        method: "kw_db_assert",
+        params: {
+            name: '数据库断言',
+            datasource_id: null,
+            sql: '',
+            field: '',
+            operator: 'equals',
+            expected: ''
+        }
     }
 ]
 // 7、其他操作
@@ -489,6 +517,9 @@ const otherSteps = [
         params: {
             locator: '',
             file_path: '',
+            file_key: '',
+            file_bucket: '',
+            file_name: '',
             timeout: 20000
         }
     },

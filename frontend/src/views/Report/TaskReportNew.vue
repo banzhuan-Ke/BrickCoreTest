@@ -181,7 +181,7 @@
           stripe
           v-loading="loading"
         >
-          <el-table-column label="序号" type="index" width="70"/>
+          <el-table-column label="序号" type="index" :index="tableRowIndex" width="70"/>
           <el-table-column prop="suite_name" label="套件名称" min-width='150' show-overflow-tooltip/>
           <el-table-column label="执行状态" width="110">
             <template #default="scope">
@@ -260,29 +260,18 @@
       </div>
 
       <!-- 任务日志 -->
-      <div class="task-logs" v-if="taskRunDetail.execution_log?.length > 0">
-        <div class="section-title">
+      <ExecutionLogScroller
+        v-if="taskRunDetail.execution_log?.length > 0"
+        :logs="taskRunDetail.execution_log"
+        container-height="300px"
+        show-time
+        show-level
+      >
+        <template #title>
           <el-icon><Document /></el-icon>
           任务执行日志
-          <el-tag size="small" type="info">{{ taskRunDetail.execution_log.length }} 条</el-tag>
-        </div>
-        <div class="log-container">
-          <RecycleScroller
-            class="log-scroller"
-            :items="taskLogItems"
-            :item-size="24"
-            key-field="index"
-            v-slot="{ item }"
-          >
-            <div :class="['log-line', item.level]">
-              <span class="log-index">[{{ item.index + 1 }}]</span>
-              <span class="log-time" v-if="item.time">{{ item.time }}</span>
-              <span class="log-level" :class="item.level">{{ item.level?.toUpperCase() }}</span>
-              <span class="log-message">{{ item.message }}</span>
-            </div>
-          </RecycleScroller>
-        </div>
-      </div>
+        </template>
+      </ExecutionLogScroller>
     </template>
     
     <template #bottom>
@@ -346,17 +335,17 @@ import {
   Grid,
   Document
 } from '@element-plus/icons-vue'
-import { RecycleScroller } from 'vue-virtual-scroller'
-import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import * as echarts from 'echarts'
 import { useDark } from '@vueuse/core'
 
 import http from '@/api/index'
 import PageCard from "@/components/PageCard.vue"
+import ExecutionLogScroller from '@/components/Report/ExecutionLogScroller.vue'
 import dateTools from '@/tools/dateTools'
 import chart from '@/tools/chart'
 import { UserStore } from "@/stores/module/UserStore.js"
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
+import { makeTableRowIndex } from '@/utils/tableIndex'
 import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
 import { aiAnalyzeApi } from '@/api/modules/ai.js'
 
@@ -411,6 +400,8 @@ const pageConfig = reactive({
   total: 0
 })
 
+const tableRowIndex = makeTableRowIndex(pageConfig)
+
 // 状态映射
 const statusMap = {
   '执行完成': { type: 'success', icon: CircleCheck },
@@ -428,34 +419,6 @@ const taskStats = computed(() => [
   { key: 'skip', label: '跳过', value: taskRunDetail.value?.skip || 0, color: '#909399', class: 'info' }
 ])
 
-// 任务日志
-const taskLogItems = computed(() => {
-  if (!taskRunDetail.value?.execution_log) return []
-  return taskRunDetail.value.execution_log.map((log, index) => {
-    const parsed = parseLogLine(log)
-    return { ...parsed, index }
-  })
-})
-
-// 解析日志
-const parseLogLine = (log) => {
-  const logStr = typeof log === 'string' ? log : (log == null ? '' : JSON.stringify(log))
-  const result = { message: logStr, level: 'info' }
-  const match = logStr.match(/^\[(\d{2}:\d{2}:\d{2}[\.:]?\d*)\]?\s*\[(\w+)\]?\s*(.*)/i)
-  if (match) {
-    result.time = match[1]
-    result.level = match[2].toLowerCase()
-    result.message = match[3]
-  } else {
-    const lower = logStr.toLowerCase()
-    if (lower.includes('error')) result.level = 'error'
-    else if (lower.includes('warn')) result.level = 'warning'
-    else if (lower.includes('debug')) result.level = 'debug'
-    else if (lower.includes('success')) result.level = 'success'
-  }
-  return result
-}
-
 // 获取任务报告
 const getTaskReport = async () => {
   const response = await http.resultApi.getTaskRecordDetail(task_id)
@@ -471,8 +434,8 @@ const getSuiteList = async () => {
   try {
     const params = {
       task_records_id: task_id,
-      page: pageConfig.page,
-      size: pageConfig.size
+      page: showTimeline.value ? 1 : pageConfig.page,
+      size: showTimeline.value ? 100 : pageConfig.size
     }
     const response = await http.resultApi.getSuiteRecord(params)
     if (response.status === 200) {
@@ -820,62 +783,6 @@ getSuiteList()
     .pagination {
       margin-top: 16px;
       justify-content: flex-end;
-    }
-  }
-  
-  .task-logs {
-    .log-container {
-      height: 300px;
-      background: #1e1e1e;
-      border-radius: 8px;
-      overflow: hidden;
-      
-      .log-scroller {
-        height: 100%;
-        
-        .log-line {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 2px 12px;
-          font-family: 'Consolas', 'Monaco', monospace;
-          font-size: 12px;
-          line-height: 20px;
-          color: #d4d4d4;
-          
-          &:hover {
-            background: #2a2a2a;
-          }
-          
-          .log-index {
-            color: #6e7681;
-            min-width: 50px;
-          }
-          
-          .log-time {
-            color: #6e7681;
-            min-width: 80px;
-          }
-          
-          .log-level {
-            min-width: 50px;
-            font-weight: bold;
-            
-            &.error { color: #f85149; }
-            &.warning { color: #ffa657; }
-            &.info { color: #58a6ff; }
-            &.debug { color: #8b949e; }
-            &.success { color: #3fb950; }
-          }
-          
-          .log-message {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-          }
-        }
-      }
     }
   }
 }

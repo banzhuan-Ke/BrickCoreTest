@@ -73,6 +73,23 @@
               <el-option label="场景测试" value="2" />
             </el-select>
           </el-form-item>
+
+          <el-form-item label="执行策略">
+            <div class="suite-strategy-box">
+              <el-checkbox v-model="suiteInfo.propagate_variables">
+                链路用例变量传递给后续链路用例
+              </el-checkbox>
+              <p class="strategy-hint" v-pre>
+                开启后，标记为「链路」的用例会将 ${{base_name}} 等已解析变量传给后续链路用例；「独立」用例每次使用环境原始变量。
+              </p>
+              <el-checkbox v-model="suiteInfo.stop_on_failure">
+                任一用例失败时停止全部后续用例
+              </el-checkbox>
+              <p class="strategy-hint">
+                未勾选时，仅「链路」用例失败会阻断后续链路用例；「独立」用例失败不影响其他用例。
+              </p>
+            </div>
+          </el-form-item>
           
           <el-form-item label="所属目录" prop="catalog_id">
             <CatalogTreeSelect
@@ -91,10 +108,13 @@
         <div class="setup-steps-section">
           <div class="section-title">
             <span>公共前置步骤</span>
+            <el-button size="small" plain type="primary" @click="fragmentPickerVisible = true">插入片段</el-button>
             <el-text type="info" size="small">拖拽左侧操作到此处</el-text>
           </div>
           <StepEditor v-model:steps="suiteInfo.pre_actions" />
         </div>
+
+        <FragmentPickerDialog v-model="fragmentPickerVisible" @insert="onFragmentInsert" />
 
         <el-collapse class="suite-hooks-collapse">
           <el-collapse-item title="数据工厂（前置/后置 SQL）" name="sql">
@@ -132,7 +152,11 @@
     <el-aside width="420px" class="case-sidebar">
       <div class="case-section">
         <h3 class="sidebar-title">套件用例</h3>
-        <SuiteCaseList ref="suiteCaseListRef" :suite-id="suiteId" />
+        <SuiteCaseList
+          ref="suiteCaseListRef"
+          :suite-id="suiteId"
+          :default-run-mode="suiteInfo.suite_type === '2' ? 'chain' : 'standalone'"
+        />
       </div>
       <div class="case-section">
         <h3 class="sidebar-title">测试用例集</h3>
@@ -165,7 +189,9 @@ import {
 import SuiteCaseList from './componets/SuiteCaseList.vue'
 import CaseSet from './componets/CaseSet.vue'
 import DbAssertionsEditor from '@/views/ApiModule/components/DbAssertionsEditor.vue'
+import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
 import { dataFactoryApi } from '@/api/modules/dataFactory'
+import { ElMessage } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
@@ -173,6 +199,7 @@ const proStore = ProjectStore()
 const userStore = UserStore()
 
 const suiteId = route.params.id
+const fragmentPickerVisible = ref(false)
 const formRef = ref()
 const suiteCaseListRef = ref()
 const saving = ref(false)
@@ -187,6 +214,8 @@ const suiteInfo = reactive({
   setup_sql_ids: [],
   teardown_sql_ids: [],
   db_assertions: [],
+  stop_on_failure: false,
+  propagate_variables: false,
 })
 
 const datasources = ref([])
@@ -256,6 +285,12 @@ const formRules = {
   catalog_id: [{ required: true, message: '请选择所属目录', trigger: 'change' }]
 }
 
+function onFragmentInsert(refStep) {
+  if (!refStep) return
+  suiteInfo.pre_actions = [...(suiteInfo.pre_actions || []), refStep]
+  ElMessage.success(`已插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
+}
+
 // 获取套件详情
 const getSuiteDetail = async () => {
   try {
@@ -273,6 +308,8 @@ const getSuiteDetail = async () => {
       suiteInfo.db_assertions = Array.isArray(res.data.db_assertions)
         ? res.data.db_assertions.map(a => ({ ...a }))
         : []
+      suiteInfo.stop_on_failure = !!res.data.stop_on_failure
+      suiteInfo.propagate_variables = !!res.data.propagate_variables
     }
   } catch (error) {
     ElNotification.error('获取套件详情失败')
@@ -321,6 +358,21 @@ onMounted(() => {
 </script>
 
 <style scoped lang="scss">
+.suite-strategy-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.strategy-hint {
+  margin: 0 0 8px;
+  padding-left: 24px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
+}
+
 .suite-edit-container {
   height: calc(100vh - 50px);
 }

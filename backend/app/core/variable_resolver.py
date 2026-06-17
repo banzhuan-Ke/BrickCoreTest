@@ -10,6 +10,8 @@ try:
 except ImportError:  # pragma: no cover - 运行环境应安装 Faker
     Faker = None  # type: ignore
 
+from app.core.data_tools.errors import ToolExecutionError
+from app.core.data_tools.inline_tools import DT_CACHE_KEY, DT_EXPR_PREFIX, execute_inline_tool
 
 _VAR_PATTERN = re.compile(r"\$\{\{([^}]+)\}\}|\$\{([^}]+)\}|\{\{([^}]+)\}\}")
 _FAKER_EXPR_PATTERN = re.compile(r"^faker\.(\w+)\((.*)\)$", re.IGNORECASE)
@@ -30,13 +32,22 @@ class VariableResolver:
     )
 
     def __init__(self, global_vars: Optional[Dict[str, Any]] = None):
-        self._global_vars = dict(global_vars or {})
+        from app.core.global_vars_validate import flatten_global_vars
+
+        self._global_vars = flatten_global_vars(global_vars)
         self._cache: Dict[str, Any] = {}
         self._faker = Faker("zh_CN") if Faker else None
+        if DT_CACHE_KEY not in self._global_vars or not isinstance(self._global_vars.get(DT_CACHE_KEY), dict):
+            self._global_vars[DT_CACHE_KEY] = {}
 
     def get(self, key: str) -> Any:
         if key in self._cache:
             return self._cache[key]
+
+        if key.startswith(DT_EXPR_PREFIX):
+            value = self._resolve_inline_tool(key)
+            self._cache[key] = value
+            return value
 
         if key in self._global_vars:
             value = self._resolve_raw_value(self._global_vars[key])
@@ -63,7 +74,10 @@ class VariableResolver:
 
     def get_resolved_snapshot(self) -> Dict[str, Any]:
         """返回当前执行过程中已解析/生成的变量，便于报告展示。"""
-        snapshot = dict(self._global_vars)
+        snapshot = {
+            k: v for k, v in self._global_vars.items()
+            if k != DT_CACHE_KEY
+        }
         snapshot.update(self._cache)
         return snapshot
 
@@ -71,10 +85,30 @@ class VariableResolver:
         var_name = (match.group(1) or match.group(2) or match.group(3) or "").strip()
         if not var_name:
             return match.group(0)
-        value = self.get(var_name)
+        try:
+            value = self.get(var_name)
+        except ToolExecutionError:
+            raise
         if value is not None:
             return str(value)
         return match.group(0)
+
+    def _lookup_binding(self, key: str) -> Any:
+        """解析内联工具参数 @var 时使用的变量查找（不触发 dt 表达式）。"""
+        if not key or key == DT_CACHE_KEY:
+            return None
+        if key in self._cache:
+            return self._cache[key]
+        if key in self._global_vars:
+            return self._resolve_raw_value(self._global_vars[key])
+        return self._generate_dynamic(key)
+
+    def _resolve_inline_tool(self, expr: str) -> str:
+        cache = self._global_vars.get(DT_CACHE_KEY)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._global_vars[DT_CACHE_KEY] = cache
+        return execute_inline_tool(expr, self._lookup_binding, cache)
 
     def _resolve_raw_value(self, raw: Any) -> Any:
         if raw is None or not isinstance(raw, str):

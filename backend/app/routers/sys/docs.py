@@ -237,6 +237,41 @@ async def get_builtin_doc(doc_id: str):
     })
 
 
+@router.post("/builtin/sync-from-files", summary="从 docs-site 同步内置文档（清除正文覆盖）", dependencies=[Depends(require_permissions(DOCS_EDIT))])
+async def sync_builtin_from_files(username: str = Depends(get_current_username)):
+    """
+    将内置文档正文重置为仓库 docs-site 中的 Markdown 文件。
+    清除 platform_doc 中 builtin 条目的 content 覆盖，保留标题/排序/隐藏设置。
+    """
+    entries = get_builtin_doc_entries()
+    cleared = 0
+    created = 0
+    for doc_id in entries:
+        doc = await PlatformDoc.get_or_none(builtin_id=doc_id, is_del=False)
+        if doc:
+            if doc.content:
+                doc.content = None
+                doc.update_by = username
+                await doc.save(update_fields=["content", "update_by", "update_time"])
+                cleared += 1
+        else:
+            default_title = entries[doc_id][1]
+            await PlatformDoc.create(
+                builtin_id=doc_id,
+                title=default_title,
+                doc_type="markdown",
+                content=None,
+                is_published=True,
+                create_by=username,
+                update_by=username,
+            )
+            created += 1
+    return StandardResponse(
+        data={"cleared": cleared, "created": created, "total": len(entries)},
+        message=f"已同步 {len(entries)} 篇内置文档（清除 {cleared} 篇覆盖）",
+    )
+
+
 @router.put("/builtin/{entry_id}", summary="更新内置文档或分组", dependencies=[Depends(require_permissions(DOCS_EDIT))])
 async def update_builtin_entry(
     entry_id: str,

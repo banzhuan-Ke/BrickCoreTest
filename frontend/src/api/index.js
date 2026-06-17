@@ -11,7 +11,7 @@
  */
 
 import { 
-    userApi, roleApi, projectApi, envApi, deviceApi, moduleApi, catalogApi, dashboardApi, operationLogApi, notificationApi,
+    userApi, roleApi, inviteCodeApi, projectApi, envApi, deviceApi, moduleApi, catalogApi, dashboardApi, operationLogApi, notificationApi,
     uiCaseApi, uiSuiteApi, uiTaskApi, uiExecApi, uiRecordApi,
     httpApi, httpCaseApi, httpSuiteApi, httpExecApi, httpRecordApi, httpCronApi, httpPlanApi,
     scheduleApi,
@@ -21,7 +21,7 @@ import {
 
 // 统一导出
 export {
-    userApi, roleApi, projectApi, envApi, deviceApi, moduleApi, catalogApi, dashboardApi, operationLogApi, notificationApi,
+    userApi, roleApi, inviteCodeApi, projectApi, envApi, deviceApi, moduleApi, catalogApi, dashboardApi, operationLogApi, notificationApi,
     uiCaseApi, uiSuiteApi, uiTaskApi, uiExecApi, uiRecordApi,
     httpApi, httpCaseApi, httpSuiteApi, httpExecApi, httpRecordApi, httpCronApi, httpPlanApi,
     scheduleApi,
@@ -34,6 +34,7 @@ export default {
     // 系统管理
     userApi,
     roleApi,
+    inviteCodeApi,
     projectApi,
     envApi,
     environmentApi: envApi,
@@ -61,6 +62,7 @@ export default {
         deleteApi: httpApi.delete,
         batchDeleteApis: httpApi.batchDelete,
         debugApi: httpApi.debug,
+        debugWs: httpApi.debugWs,
         importCurl: httpApi.importCurl,
         parseCurl: httpApi.parseCurl,  // 解析 curl
         uploadBodyFile: httpApi.uploadBodyFile,

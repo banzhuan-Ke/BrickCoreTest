@@ -10,6 +10,23 @@ from app.core.config import MCP_HTTP_PATH
 # 需要脱敏的字段名
 SENSITIVE_FIELDS = {"password", "password_confirm", "admin_password", "token", "secret", "access_token"}
 
+# 体积过大、不应完整入库/下发的字段（如 Runner 屏幕截图 base64）
+BULK_PARAM_FIELDS = frozenset({
+    "image_base64",
+    "screenshot",
+    "body",
+    "html",
+    "video",
+    "video_url",
+    "content",
+    "result_data",
+    "raw_actions",
+    "steps",
+})
+
+# 单字段字符串最大保留长度（超出则省略）
+MAX_PARAM_STRING_LEN = 500
+
 _GENERIC_ACTIONS = frozenset({"创建", "更新", "删除", "修改", "操作"})
 
 # 路由映射：(method, 正则pattern, action, module, path_name)
@@ -36,6 +53,7 @@ ROUTE_MAPPING = [
     ("PUT", r"^/sys/mcp/config$", "更新MCP配置", "系统管理", "更新MCP配置"),
     ("POST", r"^/sys/devices$", "创建设备", "UI自动化", "创建设备"),
     ("PUT", r"^/sys/devices/[^/]+$", "更新设备", "UI自动化", "更新设备"),
+    ("POST", r"^/sys/devices/[^/]+/stop$", "停止Runner设备", "UI自动化", "停止Runner设备"),
     ("DELETE", r"^/sys/devices/[^/]+$", "删除设备", "UI自动化", "删除设备"),
     ("DELETE", r"^/sys/operation-logs$", "删除操作日志", "系统管理", "批量删除操作日志"),
 
@@ -116,6 +134,7 @@ ROUTE_MAPPING = [
     ("DELETE", r"^/ai/assistant/sessions/\d+$", "删除助手会话", "AI测试", "删除AI助手会话"),
     ("POST", r"^/ai/generate/api-case$", "AI生成接口用例", "AI测试", "AI生成接口用例"),
     ("POST", r"^/ai/generate/api-case/import$", "导入AI接口用例", "AI测试", "导入AI接口用例"),
+    ("POST", r"^/api-module/mock/ai-generate$", "AI生成Mock响应", "接口自动化", "AI生成Mock响应"),
     ("POST", r"^/ai/generate/ui-case$", "AI生成UI用例", "AI测试", "AI生成UI用例"),
     ("POST", r"^/ai/analyze/failure$", "AI失败分析", "AI测试", "AI失败分析"),
     ("POST", r"^/ai/analyze/failure/batch$", "AI批量失败分析", "AI测试", "AI批量失败分析"),
@@ -127,13 +146,20 @@ ROUTE_MAPPING = [
     ("PUT", r"^/ai/configs/\d+$", "更新AI模型配置", "AI测试", "更新AI模型配置"),
     ("DELETE", r"^/ai/configs/\d+$", "删除AI模型配置", "AI测试", "删除AI模型配置"),
     ("POST", r"^/ai/record/start$", "启动AI录制", "AI测试", "启动AI录制"),
+    ("POST", r"^/ai/record/optimize-steps$", "AI优化用例步骤", "AI测试", "AI优化用例步骤"),
     ("POST", r"^/ai/record/\d+/apply$", "应用录制结果", "AI测试", "应用AI录制结果"),
+    ("POST", r"^/ai/record/\d+/optimize$", "AI优化录制步骤", "AI测试", "AI优化录制步骤"),
 
     # 性能测试
     ("POST", r"^/perf/scenes$", "创建压测场景", "性能测试", "创建压测场景"),
     ("PUT", r"^/perf/scenes/\d+$", "更新压测场景", "性能测试", "更新压测场景"),
     ("DELETE", r"^/perf/scenes/\d+$", "删除压测场景", "性能测试", "删除压测场景"),
     ("POST", r"^/perf/scenes/\d+/run$", "启动压测", "性能测试", "启动压测"),
+    ("POST", r"^/perf/workers/register$", "压测Worker上线", "性能测试", "压测Worker注册上线"),
+    ("POST", r"^/perf/workers/unregister$", "压测Worker下线", "性能测试", "压测Worker主动下线"),
+    ("POST", r"^/perf/workers/heartbeat$", "压测Worker心跳", "性能测试", "压测Worker心跳"),
+    ("POST", r"^/perf/workers/\d+/report$", "压测Worker秒级上报", "性能测试", "压测Worker秒级上报"),
+    ("POST", r"^/perf/workers/\d+/final$", "压测Worker最终报告", "性能测试", "压测Worker最终报告"),
 ]
 
 
@@ -232,12 +258,38 @@ def _infer_path_name(method: str, path: str, action: str, module: str) -> str:
             return f"删除{label}"
         return label
     if segment:
+        perf_worker_labels = {
+            "register": "压测Worker注册上线",
+            "unregister": "压测Worker主动下线",
+            "heartbeat": "压测Worker心跳",
+            "report": "压测Worker秒级上报",
+            "final": "压测Worker最终报告",
+        }
+        if path.startswith("/perf/workers/"):
+            if segment in perf_worker_labels:
+                return perf_worker_labels[segment]
+            return f"压测Worker/{segment}"
         return f"{module}-{action}({segment})"
     return f"{module}-{action}"
 
 
-def _mask_sensitive_data(data: dict) -> dict:
-    """脱敏处理"""
+def _truncate_large_value(key: str, value):
+    """压缩超大字段，避免操作日志撑爆数据库与前端渲染。"""
+    if isinstance(value, str):
+        if key in BULK_PARAM_FIELDS or len(value) > MAX_PARAM_STRING_LEN:
+            return f"[omitted, length={len(value)}]"
+        return value
+    if isinstance(value, dict):
+        return compact_log_params(value)
+    if isinstance(value, list):
+        if len(value) > 20:
+            return f"[omitted, list_length={len(value)}]"
+        return [_truncate_large_value(key, item) for item in value]
+    return value
+
+
+def compact_log_params(data) -> dict | list | str | int | float | bool | None:
+    """递归压缩请求参数中的大字段。"""
     if not isinstance(data, dict):
         return data
     result = {}
@@ -245,12 +297,20 @@ def _mask_sensitive_data(data: dict) -> dict:
         if k in SENSITIVE_FIELDS:
             result[k] = "***"
         elif isinstance(v, dict):
-            result[k] = _mask_sensitive_data(v)
+            result[k] = compact_log_params(v)
         elif isinstance(v, list):
-            result[k] = [_mask_sensitive_data(i) if isinstance(i, dict) else i for i in v]
+            if len(v) > 20:
+                result[k] = f"[omitted, list_length={len(v)}]"
+            else:
+                result[k] = [_truncate_large_value(k, item) for item in v]
         else:
-            result[k] = v
+            result[k] = _truncate_large_value(k, v)
     return result
+
+
+def _mask_sensitive_data(data: dict) -> dict:
+    """脱敏处理（兼容旧调用）。"""
+    return compact_log_params(data) if isinstance(data, dict) else data
 
 
 def _get_client_ip(request: Request) -> str:
@@ -276,15 +336,56 @@ async def _parse_request_body(request: Request) -> dict:
         data = json.loads(body)
         if isinstance(data, dict):
             return _mask_sensitive_data(data)
-        return {"data": data}
+        return compact_log_params({"data": data}) if data is not None else {}
     except Exception:
         return {}
 
 
+async def _resolve_perf_worker_user(params: dict, path: str) -> tuple[int, str] | None:
+    """从压测 Worker 请求体中的 token 解析节点名称（无用户 JWT 的 Worker 脚本调用）。"""
+    token = params.get("token")
+    if not token or not path.startswith("/perf/workers"):
+        return None
+
+    from app.models.perf import PerfWorker
+
+    worker = None
+    worker_id = params.get("worker_id")
+    if worker_id is not None:
+        try:
+            worker = await PerfWorker.get_or_none(id=int(worker_id), token=token)
+        except (TypeError, ValueError):
+            worker = None
+
+    if not worker and path.endswith("/unregister"):
+        host = str(params.get("host") or "").strip()
+        q = PerfWorker.filter(token=token)
+        if host:
+            q = q.filter(host=host)
+        worker = await q.order_by("-id").first()
+
+    if not worker and path.endswith("/register"):
+        host = str(params.get("host") or "").strip()
+        q = PerfWorker.filter(token=token)
+        if host:
+            q = q.filter(host=host)
+        worker = await q.order_by("-id").first()
+
+    if not worker:
+        worker = await PerfWorker.filter(token=token).order_by("-id").first()
+
+    if not worker:
+        return None
+
+    label = (worker.name or "").strip() or (worker.host or "").strip() or f"#{worker.id}"
+    return 0, f"压测Worker·{label}"
+
+
 async def _resolve_log_user(request: Request, path: str, params: dict) -> tuple[int, str]:
-    """解析操作人：支持登录用户 JWT、Runner 客户端 token。"""
-    if path == "/sys/users/login" and params.get("username"):
-        return 0, str(params["username"])
+    """解析操作人：支持登录用户 JWT、Runner 客户端 token、压测 Worker token。"""
+    if path in ("/sys/users/login", "/login") or path.endswith("/login"):
+        if params.get("username"):
+            return 0, str(params["username"])
 
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
@@ -293,7 +394,10 @@ async def _resolve_log_user(request: Request, path: str, params: dict) -> tuple[
 
             token = auth_header.replace("Bearer ", "", 1).strip()
             payload = verify_token(token)
-            return payload.get("id", 0), payload.get("username") or "未知用户"
+            uid = payload.get("id") or payload.get("user_id") or 0
+            uname = payload.get("username") or payload.get("sub") or ""
+            if uname:
+                return int(uid or 0), str(uname)
         except Exception:
             pass
 
@@ -326,6 +430,10 @@ async def _resolve_log_user(request: Request, path: str, params: dict) -> tuple[
         if internal_token == INTERNAL_API_KEY:
             return 0, "系统内部服务"
 
+    perf_user = await _resolve_perf_worker_user(params, path)
+    if perf_user:
+        return perf_user
+
     return 0, "未知用户"
 
 
@@ -335,6 +443,12 @@ SKIP_PATHS = {
     "/sys/users/verify",
     "/sys/users/refresh",
     "/runner/heartbeat",
+    "/login",  # 外部扫描/误配路径，非平台真实登录接口
+    "/perf/workers/heartbeat",  # 压测 Worker 每 30s 心跳，无审计价值
+    # Runner 高频上报：无审计价值且 params 体积巨大（尤其 image_base64）
+    "/runner/device-screen",
+    "/runner/device-log",
+    "/runner/device-log/batch",
 }
 SKIP_PREFIXES = (
     "/static",
@@ -342,12 +456,19 @@ SKIP_PREFIXES = (
     "/redoc",
     "/openapi.json",
 )
+# 高频探活 / 机器上报，无审计价值
+SKIP_PATH_REGEXES = (
+    re.compile(r"^/ai/record/\d+/heartbeat$"),
+    re.compile(r"^/perf/workers/\d+/report$"),  # 压测秒级上报
+)
 
 
 def _should_skip_operation_log(path: str) -> bool:
     if path in SKIP_PATHS:
         return True
     if any(path.startswith(p) for p in SKIP_PREFIXES):
+        return True
+    if any(pat.match(path) for pat in SKIP_PATH_REGEXES):
         return True
     return path == MCP_HTTP_PATH or path.startswith(f"{MCP_HTTP_PATH}/")
 

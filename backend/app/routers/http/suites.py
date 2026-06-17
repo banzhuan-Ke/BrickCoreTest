@@ -312,6 +312,7 @@ from .utils import (
     prepare_httpx_headers,
 )
 from app.core.variable_resolver import VariableResolver
+from app.core.data_tools.errors import ToolExecutionError
 
 
 async def run_single_case(
@@ -355,6 +356,12 @@ async def run_single_case(
     # 获取环境变量；优先级：project_vars < env_vars < passed variables
     env_vars = env.global_vars or {}
     all_variables = {**proj_vars, **env_vars, **(variables or {})}
+
+    from app.core.data_tools.tag_service import merge_execution_variables
+
+    all_variables = await merge_execution_variables(
+        case.project_id, env_id, all_variables
+    )
     
     stage_timings["merge_vars_ms"] = round((time.time() - _stage_start) * 1000, 2)
     _stage_start = time.time()
@@ -402,8 +409,9 @@ async def run_single_case(
     if not base_url and isinstance(case.request_headers, dict):
         base_url = case.request_headers.get("base_url")
     base_url = base_url or api.base_url or env.host
+    api_protocol = getattr(api, "protocol", "http") or "http"
     try:
-        url = build_api_url(base_url, api.path)
+        url = build_api_url(base_url, api.path, protocol=api_protocol)
     except ValueError as e:
         return ApiRunResult(record_id=0, status="failed", error=str(e))
     
@@ -425,13 +433,16 @@ async def run_single_case(
     original_body = body
     original_body_fields = list(body_fields)
     
-    # 变量替换并获取详情（共享 resolver，保证 random_int 等同用例内一致）
+    # 变量替换并获取详情（共享 resolver，保证 random_int / dt 工具等同用例内一致）
     var_resolver = VariableResolver(all_variables)
-    url, url_details = replace_variables_with_detail(url, all_variables, "url", resolver=var_resolver)
-    headers, headers_details = replace_variables_with_detail(headers, all_variables, "headers", resolver=var_resolver)
-    params, params_details = replace_variables_with_detail(params, all_variables, "params", resolver=var_resolver)
-    body, body_details = replace_variables_with_detail(body, all_variables, "body", resolver=var_resolver)
-    body_fields, body_fields_details = replace_body_fields_with_detail(body_fields, all_variables, resolver=var_resolver)
+    try:
+        url, url_details = replace_variables_with_detail(url, all_variables, "url", resolver=var_resolver)
+        headers, headers_details = replace_variables_with_detail(headers, all_variables, "headers", resolver=var_resolver)
+        params, params_details = replace_variables_with_detail(params, all_variables, "params", resolver=var_resolver)
+        body, body_details = replace_variables_with_detail(body, all_variables, "body", resolver=var_resolver)
+        body_fields, body_fields_details = replace_body_fields_with_detail(body_fields, all_variables, resolver=var_resolver)
+    except ToolExecutionError as exc:
+        return ApiRunResult(record_id=0, status="failed", error=str(exc))
     
     # 合并替换详情
     all_replacements = url_details + headers_details + params_details + body_details + body_fields_details
@@ -465,8 +476,45 @@ async def run_single_case(
 
     # 内部函数：执行一次请求（含断言和变量提取）
     last_attempt_timings = {}
+    is_ws = api_protocol == "websocket"
     
     async def _execute_once():
+        if is_ws:
+            from app.core.ws_executor import execute_ws_case_attempt
+
+            (
+                response,
+                response_body,
+                assertions_result,
+                all_passed,
+                extracted_vars,
+                extractor_results,
+                db_assertion_results,
+                attempt_timings,
+                message_log,
+            ) = await execute_ws_case_attempt(
+                url=url,
+                headers=headers if isinstance(headers, dict) else {},
+                case=case,
+                api=api,
+                all_variables=all_variables,
+                var_resolver=var_resolver,
+                auto_validate_schema=auto_validate_schema,
+                env_id=env_id,
+                script_logs=script_logs,
+            )
+            last_attempt_timings.update(attempt_timings)
+            request_detail["ws_messages"] = message_log
+            return (
+                response,
+                response_body,
+                assertions_result,
+                all_passed,
+                extracted_vars,
+                extractor_results,
+                db_assertion_results,
+            )
+
         async with httpx.AsyncClient(timeout=case.timeout, follow_redirects=True) as client:
             method = api.method.upper()
             kwargs = {"headers": prepare_httpx_headers(headers), "params": params}
@@ -666,7 +714,7 @@ async def run_single_case(
             "project_id": case.project_id,
             "status": "failed",
             "request_url": url if 'url' in locals() else "",
-            "request_method": api.method if api else "",
+            "request_method": "WS" if is_ws else (api.method if api else ""),
             "request_headers": safe_headers,
             "request_body": body if 'body' in locals() else None,
             "error_msg": last_error or "未知错误",
@@ -704,7 +752,7 @@ async def run_single_case(
             "project_id": case.project_id,
             "status": "success" if last_all_passed else "failed",
             "request_url": url,
-            "request_method": api.method.upper() if api else "",
+            "request_method": "WS" if is_ws else (api.method.upper() if api else ""),
             "request_headers": safe_headers,
             "request_body": body,
             "response_status": last_response.status_code,

@@ -20,59 +20,110 @@
           <el-option label="禁用" :value="false" />
         </el-select>
         <el-button @click="handleSearch">查询</el-button>
+        <TableColumnPicker
+          :items="pickerItems"
+          @toggle="setColumnVisible"
+          @reorder="setPickerOrder"
+          @reset="resetColumns"
+        />
       </div>
     </div>
 
     <!-- 任务列表 -->
-    <el-table :data="jobList" v-loading="loading" border @selection-change="handleSelectionChange">
+    <el-table :key="tableRenderKey" :data="jobList" v-loading="loading" border @selection-change="handleSelectionChange">
       <el-table-column type="selection" width="50" align="center" />
-      <el-table-column type="index" width="50" />
-      <el-table-column prop="name" label="任务名称" min-width="150" />
-      <el-table-column label="执行目标" min-width="160">
-        <template #default="{ row }">
-          <el-tag size="small" :type="row.target_type === 'plan' ? 'warning' : 'primary'" style="margin-right:4px">
-            {{ row.target_type === 'plan' ? '计划' : '套件' }}
-          </el-tag>
-          <span>{{ row.target_type === 'plan' ? row.plan_name : row.suite_name }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="run_type" label="执行类型" width="100">
-        <template #default="{ row }">
-          <el-tag size="small">{{ getRunTypeText(row.run_type) }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="执行计划" min-width="150">
-        <template #default="{ row }">{{ formatSchedule(row) }}</template>
-      </el-table-column>
-      <el-table-column prop="state" label="状态" width="80">
-        <template #default="{ row }">
-          <el-switch
-            v-model="row.state"
-            @change="handleToggle(row)"
-            inline-prompt
-            active-text="启"
-            inactive-text="禁"
-          />
-        </template>
-      </el-table-column>
-      <el-table-column label="最近执行" width="130">
-        <template #default="{ row }">
-          <div v-if="row.last_run_status" class="last-run">
-            <el-tag :type="getRunStatusType(row.last_run_status)" size="small">
-              {{ getRunStatusText(row.last_run_status) }}
+      <template v-for="col in activeColumns" :key="col.key">
+        <el-table-column
+          v-if="col.key === 'index'"
+          type="index"
+          :index="tableRowIndex"
+          :width="col.width"
+        />
+        <el-table-column
+          v-else-if="col.key === 'name'"
+          prop="name"
+          label="任务名称"
+          :min-width="col.minWidth || 150"
+        />
+        <el-table-column
+          v-else-if="col.key === 'target'"
+          label="执行目标"
+          :min-width="col.minWidth || 160"
+        >
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.target_type === 'plan' ? 'warning' : 'primary'" style="margin-right:4px">
+              {{ row.target_type === 'plan' ? '计划' : '套件' }}
             </el-tag>
-            <div class="run-time">{{ formatDate(row.last_run_time) }}</div>
-          </div>
-          <span v-else style="color: #999">-</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="create_by" label="创建人" width="100" />
-      <el-table-column label="修改人" width="100">
-        <template #default="{ row }">{{ row.update_by || row.create_by || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="创建时间" width="160">
-        <template #default="{ row }">{{ formatDate(row.create_time) }}</template>
-      </el-table-column>
+            <span>{{ row.target_type === 'plan' ? row.plan_name : row.suite_name }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'run_type'"
+          label="执行类型"
+          :width="col.width"
+        >
+          <template #default="{ row }">
+            <el-tag size="small">{{ getRunTypeText(row.run_type) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'schedule'"
+          label="执行计划"
+          :min-width="col.minWidth || 150"
+        >
+          <template #default="{ row }">{{ formatSchedule(row) }}</template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'state'"
+          label="状态"
+          :width="col.width"
+        >
+          <template #default="{ row }">
+            <el-switch
+              v-model="row.state"
+              @change="handleToggle(row)"
+              inline-prompt
+              active-text="启"
+              inactive-text="禁"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'last_run'"
+          label="最近执行"
+          :width="col.width"
+        >
+          <template #default="{ row }">
+            <div v-if="row.last_run_status" class="last-run">
+              <el-tag :type="getRunStatusType(row.last_run_status)" size="small">
+                {{ getRunStatusText(row.last_run_status) }}
+              </el-tag>
+              <div class="run-time">{{ formatDate(row.last_run_time) }}</div>
+            </div>
+            <span v-else style="color: #999">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'create_by'"
+          prop="create_by"
+          label="创建人"
+          :width="col.width"
+        />
+        <el-table-column
+          v-else-if="col.key === 'update_by'"
+          label="修改人"
+          :width="col.width"
+        >
+          <template #default="{ row }">{{ row.update_by || row.create_by || '—' }}</template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'create_time'"
+          label="创建时间"
+          :width="col.width"
+        >
+          <template #default="{ row }">{{ formatDate(row.create_time) }}</template>
+        </el-table-column>
+      </template>
       <el-table-column label="操作" width="300" fixed="right">
         <template #default="{ row }">
           <div class="table-row-actions">
@@ -258,6 +309,18 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import http from '@/api/index'
 import { httpPlanApi } from '@/api/modules/http'
 import ApiRunDetail from './components/ApiRunDetail.vue'
+import { makeTableRowIndexRefs } from '@/utils/tableIndex'
+import TableColumnPicker from '@/components/TableColumnPicker.vue'
+import { useTableColumns } from '@/composables/useTableColumns.js'
+
+const {
+  activeColumns,
+  pickerItems,
+  tableRenderKey,
+  setColumnVisible,
+  setPickerOrder,
+  resetColumns
+} = useTableColumns('api.cron_jobs')
 
 const route = useRoute()
 const proStore = ProjectStore()
@@ -269,6 +332,7 @@ const jobList = ref([])
 const total = ref(0)
 const page = ref(1)
 const size = ref(20)
+const tableRowIndex = makeTableRowIndexRefs(page, size)
 
 const filter = reactive({ state: null })
 

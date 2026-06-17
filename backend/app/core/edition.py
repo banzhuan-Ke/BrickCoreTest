@@ -1,6 +1,4 @@
-"""
-社区版 / 商业版识别（文档目录、部分文案分支用）。
-"""
+"""部署版本识别（文档目录与部分文案分支）。"""
 from __future__ import annotations
 
 import os
@@ -18,7 +16,7 @@ def _repo_root() -> Path:
 
 @lru_cache(maxsize=1)
 def is_community_edition() -> bool:
-    """CE：显式环境变量，或仓库内无 runner/WebEngine 源码目录。"""
+    """公开部署：显式环境变量，或仓库内无 runner/WebEngine 源码目录。"""
     raw = os.getenv("BRICKCORE_EDITION", "").strip().lower()
     if raw in ("ce", "community", "oss"):
         return True

@@ -1,8 +1,8 @@
 """
 数据模型模块
 """
-from .sys import User, Role, Project, Environment, Device, TestCatalog
-from .ui import Case, Suite, Step, Task, UiPlanExecution, UiSuiteExecution, UiCaseExecution
+from .sys import User, Role, InviteCode, Project, ProjectMember, Environment, Device, TestCatalog
+from .ui import Case, Suite, Step, Task, UiPlanExecution, UiSuiteExecution, UiCaseExecution, UiStepFragment, UiTestFile
 from .http import (
     ApiDefinition, ApiTestCase,
     ApiRunRecord, MockApi, ApiTestSuite, ApiSuiteCase, ApiSuiteRunRecord, ApiCronJob,
@@ -14,9 +14,9 @@ from .perf import PerfScene, PerfRecord
 
 __all__ = [
     # Sys
-    'User', 'Role', 'Project', 'Environment', 'Device', 'TestCatalog',
+    'User', 'Role', 'InviteCode', 'Project', 'ProjectMember', 'Environment', 'Device', 'TestCatalog',
     # UI
-    'Case', 'Suite', 'Step', 'Task', 'UiPlanExecution', 'UiSuiteExecution', 'UiCaseExecution',
+    'Case', 'Suite', 'Step', 'Task', 'UiPlanExecution', 'UiSuiteExecution', 'UiCaseExecution', 'UiStepFragment', 'UiTestFile',
     # HTTP
     'ApiDefinition', 'ApiTestCase',
     'ApiRunRecord', 'MockApi', 'ApiTestSuite', 'ApiSuiteCase', 'ApiSuiteRunRecord', 'ApiCronJob',

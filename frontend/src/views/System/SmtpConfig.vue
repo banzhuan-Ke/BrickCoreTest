@@ -1,5 +1,5 @@
 <template>
-  <PageCard>
+  <ConfigShell :embedded="embedded">
     <template #title>
       <b>SMTP 配置</b>
     </template>
@@ -28,14 +28,19 @@
         </el-form-item>
       </el-form>
     </template>
-  </PageCard>
+  </ConfigShell>
 </template>
 
 <script setup>
+import ConfigShell from '@/components/ConfigShell.vue'
+
+defineProps({
+  embedded: { type: Boolean, default: false }
+})
+
 import { reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '@/api/index'
-import PageCard from "@/components/PageCard.vue"
 
 const smtpForm = reactive({
   host: '',

@@ -14,11 +14,52 @@
     >
       <!-- 步骤名称 -->
       <el-form-item label="操作名称" prop="desc">
-        <el-input v-model="form.desc" placeholder="请输入操作描述" style="width: 100%" />
+        <div class="param-input-row">
+          <el-input v-model="form.desc" placeholder="请输入操作描述" style="flex: 1" />
+          <VarInsertButton :env-id="varInsertEnvId" label="变量" />
+          <ToolInsertButton label="工具" />
+        </div>
+      </el-form-item>
+
+      <el-form-item label="变量参考">
+        <div class="step-insert-toolbar">
+          <el-select
+            v-model="varInsertEnvId"
+            placeholder="参考环境"
+            size="small"
+            clearable
+            style="width: 140px"
+          >
+            <el-option
+              v-for="e in envList"
+              :key="e.id"
+              :label="e.name"
+              :value="e.id"
+            />
+          </el-select>
+          <VarInsertButton :env-id="varInsertEnvId" label="插入变量" hint-text="跨环境请优先用环境变量同名 key。" />
+          <ToolInsertButton label="插入工具" />
+          <el-button link type="info" size="small" @click="tagPickerVisible = true">数据工厂标签</el-button>
+        </div>
+        <p class="step-insert-hint">请先点击要填入的参数输入框，再选择插入项；执行时以运行环境为准。</p>
       </el-form-item>
       
+      <!-- 数据库断言（专用表单） -->
+      <el-form-item label="库断言" v-if="isDbAssertStep">
+        <UiDbAssertStepFields
+          :params="form.params"
+          :project-id="projectId"
+          :env-id="varInsertEnvId"
+        />
+      </el-form-item>
+
+      <!-- input 文件上传：平台 MinIO 文件选择 -->
+      <el-form-item label="测试文件" v-if="isUploadFileStep">
+        <UiTestFilePicker v-model="form.params" :env-id="varInsertEnvId" />
+      </el-form-item>
+
       <!-- 参数配置 -->
-      <el-form-item label="配置参数" v-if="hasParams">
+      <el-form-item :label="paramsSectionLabel" v-if="hasParams && !isDbAssertStep">
         <div class="params-container">
           <div 
             class="param-item" 
@@ -26,7 +67,7 @@
             :key="key"
           >
             <div class="param-label">
-              {{ paramLabelMap[key] || key }}
+              {{ getParamLabel(form.method, key, paramLabelMap[key]) }}
               <span v-if="isRequiredParam(key)" class="required-mark">*</span>
             </div>
             
@@ -55,6 +96,7 @@
                   style="flex: 1"
                 />
                 <VarInsertButton v-if="canInsertVar(key)" :env-id="varInsertEnvId" label="变量" />
+                <ToolInsertButton v-if="canInsertVar(key)" label="工具" />
               </div>
             </template>
             <template v-else-if="isNumber(value)">
@@ -81,6 +123,7 @@
                   style="flex: 1"
                 />
                 <VarInsertButton v-if="canInsertVar(key)" :env-id="varInsertEnvId" label="变量" />
+                <ToolInsertButton v-if="canInsertVar(key)" label="工具" />
               </div>
             </template>
           </div>
@@ -126,6 +169,12 @@
     </template>
   </el-dialog>
 
+  <DataFactoryTagPicker
+    v-model="tagPickerVisible"
+    :project-id="projectId"
+    @insert="onDfTagInsert"
+  />
+
   <el-dialog v-model="healDialogVisible" title="AI 定位器自愈" width="520px" append-to-body destroy-on-close>
     <el-form label-width="120px">
       <el-form-item label="抓取方式">
@@ -159,9 +208,35 @@ import { ElMessage } from 'element-plus'
 import ConditionEdit from './ConditionEdit.vue'
 import LocatorSelector from '@/components/LocatorSelector.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
+import ToolInsertButton from '@/components/ToolInsertButton.vue'
+import DataFactoryTagPicker from '@/views/ApiModule/components/DataFactoryTagPicker.vue'
+import UiDbAssertStepFields from './UiDbAssertStepFields.vue'
+import UiTestFilePicker from './UiTestFilePicker.vue'
+import { ProjectStore } from '@/stores/module/ProjectStore'
+import { insertVarRef } from '@/utils/varInsert.js'
+import { getOrderedVisibleParams, getParamLabel, isAssertionMethod } from '@/utils/uiStepMeta.js'
 import { aiGenerateApi } from '@/api/modules/ai.js'
 
+const proStore = ProjectStore()
 const varInsertEnvId = inject('varInsertEnvId', ref(null))
+const envList = computed(() => proStore.envList || [])
+const projectId = computed(() => proStore.projectInfo?.id)
+const tagPickerVisible = ref(false)
+
+async function onDfTagInsert(refStr) {
+  const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
+  const name = m ? m[1] : refStr
+  const result = await insertVarRef(name)
+  if (result?.ok) {
+    const tip =
+      result.mode === 'copy'
+        ? `已复制 ${refStr}，请粘贴到目标输入框`
+        : `已插入 ${refStr}`
+    ElMessage.success(tip)
+  } else {
+    ElMessage.warning('请先将光标放入要填入的输入框')
+  }
+}
 
 const props = defineProps({
   visible: {
@@ -210,6 +285,16 @@ const isConditionBranch = computed(() => {
   return form.value.method === 'condition_branch'
 })
 
+const isDbAssertStep = computed(() => form.value.method === 'kw_db_assert')
+
+const isUploadFileStep = computed(() => form.value.method === 'upload_file')
+
+const paramsSectionLabel = computed(() =>
+  isAssertionMethod(form.value.method) ? '断言参数' : '配置参数'
+)
+
+const uploadFileHiddenKeys = new Set(['file_path', 'file_key', 'file_bucket', 'file_name'])
+
 // 表单校验规则
 const formRules = {
   desc: [
@@ -217,17 +302,17 @@ const formRules = {
   ]
 }
 
-// 过滤后的参数（移除 timeout，避免与高级配置重复；但等待类步骤保留）
+// 过滤后的参数（按 method 元数据控制可见字段与顺序）
 const filteredParams = computed(() => {
-  const params = {}
+  const raw = { ...(form.value.params || {}) }
   const keepTimeoutMethods = ['wait_for_time', 'set_default_timeout']
-  for (const [key, value] of Object.entries(form.value.params || {})) {
-    if (key === 'timeout' && !keepTimeoutMethods.includes(form.value.method)) {
-      continue
-    }
-    params[key] = value
+  if (form.value.method === 'upload_file') {
+    uploadFileHiddenKeys.forEach((key) => delete raw[key])
   }
-  return params
+  if (!keepTimeoutMethods.includes(form.value.method)) {
+    delete raw.timeout
+  }
+  return getOrderedVisibleParams(form.value.method, raw)
 })
 
 // 是否有参数
@@ -237,8 +322,30 @@ const hasParams = computed(() => {
 
 // 判断参数是否必填
 function isRequiredParam(key) {
-  // 根据参数类型判断哪些是必须的
-  const requiredParams = ['selector', 'condition', 'locator', 'var_name', 'attr_name']
+  const method = form.value.method
+  const assertionRequired = {
+    kw_assert_page_title: ['title'],
+    kw_assert_page_url: ['url'],
+    kw_assert_value: ['locator', 'value'],
+    kw_assert_element_text: ['locator', 'text'],
+    kw_assert_element_text_contains: ['locator', 'text'],
+    kw_assert_text_contains: ['text'],
+    kw_assert_attribute: ['locator', 'attr_name', 'value'],
+    kw_assert_visible: ['locator'],
+    kw_assert_hidden: ['locator'],
+    kw_assert_not_exist: ['locator'],
+    kw_assert_not_visible: ['locator'],
+    kw_assert_enabled: ['locator'],
+    kw_assert_disabled: ['locator'],
+    kw_assert_checked: ['locator'],
+    kw_assert_empty: ['locator'],
+    kw_assert_editable: ['locator'],
+    kw_assert_focused: ['locator'],
+  }
+  if (assertionRequired[method]) {
+    return assertionRequired[method].includes(key)
+  }
+  const requiredParams = ['selector', 'condition', 'locator', 'var_name', 'attr_name', 'url', 'value', 'text']
   return requiredParams.includes(key)
 }
 
@@ -281,6 +388,8 @@ const paramLabelMap = {
   expect_results: '预期结果',
   is_equal: '是否相等',
   attr_name: '属性名称',
+  text: '预期文本',
+  match_mode: '匹配方式',
   
   // 变量提取
   var_name: '变量名',
@@ -349,7 +458,7 @@ function isNumber(value) {
 
 // 判断是否为下拉选择
 function isSelect(key) {
-  const selectKeys = ['wait_until', 'browser_type', 'operator', 'key', 'button']
+  const selectKeys = ['wait_until', 'browser_type', 'operator', 'key', 'button', 'match_mode']
   return selectKeys.includes(key)
 }
 
@@ -457,6 +566,10 @@ function getOptions(key) {
       { label: '左键', value: 'left' },
       { label: '右键', value: 'right' },
       { label: '中键', value: 'middle' }
+    ],
+    match_mode: [
+      { label: '完全相等', value: 'exact' },
+      { label: '包含', value: 'contains' }
     ]
   }
   return options[key] || []
@@ -471,7 +584,21 @@ async function handleSave() {
   }
   
   // 条件分支不需要校验参数
-  if (!isConditionBranch.value) {
+  if (isDbAssertStep.value) {
+    if (!form.value.params?.sql?.trim()) {
+      ElMessage.warning('请填写 SQL/Redis 命令')
+      return
+    }
+  } else if (!isConditionBranch.value) {
+    if (isUploadFileStep.value) {
+      const p = form.value.params || {}
+      const hasPlatformFile = !!(p.file_key && p.file_bucket)
+      const hasLegacyPath = !!(p.file_path && String(p.file_path).trim())
+      if (!hasPlatformFile && !hasLegacyPath) {
+        ElMessage.warning('请选择测试文件，或填写 Runner 本地路径')
+        return
+      }
+    }
     // 额外校验必填参数
     for (const key of Object.keys(filteredParams.value)) {
       if (isRequiredParam(key)) {
@@ -645,6 +772,22 @@ function handleClose() {
 
 .heal-hint {
   margin-top: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
+}
+
+.step-insert-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  width: 100%;
+  overflow-x: auto;
+}
+
+.step-insert-hint {
+  margin: 6px 0 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.5;

@@ -13,6 +13,9 @@
             <el-tag size="small" :type="suiteInfo.stop_on_failure ? 'danger' : 'info'">
               {{ suiteInfo.stop_on_failure ? '失败停止' : '失败继续' }}
             </el-tag>
+            <el-tag size="small" :type="suiteInfo.parallel ? 'warning' : 'info'">
+              {{ suiteInfo.parallel ? '并行执行' : '串行执行' }}
+            </el-tag>
           </div>
         </div>
         <div class="right">
@@ -160,6 +163,7 @@ const suiteInfo = reactive({
   timeout: 300,
   retry_count: 0,
   stop_on_failure: false,
+  parallel: false,
   env_id: null
 })
 const caseList = ref([])

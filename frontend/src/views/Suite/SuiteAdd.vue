@@ -73,6 +73,17 @@
               <el-option label="场景测试" value="2" />
             </el-select>
           </el-form-item>
+
+          <el-form-item label="执行策略">
+            <div class="suite-strategy-box">
+              <el-checkbox v-model="suiteInfo.propagate_variables">
+                链路用例变量传递给后续链路用例
+              </el-checkbox>
+              <el-checkbox v-model="suiteInfo.stop_on_failure">
+                任一用例失败时停止全部后续用例
+              </el-checkbox>
+            </div>
+          </el-form-item>
           
           <el-form-item label="所属目录" prop="catalog_id">
             <CatalogTreeSelect
@@ -115,21 +126,19 @@
       <div class="case-section">
         <h3 class="sidebar-title">套件用例</h3>
         <div class="empty-case-tip">
-          <el-empty description="保存套件后可添加用例" :image-size="80" />
+          <el-empty description="保存套件后可从用例集拖拽添加" :image-size="80" />
         </div>
       </div>
       <div class="case-section">
         <h3 class="sidebar-title">测试用例集</h3>
-        <div class="empty-case-tip">
-          <el-empty description="保存套件后可添加用例" :image-size="80" />
-        </div>
+        <CaseSet />
       </div>
     </el-aside>
   </el-container>
 </template>
 
 <script setup>
-import { reactive, ref, computed } from 'vue'
+import { reactive, ref, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { VueDraggable } from 'vue-draggable-plus'
 import { StepEditor } from '@/components/StepEditor'
@@ -139,6 +148,7 @@ import { UserStore } from '@/stores/module/UserStore'
 import http from '@/api/index'
 import { ElNotification } from 'element-plus'
 import ActionGroup from '@/datas/ActionGroup.js'
+import CaseSet from './componets/CaseSet.vue'
 import {
   Rank, Check, Close,
   ChromeFilled, Position, Mouse,
@@ -161,6 +171,8 @@ const saving = ref(false)
 const suiteInfo = reactive({
   name: '测试套件',
   suite_type: '1',
+  stop_on_failure: false,
+  propagate_variables: false,
   catalog_id: null,
   username: userStore.userInfo.username,
   pre_actions: [
@@ -173,6 +185,12 @@ const suiteInfo = reactive({
       children: []
     }
   ]
+})
+
+watch(() => suiteInfo.suite_type, (type) => {
+  if (type === '2') {
+    suiteInfo.propagate_variables = true
+  }
 })
 
 // 默认展开所有分组
@@ -255,6 +273,13 @@ const goBack = () => {
 </script>
 
 <style scoped lang="scss">
+.suite-strategy-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
 .suite-edit-container {
   height: calc(100vh - 50px);
 }

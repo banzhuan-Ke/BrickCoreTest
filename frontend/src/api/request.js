@@ -71,12 +71,14 @@ request.interceptors.response.use(
             return Promise.reject(response)
         }
         if (response.status === 403) {
-            ElNotification({
-                title: '权限不足',
-                message: response.data?.detail || '您没有权限执行该操作，请联系管理员分配权限',
-                type: 'error',
-                duration: 2000
-            })
+            if (!response.config?.silent403) {
+                ElNotification({
+                    title: '权限不足',
+                    message: response.data?.detail || '您没有权限执行该操作，请联系管理员分配权限',
+                    type: 'error',
+                    duration: 2000
+                })
+            }
             return Promise.reject(response)
         }
         if (response.status === 404) {

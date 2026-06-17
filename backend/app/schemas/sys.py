@@ -55,9 +55,8 @@ class RegisterForm(BaseModel):
     nickname: str
     email: str
     mobile: str
+    invite_code: str = ""
     roles: List[int] = []
-    admin_username: str = ""
-    admin_password: str = ""
 
 
 class RegisterSchemas(UserSchemas):
@@ -120,9 +119,11 @@ class PasswordChangeForm(BaseModel):
 class RoleSchemas(BaseModel):
     """角色Schema"""
     id: int
+    code: Optional[str] = None
     name: str
     description: str = ""
     permissions: List[str] = []
+    is_system: bool = False
     create_time: Optional[datetime] = None
     update_time: Optional[datetime] = None
     is_del: bool = False
@@ -152,6 +153,49 @@ class UpdateRoleForm(BaseModel):
     is_del: Optional[bool] = None
 
 
+class InviteCodeSchemas(BaseModel):
+    """邀请码 Schema"""
+    id: int
+    code: str
+    role_ids: List[int] = []
+    max_uses: int = 1
+    used_count: int = 0
+    expires_at: Optional[datetime] = None
+    note: str = ""
+    created_by_id: Optional[int] = None
+    created_by_username: str = ""
+    is_active: bool = True
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
+    is_del: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class InviteCodeListSchemas(BaseModel):
+    total: int
+    data: List[InviteCodeSchemas]
+
+
+class CreateInviteCodeForm(BaseModel):
+    """生成邀请码"""
+    code: str = ""
+    role_ids: List[int] = []
+    max_uses: int = 1
+    expires_at: Optional[datetime] = None
+    note: str = ""
+
+
+class UpdateInviteCodeForm(BaseModel):
+    """更新邀请码"""
+    role_ids: Optional[List[int]] = None
+    max_uses: Optional[int] = None
+    expires_at: Optional[datetime] = None
+    note: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 # ========== 项目相关 ==========
 class ProjectSchemas(BaseModel):
     """项目Schema"""
@@ -165,6 +209,10 @@ class ProjectSchemas(BaseModel):
     username: str
     is_del: bool = False
     is_user_default: bool = False
+    my_role: Optional[str] = Field(default=None, description="当前用户在项目中的角色")
+    can_manage_members: bool = Field(default=False, description="是否可管理成员")
+    can_edit_project: bool = Field(default=False, description="是否可编辑项目")
+    can_delete_project: bool = Field(default=False, description="是否可删除项目")
 
     @field_validator("default_headers", mode="before")
     @classmethod
@@ -199,6 +247,39 @@ class UpdateProjectForm(BaseModel):
     global_vars: Optional[dict] = None
     default_headers: Optional[List[Dict[str, Any]]] = None
     is_del: Optional[bool] = None
+
+
+class ProjectMemberSchemas(BaseModel):
+    id: int
+    project_id: int
+    user_id: int
+    role: str
+    username: str = ""
+    nickname: str = ""
+    invited_by_username: str = ""
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ProjectMemberListSchemas(BaseModel):
+    total: int
+    data: List[ProjectMemberSchemas]
+
+
+class AddProjectMemberForm(BaseModel):
+    user_id: int
+    role: str = "member"
+
+
+class UpdateProjectMemberForm(BaseModel):
+    role: str
+
+
+class TransferProjectOwnerForm(BaseModel):
+    user_id: int
 
 
 # ========== 环境相关 ==========

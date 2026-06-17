@@ -76,72 +76,146 @@
             <el-icon style="cursor: pointer" @click="handleSearch"><Search /></el-icon>
           </template>
         </el-input>
+        <TableColumnPicker
+          :items="pickerItems"
+          @toggle="setColumnVisible"
+          @reorder="setPickerOrder"
+          @reset="resetColumns"
+        />
       </div>
     </div>
 
     <!-- 计划列表 -->
     <el-table
+      :key="tableRenderKey"
       :data="planList"
       v-loading="loading"
       border
       @selection-change="handleSelectionChange"
     >
       <el-table-column type="selection" width="50" align="center" />
-      <el-table-column type="index" width="60" align="center" />
-      <el-table-column label="计划名称" min-width="150" show-overflow-tooltip>
-        <template #default="{ row }">
-          <el-link type="primary" @click="handleEdit(row)">{{ row.name }}</el-link>
-        </template>
-      </el-table-column>
-      <el-table-column label="所属目录" width="120" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.catalog_name || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="条目" width="110" align="center">
-        <template #default="{ row }">
-          <span>{{ row.item_count ?? 0 }}</span>
-          <span class="item-breakdown" v-if="row.item_count">
-            (套{{ row.suite_item_count ?? 0 }}/例{{ row.case_item_count ?? 0 }})
-          </span>
-        </template>
-      </el-table-column>
-      <el-table-column label="执行模式" width="100" align="center">
-        <template #default="{ row }">
-          <el-tag size="small" :type="row.parallel ? 'warning' : 'info'">
-            {{ row.parallel ? '并行' : '串行' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="默认环境" width="130" show-overflow-tooltip>
-        <template #default="{ row }">{{ getEnvName(row.env_id) || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="最近执行" width="150" align="center">
-        <template #default="{ row }">
-          <template v-if="row.last_run_time">
-            <el-tag size="small" :type="row.last_run_status === 'success' ? 'success' : row.last_run_status === 'running' ? 'warning' : 'danger'">
-              {{ lastRunStatusLabel(row.last_run_status) }}
-            </el-tag>
-            <div class="last-run-time">{{ formatDate(row.last_run_time) }}</div>
+      <template v-for="col in activeColumns" :key="col.key">
+        <el-table-column
+          v-if="col.key === 'index'"
+          type="index"
+          :index="tableRowIndex"
+          :width="col.width"
+          align="center"
+        />
+        <el-table-column
+          v-else-if="col.key === 'name'"
+          label="计划名称"
+          :min-width="col.minWidth || 150"
+          show-overflow-tooltip
+        >
+          <template #default="{ row }">
+            <el-link type="primary" @click="handleEdit(row)">{{ row.name }}</el-link>
           </template>
-          <span v-else class="text-muted">未执行</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="执行次数" width="88" align="center" prop="run_count" />
-      <el-table-column label="定时任务" width="88" align="center">
-        <template #default="{ row }">
-          <span v-if="row.cron_job_count">{{ row.cron_enabled_count }}/{{ row.cron_job_count }}</span>
-          <span v-else class="text-muted">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.description || '—' }}</template>
-      </el-table-column>
-      <el-table-column prop="create_by" label="创建人" width="100" />
-      <el-table-column label="修改人" width="100">
-        <template #default="{ row }">{{ row.update_by || row.create_by || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="创建时间" width="160">
-        <template #default="{ row }">{{ formatDate(row.create_time) }}</template>
-      </el-table-column>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'catalog_name'"
+          label="所属目录"
+          :width="col.width"
+          show-overflow-tooltip
+        >
+          <template #default="{ row }">{{ row.catalog_name || '—' }}</template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'item_count'"
+          label="条目"
+          :width="col.width"
+          align="center"
+        >
+          <template #default="{ row }">
+            <span>{{ row.item_count ?? 0 }}</span>
+            <span class="item-breakdown" v-if="row.item_count">
+              (套{{ row.suite_item_count ?? 0 }}/例{{ row.case_item_count ?? 0 }})
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'parallel'"
+          label="执行模式"
+          :width="col.width"
+          align="center"
+        >
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.parallel ? 'warning' : 'info'">
+              {{ row.parallel ? '并行' : '串行' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'env_name'"
+          label="默认环境"
+          :width="col.width"
+          show-overflow-tooltip
+        >
+          <template #default="{ row }">{{ getEnvName(row.env_id) || '—' }}</template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'last_run'"
+          label="最近执行"
+          :width="col.width"
+          align="center"
+        >
+          <template #default="{ row }">
+            <template v-if="row.last_run_time">
+              <el-tag size="small" :type="row.last_run_status === 'success' ? 'success' : row.last_run_status === 'running' ? 'warning' : 'danger'">
+                {{ lastRunStatusLabel(row.last_run_status) }}
+              </el-tag>
+              <div class="last-run-time">{{ formatDate(row.last_run_time) }}</div>
+            </template>
+            <span v-else class="text-muted">未执行</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'run_count'"
+          label="执行次数"
+          :width="col.width"
+          align="center"
+          prop="run_count"
+        />
+        <el-table-column
+          v-else-if="col.key === 'cron_jobs'"
+          label="定时任务"
+          :width="col.width"
+          align="center"
+        >
+          <template #default="{ row }">
+            <span v-if="row.cron_job_count">{{ row.cron_enabled_count }}/{{ row.cron_job_count }}</span>
+            <span v-else class="text-muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'description'"
+          label="描述"
+          :min-width="col.minWidth || 180"
+          show-overflow-tooltip
+        >
+          <template #default="{ row }">{{ row.description || '—' }}</template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'create_by'"
+          prop="create_by"
+          label="创建人"
+          :width="col.width"
+        />
+        <el-table-column
+          v-else-if="col.key === 'update_by'"
+          label="修改人"
+          :width="col.width"
+        >
+          <template #default="{ row }">{{ row.update_by || row.create_by || '—' }}</template>
+        </el-table-column>
+        <el-table-column
+          v-else-if="col.key === 'create_time'"
+          label="创建时间"
+          :width="col.width"
+        >
+          <template #default="{ row }">{{ formatDate(row.create_time) }}</template>
+        </el-table-column>
+      </template>
       <el-table-column label="操作" width="340" fixed="right">
         <template #default="{ row }">
           <div class="plan-actions">
@@ -263,7 +337,7 @@
       </div>
 
       <el-table :data="recordList" v-loading="recordsLoading" border size="small" style="margin-top:12px">
-        <el-table-column type="index" width="50" align="center" />
+        <el-table-column type="index" :index="recordTableRowIndex" width="50" align="center" />
         <el-table-column label="状态" width="80" align="center">
           <template #default="{ row }">
             <el-tag :type="row.status === 'success' ? 'success' : 'danger'" size="small">
@@ -370,13 +444,25 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Delete, Edit, Search, Document, VideoPlay, Loading, DocumentCopy } from '@element-plus/icons-vue'
 import { httpPlanApi } from '@/api/modules/http'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import CatalogListLayout from '@/components/CatalogListLayout.vue'
+import TableColumnPicker from '@/components/TableColumnPicker.vue'
+import { useTableColumns } from '@/composables/useTableColumns.js'
+import { makeTableRowIndexRefs } from '@/utils/tableIndex'
+
+const {
+  activeColumns,
+  pickerItems,
+  tableRenderKey,
+  setColumnVisible,
+  setPickerOrder,
+  resetColumns
+} = useTableColumns('api.plans')
 
 const emptySummary = () => ({
   plan_count: 0,
@@ -396,6 +482,7 @@ const emptySummary = () => ({
 })
 
 const router = useRouter()
+const route = useRoute()
 const proStore = ProjectStore()
 
 // 列表数据
@@ -404,6 +491,7 @@ const loading = ref(false)
 const total = ref(0)
 const page = ref(1)
 const size = ref(20)
+const tableRowIndex = makeTableRowIndexRefs(page, size)
 const keyword = ref('')
 const catalogId = ref(null)
 const selectedPlans = ref([])
@@ -646,6 +734,7 @@ const recordList = ref([])
 const recordTotal = ref(0)
 const recordPage = ref(1)
 const recordSize = ref(10)
+const recordTableRowIndex = makeTableRowIndexRefs(recordPage, recordSize)
 const recordFilter = ref('')
 const currentPlanId = ref(null)
 const currentPlanName = ref('')
@@ -693,8 +782,23 @@ const handleViewRecordDetail = async (row) => {
 
 onMounted(() => {
   proStore.getCatalogList()
+  const qKeyword = route.query.keyword
+  if (qKeyword && typeof qKeyword === 'string') {
+    keyword.value = qKeyword
+  }
   fetchPlans()
 })
+
+watch(
+  () => route.query.keyword,
+  (qKeyword) => {
+    if (qKeyword && typeof qKeyword === 'string') {
+      keyword.value = qKeyword
+      page.value = 1
+      fetchPlans()
+    }
+  },
+)
 </script>
 
 <style scoped>

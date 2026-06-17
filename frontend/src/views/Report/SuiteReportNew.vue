@@ -208,7 +208,7 @@
               <CaseReportTimeline :runInfo="props.row.result_data" />
             </template>
           </el-table-column>
-          <el-table-column type="index" label="序号" width="70"/>
+          <el-table-column type="index" label="序号" :index="tableRowIndex" width="70"/>
           <el-table-column prop="result_data.name" label="用例名称" min-width='180' show-overflow-tooltip>
             <template #default="scope">
               {{ scope.row.result_data?.name || '未知用例' }}
@@ -279,27 +279,16 @@
       </div>
 
       <!-- 套件日志 -->
-      <div class="suite-logs" v-if="runInfo.execution_log?.length > 0">
-        <div class="section-title">
+      <ExecutionLogScroller
+        v-if="runInfo.execution_log?.length > 0"
+        :logs="runInfo.execution_log"
+        container-height="300px"
+      >
+        <template #title>
           <el-icon><Document /></el-icon>
           套件执行日志
-          <el-tag size="small" type="info">{{ runInfo.execution_log.length }} 条</el-tag>
-        </div>
-        <div class="log-container">
-          <RecycleScroller
-            class="log-scroller"
-            :items="suiteLogItems"
-            :item-size="24"
-            key-field="index"
-            v-slot="{ item }"
-          >
-            <div :class="['log-line', item.level]">
-              <span class="log-index">[{{ item.index + 1 }}]</span>
-              <span class="log-message">{{ item.message }}</span>
-            </div>
-          </RecycleScroller>
-        </div>
-      </div>
+        </template>
+      </ExecutionLogScroller>
 
       <!-- 执行环境 -->
       <div class="env-section">
@@ -307,7 +296,7 @@
           <el-icon><Setting /></el-icon>
           执行环境配置
         </div>
-        <VueJsonPretty :data="runInfo.env" :showIcon="true" class="env-json" />
+        <ExecutionEnvPanel :env="runInfo.env" />
       </div>
     </template>
     
@@ -384,19 +373,17 @@ import {
   Setting,
   Loading
 } from '@element-plus/icons-vue'
-import VueJsonPretty from 'vue-json-pretty'
-import { RecycleScroller } from 'vue-virtual-scroller'
-import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
-import 'vue-json-pretty/lib/styles.css'
-
 import http from '@/api/index'
 import PageCard from "@/components/PageCard.vue"
 import CaseReportTimeline from "@/components/Report/CaseReportTimeline.vue"
+import ExecutionLogScroller from '@/components/Report/ExecutionLogScroller.vue'
+import ExecutionEnvPanel from '@/components/Report/ExecutionEnvPanel.vue'
 import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
 import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
 import { aiAnalyzeApi } from '@/api/modules/ai.js'
 import { UserStore } from "@/stores/module/UserStore.js"
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
+import { makeTableRowIndex } from '@/utils/tableIndex'
 import { fileApi } from '@/api/modules/sys'
 
 const router = useRouter()
@@ -467,6 +454,8 @@ const pageConfig = reactive({
   size: 10,
   total: 0
 })
+
+const tableRowIndex = makeTableRowIndex(pageConfig)
 
 // 状态映射
 const statusMap = {
@@ -616,20 +605,6 @@ const formatDateTime = (timestamp) => {
     second: '2-digit'
   })
 }
-
-// 套件日志
-const suiteLogItems = computed(() => {
-  if (!runInfo.value.execution_log) return []
-  return runInfo.value.execution_log.map((log, index) => {
-    let level = 'info'
-    // 处理非字符串日志
-    let logStr = typeof log === 'string' ? log : JSON.stringify(log)
-    if (logStr.toLowerCase().includes('error')) level = 'error'
-    else if (logStr.toLowerCase().includes('warn')) level = 'warning'
-    else if (logStr.toLowerCase().includes('success')) level = 'success'
-    return { message: logStr, index, level }
-  })
-})
 
 // 返回
 const back = () => {
@@ -836,53 +811,8 @@ getRunInfo()
     }
   }
   
-  .suite-logs {
-    .log-container {
-      height: 300px;
-      background: #1e1e1e;
-      border-radius: 8px;
-      overflow: hidden;
-      
-      .log-scroller {
-        height: 100%;
-        
-        .log-line {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 2px 12px;
-          font-family: 'Consolas', 'Monaco', monospace;
-          font-size: 12px;
-          line-height: 20px;
-          color: #d4d4d4;
-          
-          &:hover {
-            background: #2a2a2a;
-          }
-          
-          .log-index {
-            color: #6e7681;
-            min-width: 50px;
-          }
-          
-          .log-message {
-            flex: 1;
-          }
-          
-          &.error { color: #f85149; }
-          &.warning { color: #ffa657; }
-          &.success { color: #3fb950; }
-        }
-      }
-    }
-  }
-  
   .env-section {
-    .env-json {
-      background: var(--el-fill-color-light);
-      padding: 16px;
-      border-radius: 8px;
-    }
+    // 样式由 ExecutionEnvPanel 内部承担
   }
 }
 

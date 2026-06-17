@@ -1,4 +1,4 @@
-"""平台内 AI 助手（Phase 2：LLM 选工具 + 服务端历史 + 写操作 confirm）"""
+"""平台内 AI 助手（Phase 4：多会话 + 页面上下文 + 写操作 confirm + 执行回传）"""
 from __future__ import annotations
 
 import logging
@@ -125,6 +125,21 @@ QUICK_PROMPTS = [
         "key": "qa_eval",
         "label": "问答评测",
         "message": "列出当前项目的问答准确性评测集及被测 API 配置，并说明如何提交跑批。",
+    },
+    {
+        "key": "data_factory",
+        "label": "数据工厂",
+        "message": "列出当前项目的数据工厂数据源和 SQL 模板（setup/teardown），说明各环境配置情况。",
+    },
+    {
+        "key": "mock",
+        "label": "Mock 接口",
+        "message": "列出当前项目已配置的 Mock 接口及匹配规则。",
+    },
+    {
+        "key": "devices",
+        "label": "在线设备",
+        "message": "列出当前项目在线的 Web UI Runner 设备，说明 device_id 与状态。",
     },
 ]
 

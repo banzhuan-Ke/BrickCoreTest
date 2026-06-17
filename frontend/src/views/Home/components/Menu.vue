@@ -64,6 +64,9 @@ const menuGroups = reactive(MenuGroups.map(g => ({
 const filteredMenuGroups = computed(() => {
   return menuGroups.map(group => {
     const items = group.items.filter(item => {
+      if (item.anyPermissions?.length) {
+        return item.anyPermissions.some((p) => uStore.hasPermission(p))
+      }
       if (!item.permission) return true
       return uStore.hasPermission(item.permission)
     })

@@ -129,12 +129,14 @@ class BrickCoreApi:
     def heartbeat(self, device_id: str) -> None:
         if not self.runner_token:
             return
-        requests.post(
+        resp = requests.post(
             self._url("/runner/heartbeat"),
             json={"device_id": device_id, "client_version": CLIENT_VERSION},
             headers={"X-Runner-Token": self.runner_token},
             timeout=10,
         )
+        if resp.status_code != 200:
+            raise ApiError(self._extract_error(resp), resp.status_code)
 
     def fetch_version_info(self) -> dict[str, Any] | None:
         try:
@@ -144,6 +146,36 @@ class BrickCoreApi:
         except requests.RequestException:
             pass
         return None
+
+    def list_projects(self, *, page: int = 1, size: int = 200) -> list[dict[str, Any]]:
+        if not self.user_token:
+            raise ApiError("请先登录")
+        resp = requests.get(
+            self._url("/sys/projects"),
+            params={"page": page, "size": size},
+            headers={"Authorization": f"Bearer {self.user_token}"},
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            raise ApiError(self._extract_error(resp), resp.status_code)
+        body = resp.json()
+        data = body.get("data") if isinstance(body, dict) else body
+        if not isinstance(data, list):
+            return []
+        return [item for item in data if isinstance(item, dict)]
+
+    def unregister_perf_worker(self, project_id: int, *, host: str | None = None) -> None:
+        from runner_client.app.perf_worker_manager import perf_worker_token
+
+        hostname = host or socket.gethostname()
+        resp = requests.post(
+            self._url("/perf/workers/unregister"),
+            params={"project_id": project_id},
+            json={"token": perf_worker_token(), "host": hostname},
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            raise ApiError(self._extract_error(resp), resp.status_code)
 
     def download_client_package(self, dest: Path) -> Path:
         from runner_client.app.package_updater import download_client_package

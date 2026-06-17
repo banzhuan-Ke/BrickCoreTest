@@ -3,16 +3,33 @@ import json
 from datetime import datetime
 from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Depends, Query, Request, status
+from pydantic import BaseModel, Field
 from starlette.responses import Response
 from app.models.http import MockApi
 from app.schemas.http import MockApiCreate, MockApiUpdate, MockApiOut, MockApiListResponse
-from app.core.auth import require_permissions
-from app.core.permissions import API_MOCK_VIEW, API_MOCK_EDIT
+from app.core.auth import require_permissions, is_authenticated
+from app.core.permissions import API_MOCK_VIEW, API_MOCK_EDIT, AI_TEST_EXECUTE
+from app.core.mock_ai_service import generate_mock_response_body
 
 router = APIRouter()
 
 MOCK_VIEW = API_MOCK_VIEW
 MOCK_EDIT = API_MOCK_EDIT
+
+
+class MockAiGenerateRequest(BaseModel):
+    method: str = Field(default="GET", description="HTTP 方法")
+    path: str = Field(..., description="Mock 路径")
+    name: str = Field(default="", description="Mock 名称")
+    description: str = Field(default="", description="响应业务描述")
+    response_status: int = Field(default=200, ge=100, le=599)
+    ai_config_id: Optional[int] = Field(default=None, description="可选 AI 配置 ID")
+    project_id: Optional[int] = Field(default=None, description="项目 ID（用于 usage 日志）")
+
+
+class MockAiGenerateResponse(BaseModel):
+    response_body: dict | list | str | int | float | bool | None = Field(default_factory=dict)
+    response_status: int = 200
 
 
 def _build_mock_out(mock: MockApi) -> dict:
@@ -33,6 +50,32 @@ def _build_mock_out(mock: MockApi) -> dict:
         "create_time": mock.create_time,
         "update_time": mock.update_time,
     }
+
+
+@router.post("/mock/ai-generate", summary="AI 生成 Mock 响应体", response_model=MockAiGenerateResponse,
+             dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
+async def ai_generate_mock_body(
+    body: MockAiGenerateRequest,
+    user_info: dict = Depends(is_authenticated),
+):
+    """根据接口路径与业务描述，AI 生成 Mock 响应 JSON。"""
+    if not body.path.strip():
+        raise HTTPException(status_code=400, detail="path 不能为空")
+    project_id = body.project_id or user_info.get("project_id") or user_info.get("current_project_id")
+    result = await generate_mock_response_body(
+        method=body.method.upper(),
+        path=body.path.strip(),
+        name=body.name.strip(),
+        description=body.description.strip(),
+        response_status=body.response_status,
+        ai_config_id=body.ai_config_id,
+        user_info=user_info,
+        project_id=project_id,
+    )
+    return MockAiGenerateResponse(
+        response_body=result["response_body"],
+        response_status=result["response_status"],
+    )
 
 
 @router.get("/mock", summary="Mock 接口列表", response_model=MockApiListResponse,

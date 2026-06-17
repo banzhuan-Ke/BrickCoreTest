@@ -12,9 +12,14 @@
       >
         <template #default>
           <div style="font-size: 13px; line-height: 1.8;">
-            <div>在 <code>runner</code> 目录下启动执行机脚本，注册成功后本页会显示节点；执行压测时在场景弹窗选择「使用分布式 Worker 执行」。</div>
+            <div>
+              <strong>推荐</strong>：使用 <strong>BrickCoreRunner v1.3.14+</strong>，登录后默认 UI 执行器；压测时在客户端切换为「仅压测执行机」或「UI + 压测」，选择压测项目后点「上线」。压测引擎与下方脚本相同，报告指标一致。
+            </div>
             <div style="margin-top: 8px;">
-              <strong>启动命令</strong>（<code>--project-id</code> 必须与当前项目一致，当前为 <b>{{ proStore.projectInfo?.id || '未选择' }}</b>）：
+              执行压测时在场景弹窗勾选「使用分布式 Worker 执行」。客户端「当前会话日志」会实时显示秒级 QPS / RT；完整日志见本机 <code>runner/logs/perf_worker.log</code>。
+            </div>
+            <div style="margin-top: 12px;">
+              <strong>备选：命令行脚本</strong>（<code>--project-id</code> 须与当前项目 <b>{{ proStore.projectInfo?.id || '未选择' }}</b> 一致）：
             </div>
             <pre class="cmd-block">{{ startCommand }}</pre>
           </div>
@@ -69,7 +74,7 @@
         <template #description>
           <div style="color: #909399;">暂无执行机</div>
           <div style="font-size: 13px; color: #606266; margin-top: 8px;">
-            运行 runner 目录的 perf_worker.py 脚本即可注册
+            推荐使用 BrickCoreRunner 客户端（压测模式上线），或运行 runner 目录的 perf_worker.py
           </div>
         </template>
       </el-empty>
@@ -98,7 +103,7 @@ const backendUrl = computed(() => {
 
 const startCommand = computed(() => {
   const pid = proStore.projectInfo?.id || 1
-  return `cd runner\npython perf_worker.py --master ${backendUrl.value} --token my-local-token --name "我的电脑" --max-concurrent 200 --project-id ${pid}`
+  return `cd runner\npython -u perf_worker.py --master ${backendUrl.value} --token my-local-token --name "我的电脑" --max-concurrent 200 --project-id ${pid}`
 })
 
 const getStatusType = (status) => {
@@ -126,7 +131,7 @@ const fetchData = async () => {
       const resAll = await perfWorkerApi.getList({})
       const all = parseWorkerList(resAll)
       if (all.length) {
-        projectMismatchHint.value = `检测到 ${all.length} 个执行机注册在其他项目，请按上方命令中的 --project-id ${pid} 重新启动脚本`
+        projectMismatchHint.value = `检测到 ${all.length} 个执行机注册在其他项目，请在客户端选择项目 ${pid} 后重新上线`
         list = all
       }
     }

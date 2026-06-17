@@ -10,19 +10,32 @@ from typing import Any, Optional
 
 from jinja2 import Template as Jinja2Template
 
+from app.core.export_profile import EXPORT_PROFILE_GENERIC, EXPORT_PROFILE_ZENTAO
 from app.models.sys import Project
 
 CASE_NAMING_GLOBAL_VARS_KEY = "case_naming"
+
+_JINJA_VAR_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 
 DEFAULT_TITLE_TEMPLATE = (
     "【#{{ story_no }}_{{ main_module }}_{{ sub_module }}】"
     "（{{ feature_point }}）{{ case_description }}"
 )
 
+ZENTAO_NO_STORY_TITLE_TEMPLATE = (
+    "【{{ main_module }}_{{ sub_module }}】"
+    "（{{ feature_point }}）{{ case_description }}"
+)
+
+GENERIC_TITLE_TEMPLATE = (
+    "【{{ main_module }}】（{{ feature_point }}）{{ case_description }}"
+)
+
 DEFAULT_SLOT_DEFINITIONS: dict[str, dict] = {
     "story_no": {
         "source": "bindings.related_story",
         "transform": "extract_leading_number",
+        "fallbacks": ["context.story_code", "context.requirement_id"],
         "label": "需求编号",
     },
     "main_module": {
@@ -58,11 +71,59 @@ DEFAULT_EXPORT_COLUMNS: list[dict] = [
     {"column": "适用阶段", "expr": "{{ stage_resolved }}"},
 ]
 
+GENERIC_EXPORT_COLUMNS: list[dict] = [
+    {"column": "用例标题", "expr": "{{ case.title }}"},
+    {"column": "功能模块", "expr": "{{ case.module }}"},
+    {"column": "前置条件", "expr": "{{ case.precondition }}"},
+    {"column": "步骤", "expr": "{{ steps_text }}"},
+    {"column": "预期", "expr": "{{ expects_text }}"},
+    {"column": "优先级", "expr": "{{ case.priority }}"},
+    {"column": "用例类型", "expr": "{{ case.type or '功能测试' }}"},
+    {"column": "关键词", "expr": "{{ case.keywords or '' }}"},
+]
+
+BUILTIN_TEMPLATE_IDS = frozenset({"default", "zentao_no_story", "generic"})
+
+CORE_WARN_SLOTS = ["main_module", "sub_module", "feature_point", "case_description"]
+
+BUILTIN_TEMPLATE_CATALOG = [
+    {
+        "id": "default",
+        "name": "禅道·含需求编号",
+        "description": "标题含需求编号前缀，适合禅道「相关研发需求」带前导数字的场景",
+        "export_profile": EXPORT_PROFILE_ZENTAO,
+    },
+    {
+        "id": "zentao_no_story",
+        "name": "禅道·无需求编号",
+        "description": "标题不含编号，仍导出禅道完整列；研发需求可填纯中文名",
+        "export_profile": EXPORT_PROFILE_ZENTAO,
+    },
+    {
+        "id": "generic",
+        "name": "通用·简洁标题",
+        "description": "非禅道场景，导出通用 XLSX（无产品/模块/研发需求列）",
+        "export_profile": EXPORT_PROFILE_GENERIC,
+    },
+]
+
+
+def parse_title_template_vars(title_template: str) -> set[str]:
+    return set(_JINJA_VAR_RE.findall(title_template or ""))
+
+
+def effective_warn_missing_slots(template: dict) -> list[str]:
+    """仅对标题模板中实际用到的槽位做缺省告警。"""
+    validation = template.get("validation") or {}
+    configured = validation.get("warn_if_missing_slots") or []
+    used = parse_title_template_vars(template.get("title_template") or DEFAULT_TITLE_TEMPLATE)
+    return [name for name in configured if name in used]
+
 
 def default_template() -> dict:
     return {
         "id": "default",
-        "name": "公司默认规范",
+        "name": "禅道·含需求编号",
         "version": 1,
         "enabled": True,
         "requirement_types": ["*"],
@@ -70,24 +131,107 @@ def default_template() -> dict:
         "slot_definitions": copy.deepcopy(DEFAULT_SLOT_DEFINITIONS),
         "validation": {
             "title_max_length": 500,
-            "warn_if_missing_slots": [
-                "story_no",
-                "main_module",
-                "sub_module",
-                "feature_point",
-                "case_description",
-            ],
+            "warn_if_missing_slots": list(CORE_WARN_SLOTS),
         },
         "export_columns": copy.deepcopy(DEFAULT_EXPORT_COLUMNS),
     }
 
 
-def default_naming_config() -> dict:
+def zentao_no_story_template() -> dict:
     tpl = default_template()
-    return {
-        "active_template_id": tpl["id"],
-        "templates": [tpl],
+    tpl["id"] = "zentao_no_story"
+    tpl["name"] = "禅道·无需求编号"
+    tpl["title_template"] = ZENTAO_NO_STORY_TITLE_TEMPLATE
+    tpl["validation"] = {
+        "title_max_length": 500,
+        "warn_if_missing_slots": list(CORE_WARN_SLOTS),
     }
+    return tpl
+
+
+def generic_template() -> dict:
+    return {
+        "id": "generic",
+        "name": "通用·简洁标题",
+        "version": 1,
+        "enabled": True,
+        "requirement_types": ["generic", "*"],
+        "title_template": GENERIC_TITLE_TEMPLATE,
+        "slot_definitions": copy.deepcopy(DEFAULT_SLOT_DEFINITIONS),
+        "validation": {
+            "title_max_length": 500,
+            "warn_if_missing_slots": ["main_module", "feature_point", "case_description"],
+        },
+        "export_columns": copy.deepcopy(GENERIC_EXPORT_COLUMNS),
+    }
+
+
+def default_naming_config() -> dict:
+    return {
+        "active_template_id": "default",
+        "templates": [
+            default_template(),
+            zentao_no_story_template(),
+            generic_template(),
+        ],
+    }
+
+
+def suggest_template_id_for_profile(export_profile: str) -> str:
+    if export_profile == EXPORT_PROFILE_GENERIC:
+        return "generic"
+    return "default"
+
+
+def _merge_template_defaults(raw: dict, base: dict) -> dict:
+    merged = copy.deepcopy(base)
+    merged.update({k: v for k, v in raw.items() if v is not None})
+    if isinstance(raw.get("slot_definitions"), dict):
+        fixed_defs = {}
+        for sk, sv in {**DEFAULT_SLOT_DEFINITIONS, **raw["slot_definitions"]}.items():
+            if isinstance(sv, dict):
+                sd = dict(sv)
+                src = sd.get("source") or ""
+                fb = sd.get("fallback") or ""
+                if src.startswith("binding."):
+                    sd["source"] = "bindings." + src.split(".", 1)[1]
+                if fb.startswith("binding."):
+                    sd["fallback"] = "bindings." + fb.split(".", 1)[1]
+                fixed_defs[sk] = sd
+            else:
+                fixed_defs[sk] = sv
+        merged["slot_definitions"] = fixed_defs
+    if isinstance(raw.get("export_columns"), list) and raw["export_columns"]:
+        merged["export_columns"] = raw["export_columns"]
+    elif merged["id"] == "generic":
+        merged["export_columns"] = copy.deepcopy(GENERIC_EXPORT_COLUMNS)
+    else:
+        merged["export_columns"] = copy.deepcopy(DEFAULT_EXPORT_COLUMNS)
+    if isinstance(raw.get("validation"), dict):
+        merged["validation"] = {**merged["validation"], **raw["validation"]}
+    if not merged.get("id"):
+        merged["id"] = f"tpl_{uuid.uuid4().hex[:8]}"
+    return merged
+
+
+def _ensure_builtin_templates(templates: list[dict]) -> list[dict]:
+    by_id = {t["id"]: t for t in templates if isinstance(t, dict) and t.get("id")}
+    builtins = {
+        "default": default_template(),
+        "zentao_no_story": zentao_no_story_template(),
+        "generic": generic_template(),
+    }
+    for bid, builtin in builtins.items():
+        if bid in by_id:
+            by_id[bid] = _merge_template_defaults(by_id[bid], builtin)
+        else:
+            by_id[bid] = copy.deepcopy(builtin)
+    custom = [
+        t for t in templates
+        if isinstance(t, dict) and t.get("id") and t["id"] not in BUILTIN_TEMPLATE_IDS
+    ]
+    ordered = [by_id[bid] for bid in ("default", "zentao_no_story", "generic") if bid in by_id]
+    return ordered + custom
 
 
 def normalize_naming_config(raw: Optional[dict]) -> dict:
@@ -100,33 +244,13 @@ def normalize_naming_config(raw: Optional[dict]) -> dict:
         for t in templates:
             if not isinstance(t, dict):
                 continue
-            merged = default_template()
-            merged.update({k: v for k, v in t.items() if v is not None})
-            if isinstance(t.get("slot_definitions"), dict):
-                fixed_defs = {}
-                for sk, sv in {**DEFAULT_SLOT_DEFINITIONS, **t["slot_definitions"]}.items():
-                    if isinstance(sv, dict):
-                        sd = dict(sv)
-                        src = sd.get("source") or ""
-                        fb = sd.get("fallback") or ""
-                        if src.startswith("binding."):
-                            sd["source"] = "bindings." + src.split(".", 1)[1]
-                        if fb.startswith("binding."):
-                            sd["fallback"] = "bindings." + fb.split(".", 1)[1]
-                        fixed_defs[sk] = sd
-                    else:
-                        fixed_defs[sk] = sv
-                merged["slot_definitions"] = fixed_defs
-            if isinstance(t.get("export_columns"), list) and t["export_columns"]:
-                merged["export_columns"] = t["export_columns"]
-            else:
-                merged["export_columns"] = copy.deepcopy(DEFAULT_EXPORT_COLUMNS)
-            if isinstance(t.get("validation"), dict):
-                merged["validation"] = {**merged["validation"], **t["validation"]}
-            if not merged.get("id"):
-                merged["id"] = f"tpl_{uuid.uuid4().hex[:8]}"
-            normalized_tpls.append(merged)
-        base["templates"] = normalized_tpls
+            base_tpl = default_template()
+            if t.get("id") == "zentao_no_story":
+                base_tpl = zentao_no_story_template()
+            elif t.get("id") == "generic":
+                base_tpl = generic_template()
+            normalized_tpls.append(_merge_template_defaults(t, base_tpl))
+        base["templates"] = _ensure_builtin_templates(normalized_tpls)
     active = raw.get("active_template_id")
     if active and any(t["id"] == active for t in base["templates"]):
         base["active_template_id"] = active
@@ -183,23 +307,35 @@ def resolve_template(
     config: dict,
     requirement_type: str = "default",
     template_id_override: Optional[str] = None,
+    export_profile: Optional[str] = None,
 ) -> dict:
-    """按需求类型或显式 override 选取模板，否则用 active。"""
+    """按需求 override → 项目 active → 导出目标 → 需求类型（非 *）选取模板。"""
     if template_id_override:
         tpl = find_template_by_id(config, template_id_override)
         if tpl:
             return tpl
+
+    active_id = config.get("active_template_id")
+    if active_id:
+        tpl = find_template_by_id(config, active_id)
+        if tpl:
+            return tpl
+
+    if export_profile == EXPORT_PROFILE_GENERIC:
+        tpl = find_template_by_id(config, "generic")
+        if tpl:
+            return tpl
+
     req_type = (requirement_type or "default").strip() or "default"
     for t in config.get("templates") or []:
         if not t.get("enabled", True):
             continue
         types = t.get("requirement_types") or ["*"]
-        if "*" in types or req_type in types:
+        if "*" in types:
+            continue
+        if req_type in types:
             return t
-    active_id = config.get("active_template_id")
-    tpl = find_template_by_id(config, active_id) if active_id else None
-    if tpl:
-        return tpl
+
     templates = config.get("templates") or []
     return templates[0] if templates else default_template()
 
@@ -230,18 +366,33 @@ def _read_source(source: str, ctx: dict) -> Any:
 
 
 def resolve_slot(slot_name: str, definition: dict, ctx: dict) -> str:
-    val = _read_source(definition.get("source", ""), ctx)
-    if not str(val or "").strip() and definition.get("fallback"):
-        val = _read_source(definition["fallback"], ctx)
-    return _apply_transform(val, definition.get("transform"))
+    transform = definition.get("transform")
+    sources: list[str] = []
+    if definition.get("source"):
+        sources.append(definition["source"])
+    if definition.get("fallback"):
+        sources.append(definition["fallback"])
+    sources.extend(definition.get("fallbacks") or [])
+
+    for idx, src in enumerate(sources):
+        val = _read_source(src, ctx)
+        if not str(val or "").strip():
+            continue
+        use_transform = transform if idx == 0 and transform == "extract_leading_number" else None
+        if use_transform == "extract_leading_number":
+            result = _apply_transform(val, use_transform)
+            if result:
+                return result
+            continue
+        return _apply_transform(val, use_transform)
+    return ""
 
 
 def resolve_all_slots(template: dict, ctx: dict) -> tuple[dict[str, str], list[str]]:
     definitions = template.get("slot_definitions") or DEFAULT_SLOT_DEFINITIONS
     slots: dict[str, str] = {}
     warnings: list[str] = []
-    validation = template.get("validation") or {}
-    warn_missing = validation.get("warn_if_missing_slots") or []
+    warn_missing = effective_warn_missing_slots(template)
 
     for name, definition in definitions.items():
         if not isinstance(definition, dict):
@@ -255,9 +406,21 @@ def resolve_all_slots(template: dict, ctx: dict) -> tuple[dict[str, str], list[s
     return slots, warnings
 
 
+def _clean_rendered_title(title: str) -> str:
+    cleaned = title
+    cleaned = re.sub(r"【#_", "【", cleaned)
+    cleaned = re.sub(r"【#】", "【", cleaned)
+    cleaned = re.sub(r"__+", "_", cleaned)
+    cleaned = re.sub(r"【_", "【", cleaned)
+    cleaned = re.sub(r"_】", "】", cleaned)
+    cleaned = re.sub(r"\(_+\)", "()", cleaned)
+    return cleaned.strip()
+
+
 def compose_title(template: dict, slots: dict[str, str]) -> str:
     title_tpl = (template.get("title_template") or DEFAULT_TITLE_TEMPLATE).strip()
     rendered = Jinja2Template(title_tpl).render(**slots).strip()
+    rendered = _clean_rendered_title(rendered)
     max_len = int((template.get("validation") or {}).get("title_max_length") or 500)
     if len(rendered) > max_len:
         rendered = rendered[:max_len]
@@ -278,7 +441,10 @@ def preview_title(template: dict, sample_slots: dict[str, str]) -> dict:
             "level2_title": sample_slots.get("sub_module", ""),
             "leaf_title": sample_slots.get("sub_module", ""),
         },
-        "context": {},
+        "context": {
+            "story_code": sample_slots.get("story_code", ""),
+            "requirement_id": sample_slots.get("requirement_id", ""),
+        },
     }
     if sample_slots.get("story_no") and not str(sample_slots["story_no"]).startswith(":"):
         ctx["bindings"]["related_story"] = f"{sample_slots['story_no']}:示例需求"
@@ -287,9 +453,8 @@ def preview_title(template: dict, sample_slots: dict[str, str]) -> dict:
     for k, v in sample_slots.items():
         if v and k in slots:
             slots[k] = str(v).strip()
-    # 告警以最终槽位值为准（预览样例会覆盖自动解析结果）
     warnings: list[str] = []
-    warn_missing = (template.get("validation") or {}).get("warn_if_missing_slots") or []
+    warn_missing = effective_warn_missing_slots(template)
     definitions = template.get("slot_definitions") or DEFAULT_SLOT_DEFINITIONS
     for name in warn_missing:
         if not slots.get(name):
@@ -342,6 +507,8 @@ def apply_naming_to_case_item(
     *,
     batch_name: str = "",
     requirement_name: str = "",
+    requirement_id: Optional[int] = None,
+    story_code: str = "",
 ) -> tuple[dict, list[str]]:
     llm = {
         "main_module": (item.get("main_module") or item.get("module") or "").strip(),
@@ -356,6 +523,8 @@ def apply_naming_to_case_item(
         "context": {
             "batch_name": batch_name,
             "requirement_name": requirement_name,
+            "requirement_id": str(requirement_id) if requirement_id else "",
+            "story_code": (story_code or "").strip(),
         },
     }
     slots, warnings = resolve_all_slots(template, ctx)
@@ -381,6 +550,8 @@ def apply_naming_to_cases(
     *,
     batch_name: str = "",
     requirement_name: str = "",
+    requirement_id: Optional[int] = None,
+    story_code: str = "",
 ) -> tuple[list[dict], list[str]]:
     all_warnings: list[str] = []
     result: list[dict] = []
@@ -392,6 +563,8 @@ def apply_naming_to_cases(
             section_ctx,
             batch_name=batch_name,
             requirement_name=requirement_name,
+            requirement_id=requirement_id,
+            story_code=story_code,
         )
         result.append(out)
         all_warnings.extend(warnings)
@@ -402,6 +575,9 @@ def recalc_title_from_stored_slots(
     item: dict,
     template: dict,
     bindings: dict,
+    *,
+    requirement_id: Optional[int] = None,
+    story_code: str = "",
 ) -> tuple[str, list[str]]:
     """草稿重算：保留 LLM 槽位，重新解析 binding 等自动槽位。"""
     stored = item.get("naming_slots") if isinstance(item.get("naming_slots"), dict) else {}
@@ -412,16 +588,19 @@ def recalc_title_from_stored_slots(
         "case_description": stored.get("case_description") or item.get("case_description", ""),
     }
     section_ctx = {
-        "level1_title": stored.get("main_module") or llm["main_module"],
-        "level2_title": stored.get("sub_module") or llm["sub_module"],
-        "leaf_title": stored.get("sub_module") or llm["sub_module"],
+        "level1_title": llm["main_module"],
+        "level2_title": llm["sub_module"],
+        "leaf_title": llm["sub_module"],
         "path_titles": [],
     }
     ctx = {
         "llm": llm,
         "bindings": bindings,
         "section": section_ctx,
-        "context": {},
+        "context": {
+            "requirement_id": str(requirement_id) if requirement_id else "",
+            "story_code": (story_code or "").strip(),
+        },
     }
     slots, warnings = resolve_all_slots(template, ctx)
     for key in ("main_module", "sub_module", "feature_point", "case_description"):
@@ -481,7 +660,7 @@ def format_naming_rules_for_prompt(template: dict) -> str:
         "- case_description: 用例描述（说明验证点，会拼入最终用例标题）",
         "不要输出 title 字段；不要重复已有用例的 feature_point。",
     ]
-    warn = (template.get("validation") or {}).get("warn_if_missing_slots") or []
+    warn = effective_warn_missing_slots(template)
     if warn:
         labels = [slots.get(s, {}).get("label", s) for s in warn if s in slots]
         lines.append(f"必填语义槽：{', '.join(labels)}")

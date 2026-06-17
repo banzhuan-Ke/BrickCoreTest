@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -74,6 +74,8 @@ class RunnerVersionResponse(BaseModel):
     download_config_source: str = "none"
     storage_mode: str
     middleware_isolation: bool = True
+    runner_notices: Optional[dict[str, Any]] = None
+    community_edition: bool = False
 
 
 class RunnerReleaseConfigForm(BaseModel):
@@ -142,4 +144,16 @@ class RunnerUploadPresignResponse(BaseModel):
     upload_url: str
     object_key: str
     access_url: str
+    expires_in: int = 3600
+
+
+class RunnerDownloadPresignRequest(BaseModel):
+    file_key: str = Field(..., min_length=1, max_length=500)
+    bucket: str = Field(default="", max_length=100, description="MinIO bucket，默认 ui-test-files")
+
+
+class RunnerDownloadPresignResponse(BaseModel):
+    download_url: str
+    file_key: str
+    bucket: str
     expires_in: int = 3600

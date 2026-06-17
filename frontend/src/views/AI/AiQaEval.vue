@@ -34,7 +34,12 @@
           <li>
             <strong>配置评判 LLM（打分用）</strong>：
             <el-button link type="primary" size="small" @click="goAiConfig('scene')">AI 模型配置 → 场景绑定</el-button>
-            绑定「问答准确性评判」场景；它接收：问题 + 标准答案 + 被测系统回答，按 RAG v2 公式打分（与被测 API 不是同一个）。
+            <template v-if="isCommunityEdition">
+              绑定「问答准确性评判」场景；模型根据问题、标准答案与被测回答综合打分（与被测 API 不是同一个）。
+            </template>
+            <template v-else>
+              绑定「问答准确性评判」场景；它接收：问题 + 标准答案 + 被测系统回答，按 RAG v2 公式打分（与被测 API 不是同一个）。
+            </template>
           </li>
           <li>
             <strong>执行评测</strong>：填写<strong>评测名称</strong>便于在执行记录中识别；可选三种模式——
@@ -56,7 +61,7 @@
           <div class="guide-actions">
             <el-button size="small" type="primary" @click="downloadImportTemplate">问答模板</el-button>
             <el-button size="small" @click="openTargetDialog">配置被测 API</el-button>
-            <span class="hint">必填：问题、标准答案；列结构与 RAG 批量问答 Excel 一致</span>
+            <span class="hint">必填：问题、标准答案<template v-if="!isCommunityEdition">；列结构与 RAG 批量问答 Excel 一致</template></span>
           </div>
         </div>
 
@@ -66,7 +71,12 @@
         </div>
 
         <div class="guide-section guide-footer">
-          <span>通过线：<strong>换算后 ≥80 分</strong> 且无明显胡编；评判 Prompt 为 RAG 评测 v2 长公式（可在「AI 模型配置 → 提示词模板 → 问答准确性评判」查看/重置）。</span>
+          <span v-if="isCommunityEdition">
+            通过线：<strong>换算后 ≥80 分</strong> 且无明显胡编；可在「AI 模型配置 → 提示词模板 → 问答准确性评判」查看或重置评判说明。
+          </span>
+          <span v-else>
+            通过线：<strong>换算后 ≥80 分</strong> 且无明显胡编；评判 Prompt 为 RAG 评测 v2 长公式（可在「AI 模型配置 → 提示词模板 → 问答准确性评判」查看/重置）。
+          </span>
         </div>
       </el-card>
 
@@ -952,6 +962,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import { qaEvalApi, aiConfigApi } from '@/api/modules/ai'
+import http from '@/api/request'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
 
@@ -961,6 +972,16 @@ const router = useRouter()
 const projectId = computed(() => proStore.projectInfo?.id)
 const canExecute = computed(() => uStore.hasPermission('ai_test:execute'))
 const guideVisible = ref(true)
+const isCommunityEdition = ref(false)
+
+async function loadEditionFlag() {
+  try {
+    const res = await http.get('/runner/version')
+    isCommunityEdition.value = !!res.data?.community_edition
+  } catch {
+    isCommunityEdition.value = false
+  }
+}
 
 const excelFormatRows = [
   { col: '序号', required: '否', desc: 'Excel 行序号，用于范围跑批与合并导出', example: '1' },
@@ -2175,6 +2196,7 @@ watch(batchGroupOptions, (opts) => {
 })
 
 onMounted(() => {
+  loadEditionFlag()
   loadSets()
   loadTargets()
   fetchQuestionTypePresets()

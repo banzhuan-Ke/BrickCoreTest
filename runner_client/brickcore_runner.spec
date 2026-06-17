@@ -19,6 +19,7 @@ a = Analysis(
         "runner_client.app.engine_manager",
         "runner_client.app.store",
         "runner_client.app.runtime_check",
+        "runner_client.app.win_subprocess",
         "runner_client.app.health",
         "runner_client.app.preferences",
         "runner_client.app.secure_store",

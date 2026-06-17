@@ -142,6 +142,12 @@
 
   <!-- 管理列表 -->
   <el-drawer v-model="manageVisible" title="文档管理" size="640px">
+    <div v-if="canEdit" class="manage-toolbar">
+      <el-button type="primary" plain size="small" icon="Refresh" :loading="syncing" @click="syncBuiltinDocs">
+        从仓库同步内置文档
+      </el-button>
+      <el-text type="info" size="small">清除已发布的内置文档正文覆盖，重新读取 docs-site 最新 Markdown</el-text>
+    </div>
     <el-table :data="manageList" size="small" stripe>
       <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
       <el-table-column label="来源" width="88">
@@ -174,7 +180,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { VideoCamera, Document, Notebook, Folder } from '@element-plus/icons-vue'
 import PageCard from '@/components/PageCard.vue'
@@ -184,6 +190,7 @@ import { UserStore } from '@/stores/module/UserStore'
 
 const userStore = UserStore()
 const route = useRoute()
+const router = useRouter()
 const canEdit = computed(() => userStore.hasPermission('docs:edit'))
 
 const loading = ref(false)
@@ -192,6 +199,7 @@ const treeRef = ref(null)
 const treeData = ref([])
 const manageList = ref([])
 const customFolders = ref([])
+const syncing = ref(false)
 
 const editorDialogTitle = computed(() => {
   if (editorForm.is_custom_group) return editorForm.id ? '编辑目录' : '新增目录'
@@ -279,6 +287,31 @@ const openManage = async () => {
   await loadManageList()
 }
 
+async function syncBuiltinDocs() {
+  try {
+    await ElMessageBox.confirm(
+      '将把全部内置文档正文重置为仓库 docs-site 中的最新 Markdown，已「发布」覆盖的正文会被清除。是否继续？',
+      '同步内置文档',
+      { type: 'warning', confirmButtonText: '同步' }
+    )
+  } catch {
+    return
+  }
+  syncing.value = true
+  try {
+    const res = await docsApi.syncBuiltinFromFiles()
+    const data = res.data?.data || {}
+    ElMessage.success(res.data?.message || `已同步 ${data.total || 0} 篇文档`)
+    await loadManageList()
+    await loadCatalog()
+    if (currentDoc.value?.type === 'builtin' && currentDoc.value.id) {
+      await openBuiltinById(currentDoc.value.id)
+    }
+  } finally {
+    syncing.value = false
+  }
+}
+
 const filterNode = (value, data) => {
   if (!value) return true
   return (data.title || '').toLowerCase().includes(value.toLowerCase())
@@ -288,8 +321,18 @@ watch(filterText, val => {
   treeRef.value?.filter(val)
 })
 
+const DEFAULT_DOC_ID = 'highlights'
+
+const resolveDocId = () => {
+  const q = route.query.doc
+  return typeof q === 'string' && q ? q : DEFAULT_DOC_ID
+}
+
 const onNodeClick = async (data) => {
   if (data.type === 'group') return
+  if (data.type === 'builtin') {
+    router.replace({ query: { ...route.query, doc: data.id } })
+  }
   await loadDocNode(data)
 }
 
@@ -594,17 +637,16 @@ const restoreItem = async (row) => {
 
 onMounted(async () => {
   await loadCatalog()
-  const docId = route.query.doc
-  if (docId && typeof docId === 'string') {
-    await nextTick()
-    await openBuiltinById(docId)
+  await nextTick()
+  const docId = resolveDocId()
+  if (!route.query.doc) {
+    router.replace({ query: { ...route.query, doc: docId } })
   }
+  await openBuiltinById(docId)
 })
 
 watch(() => route.query.doc, async (docId) => {
-  if (docId && typeof docId === 'string') {
-    await openBuiltinById(docId)
-  }
+  await openBuiltinById(typeof docId === 'string' && docId ? docId : DEFAULT_DOC_ID)
 })
 </script>
 
@@ -669,6 +711,15 @@ watch(() => route.query.doc, async (docId) => {
   min-height: 0;
   overflow-y: auto;
   padding: 0 8px 16px;
+}
+.manage-toolbar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
 .content-head {
   display: flex;

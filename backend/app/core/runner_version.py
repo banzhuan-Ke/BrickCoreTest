@@ -44,8 +44,11 @@ def ensure_client_version(client_version: str) -> None:
 
 
 async def get_version_info(request_base_url: str = "") -> dict:
+    from app.core.edition import is_community_edition
     from app.core.runner_release import build_client_release_info
     from app.core.runner_release_config_service import enrich_release_info
 
     info = build_client_release_info(request_base_url)
-    return await enrich_release_info(info, request_base_url)
+    info = await enrich_release_info(info, request_base_url)
+    info["community_edition"] = is_community_edition()
+    return info

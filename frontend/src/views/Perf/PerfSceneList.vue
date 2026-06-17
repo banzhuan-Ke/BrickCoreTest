@@ -62,6 +62,9 @@
             <span v-else-if="row.config?.mode === 'stepping'">
               {{ row.config?.steps ? row.config.steps.length + '阶段' : '-' }}
             </span>
+            <span v-else-if="row.config?.mode === 'stream_burst' || row.config?.mode === 'sse_burst'">
+              {{ row.config?.concurrent_users ? row.config.concurrent_users + '并发×1次' : '-' }}
+            </span>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -118,8 +121,8 @@
       </div>
 
       <!-- 执行对话框 -->
-      <el-dialog v-model="runDialogVisible" title="启动性能测试" width="420px">
-        <el-form :model="runForm" label-width="80px">
+      <el-dialog v-model="runDialogVisible" title="启动性能测试" width="580px">
+        <el-form :model="runForm" label-width="90px">
           <el-form-item label="场景">
             <el-input v-model="runForm.sceneName" disabled />
           </el-form-item>
@@ -151,10 +154,21 @@
                 <span v-if="runForm.config?.mode === 'fixed'">持续时间: {{ runForm.config?.duration_seconds }}s</span>
                 <span v-else-if="runForm.config?.mode === 'loop'">循环次数: {{ runForm.config?.loop_count }}次</span>
                 <span v-else-if="runForm.config?.mode === 'stepping'">梯度阶段: {{ runForm.config?.steps?.length || 0 }}个</span>
+                <span v-else-if="runForm.config?.mode === 'stream_burst' || runForm.config?.mode === 'sse_burst'">并发单次: {{ runForm.config?.concurrent_users }}用户×1次</span>
                 <el-tooltip placement="top" :content="getDurationTip(runForm.config)">
                   <el-icon class="tip-icon"><QuestionFilled /></el-icon>
                 </el-tooltip>
               </div>
+            </div>
+          </el-form-item>
+          <el-form-item label="接口明细">
+            <el-radio-group v-model="runForm.requestDetailLevel" class="detail-level-group">
+              <el-radio value="brief">简略（失败含详情）</el-radio>
+              <el-radio value="full">详细（含成功请求）</el-radio>
+            </el-radio-group>
+            <div class="detail-level-hint">
+              <strong>不影响 QPS、平均/P95 响应时间、错误率等汇总数据</strong>——请求发出与 RT 计时逻辑与简略模式完全相同，仅在请求结束后额外记录接口信息供报告排查。
+              失败请求两种模式均保留最多 50 条详情；详细模式另采集最多 500 条成功请求。高并发时可能略增内存与收尾耗时，不改变已测得的性能指标。
             </div>
           </el-form-item>
           <el-form-item label="分布式">
@@ -174,7 +188,7 @@
                   <template #title>暂无在线执行机</template>
                   <template #default>
                     <div style="font-size: 12px; line-height: 1.6;">
-                      请先在 runner 目录运行 perf_worker.py，且 <code>--project-id</code> 与当前项目（{{ proStore.projectInfo?.id }}）一致。
+                      请使用 <strong>BrickCoreRunner v1.3.14+</strong> 客户端（压测时在客户端切换执行角色）上线，或运行 runner 目录的 perf_worker.py；<code>--project-id</code> / 客户端压测项目须与当前项目（{{ proStore.projectInfo?.id }}）一致。
                     </div>
                   </template>
                 </el-alert>
@@ -229,18 +243,18 @@ const searchKeyword = ref('')
 
 const runDialogVisible = ref(false)
 const runLoading = ref(false)
-const runForm = ref({ sceneId: null, sceneName: '', envId: null, config: {}, useWorkers: false })
+const runForm = ref({ sceneId: null, sceneName: '', envId: null, config: {}, useWorkers: false, requestDetailLevel: 'brief' })
 const workerList = ref([])
 const workerTotalConcurrent = computed(() => workerList.value.reduce((sum, w) => sum + (w.max_concurrent || 0), 0))
 const envList = ref([])
 
 const getModeType = (mode) => {
-  const map = { fixed: 'primary', loop: 'success', stepping: 'warning' }
+  const map = { fixed: 'primary', loop: 'success', stepping: 'warning', stream_burst: 'danger', sse_burst: 'danger' }
   return map[mode] || ''
 }
 
 const getModeLabel = (mode) => {
-  const map = { fixed: '固定', loop: '循环', stepping: '梯度' }
+  const map = { fixed: '固定', loop: '循环', stepping: '梯度', stream_burst: '流式阶段', sse_burst: '流式阶段' }
   return map[mode] || mode
 }
 
@@ -303,7 +317,8 @@ const handleRun = async (row) => {
     sceneName: row.name,
     envId: null,
     config: row.config || {},
-    useWorkers: false
+    useWorkers: false,
+    requestDetailLevel: 'brief'
   }
   // 加载环境列表
   try {
@@ -328,7 +343,9 @@ const getDurationTip = (config) => {
   const tips = {
     fixed: '压测持续的总时长',
     loop: '每个并发用户执行的总次数',
-    stepping: '分阶段递增并发的阶段数'
+    stepping: '分阶段递增并发的阶段数',
+    stream_burst: '每个虚拟用户只发送 1 次流式请求',
+    sse_burst: '每个虚拟用户只发送 1 次流式请求'
   }
   return tips[mode] || ''
 }
@@ -340,7 +357,12 @@ const confirmRun = async () => {
   }
   runLoading.value = true
   try {
-    const res = await perfExecApi.start(runForm.value.sceneId, runForm.value.envId, runForm.value.useWorkers)
+    const res = await perfExecApi.start(
+      runForm.value.sceneId,
+      runForm.value.envId,
+      runForm.value.useWorkers,
+      runForm.value.requestDetailLevel
+    )
     ElMessage.success('性能测试已启动')
     runDialogVisible.value = false
     // 跳转到记录页
@@ -394,5 +416,17 @@ onMounted(() => {
   display: flex;
   flex-wrap: nowrap;
   gap: 6px;
+}
+.detail-level-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+.detail-level-hint {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 8px;
+  line-height: 1.65;
+  max-width: 100%;
 }
 </style>

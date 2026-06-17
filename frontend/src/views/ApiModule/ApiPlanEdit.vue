@@ -117,6 +117,7 @@
                     />
                   </el-select>
                   <VarInsertButton :env-id="planRefEnvId" :show-env-edit="false" label="插入变量" />
+                  <ToolInsertButton :extra-vars="planVarNames" label="插入工具" />
                 </div>
                 <div
                   v-for="(v, idx) in varList"
@@ -309,6 +310,7 @@ import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import PlanItemSelector from './components/PlanItemSelector.vue'
 import PlanItemList from './components/PlanItemList.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
+import ToolInsertButton from '@/components/ToolInsertButton.vue'
 import VariablePreviewPanel from '@/components/VariablePreviewPanel.vue'
 
 const route = useRoute()
@@ -339,6 +341,10 @@ const rules = {
 // 全局变量键值对
 const varList = ref([])
 const planRefEnvId = ref(null)
+
+const planVarNames = computed(() =>
+  varList.value.map((v) => (v.key || '').trim()).filter(Boolean)
+)
 
 const syncVars = () => {
   const obj = {}

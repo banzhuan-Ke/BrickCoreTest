@@ -23,6 +23,7 @@
           @delete="deleteSubStep(sIndex)"
           @add-branch="() => handleAddBranch(sIndex)"
           @delete-branch="(bIndex) => handleDeleteBranch(sIndex, bIndex)"
+          @expand-fragment="(payload) => onExpandFragment(sIndex, payload)"
         />
       </div>
     </VueDraggable>
@@ -70,6 +71,12 @@ function updateParent(steps) {
   nextTick(() => {
     isUpdating.value = false
   })
+}
+
+function onExpandFragment(stepIndex, { expanded }) {
+  const steps = [...localSteps.value]
+  steps.splice(stepIndex, 1, ...expanded)
+  updateParent(steps)
 }
 
 // 处理拖拽添加步骤

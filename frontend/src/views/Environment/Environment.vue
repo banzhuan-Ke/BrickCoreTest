@@ -36,10 +36,13 @@
             {{ dateTools.rTime(scope.row.update_time) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="scope">
-            <el-button type="primary" plain @click="clickEdit(scope.row)" icon="Edit">编辑</el-button>
-            <el-button type="danger" plain @click="handleDelete(scope.row)" icon="Delete">删除</el-button>
+            <div class="env-action-btns">
+              <el-button size="small" type="primary" plain @click="clickEdit(scope.row)" icon="Edit">编辑</el-button>
+              <el-button size="small" type="success" plain @click="clickCopy(scope.row)" icon="CopyDocument">复制</el-button>
+              <el-button size="small" type="danger" plain @click="handleDelete(scope.row)" icon="Delete">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -66,6 +69,7 @@
               <p><strong>引用：</strong>UI / 接口用例中写 <code v-pre>${{token}}</code>、<code v-pre>${{username}}</code></p>
               <p><strong>Faker：</strong>变量值可写 <code>faker.random_int(min=100,max=100000)</code>，或引用内置 <code v-pre>${{random_int}}</code></p>
               <p><strong>嵌套：</strong><code>{"tag_name": "标签_${{random_int}}"}</code>，用例里用 <code v-pre>${{tag_name}}</code></p>
+              <p><strong>描述：</strong>填写用途说明，在用例/接口中「插入变量」与变量预览时可查看</p>
               <p><strong>敏感项：</strong>名称含 token/password 等会自动按密码框显示，可手动开关「敏感」列</p>
               <p><strong>优先级：</strong>用例提取/脚本变量 &gt; 动态缓存 &gt; 本页全局变量</p>
             </div>
@@ -76,7 +80,7 @@
     <template #footer>
       <el-button @click="dialogVisible = false" plain>取消</el-button>
       <el-button v-if="title === '修改环境'" type="primary" @click="UpdateEnv(formDataRef)">确定</el-button>
-      <el-button v-else type="primary" @click="addEnv(formDataRef)">确定</el-button>
+      <el-button v-else type="primary" @click="addEnv(formDataRef)">{{ title === '复制环境' ? '创建副本' : '确定' }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -91,7 +95,7 @@ import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import GlobalVarsEditor from '@/components/GlobalVarsEditor.vue'
 import { UserStore } from '@/stores/module/UserStore.js'
-import { formatVarsPreview, validateVarsObject } from '@/utils/globalVars.js'
+import { formatVarsPreview, validateVarsObject, varsObjectToList } from '@/utils/globalVars.js'
 
 const uStore = UserStore()
 const proStore = ProjectStore()
@@ -100,13 +104,21 @@ proStore.getEnvironmentList()
 const globalVarsEditorRef = ref(null)
 
 function varKeyCount(globalVars) {
-  if (!globalVars || typeof globalVars !== 'object') return 0
-  return Object.keys(globalVars).length
+  return varsObjectToList(globalVars).filter((r) => !r._rawObject).length
+}
+
+function truncateText(text, max = 48) {
+  const s = String(text || '').trim()
+  if (!s || s.length <= max) return s
+  return `${s.slice(0, max)}…`
 }
 
 function varsTooltip(globalVars) {
-  if (!globalVars || typeof globalVars !== 'object') return ''
-  return Object.keys(globalVars).join(', ')
+  const rows = varsObjectToList(globalVars).filter((r) => !r._rawObject)
+  if (!rows.length) return ''
+  return rows
+    .map((r) => (r.description ? `${r.key}：${truncateText(r.description)}` : r.key))
+    .join('\n')
 }
 
 const handleDelete = (row) => {
@@ -190,6 +202,17 @@ async function addEnv(elForm) {
   })
 }
 
+function suggestCopyName(baseName) {
+  const existing = new Set((proStore.envList || []).map((e) => e.name))
+  let name = `${baseName}-副本`
+  let suffix = 1
+  while (existing.has(name)) {
+    suffix += 1
+    name = `${baseName}-副本${suffix}`
+  }
+  return name
+}
+
 const clickEdit = (env) => {
   title.value = '修改环境'
   dialogVisible.value = true
@@ -200,6 +223,21 @@ const clickEdit = (env) => {
   addEnvForm.global_vars =
     env.global_vars && typeof env.global_vars === 'object' ? { ...env.global_vars } : {}
   addEnvForm.default_headers = Array.isArray(env.default_headers) ? env.default_headers.map((h) => ({ ...h })) : []
+}
+
+const clickCopy = (env) => {
+  title.value = '复制环境'
+  dialogVisible.value = true
+  delete addEnvForm.id
+  addEnvForm.project_id = proStore.projectInfo?.id || env.project_id
+  addEnvForm.name = suggestCopyName(env.name)
+  addEnvForm.username = uStore.userInfo.username
+  addEnvForm.host = env.host
+  addEnvForm.global_vars =
+    env.global_vars && typeof env.global_vars === 'object' ? JSON.parse(JSON.stringify(env.global_vars)) : {}
+  addEnvForm.default_headers = Array.isArray(env.default_headers)
+    ? env.default_headers.map((h) => ({ ...h }))
+    : []
 }
 
 async function UpdateEnv(elForm) {
@@ -264,5 +302,14 @@ function onDialogClosed() {
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 11px;
+}
+
+.env-action-btns {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
 }
 </style>

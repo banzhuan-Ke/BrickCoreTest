@@ -48,6 +48,7 @@ _RECORD_HINTS = ("执行记录", "跑测", "运行记录", "最近执行", "测�
 _API_PLAN_HINTS = ("测试计划", "接口计划", "编排计划", "api计划")
 _MOCK_HINTS = ("mock", "Mock", "模拟接口")
 _CRON_HINTS = ("定时", "cron", "调度", "Cron")
+_DATA_FACTORY_HINTS = ("数据工厂", "数据源", "SQL模板", "SQL 模板", "sql模板", "造数", "数据准备")
 
 SYSTEM_PROMPT = """你是 BrickCore 测试平台助手。根据用户问题与附带的平台查询 JSON 数据，用简体中文回答。
 可综合多个工具的结果作答。不要编造数据中不存在的内容；若某类数据未出现在 JSON 中，请明确说明「平台未返回该数据」，不要从失败记录等无关数据猜测。
@@ -55,7 +56,7 @@ SYSTEM_PROMPT = """你是 BrickCore 测试平台助手。根据用户问题与�
 若某工具返回 permission_denied 或 user_hint，请原样转告用户权限不足原因及 user_hint，不要尝试绕过权限。
 若 JSON 含 _truncated 或 _truncated_note，说明列表被截断，回答时注明「仅展示部分数据」。
 回答使用 Markdown；段落之间最多空一行，列表项之间不要插入空行。
-提及平台实体时请使用可识别格式便于跳转，例如：suite_id=12、api_id=5、requirement_id=3、task_id=8、plan_id=4、case_id=6、perf_scene_id=2、perf_record_id=9、(id=12)。
+提及平台实体时请使用可识别格式便于跳转，例如：suite_id=12、api_id=5、requirement_id=3、task_id=8、plan_id=4、case_id=6、perf_scene_id=2、perf_record_id=9、template_id=7、datasource_id=3、set_id=2、(id=12)。
 危险操作（执行测试、批量生成、失败分析）需用户在前端点击确认后才会真正执行；若返回了 pending_confirm，请简要说明影响并提示用户确认。"""
 
 TOOL_SELECT_PROMPT = """你是 BrickCore 平台工具规划器。根据用户问题，从可用工具中选择 1～4 个最相关的工具及参数。
@@ -68,6 +69,7 @@ TOOL_SELECT_PROMPT = """你是 BrickCore 平台工具规划器。根据用户问
 - 接口测试计划用 list_api_plans；接口执行记录用 list_api_run_records
 - 压测场景/记录/定时/Worker 用 list_perf_scenes / list_perf_records / list_perf_cron_jobs / list_perf_workers
 - UI 套件/定时用 list_ui_suites / list_ui_cron_jobs
+- Mock 接口用 list_mock_apis；数据工厂数据源/SQL 模板用 list_data_factory_datasources / list_sql_templates / get_sql_template
 - 执行接口套件/计划用 preview_run_api_suite / preview_run_api_plan（需用户 confirm，执行记录触发方式为「小测」）
 - 执行单条接口用例用 preview_run_api_case（case_id 或 case_name + env_id，确认后同步返回结果）
 - 执行单条 Web UI 用例用 preview_run_ui_case（case_id 或 case_name + env_id + device_id）
@@ -236,6 +238,10 @@ def _format_page_context_hint(page_context: dict[str, Any] | None) -> str:
         ("perf_scene_id", "压测场景 ID"),
         ("perf_record_id", "压测记录 ID"),
         ("ui_task_run_id", "UI 执行记录 ID"),
+        ("ui_suite_run_id", "UI 套件执行记录 ID"),
+        ("template_id", "SQL 模板 ID"),
+        ("datasource_id", "数据源 ID"),
+        ("set_id", "问答评测集 ID"),
     ):
         val = page_context.get(key)
         if val:
@@ -277,6 +283,8 @@ def _plan_tools_from_page_context(
     perf_scene_id = _safe_int(page_context.get("perf_scene_id"))
     perf_record_id = _safe_int(page_context.get("perf_record_id"))
     ui_task_run_id = _safe_int(page_context.get("ui_task_run_id"))
+    ui_suite_run_id = _safe_int(page_context.get("ui_suite_run_id"))
+    template_id = _safe_int(page_context.get("template_id"))
     page_hint = (page_context.get("page_hint") or "").strip()
 
     if api_id:
@@ -308,6 +316,36 @@ def _plan_tools_from_page_context(
     elif ui_task_run_id:
         add("list_ui_run_records", {"project_id": pid, "page": 1, "size": 10})
         add("get_execution_record", {"record_type": "ui_plan", "record_id": ui_task_run_id})
+    elif ui_suite_run_id:
+        add("get_execution_record", {"record_type": "ui_suite", "record_id": ui_suite_run_id})
+        add("list_ui_run_records", {"project_id": pid, "page": 1, "size": 10})
+    elif template_id:
+        add("get_sql_template", {"template_id": template_id})
+        add("list_sql_templates", {"project_id": pid, "page": 1, "size": 15})
+    elif page_hint == "data_factory":
+        add("list_data_factory_datasources", {"project_id": pid, "page": 1, "size": 20})
+        add("list_sql_templates", {"project_id": pid, "page": 1, "size": 20})
+    elif page_hint == "mock_apis":
+        add("list_mock_apis", {"project_id": pid, "page": 1, "size": 20})
+    elif page_hint == "qa_eval":
+        add("list_qa_eval_sets", {"project_id": pid})
+    elif page_hint == "online_devices":
+        add("list_online_devices", {"project_id": pid})
+    elif page_hint == "api_plans":
+        add("list_api_plans", {"project_id": pid, "keyword": "", "page": 1, "size": 15})
+        add("list_api_run_records", {"project_id": pid, "record_type": "plan", "page": 1, "size": 10})
+    elif page_hint == "ui_suites":
+        add("list_ui_suites", {"project_id": pid, "page": 1, "size": 20})
+        add("list_ui_cases", {"project_id": pid, "page": 1, "size": 15})
+    elif page_hint == "cron_jobs":
+        add("list_api_cron_jobs", {"project_id": pid, "page": 1, "size": 10})
+        add("list_ui_cron_jobs", {"project_id": pid, "page": 1, "size": 10})
+        add("list_perf_cron_jobs", {"project_id": pid, "page": 1, "size": 10})
+    elif page_hint == "perf_scenes":
+        add("list_perf_scenes", {"project_id": pid, "page": 1, "size": 15})
+        add("list_perf_records", {"project_id": pid, "page": 1, "size": 10})
+    elif page_hint == "perf_workers":
+        add("list_perf_workers", {"project_id": pid, "page": 1, "size": 15})
     elif page_hint == "api_definitions":
         _add_api_tool_bundle(add, pid, detail_level="overview")
     elif page_hint == "api_test_cases":
@@ -449,6 +487,14 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
 
     if any(h in text for h in _MOCK_HINTS):
         add("list_mock_apis", {"project_id": pid, "page": 1, "size": 15})
+
+    if any(h in text for h in _DATA_FACTORY_HINTS):
+        template_id = _extract_id(text, ("模板", "template"))
+        if template_id and ("详情" in text or "detail" in text.lower()):
+            add("get_sql_template", {"template_id": template_id})
+        else:
+            add("list_data_factory_datasources", {"project_id": pid, "page": 1, "size": 15})
+            add("list_sql_templates", {"project_id": pid, "page": 1, "size": 15})
 
     if any(h in text for h in _UI_HINTS) and not is_api_ctx:
         if "计划" in text or "task" in text.lower():

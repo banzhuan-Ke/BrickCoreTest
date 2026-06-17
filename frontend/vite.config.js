@@ -9,14 +9,18 @@ export default defineConfig(({mode}) => {
             vue(),
         ],
         build: {
-            chunkSizeWarningLimit: 1500,
+            chunkSizeWarningLimit: 2500,
             rollupOptions: {
                 output: {
-                    manualChunks: {
-                        vue: ['vue', 'vue-router', 'pinia'],
-                    }
-                }
-            }
+                    manualChunks(id) {
+                        // 勿拆 vue / element-plus：强耦合，拆包易出现「Cannot access before initialization」白屏
+                        // monaco 由 MonacoEditor 异步组件按需加载，勿放入 manualChunks
+                        if (id.includes('node_modules/echarts') || id.includes('node_modules/zrender')) {
+                            return 'echarts'
+                        }
+                    },
+                },
+            },
         },
         server: {
             // 是否自动打开浏览器

@@ -20,7 +20,7 @@
 
         <!-- 列表 -->
         <el-table :data="mockList" stripe v-loading="loading">
-          <el-table-column type="index" label="序号" width="60" />
+          <el-table-column type="index" label="序号" :index="tableRowIndex" width="60" />
           <el-table-column label="名称" min-width="160" show-overflow-tooltip>
             <template #default="{ row }">
               <span>{{ row.name }}</span>
@@ -95,6 +95,7 @@ import { httpMockApi } from '@/api/modules/http'
 import dateTools from '@/tools/dateTools'
 import PageCard from '@/components/PageCard.vue'
 import MockDialog from './components/MockDialog.vue'
+import { makeTableRowIndex } from '@/utils/tableIndex'
 
 const proStore = ProjectStore()
 
@@ -103,6 +104,7 @@ const loading = ref(false)
 const mockList = ref([])
 const dialog = reactive({ visible: false, data: null })
 const pagination = reactive({ page: 1, size: 20, total: 0 })
+const tableRowIndex = makeTableRowIndex(pagination)
 
 const getMockList = async () => {
   loading.value = true

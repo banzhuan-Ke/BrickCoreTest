@@ -30,6 +30,7 @@ from app.core.notification import NotificationService
 from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
 from .utils import api_run_result_to_case_display, normalize_plan_item_results
 from app.core.api_report_export import sum_plan_item_results_http_ms
+from app.core.data_tools.inline_tools import ensure_dt_cache
 
 router = APIRouter(
     tags=["接口测试计划"],
@@ -773,11 +774,11 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
     project_global_vars = (project_obj.global_vars or {}) if project_obj else {}
 
     # 合并变量：project_global_vars < plan_vars < req_vars
-    accumulated_vars: dict = {
+    accumulated_vars: dict = ensure_dt_cache({
         **project_global_vars,
         **(plan.variables or {}),
         **(req.variables or {}),
-    }
+    })
 
     # 加载所有 items（按 sort 排序）
     items = await ApiPlanItem.filter(plan_id=plan_id).order_by("sort").all()
@@ -1052,11 +1053,11 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
         project_obj = await ProjectModel.get_or_none(id=project_id)
         project_global_vars = (project_obj.global_vars or {}) if project_obj else {}
 
-        accumulated_vars: dict = {
+        accumulated_vars: dict = ensure_dt_cache({
             **project_global_vars,
             **(plan.variables or {}),
             **(req.variables or {}),
-        }
+        })
 
         plan_start = time.time()
         total_count = 0

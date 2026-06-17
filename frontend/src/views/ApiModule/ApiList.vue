@@ -35,6 +35,7 @@
               </template>
             </el-input>
             <el-select v-model="searchForm.method" placeholder="请求方法" clearable style="width: 120px;">
+              <el-option label="WS" value="WS"/>
               <el-option label="GET" value="GET"/>
               <el-option label="POST" value="POST"/>
               <el-option label="PUT" value="PUT"/>
@@ -43,6 +44,7 @@
             </el-select>
             <el-button type="primary" @click="getApiList" icon="Search">搜索</el-button>
             <el-button @click="resetSearch" icon="RefreshRight">重置</el-button>
+            <el-checkbox v-model="showFavoritesOnly" @change="getApiList">只看收藏</el-checkbox>
             <el-button
               v-if="selectedApis.length > 0"
               type="warning"
@@ -59,10 +61,18 @@
           
           <el-table :data="apiList" stripe v-loading="loading" @selection-change="handleSelectionChange">
             <el-table-column type="selection" width="50" align="center" />
-            <el-table-column type="index" width="50"/>
+            <el-table-column label="收藏" width="52" align="center">
+              <template #default="{ row }">
+                <el-button link :type="isFavorite(row.id) ? 'warning' : 'info'" @click.stop="toggleFavorite(row.id)">
+                  <el-icon><StarFilled v-if="isFavorite(row.id)" /><Star v-else /></el-icon>
+                </el-button>
+              </template>
+            </el-table-column>
+            <el-table-column type="index" :index="tableRowIndex" width="50"/>
             <el-table-column label="请求方法" width="90">
               <template #default="{ row }">
-                <el-tag :type="getMethodType(row.method)" size="small">{{ row.method }}</el-tag>
+                <el-tag v-if="row.protocol === 'websocket'" type="warning" size="small">WS</el-tag>
+                <el-tag v-else :type="getMethodType(row.method)" size="small">{{ row.method }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="接口名称" min-width="150" show-overflow-tooltip>
@@ -111,12 +121,13 @@
                 {{ formatTime(row.update_time) }}
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="200" fixed="right">
+            <el-table-column label="操作" width="248" fixed="right">
               <template #default="{ row }">
                 <el-button-group>
                   <el-button size="small" type="primary" @click="handleDebug(row)" icon="Promotion" title="调试"/>
                   <el-button size="small" type="warning" @click="handleAiGenerate(row)" icon="MagicStick" title="AI生成"/>
                   <el-button size="small" type="success" @click="handleEdit(row)" icon="Edit" title="编辑"/>
+                  <el-button size="small" type="info" @click="openCopyDialog(row)" icon="CopyDocument" title="复制到其他项目"/>
                   <el-button size="small" type="danger" @click="handleDelete(row)" icon="Delete" title="删除"/>
                 </el-button-group>
               </template>
@@ -210,12 +221,21 @@
     :data="linkedCaseEdit.data"
     @success="onLinkedCaseSaved"
   />
+
+  <CopyToProjectDialog
+    v-model="copyDialog.visible"
+    title="复制接口到其他项目"
+    :asset-name="copyDialog.row?.name"
+    :submit-fn="submitCopyApi"
+    @success="getApiList"
+  />
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { useRouter } from 'vue-router'
+import { Star, StarFilled } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import http from '@/api/index'
 import { httpApi } from '@/api/modules/http'
@@ -229,9 +249,16 @@ import ApiCaseGenerator from '@/views/AI/components/ApiCaseGenerator.vue'
 import ApiBatchCaseGenerator from '@/views/AI/components/ApiBatchCaseGenerator.vue'
 import ApiSyncDiffDialog from './components/ApiSyncDiffDialog.vue'
 import CaseEdit from './components/CaseEdit.vue'
+import CopyToProjectDialog from '@/components/CopyToProjectDialog.vue'
+import { useAssetFavorites } from '@/composables/useAssetFavorites'
+import { makeTableRowIndex } from '@/utils/tableIndex'
 
+const route = useRoute()
 const router = useRouter()
 const proStore = ProjectStore()
+const { loadFavorites, isFavorite, toggleFavorite, sortByFavorites } = useAssetFavorites('api')
+const showFavoritesOnly = ref(false)
+const copyDialog = reactive({ visible: false, row: null })
 
 const currentCatalogId = ref(null)
 
@@ -247,6 +274,8 @@ const pagination = reactive({
   size: 20,
   total: 0
 })
+
+const tableRowIndex = makeTableRowIndex(pagination)
 
 // 接口列表
 const apiList = ref([])
@@ -337,6 +366,7 @@ const handleEditSuccess = async () => {
 const getApiList = async () => {
   loading.value = true
   try {
+    await loadFavorites()
     const params = {
       project_id: proStore.projectInfo.id,
       page: pagination.page,
@@ -349,8 +379,13 @@ const getApiList = async () => {
     }
     const res = await http.apiModuleApi.getApiList(params)
     if (res.status === 200) {
-      apiList.value = res.data.data
-      pagination.total = res.data.total
+      let rows = res.data.data || []
+      rows = sortByFavorites(rows)
+      if (showFavoritesOnly.value) {
+        rows = rows.filter((r) => isFavorite(r.id))
+      }
+      apiList.value = rows
+      pagination.total = showFavoritesOnly.value ? rows.length : res.data.total
     }
   } catch (error) {
     ElMessage.error('获取接口列表失败')
@@ -468,9 +503,41 @@ const handleAiSuccess = () => {
   ElMessage.success('用例已导入，请前往接口用例页面查看')
 }
 
-onMounted(() => {
-  getApiList()
+const openCopyDialog = (row) => {
+  copyDialog.row = row
+  copyDialog.visible = true
+}
+
+const submitCopyApi = (payload) => httpApi.copyToProject(copyDialog.row.id, payload)
+
+const applyRouteQuery = async () => {
+  const apiId = route.query.api_id
+  if (!apiId) return
+  const id = Number(apiId)
+  let row = apiList.value.find((a) => a.id === id)
+  if (!row) {
+    try {
+      const res = await httpApi.getDetail(id)
+      row = res.data?.data ?? res.data
+    } catch {
+      return
+    }
+  }
+  if (row) handleEdit(row)
+}
+
+onMounted(async () => {
+  await getApiList()
+  await applyRouteQuery()
 })
+
+watch(
+  () => route.query.api_id,
+  async (apiId) => {
+    if (!apiId) return
+    await applyRouteQuery()
+  },
+)
 </script>
 
 <style scoped lang="scss">

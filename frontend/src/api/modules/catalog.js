@@ -20,6 +20,9 @@ export const catalogApi = {
     async getDetail(catalog_id) {
         return await http.get(`/sys/catalogs/${catalog_id}`)
     },
+    async getAssets(catalog_id, params = {}) {
+        return await http.get(`/sys/catalogs/${catalog_id}/assets`, { params })
+    },
 
     // ===== 兼容命名 =====
     getCatalogList(params) { return this.getList(params) },

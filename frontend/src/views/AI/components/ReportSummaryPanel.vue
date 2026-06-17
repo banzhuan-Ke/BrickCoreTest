@@ -12,6 +12,14 @@
     </template>
 
     <template v-if="summary?.summary">
+      <el-alert
+        v-if="summary?.summary && hasIncompleteFailureData"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="部分失败用例缺少详细错误字段，可点击用例行的「AI 分析」获取逐步骤根因（含截图）。"
+        style="margin-bottom: 12px;"
+      />
       <p class="summary-text">{{ summary.summary }}</p>
       <div v-if="summary.highlights?.length" class="block">
         <div class="block-label">关注要点</div>
@@ -37,7 +45,7 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { aiAnalyzeApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
@@ -52,6 +60,11 @@ const proStore = ProjectStore()
 const uStore = UserStore()
 const loading = ref(false)
 const summary = ref(null)
+
+const hasIncompleteFailureData = computed(() => {
+  const s = summary.value?.summary || ''
+  return /缺少|未提供|无具体|错误信息缺失|详细错误/.test(s)
+})
 
 const loadCached = async () => {
   if (!props.recordId || !proStore.projectInfo?.id) return

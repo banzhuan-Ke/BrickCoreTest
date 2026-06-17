@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -17,8 +17,9 @@ from pydantic import BaseModel, Field
 
 from app.core.auth import is_authenticated, require_permissions
 from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, PROJECT_EDIT
-from app.core.ai_prompts import PromptManager
+from app.core.ai_prompts import PromptManager, append_extra_instructions
 from app.core.case_naming import (
+    BUILTIN_TEMPLATE_CATALOG,
     apply_naming_to_cases,
     build_section_context,
     default_naming_config,
@@ -31,7 +32,9 @@ from app.core.case_naming import (
     render_export_row,
     resolve_template,
     save_naming_config,
+    suggest_template_id_for_profile,
 )
+from app.core.export_profile import EXPORT_PROFILE_GENERIC, EXPORT_PROFILE_LABELS
 from app.core.requirement_storage import (
     get_storage_summary,
     load_images_from_meta,
@@ -39,7 +42,7 @@ from app.core.requirement_storage import (
     save_requirement_images,
     save_requirement_source,
 )
-from app.core.case_steps import align_steps_expects
+from app.core.case_steps import align_steps_expects, normalize_corner_quotes
 from app.core.document_loader import load_document, SUPPORTED_EXTENSIONS
 from app.core.requirement_document import (
     BLOCK_ESTIMATED_INPUT_TOKENS,
@@ -53,10 +56,12 @@ from app.core.requirement_document import (
     truncate_scope_text,
     vision_summary_to_text,
 )
+from app.core.zentao_case_types import DEFAULT_ZENTAO_CASE_TYPE, split_case_type_fields
 from app.core.zentao_bindings import (
     apply_bindings_to_case_fields,
     bindings_for_export,
     build_requirement_case_extra,
+    get_export_profile,
     get_requirement_bindings,
     load_project_bindings,
     merge_bindings,
@@ -80,6 +85,8 @@ from app.models.ai import (
     AiRequirement,
     AiRequirementCase,
     AiRequirementGenerateJob,
+    AiRequirementTestPoint,
+    AiRequirementTestScheme,
 )
 from app.routers.ai.generate import _call_llm, _extract_json_array, _get_default_ai_config
 from app.schemas.ai import StandardResponse
@@ -144,8 +151,20 @@ def _case_test_point_ids(case: AiRequirementCase) -> list[int]:
     return _parse_test_point_ids_from_keywords(getattr(case, "keywords", None) or "")
 
 
-def _merge_test_point_keywords(keywords: str, test_point_ids: list[int]) -> str:
-    kw = (keywords or "").strip()
+def _normalize_keywords_text(keywords: Any) -> str:
+    """将 LLM 返回的 keywords（可能是 str / list）规范为字符串。"""
+    if keywords is None:
+        return ""
+    if isinstance(keywords, str):
+        return keywords.strip()
+    if isinstance(keywords, (list, tuple)):
+        parts = [str(x).strip() for x in keywords if x is not None and str(x).strip()]
+        return ", ".join(parts)
+    return str(keywords).strip()
+
+
+def _merge_test_point_keywords(keywords: Any, test_point_ids: list[int]) -> str:
+    kw = _normalize_keywords_text(keywords)
     if not test_point_ids:
         return kw
     if _TP_KEYWORDS_RE.search(kw):
@@ -446,6 +465,55 @@ def _format_existing_cases_for_prompt(
     return "\n".join(lines), n
 
 
+def _case_count_quality_hint(requested: int, char_count: int, section_count: int) -> str:
+    """注入 Prompt：条数目标与范围体量不匹配时的质量优先说明"""
+    sections = max(section_count, 1)
+    if char_count < 2500 and requested > 8:
+        return (
+            f"【条数提示】本次范围约 {char_count} 字、{sections} 个章节，参考目标 {requested} 条可能偏高。"
+            f"请按需求分支/边界/异常/权限拆分**高质量**用例，**实际条数可明显少于 {requested}**；"
+            "禁止为凑条数输出大量「一步操作+一句泛化预期」的浅用例。"
+        )
+    if char_count < 5000 and requested > 12:
+        return (
+            f"【条数提示】参考目标 {requested} 条，范围约 {char_count} 字。"
+            "**质量与覆盖维度优先于凑满条数**；宁可少生成，也不要堆一步式用例。"
+        )
+    return (
+        f"【条数提示】参考目标约 {requested} 条，以覆盖要点为准，可略少或略多；"
+        "每条须可独立执行，步骤与预期须具体、可验证。"
+    )
+
+
+def _format_scope_section_titles(sections: list[dict]) -> str:
+    titles = [(s.get("title") or "").strip() for s in (sections or []) if (s.get("title") or "").strip()]
+    if not titles:
+        return "（未指定章节标题）"
+    return "、".join(titles[:20])
+
+
+def _batch_scope_fields(
+    req: AiRequirement,
+    section_ids: Optional[list[str]],
+    generate_report: Optional[dict] = None,
+) -> dict[str, Any]:
+    """批次结果中附带章节范围，便于历史报告展示"""
+    scope = (generate_report or {}).get("scope") if isinstance(generate_report, dict) else None
+    if isinstance(scope, dict) and scope.get("section_ids"):
+        return {
+            "scope_section_ids": list(scope.get("section_ids") or []),
+            "scope_section_titles": list(scope.get("section_titles") or []),
+        }
+    ids = list(section_ids or [])
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    all_sections = meta.get("sections") or []
+    selected = resolve_sections(all_sections, ids)
+    return {
+        "scope_section_ids": ids,
+        "scope_section_titles": [(s.get("title") or "").strip() for s in selected if (s.get("title") or "").strip()],
+    }
+
+
 def _case_count_expectation_note(requested: int, parsed: int) -> str:
     """生成报告中的条数预期说明（不做截断，仅解释目标与实际差异）"""
     if parsed <= 0:
@@ -482,10 +550,19 @@ def _requirement_naming_meta(req: AiRequirement) -> tuple[str, Optional[str]]:
     return req_type, tpl_override
 
 
+def _requirement_story_code(req: Optional[AiRequirement]) -> str:
+    if not req:
+        return ""
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    return str(meta.get("story_code") or "").strip()
+
+
 async def _resolve_naming_template(project_id: int, req: Optional[AiRequirement] = None):
     config = await load_naming_config(project_id)
     req_type, tpl_override = _requirement_naming_meta(req) if req else ("default", None)
-    template = resolve_template(config, req_type, tpl_override)
+    project_b = await load_project_bindings(project_id)
+    export_profile = get_export_profile(project_b)
+    template = resolve_template(config, req_type, tpl_override, export_profile)
     return config, template
 
 
@@ -509,7 +586,7 @@ def _normalize_cases(raw_cases: list) -> list[dict]:
                         merged.append({"step": str(st), "expect": str(exp)})
                 raw_steps = merged
 
-        norm_steps = align_steps_expects(raw_steps, min_steps=2)
+        norm_steps = align_steps_expects(raw_steps)
 
         priority = str(item.get("priority", "2"))
         if priority.upper().startswith("P"):
@@ -537,6 +614,8 @@ def _normalize_cases(raw_cases: list) -> list[dict]:
             or "默认模块"
         ).strip()
 
+        zentao_type, test_design = split_case_type_fields(item, default_zentao=DEFAULT_ZENTAO_CASE_TYPE)
+
         row = {
             "module": func_module,
             "main_module": main_module or func_module,
@@ -544,11 +623,17 @@ def _normalize_cases(raw_cases: list) -> list[dict]:
             "feature_point": feature_point,
             "case_description": case_description,
             "title": legacy_title,
-            "precondition": (item.get("precondition") or item.get("pre_condition") or "").strip(),
+            "precondition": normalize_corner_quotes(
+                (item.get("precondition") or item.get("pre_condition") or "").strip()
+            ),
             "steps": norm_steps,
             "priority": priority if priority in ("1", "2", "3", "4") else "2",
-            "type": item.get("type") or "功能测试",
-            "keywords": item.get("keywords") or (",".join(item.get("tags", [])) if item.get("tags") else ""),
+            "type": zentao_type,
+            "test_design": test_design,
+            "keywords": _normalize_keywords_text(
+                item.get("keywords")
+                or (item.get("tags") if item.get("tags") else "")
+            ),
         }
         raw_tp = item.get("test_point_ids") or item.get("source_test_point_ids")
         if raw_tp is not None:
@@ -577,6 +662,10 @@ def _persist_requirement_bindings(req: AiRequirement, bindings: dict, effective:
 
 
 class ZentaoBindingsBody(BaseModel):
+    export_profile: Optional[str] = Field(
+        default=None,
+        description="导出目标：zentao（禅道 XLSX）| generic（通用 XLSX）",
+    )
     product: str = Field(default="", description="所属产品")
     module: str = Field(default="", description="所属模块（禅道路径）")
     related_story: str = Field(default="", description="相关研发需求")
@@ -589,6 +678,10 @@ class ExportDefaultsBody(ZentaoBindingsBody):
 
 class CaseNamingPreviewBody(BaseModel):
     template_id: Optional[str] = Field(default=None, description="指定模板ID，默认当前生效")
+    title_template: Optional[str] = Field(
+        default=None,
+        description="表单中未保存的标题模板，传入则覆盖已存模板用于预览",
+    )
     sample_slots: dict = Field(default_factory=dict, description="预览用语义槽位")
 
 
@@ -600,6 +693,10 @@ class CaseNamingConfigBody(BaseModel):
 class RequirementNamingMetaBody(BaseModel):
     requirement_type: str = Field(default="default", description="需求类型，用于匹配模板")
     naming_template_id: Optional[str] = Field(default=None, description="显式指定模板ID")
+
+
+class UpdateRequirementBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200, description="需求名称")
 
 
 class RecalcTitlesRequest(BaseModel):
@@ -620,6 +717,16 @@ class GenerateCasesRequest(BaseModel):
         default=None,
         description="生成范围：章节 ID 列表，空或不传表示全部章节",
     )
+    extra_instructions: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description="用户额外要求，优先于默认 Prompt 规则",
+    )
+    batch_name: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description="写入 source_ref=batch:名称；单次生成建议传章节/批次名便于筛选",
+    )
 
 
 class ScopeEstimateRequest(BaseModel):
@@ -638,12 +745,22 @@ class GenerateCasesBatchItem(BaseModel):
         default=None,
         description="本批禅道覆盖（可选，留空继承项目/需求）",
     )
+    extra_instructions: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description="本批额外要求（可选，覆盖批量级默认）",
+    )
 
 
 class GenerateCasesBatchRequest(BaseModel):
     vision_config_id: Optional[int] = None
     case_gen_config_id: Optional[int] = None
     replace_existing: bool = Field(default=False, description="开始前清空已有用例")
+    extra_instructions: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description="批量生成默认额外要求，各批次可单独覆盖",
+    )
     batches: list[GenerateCasesBatchItem] = Field(..., min_length=1, max_length=30)
 
 
@@ -660,6 +777,10 @@ class UpdateCaseRequest(BaseModel):
 
 class ImportToLibraryRequest(BaseModel):
     case_ids: list[int] = Field(..., min_length=1, description="工作区用例 ID 列表")
+    duplicate_title_mode: str = Field(
+        default="skip",
+        description="标题+模块重复时：skip 跳过，overwrite 覆盖库中已有用例",
+    )
 
 
 class BatchDeleteCasesRequest(BaseModel):
@@ -866,11 +987,16 @@ async def get_zentao_bindings(
                 req.parsed_content if isinstance(req.parsed_content, dict) else None
             )
             effective = merge_bindings(project_b, req_b)
+    export_profile = get_export_profile(effective)
     return StandardResponse(
         data={
             "project": project_b,
             "requirement": req_b,
             "effective": effective,
+            "export_profile": export_profile,
+            "export_profile_options": [
+                {"value": k, "label": v} for k, v in EXPORT_PROFILE_LABELS.items()
+            ],
             "stage_rule": "priority in [1] → 冒烟测试阶段，否则 → 系统测试阶段",
         }
     )
@@ -907,13 +1033,18 @@ async def get_case_naming_config(
         req = await AiRequirement.get_or_none(id=requirement_id, project_id=project_id, is_del=False)
         if req:
             req_type, tpl_override = _requirement_naming_meta(req)
-    active = resolve_template(config, req_type, tpl_override)
+    project_b = await load_project_bindings(project_id)
+    export_profile = get_export_profile(project_b)
+    active = resolve_template(config, req_type, tpl_override, export_profile)
     return StandardResponse(
         data={
             "config": config,
             "active_template": active,
             "requirement_type": req_type,
             "naming_template_id": tpl_override,
+            "export_profile": export_profile,
+            "builtin_templates": BUILTIN_TEMPLATE_CATALOG,
+            "suggested_template_id": suggest_template_id_for_profile(export_profile),
         }
     )
 
@@ -956,6 +1087,8 @@ async def preview_case_naming(
         if req:
             req_type, tpl_override = _requirement_naming_meta(req)
     template = resolve_template(config, req_type, tpl_override)
+    if body.title_template is not None:
+        template = {**template, "title_template": body.title_template}
     result = preview_title(template, body.sample_slots or {})
     return StandardResponse(data={**result, "template_id": template.get("id"), "template_version": template.get("version")})
 
@@ -1171,6 +1304,25 @@ async def get_requirement(
     return StandardResponse(data=data)
 
 
+@router.put("/{req_id}", summary="更新需求基本信息", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
+async def update_requirement(
+    req_id: int,
+    body: UpdateRequirementBody,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="需求名称不能为空")
+    req.name = name
+    await req.save()
+    return StandardResponse(message="需求名称已更新", data=_requirement_to_dict(req))
+
+
 @router.delete("/{req_id}", summary="删除需求", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
 async def delete_requirement(
     req_id: int,
@@ -1184,7 +1336,13 @@ async def delete_requirement(
     req.is_del = True
     await req.save()
     await AiRequirementCase.filter(requirement_id=req_id).update(is_del=True)
-    return StandardResponse(message="删除成功")
+    await AiRequirementTestPoint.filter(requirement_id=req_id).update(is_del=True)
+    await AiRequirementTestScheme.filter(requirement_id=req_id).update(is_del=True)
+    await AiRequirementGenerateJob.filter(
+        requirement_id=req_id,
+        status__in=["pending", "running"],
+    ).update(status="cancelled")
+    return StandardResponse(message="删除成功（已复制到功能用例库的用例不受影响）")
 
 
 async def _execute_generate_cases(
@@ -1196,6 +1354,7 @@ async def _execute_generate_cases(
     batch_name: str = "",
     replace_existing: Optional[bool] = None,
     zentao_effective_override: Optional[dict] = None,
+    persist_job_record: bool = False,
 ) -> dict:
     """单次范围生成用例，返回 cases / generate_report / tokens / duration_ms"""
     start_time = time.time()
@@ -1343,17 +1502,27 @@ async def _execute_generate_cases(
                 "vision_summary": "（已合并至下方结构化需求内容，请直接阅读 scoped_content）",
                 "count": body.count,
                 "naming_rules": naming_rules,
+                "scope_section_titles": _format_scope_section_titles(selected_sections),
+                "count_quality_hint": _case_count_quality_hint(
+                    body.count,
+                    scope_est.get("char_count", len(scoped_content)),
+                    len(selected_sections),
+                ),
             })
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    extra_instructions = (body.extra_instructions or "").strip()
+    user_prompt = append_extra_instructions(user_prompt, extra_instructions)
+
     prompt_len = len(user_prompt or "")
     logger.info(
-        "[requirements] 用例生成 LLM 调用 model=%s batch=%s prompt_len=%s count=%s",
+        "[requirements] 用例生成 LLM 调用 model=%s batch=%s prompt_len=%s count=%s extra=%s",
         gen_config.model,
         batch_name or supplement_name or "-",
         prompt_len,
         body.count,
+        bool(extra_instructions),
     )
     try:
         resp = await _call_llm(
@@ -1405,6 +1574,8 @@ async def _execute_generate_cases(
         section_ctx,
         batch_name=batch_name or supplement_name,
         requirement_name=req.name,
+        requirement_id=req.id,
+        story_code=_requirement_story_code(req),
     )
     cases_data = [
         apply_bindings_to_case_fields(c, effective)
@@ -1430,6 +1601,7 @@ async def _execute_generate_cases(
         "supplement_mode": is_supplement,
         "supplement_batch_name": supplement_name if is_supplement else None,
         "existing_cases_count": existing_count if is_supplement else 0,
+        "extra_instructions": extra_instructions[:500] if extra_instructions else None,
         "naming_warnings": naming_warnings[:20],
         "naming_template_id": naming_template.get("id"),
         "naming_template_version": naming_template.get("version"),
@@ -1507,10 +1679,16 @@ async def _execute_generate_cases(
             status="draft",
             source_ref=source_ref,
             section_ids=batch_section_ids,
-            extra=build_requirement_case_extra(effective),
+            extra=build_requirement_case_extra(
+                effective,
+                existing={"test_design": item["test_design"]} if item.get("test_design") else None,
+            ),
             create_by=username,
         )
         created.append(_case_to_dict(case))
+
+    created_case_ids = [c["id"] for c in created if c.get("id")]
+    generate_report["created_case_ids"] = created_case_ids
 
     duration_ms = int((time.time() - start_time) * 1000)
     generate_report["duration_ms"] = duration_ms
@@ -1555,6 +1733,7 @@ async def _execute_generate_cases(
     req.parse_error = None
     meta["last_generate"] = {
         "case_count": len(created),
+        "created_case_ids": created_case_ids,
         "tokens_used": total_tokens,
         "duration_ms": duration_ms,
         "generate_report": generate_report,
@@ -1564,19 +1743,33 @@ async def _execute_generate_cases(
     req.parsed_content = meta
     await req.save()
 
-    return {
+    result = {
         "cases": created,
         "created_count": len(created),
         "tokens_used": total_tokens,
         "duration_ms": duration_ms,
         "generate_report": generate_report,
     }
+    if persist_job_record:
+        username = user_info.get("username", "")
+        job = await _persist_single_generate_job(
+            req=req,
+            project_id=project_id,
+            username=username,
+            body=body,
+            data=result,
+            batch_name=batch_name,
+        )
+        result["job_id"] = job.id
+    return result
 
 
 def _job_to_dict(job: AiRequirementGenerateJob) -> dict:
     total = job.total_batches or 0
     done = job.done_batches or 0
     pct = int(done / total * 100) if total else 0
+    gr = job.generate_report if isinstance(job.generate_report, dict) else {}
+    created_ids = gr.get("created_case_ids") or []
     return {
         "id": job.id,
         "requirement_id": job.requirement_id,
@@ -1587,14 +1780,57 @@ def _job_to_dict(job: AiRequirementGenerateJob) -> dict:
         "current_batch_name": job.current_batch_name or "",
         "progress_percent": pct,
         "batch_results": job.batch_results or [],
-        "generate_report": job.generate_report or {},
+        "generate_report": gr,
         "error": job.error,
         "tokens_used": job.tokens_used,
         "duration_ms": job.duration_ms,
+        "case_count": len(created_ids),
         "create_by": job.create_by,
         "create_time": job.create_time.isoformat() if job.create_time else None,
         "finish_time": job.finish_time.isoformat() if job.finish_time else None,
     }
+
+
+async def _persist_single_generate_job(
+    *,
+    req: AiRequirement,
+    project_id: int,
+    username: str,
+    body: GenerateCasesRequest,
+    data: dict,
+    batch_name: str,
+) -> AiRequirementGenerateJob:
+    """单次同步生成写入任务表，便于历史记录查看"""
+    gr = data.get("generate_report") or {}
+    batch_results = [
+        {
+            "name": batch_name or "单批生成",
+            "success": True,
+            "supplement": bool((body.supplement_batch_name or "").strip()),
+            "requested_count": body.count,
+            "created_count": data.get("created_count", 0),
+            "parsed_count": data.get("created_count", 0),
+            "generate_report": gr,
+            "tokens_used": data.get("tokens_used", 0),
+            "count_note": (gr.get("case_gen") or {}).get("count_note"),
+            **_batch_scope_fields(req, body.scope_section_ids, gr),
+        }
+    ]
+    return await AiRequirementGenerateJob.create(
+        requirement_id=req.id,
+        project_id=project_id,
+        status="completed",
+        total_batches=1,
+        done_batches=1,
+        current_batch_name="",
+        payload=body.model_dump(),
+        batch_results=batch_results,
+        generate_report=gr,
+        tokens_used=int(data.get("tokens_used") or 0),
+        duration_ms=int(data.get("duration_ms") or 0),
+        create_by=username,
+        finish_time=datetime.now(),
+    )
 
 
 async def _run_batch_generate_core(
@@ -1634,6 +1870,7 @@ async def _run_batch_generate_core(
 
     batch_start = time.time()
     batch_results: list[dict] = []
+    all_created_case_ids: list[int] = []
     total_tokens = 0
     last_report: dict = {}
     vision_reports: list[dict] = []
@@ -1656,6 +1893,7 @@ async def _run_batch_generate_core(
                     "success": False,
                     "created_count": 0,
                     "error": f"禅道配置不完整：{', '.join(miss)}",
+                    **_batch_scope_fields(req, item.scope_section_ids),
                 })
                 if job:
                     job.done_batches = idx + 1
@@ -1667,6 +1905,8 @@ async def _run_batch_generate_core(
         if use_supplement:
             batch_name = (item.name or "").strip() or batch_name
 
+        batch_extra = (body.extra_instructions or "").strip()
+        item_extra = (item.extra_instructions or "").strip()
         single_body = GenerateCasesRequest(
             vision_config_id=body.vision_config_id,
             case_gen_config_id=body.case_gen_config_id,
@@ -1675,6 +1915,7 @@ async def _run_batch_generate_core(
             export_defaults=None,
             scope_section_ids=item.scope_section_ids,
             supplement_batch_name=batch_name if use_supplement else None,
+            extra_instructions=item_extra or batch_extra or None,
         )
         zentao_override = item_effective if item.export_defaults else None
         try:
@@ -1693,6 +1934,11 @@ async def _run_batch_generate_core(
             if gr.get("vision"):
                 vision_reports.append(gr["vision"])
             cg = gr.get("case_gen") or {}
+            batch_created_ids = (
+                (data.get("generate_report") or {}).get("created_case_ids")
+                or [c.get("id") for c in data.get("cases", []) if c.get("id")]
+            )
+            all_created_case_ids.extend(batch_created_ids)
             batch_results.append({
                 "index": idx,
                 "name": batch_name,
@@ -1700,6 +1946,7 @@ async def _run_batch_generate_core(
                 "supplement": use_supplement,
                 "requested_count": item.count,
                 "created_count": data["created_count"],
+                "created_case_ids": batch_created_ids,
                 "parsed_count": cg.get("parsed_count", data["created_count"]),
                 "existing_cases_count": cg.get("existing_cases_count", 0),
                 "count_note": cg.get("count_note"),
@@ -1707,6 +1954,7 @@ async def _run_batch_generate_core(
                 "duration_ms": data["duration_ms"],
                 "generate_report": data["generate_report"],
                 "error": None,
+                **_batch_scope_fields(req, item.scope_section_ids, gr),
             })
         except HTTPException as e:
             detail = e.detail if isinstance(e.detail, str) else str(e.detail)
@@ -1716,6 +1964,7 @@ async def _run_batch_generate_core(
                 "success": False,
                 "created_count": 0,
                 "error": detail,
+                **_batch_scope_fields(req, item.scope_section_ids),
             })
         except Exception as e:
             logger.error(f"[requirements] 批次 {batch_name} 失败: {e}", exc_info=True)
@@ -1725,6 +1974,7 @@ async def _run_batch_generate_core(
                 "success": False,
                 "created_count": 0,
                 "error": str(e),
+                **_batch_scope_fields(req, item.scope_section_ids),
             })
 
         if job:
@@ -1744,6 +1994,7 @@ async def _run_batch_generate_core(
     combined_report = {
         "batch_mode": True,
         "batch_results": batch_results,
+        "created_case_ids": all_created_case_ids,
         "vision": _merge_vision_reports(vision_reports)
         if vision_reports
         else (last_report.get("vision") if last_report else None),
@@ -1753,6 +2004,7 @@ async def _run_batch_generate_core(
     }
     meta["last_generate"] = {
         "case_count": len(all_case_dicts),
+        "created_case_ids": all_created_case_ids,
         "tokens_used": total_tokens,
         "duration_ms": duration_ms,
         "generate_report": combined_report,
@@ -1906,7 +2158,14 @@ async def generate_cases(
     req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
     if not req:
         raise HTTPException(status_code=404, detail="需求不存在")
-    data = await _execute_generate_cases(req, project_id, user_info, body)
+    data = await _execute_generate_cases(
+        req,
+        project_id,
+        user_info,
+        body,
+        batch_name=(body.batch_name or "").strip(),
+        persist_job_record=True,
+    )
     return StandardResponse(
         message=f"成功生成 {data['created_count']} 条用例",
         data=data,
@@ -1954,7 +2213,9 @@ async def get_generate_job(
     user_info: dict = Depends(is_authenticated),
 ):
     project_id = _resolve_project_id(user_info, project_id)
-    job = await AiRequirementGenerateJob.get_or_none(id=job_id, project_id=project_id)
+    job = await AiRequirementGenerateJob.get_or_none(
+        id=job_id, project_id=project_id, is_del=False
+    )
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     return StandardResponse(data=_job_to_dict(job))
@@ -1975,11 +2236,65 @@ async def get_latest_generate_job(
     if not req:
         raise HTTPException(status_code=404, detail="需求不存在")
     job = await AiRequirementGenerateJob.filter(
-        requirement_id=req_id, project_id=project_id
+        requirement_id=req_id, project_id=project_id, is_del=False
     ).order_by("-id").first()
     if not job:
         return StandardResponse(data=None, message="暂无生成任务")
     return StandardResponse(data=_job_to_dict(job))
+
+
+@router.get(
+    "/{req_id}/generate-jobs",
+    summary="需求生成记录列表",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def list_generate_jobs(
+    req_id: int,
+    page: int = Query(1, ge=1),
+    size: int = Query(30, ge=1, le=100),
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+    q = AiRequirementGenerateJob.filter(
+        requirement_id=req_id, project_id=project_id, is_del=False
+    ).order_by("-id")
+    total = await q.count()
+    jobs = await q.offset((page - 1) * size).limit(size).all()
+    return StandardResponse(
+        data={
+            "list": [_job_to_dict(j) for j in jobs],
+            "total": total,
+            "page": page,
+            "size": size,
+        }
+    )
+
+
+@router.delete(
+    "/generate-jobs/{job_id}",
+    summary="删除生成记录（软删）",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def delete_generate_job(
+    job_id: int,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    job = await AiRequirementGenerateJob.get_or_none(
+        id=job_id, project_id=project_id, is_del=False
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="生成记录不存在")
+    if job.status in ("pending", "running"):
+        raise HTTPException(status_code=400, detail="任务执行中，无法删除")
+    job.is_del = True
+    await job.save(update_fields=["is_del", "update_time"])
+    return StandardResponse(message="已删除生成记录")
 
 
 @router.get("/{req_id}/cases", summary="用例列表", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
@@ -2018,6 +2333,8 @@ async def update_case(
     updates = body.model_dump(exclude_unset=True)
     if "steps" in updates and updates["steps"] is not None:
         updates["steps"] = align_steps_expects(updates["steps"])
+    if "precondition" in updates and updates["precondition"] is not None:
+        updates["precondition"] = normalize_corner_quotes(str(updates["precondition"]).strip())
     for k, v in updates.items():
         setattr(case, k, v)
 
@@ -2047,11 +2364,22 @@ async def import_cases_to_library(
     from app.routers.ai.functional_cases import import_requirement_cases_to_library_handler
 
     data = await import_requirement_cases_to_library_handler(
-        req_id, body.case_ids, project_id, username
+        req_id,
+        body.case_ids,
+        project_id,
+        username,
+        duplicate_title_mode=body.duplicate_title_mode,
     )
+    msg_parts = [f"已复制 {data['copied_count']} 条到功能用例库"]
+    if data.get("overwritten_count"):
+        msg_parts.append(f"已覆盖 {data['overwritten_count']} 条")
+    if data.get("skipped_count"):
+        msg_parts.append(f"已跳过 {data['skipped_count']} 条（标题重复或已在库中）")
+    if data.get("not_found_count"):
+        msg_parts.append(f"{data['not_found_count']} 条未找到")
     return StandardResponse(
         data=data,
-        message=f"已复制 {data['copied_count']} 条到功能用例库",
+        message="，".join(msg_parts),
     )
 
 
@@ -2111,7 +2439,13 @@ async def recalc_case_titles(
             "case_description": slots.get("case_description", ""),
             "title": case.title,
         }
-        new_title, ws = recalc_title_from_stored_slots(item, template, effective)
+        new_title, ws = recalc_title_from_stored_slots(
+            item,
+            template,
+            effective,
+            requirement_id=req.id,
+            story_code=_requirement_story_code(req),
+        )
         if not new_title:
             continue
         case.title = new_title
@@ -2148,7 +2482,7 @@ async def recalc_case_titles(
     )
 
 
-@router.get("/{req_id}/cases/export", summary="导出禅道 XLSX", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
+@router.get("/{req_id}/cases/export", summary="导出用例 XLSX", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
 async def export_cases_xlsx(
     req_id: int,
     project_id: Optional[int] = Query(None, description="项目ID"),
@@ -2164,6 +2498,7 @@ async def export_cases_xlsx(
         raise HTTPException(status_code=400, detail="暂无用例可导出")
 
     effective = await _effective_zentao_bindings(project_id, req)
+    export_profile = get_export_profile(effective)
     missing = validate_bindings(effective)
     if missing:
         raise HTTPException(
@@ -2197,7 +2532,8 @@ async def export_cases_xlsx(
         rows.append(row)
 
     xlsx_bytes = build_xlsx_bytes(rows, columns=columns)
-    filename = f"requirement_{req_id}_zentao_cases.xlsx"
+    suffix = "cases" if export_profile == EXPORT_PROFILE_GENERIC else "zentao_cases"
+    filename = f"requirement_{req_id}_{suffix}.xlsx"
     return StreamingResponse(
         iter([xlsx_bytes]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -53,6 +53,18 @@ export const MenuGroups = [
                 permission: 'ui_case:view'
             },
             {
+                name: '步骤片段',
+                path: '/ui-fragments',
+                icon: 'Collection',
+                permission: 'ui_case:view'
+            },
+            {
+                name: '测试文件',
+                path: '/ui-test-files',
+                icon: 'FolderOpened',
+                permission: 'ui_case:view'
+            },
+            {
                 name: '套件管理',
                 path: '/suite',
                 icon: 'Collection',
@@ -100,6 +112,12 @@ export const MenuGroups = [
                 path: '/api-case',
                 icon: 'Document',
                 permission: 'api_case:view'
+            },
+            {
+                name: '测试文件',
+                path: '/api-test-files',
+                icon: 'FolderOpened',
+                permission: 'api_manage:view'
             },
             {
                 name: '套件管理',
@@ -163,15 +181,9 @@ export const MenuGroups = [
                 permission: 'ai_test:view'
             },
             {
-                name: '测试分析',
-                path: '/ai-test-analysis',
-                icon: 'Share',
-                permission: 'ai_test:view'
-            },
-            {
-                name: '需求用例生成',
-                path: '/ai-requirements',
-                icon: 'Document',
+                name: '需求测试中心',
+                path: '/ai-testing',
+                icon: 'Cpu',
                 permission: 'ai_test:view'
             },
             {
@@ -187,15 +199,34 @@ export const MenuGroups = [
                 permission: 'ai_test:view'
             },
             {
-                name: 'AI 模型配置',
-                path: '/ai-config',
-                icon: 'Setting',
-                permission: 'ai_config:view'
-            },
-            {
                 name: '模型使用情况',
                 path: '/ai-usage',
                 icon: 'DataLine',
+                permission: 'ai_test:view'
+            },
+        ]
+    },
+    {
+        title: '智能浏览器',
+        icon: 'Monitor',
+        expanded: true,
+        items: [
+            {
+                name: '用例库',
+                path: '/browser-lab/cases',
+                icon: 'Document',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '执行任务',
+                path: '/browser-lab/run',
+                icon: 'VideoPlay',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '执行记录',
+                path: '/browser-lab/records',
+                icon: 'List',
                 permission: 'ai_test:view'
             },
         ]
@@ -269,34 +300,17 @@ export const MenuGroups = [
                 permission: 'operation_log:view'
             },
             {
-                name: '通知配置',
-                path: '/notification-config',
-                icon: 'Bell',
-                permission: 'notification_config:view'
-            },
-            {
-                name: 'SMTP配置',
-                path: '/smtp-config',
-                icon: 'Message',
-                permission: 'smtp_config:view'
-            },
-            {
-                name: 'MCP配置',
-                path: '/mcp-config',
-                icon: 'Connection',
-                permission: 'mcp_config:view'
-            },
-            {
-                name: '登录页配置',
-                path: '/login-page-config',
-                icon: 'Picture',
-                permission: 'login_page_config:view'
-            },
-            {
-                name: '执行器发布',
-                path: '/runner-release-config',
-                icon: 'Download',
-                permission: 'device:edit'
+                name: '平台配置',
+                path: '/platform-config',
+                icon: 'Setting',
+                anyPermissions: [
+                    'ai_config:view',
+                    'smtp_config:view',
+                    'notification_config:view',
+                    'mcp_config:view',
+                    'login_page_config:view',
+                    'device:edit'
+                ]
             },
             {
                 name: '推送记录',

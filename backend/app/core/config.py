@@ -10,6 +10,25 @@ BASE_DIR = os.path.dirname(app.__path__[0])
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 AVATAR_DIR = os.path.join(STATIC_DIR, "avatars")
 LOGIN_BG_DIR = os.path.join(STATIC_DIR, "login-bg")
+BROWSER_LAB_DIR = os.path.join(STATIC_DIR, "browser_lab")
+
+BROWSER_LAB_MAX_CONCURRENT = int(os.getenv("BROWSER_LAB_MAX_CONCURRENT", "2"))
+BROWSER_LAB_DAILY_LIMIT = int(os.getenv("BROWSER_LAB_DAILY_LIMIT", "0"))
+BROWSER_LAB_DEFAULT_MAX_STEPS = int(os.getenv("BROWSER_LAB_DEFAULT_MAX_STEPS", "25"))
+BROWSER_LAB_MAX_STEPS_CAP = int(os.getenv("BROWSER_LAB_MAX_STEPS_CAP", "50"))
+# 单步超时（含 LLM + 浏览器操作）；云环境 / Vision 模型建议 360～600
+BROWSER_LAB_STEP_TIMEOUT = int(os.getenv("BROWSER_LAB_STEP_TIMEOUT", "360"))
+# CDP 截图连续失败时自动重启浏览器并续跑（0=关闭）
+BROWSER_LAB_MAX_BROWSER_RESTARTS = int(os.getenv("BROWSER_LAB_MAX_BROWSER_RESTARTS", "2"))
+BROWSER_LAB_MAX_BROWSER_RESTARTS_CAP = int(os.getenv("BROWSER_LAB_MAX_BROWSER_RESTARTS_CAP", "5"))
+# 同一操作模式（如重复搜索/点击）连续出现 N 次则自动停止，避免浪费 Token
+BROWSER_LAB_MAX_REPEAT_STEPS = int(os.getenv("BROWSER_LAB_MAX_REPEAT_STEPS", "3"))
+BROWSER_LAB_MAX_REPEAT_STEPS_CAP = int(os.getenv("BROWSER_LAB_MAX_REPEAT_STEPS_CAP", "8"))
+# browser-use 单步 LLM 解析失败最大重试次数
+BROWSER_LAB_MAX_LLM_FAILURES = int(os.getenv("BROWSER_LAB_MAX_LLM_FAILURES", "3"))
+# 无头浏览器视口（宽表格场景建议 1920×1080）
+BROWSER_LAB_VIEWPORT_WIDTH = int(os.getenv("BROWSER_LAB_VIEWPORT_WIDTH", "1920"))
+BROWSER_LAB_VIEWPORT_HEIGHT = int(os.getenv("BROWSER_LAB_VIEWPORT_HEIGHT", "1080"))
 
 # ========================= MySQL数据库的配置 =========================
 DATABASE = {
@@ -73,9 +92,9 @@ ALGORITHM = "HS256"
 TOKEN_TIMEOUT = 60 * 60 * 24 * 1
 # Runner 客户端会话 token 有效期（秒），默认 7 天
 RUNNER_TOKEN_TIMEOUT = int(os.getenv("RUNNER_TOKEN_TIMEOUT", str(60 * 60 * 24 * 7)))
-RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.0.0")
-RUNNER_CLIENT_VERSION_MIN = os.getenv("RUNNER_CLIENT_VERSION_MIN", "1.0.0")
-RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.1.1")
+RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.0.2")
+RUNNER_CLIENT_VERSION_MIN = os.getenv("RUNNER_CLIENT_VERSION_MIN", "1.3.8")
+RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.3.14")
 # Runner 客户端安装包下载地址（zip 或文档页）；为空时客户端根据平台地址推导
 RUNNER_CLIENT_DOWNLOAD_URL = os.getenv("RUNNER_CLIENT_DOWNLOAD_URL", "").strip()
 # Phase 6：connect 下发按设备隔离的 MQ/Redis 凭证（需 RabbitMQ Management + Redis ACL）
@@ -159,3 +178,7 @@ MINIO_CONFIG = {
 
 API_FILE_BUCKET = os.getenv('API_FILE_BUCKET', 'api-test-files')
 AI_REQUIREMENT_BUCKET = os.getenv('AI_REQUIREMENT_BUCKET', 'ai-requirements')
+UI_TEST_FILE_BUCKET = os.getenv('UI_TEST_FILE_BUCKET', 'ui-test-files')
+
+# Web 自动化测试文件单文件上限（字节），默认 50MB
+UI_TEST_FILE_MAX_BYTES = int(os.getenv('UI_TEST_FILE_MAX_BYTES', str(50 * 1024 * 1024)))

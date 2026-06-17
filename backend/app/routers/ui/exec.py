@@ -12,6 +12,8 @@ from app.core.permissions import UI_CASE_EXECUTE, UI_SUITE_EXECUTE, UI_TASK_EXEC
 from app.core.mq_producer import MQProducer
 from app.core.ai_project_settings import resolve_locator_heal_for_execute
 from app.core.ui_execution_stop import stop_plan_execution, stop_suite_execution, stop_case_execution
+from app.core.ui_project_guard import assert_environment_for_project, assert_user_project_member
+from app.core.ui_step_expand import FragmentExpandError, expand_fragment_refs
 from app.schemas.ui import RunForm, CaseDebugForm
 
 router = APIRouter(
@@ -39,14 +41,21 @@ class ExecutionService:
         """
         构建执行环境负载；ai_heal_enabled 由 Backend 项目配置计算，不信任 Runner/前端单独决策。
         """
+        from app.core.data_tools.tag_service import merge_execution_variables
+        from app.core.data_tools.inline_tools import ensure_dt_cache
+
         ai_heal_enabled = await resolve_locator_heal_for_execute(project_id, user_heal_override)
+        variables = ensure_dt_cache(await merge_execution_variables(project_id, env.id))
+        resolved_browser = browser_type if browser_type in ["chromium", "firefox", "webkit"] else "chromium"
         payload = {
             "headless": headless,
-            "browser": browser_type if browser_type in ["chromium", "firefox", "webkit"] else "chromium",
+            "browser": resolved_browser,
+            "browser_type": resolved_browser,
             "target_host": env.host,
             "environment_id": env.id,
+            "project_id": project_id,
             "env_name": env.name,
-            "variables": env.global_vars,
+            "variables": variables,
             "ai_heal_enabled": ai_heal_enabled,
         }
         return payload
@@ -67,12 +76,9 @@ class ExecutionService:
         from app.core.db_factory_service import run_sql_templates_by_ids
         from app.models.sys import Project
 
-        proj = await Project.get_or_none(id=suite_.project_id, is_del=False)
-        env = await Environment.get_or_none(id=env_id, is_del=False)
-        variables = {
-            **((proj.global_vars or {}) if proj else {}),
-            **((env.global_vars or {}) if env else {}),
-        }
+        from app.core.data_tools.tag_service import merge_execution_variables
+
+        variables = await merge_execution_variables(suite_.project_id, env_id)
         setup_res = await run_sql_templates_by_ids(
             suite_.setup_sql_ids, variables, env_id, suite_.project_id, phase="setup"
         )
@@ -82,26 +88,49 @@ class ExecutionService:
             raise HTTPException(status_code=422, detail=f"套件前置 SQL 执行失败: {detail}")
 
     @staticmethod
-    def build_case_item(case_execution: UiCaseExecution, case_: Case, step_meta: Any) -> Dict[str, Any]:
-        """构建单个用例执行项"""
+    async def expand_steps_or_raise(steps: List, project_id: int) -> List:
+        try:
+            return await expand_fragment_refs(steps or [], project_id)
+        except FragmentExpandError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @staticmethod
+    async def build_case_item(
+        case_execution: UiCaseExecution,
+        case_: Case,
+        step_meta: Any,
+        project_id: int,
+    ) -> Dict[str, Any]:
+        """构建单个用例执行项（展开片段引用）"""
+        expanded_steps = await ExecutionService.expand_steps_or_raise(case_.steps, project_id)
         return {
             "execution_id": case_execution.id,
             "id": case_.id,
             "name": case_.name,
             "skip": step_meta.skip if step_meta else False,
-            "steps": case_.steps
+            "run_mode": (step_meta.run_mode if step_meta else None) or "standalone",
+            "steps": expanded_steps,
         }
     
     @staticmethod
-    def build_suite_payload(suite_: Suite, suite_record: UiSuiteExecution,
-                            cases: List[Dict], plan_record: UiPlanExecution = None) -> Dict[str, Any]:
-        """构建套件执行负载"""
+    async def build_suite_payload(
+        suite_: Suite,
+        suite_record: UiSuiteExecution,
+        cases: List[Dict],
+        plan_record: UiPlanExecution = None,
+    ) -> Dict[str, Any]:
+        """构建套件执行负载（展开前置步骤中的片段引用）"""
+        pre_actions = await ExecutionService.expand_steps_or_raise(
+            suite_.pre_actions or [], suite_.project_id
+        )
         payload = {
             "id": suite_.id,
             "suite_execution_id": suite_record.id,
             "name": suite_.name,
             "username": suite_record.username,
-            "pre_actions": suite_.pre_actions or [],
+            "pre_actions": pre_actions,
+            "stop_on_failure": bool(getattr(suite_, "stop_on_failure", False)),
+            "propagate_variables": bool(getattr(suite_, "propagate_variables", False)),
             "cases": cases
         }
         if plan_record:
@@ -126,7 +155,11 @@ class ExecutionService:
 # 执行单条用例
 @router.post("/cases/{case_id}", summary="执行用例", status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_permissions(UI_CASE_EXECUTE))])
-async def run_case(case_id: int, item: RunForm):
+async def run_case(
+    case_id: int,
+    item: RunForm,
+    user_info: dict = Depends(require_permissions(UI_CASE_EXECUTE)),
+):
     """执行单条用例"""
     async with transactions.in_transaction():
         case_ = await Case.get_or_none(id=case_id, is_del=False)
@@ -135,13 +168,12 @@ async def run_case(case_id: int, item: RunForm):
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="目标用例不存在或已被移除"
             )
-        
-        env = await Environment.get_or_none(id=item.env_id, is_del=False)
-        if not env:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="所选运行环境不存在或已被移除"
-            )
+        await assert_user_project_member(user_info, case_.project_id)
+
+        env = assert_environment_for_project(
+            await Environment.get_or_none(id=item.env_id, is_del=False),
+            case_.project_id,
+        )
         
         env_payload = await ExecutionService.build_env_payload(
             env,
@@ -160,6 +192,7 @@ async def run_case(case_id: int, item: RunForm):
             is_del=False
         )
         
+        expanded_steps = await ExecutionService.expand_steps_or_raise(case_.steps, case_.project_id)
         suite_payload = {
             "id": case_.id,
             "name": case_.name,
@@ -172,7 +205,7 @@ async def run_case(case_id: int, item: RunForm):
                     "id": case_.id,
                     "name": case_.name,
                     "skip": False,
-                    "steps": case_.steps
+                    "steps": expanded_steps,
                 }
             ]
         }
@@ -183,6 +216,7 @@ async def run_case(case_id: int, item: RunForm):
         
         return {
             "msg": "用例已加入执行队列，正在等待执行器处理" if dispatched else "用例已创建，但暂无在线设备可执行",
+            "dispatched": dispatched,
             "execution_id": case_execution.id
         }
 
@@ -194,7 +228,11 @@ async def run_case(case_id: int, item: RunForm):
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permissions(UI_CASE_EXECUTE))],
 )
-async def debug_case(case_id: int, item: CaseDebugForm):
+async def debug_case(
+    case_id: int,
+    item: CaseDebugForm,
+    user_info: dict = Depends(require_permissions(UI_CASE_EXECUTE)),
+):
     """执行 steps[0:through_index+1] 后停止，支持使用编辑器中未保存的步骤。"""
     if not item.steps:
         raise HTTPException(
@@ -214,15 +252,16 @@ async def debug_case(case_id: int, item: CaseDebugForm):
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="目标用例不存在或已被移除",
             )
+        await assert_user_project_member(user_info, case_.project_id)
 
-        env = await Environment.get_or_none(id=item.env_id, is_del=False)
-        if not env:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="所选运行环境不存在或已被移除",
-            )
+        env = assert_environment_for_project(
+            await Environment.get_or_none(id=item.env_id, is_del=False),
+            case_.project_id,
+        )
 
-        debug_steps = item.steps[: item.through_index + 1]
+        debug_steps = await ExecutionService.expand_steps_or_raise(
+            item.steps[: item.through_index + 1], case_.project_id
+        )
         env_payload = await ExecutionService.build_env_payload(
             env,
             item.browser_type,
@@ -264,6 +303,7 @@ async def debug_case(case_id: int, item: CaseDebugForm):
 
         return {
             "msg": "调试任务已加入执行队列" if dispatched else "调试记录已创建，但暂无在线设备可执行",
+            "dispatched": dispatched,
             "execution_id": case_execution.id,
             "through_index": item.through_index,
             "step_count": len(debug_steps),
@@ -273,7 +313,11 @@ async def debug_case(case_id: int, item: CaseDebugForm):
 # 运行测试套件
 @router.post("/suites/{suite_id}", summary="执行套件", status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_permissions(UI_SUITE_EXECUTE))])
-async def run_suite(suite_id: int, item: RunForm):
+async def run_suite(
+    suite_id: int,
+    item: RunForm,
+    user_info: dict = Depends(require_permissions(UI_SUITE_EXECUTE)),
+):
     """运行测试套件"""
     async with transactions.in_transaction():
         suite_ = await Suite.get_or_none(id=suite_id, is_del=False).prefetch_related("steps")
@@ -282,13 +326,12 @@ async def run_suite(suite_id: int, item: RunForm):
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="目标套件不存在或已被移除"
             )
-        
-        env = await Environment.get_or_none(id=item.env_id, is_del=False)
-        if not env:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="所选运行环境不存在或已被移除"
-            )
+        await assert_user_project_member(user_info, suite_.project_id)
+
+        env = assert_environment_for_project(
+            await Environment.get_or_none(id=item.env_id, is_del=False),
+            suite_.project_id,
+        )
         
         env_payload = await ExecutionService.build_env_payload(
             env,
@@ -321,14 +364,27 @@ async def run_suite(suite_id: int, item: RunForm):
                 env=env_payload,
                 is_del=False
             )
-            cases.append(ExecutionService.build_case_item(case_execution, case_, step))
+            cases.append(
+                await ExecutionService.build_case_item(
+                    case_execution, case_, step, suite_.project_id
+                )
+            )
         
         suite_record.case_count = len(cases)
         await suite_record.save()
 
+        if not cases:
+            suite_record.status = "执行完成"
+            await suite_record.save()
+            return {
+                "msg": "套件中没有可执行的用例",
+                "dispatched": False,
+                "suite_record_id": suite_record.id,
+            }
+
         await ExecutionService.run_suite_setup_sql(suite_, item.env_id)
 
-        suite_payload = ExecutionService.build_suite_payload(
+        suite_payload = await ExecutionService.build_suite_payload(
             suite_, suite_record, cases
         )
         
@@ -338,6 +394,7 @@ async def run_suite(suite_id: int, item: RunForm):
         
         return {
             "msg": "套件已加入执行队列，正在等待执行器处理" if dispatched else "套件已创建，但暂无在线设备可执行",
+            "dispatched": dispatched,
             "suite_record_id": suite_record.id
         }
 
@@ -345,98 +402,47 @@ async def run_suite(suite_id: int, item: RunForm):
 # 运行测试计划
 @router.post("/tasks/{task_id}", summary="执行任务", status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_permissions(UI_TASK_EXECUTE))])
-async def run_task(task_id: int, item: RunForm):
+async def run_task(
+    task_id: int,
+    item: RunForm,
+    user_info: dict = Depends(require_permissions(UI_TASK_EXECUTE)),
+):
     """运行测试计划"""
     async with transactions.in_transaction():
         task_ = await Task.get_or_none(id=task_id, is_del=False).prefetch_related("suites", "project")
         if not task_:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="目标测试计划不存在或已被移除"
+                detail="目标测试计划不存在或已被移除",
             )
-        
-        env = await Environment.get_or_none(id=item.env_id, is_del=False)
-        if not env:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="所选运行环境不存在或已被移除"
-            )
-        
-        env_payload = await ExecutionService.build_env_payload(
-            env,
-            item.browser_type,
-            item.config,
+        await assert_user_project_member(user_info, task_.project_id)
+        assert_environment_for_project(
+            await Environment.get_or_none(id=item.env_id, is_del=False),
             task_.project_id,
-            item.ai_heal_enabled,
         )
-        env_payload = ExecutionService.with_trigger_source(env_payload, item.trigger_source)
-        env_payload["device_id"] = item.device_id
 
-        plan_record = await UiPlanExecution.create(
-            task=task_,
+        from app.core.ui_plan_runner import execute_ui_plan
+
+        devices_payload = [
+            {"device_id": d.device_id, "weight": d.weight, "concurrency": d.concurrency}
+            for d in (item.devices or [])
+        ]
+        return await execute_ui_plan(
+            task_,
+            env_id=item.env_id,
+            browser_type=item.browser_type,
+            headless=item.config,
             username=item.username,
-            env=env_payload,
             device_id=item.device_id,
-            project=task_.project,
-            is_del=False,
-            execution_log=[]
+            devices=devices_payload,
+            concurrency=item.concurrency,
+            ai_heal_enabled=item.ai_heal_enabled,
+            trigger_source=item.trigger_source,
         )
-        
-        task_count = 0
-        for suite in await task_.suites.filter(is_del=False).all():
-            suite_ = await Suite.get_or_none(id=suite.id, is_del=False).prefetch_related("steps")
-            if not suite_:
-                continue
-            
-            suite_record = await UiSuiteExecution.create(
-                suite=suite_,
-                username=item.username,
-                env=env_payload,
-                device_id=item.device_id,
-                plan_execution=plan_record,
-                is_del=False
-            )
-            
-            cases = []
-            for step in await suite_.steps.filter(is_del=False).order_by("sort"):
-                case_ = await step.cases
-                if case_.is_del:
-                    continue
-                
-                case_execution = await UiCaseExecution.create(
-                    case=case_,
-                    username=item.username,
-                    suite_execution=suite_record,
-                    env=env_payload,
-                    is_del=False
-                )
-                cases.append(ExecutionService.build_case_item(case_execution, case_, step))
-            
-            task_count += len(cases)
-            suite_record.case_count = len(cases)
-            await suite_record.save()
-
-            await ExecutionService.run_suite_setup_sql(suite_, item.env_id)
-            
-            suite_payload = ExecutionService.build_suite_payload(
-                suite_, suite_record, cases, plan_record
-            )
-            
-            await ExecutionService.dispatch_to_device(
-                env_payload, suite_payload, item.device_id
-            )
-        
-        plan_record.case_count = task_count
-        await plan_record.save()
-        
-        return {
-            "msg": "测试计划已加入执行队列，正在等待执行器处理",
-            "task_record_id": plan_record.id
-        }
 
 
 @router.post("/stop/{record_id}", summary="停止 UI 计划执行", status_code=status.HTTP_200_OK,
-               dependencies=[Depends(require_permissions(UI_CASE_EXECUTE))])
+               dependencies=[Depends(require_permissions(UI_TASK_EXECUTE))])
 async def stop_execution(record_id: int):
     """停止 UI 测试计划执行（通过 MQ 通知 Runner 真正中断）"""
     return await stop_plan_execution(record_id)

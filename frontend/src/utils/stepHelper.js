@@ -14,6 +14,26 @@ export function generateStepId() {
 }
 
 /**
+ * 将后端展开的片段步骤转为用例内可编辑的普通步骤（新 id、去掉片段溯源字段）
+ * @param {Array} steps
+ * @returns {Array}
+ */
+export function normalizeExpandedFragmentSteps(steps) {
+  if (!Array.isArray(steps)) return []
+  return steps.map((step) => {
+    const next = { ...step, id: generateStepId() }
+    delete next._from_fragment
+    if (next.method === 'condition_branch' && Array.isArray(next.branches)) {
+      next.branches = next.branches.map((branch) => ({
+        ...branch,
+        steps: normalizeExpandedFragmentSteps(branch.steps),
+      }))
+    }
+    return next
+  })
+}
+
+/**
  * 克隆步骤对象
  * @param {Object} step 步骤对象
  * @returns {Object} 克隆后的步骤
@@ -94,18 +114,18 @@ export function canNest(parentStep, childStep) {
 export function getStepTypeName(method) {
   const typeMap = {
     open_browser: '浏览器',
-    close_browser: '浏览器',
-    goto: '导航',
+    close: '浏览器',
+    open_url: '导航',
     go_back: '导航',
-    reload: '导航',
-    click: '元素操作',
-    fill: '元素操作',
-    clear: '元素操作',
-    assert_visible: '断言',
-    assert_text_contains: '断言',
-    if: '条件',
-    for: '循环',
-    while: '循环'
+    refresh: '导航',
+    fill_value: '元素操作',
+    click_ele: '元素操作',
+    clear_value: '元素操作',
+    kw_assert_visible: '断言',
+    kw_assert_text_contains: '断言',
+    kw_assert_element_text: '断言',
+    kw_assert_element_text_contains: '断言',
+    condition_branch: '条件',
   }
   return typeMap[method] || '其他'
 }
@@ -123,6 +143,8 @@ export function formatStepDisplay(step) {
   // 添加关键参数信息
   if (step.params?.url) {
     display += ` (${truncate(step.params.url, 30)})`
+  } else if (step.params?.locator) {
+    display += ` (${truncate(step.params.locator, 20)})`
   } else if (step.params?.selector) {
     display += ` (${truncate(step.params.selector, 20)})`
   }
@@ -155,11 +177,13 @@ export function validateStep(step) {
   
   // 根据方法类型验证必填参数
   const requiredParams = {
-    goto: ['url'],
-    click: ['selector'],
-    fill: ['selector', 'value'],
-    assert_visible: ['selector'],
-    assert_text_contains: ['text']
+    open_url: ['url'],
+    click_ele: ['locator'],
+    fill_value: ['locator'],
+    kw_assert_visible: ['locator'],
+    kw_assert_text_contains: ['text'],
+    kw_assert_element_text: ['locator', 'text'],
+    kw_assert_element_text_contains: ['locator', 'text'],
   }
   
   const required = requiredParams[step.method] || []

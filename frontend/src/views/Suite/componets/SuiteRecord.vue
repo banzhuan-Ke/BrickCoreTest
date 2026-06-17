@@ -9,13 +9,15 @@
         <div>暂无数据</div>
       </div>
     </template>
-    <el-table-column label="序号" type="index" width="90"/>
+    <el-table-column label="序号" type="index" :index="tableRowIndex" width="90"/>
     <el-table-column prop="suite_name" label="套件名称" min-width='100' show-overflow-tooltip/>
     <el-table-column prop="status" label="执行状态" min-width='100'>
       <template #default="scope">
-        <el-tag v-if="scope.row.status === '执行完成'" type="success">运行完成</el-tag>
-        <el-tag v-if="scope.row.status === '等待执行'" type="info">等待运行</el-tag>
-        <el-tag v-if="scope.row.status === '运行中'" type="primary">运行中</el-tag>
+        <el-tag v-if="scope.row.status === '执行完成'" type="success">执行完成</el-tag>
+        <el-tag v-else-if="scope.row.status === '等待执行'" type="info">等待执行</el-tag>
+        <el-tag v-else-if="scope.row.status === '执行中'" type="primary">执行中</el-tag>
+        <el-tag v-else-if="scope.row.status === '已停止'" type="warning">已停止</el-tag>
+        <el-tag v-else type="info">{{ scope.row.status }}</el-tag>
       </template>
     </el-table-column>
     <el-table-column label="浏览器" prop="browser">
@@ -36,7 +38,7 @@
     <el-table-column prop="duration" label="执行耗时">
       <template #default="scope">
         <!-- 保留两位小数-->
-        {{ scope.row.duration.toFixed(2) }}秒
+        {{ (scope.row.duration ?? 0).toFixed(2) }}秒
       </template>
     </el-table-column>
     <el-table-column label="通过率" min-width='100'>
@@ -56,14 +58,32 @@
         {{ dateTools.rTime(scope.row.start_time) }}
       </template>
     </el-table-column>
-    <el-table-column label="操作" width="200px">
+    <el-table-column label="操作" width="160" fixed="right">
       <template #default="scope">
-        <el-button @click="router.push({name: 'suiteReport', params: {id: scope.row.id}})" type="success" plain
-                   icon="View">报告
-        </el-button>
-        <el-tooltip class="box-item" effect="dark" content="将删除套件、用例运行记录" placement="bottom">
-          <el-button @click="clickDelete(scope.row.id)" plain type="danger" icon="Delete">删除</el-button>
-        </el-tooltip>
+        <div class="op-btns">
+          <el-button
+            v-if="isSuiteStoppable(scope.row.status)"
+            type="warning"
+            size="small"
+            title="停止执行"
+            @click="clickStop(scope.row.id)"
+          >
+            <el-icon><VideoPause /></el-icon>
+          </el-button>
+          <el-button
+            type="success"
+            size="small"
+            title="查看报告"
+            @click="router.push({name: 'suiteReport', params: {id: scope.row.id}})"
+          >
+            <el-icon><View /></el-icon>
+          </el-button>
+          <el-tooltip effect="dark" content="仅删除记录，不会停止正在执行的用例" placement="top">
+            <el-button type="danger" size="small" title="删除记录" @click="clickDelete(scope.row.id)">
+              <el-icon><Delete /></el-icon>
+            </el-button>
+          </el-tooltip>
+        </div>
       </template>
     </el-table-column>
   </el-table>
@@ -86,6 +106,7 @@ import http from '@/api/index'
 import {useRouter} from 'vue-router'
 import {ElMessageBox, ElMessage, ElNotification} from 'element-plus'
 import dateTools from "@/tools/dateTools.js"
+import { makeTableRowIndex } from '@/utils/tableIndex'
 
 // 定义props
 const props = defineProps({
@@ -106,6 +127,8 @@ const pageConfig = reactive({
   total: 0
 })
 
+const tableRowIndex = makeTableRowIndex(pageConfig)
+
 // 获取运行记录数据
 const getRunRecordList = async () => {
   pageConfig.suite_id = props.suite_id
@@ -121,6 +144,23 @@ watch(() => props.suite_id, (newVal, oldVal) => {
   pageConfig.suite_id = newVal
   getRunRecordList()
 })
+
+const isSuiteStoppable = (status) => ['执行中', '等待执行'].includes(status)
+
+const clickStop = async (record_id) => {
+  try {
+    await ElMessageBox.confirm(
+      '确定停止当前套件执行吗？执行器将收到中断信号。删除记录不会停止执行，请使用停止。',
+      '停止执行',
+      { type: 'warning' }
+    )
+    await http.runnerApi.stopSuite(record_id)
+    ElMessage.success('停止信号已发送')
+    await getRunRecordList()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.response?.data?.detail || '停止失败')
+  }
+}
 
 // 删除套件运行记录
 const clickDelete = async (record_id) => {
@@ -161,4 +201,11 @@ const clickDelete = async (record_id) => {
 </script>
 
 <style scoped>
+.op-btns {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
 </style>

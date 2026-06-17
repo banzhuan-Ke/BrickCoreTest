@@ -8,6 +8,7 @@ from .mocks import router as mock_router
 from .auth_config import router as auth_config_router
 from .data_factory import router as data_factory_router
 from .header_templates import router as header_templates_router
+from .ws import router as ws_router
 
 # 合并所有路由
 router = APIRouter(prefix="/api-module")
@@ -44,6 +45,9 @@ for route in data_factory_router.routes:
     router.routes.append(route)
 
 for route in header_templates_router.routes:
+    router.routes.append(route)
+
+for route in ws_router.routes:
     router.routes.append(route)
 
 __all__ = ["router"]

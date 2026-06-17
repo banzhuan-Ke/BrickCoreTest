@@ -349,6 +349,7 @@ class AiRequirementGenerateJob(models.Model):
     error = fields.TextField(null=True, description="失败原因")
     tokens_used = fields.IntField(default=0, description="Token消耗")
     duration_ms = fields.IntField(default=0, description="耗时ms")
+    is_del = fields.BooleanField(default=False, description="软删除")
     create_by = fields.CharField(max_length=50, default="", description="创建人")
     create_time = fields.DatetimeField(auto_now_add=True)
     update_time = fields.DatetimeField(auto_now=True)
@@ -635,6 +636,71 @@ class AiQaEvalResult(models.Model):
     class Meta:
         table = "ai_qa_eval_result"
         table_description = "问答评测结果"
+
+
+class BrowserLabCase(models.Model):
+    """智能浏览器用例库（可重复执行的自然语言场景）"""
+    id = fields.IntField(pk=True)
+    project = fields.ForeignKeyField(
+        "models.Project",
+        related_name="browser_lab_cases",
+        description="所属项目",
+    )
+    name = fields.CharField(max_length=200, description="用例名称")
+    description = fields.TextField(null=True, description="用例说明")
+    task_text = fields.TextField(description="自然语言任务描述")
+    start_url = fields.CharField(max_length=500, description="起始 URL")
+    config_json = fields.JSONField(default=dict, description="默认运行配置")
+    tags = fields.CharField(max_length=200, default="", description="标签，逗号分隔")
+    created_by = fields.CharField(max_length=50, default="", description="创建人")
+    update_by = fields.CharField(max_length=50, default="", description="更新人")
+    run_count = fields.IntField(default=0, description="累计执行次数")
+    last_run_at = fields.DatetimeField(null=True, description="最近执行时间")
+    last_status = fields.CharField(max_length=20, null=True, description="最近执行状态")
+    is_del = fields.BooleanField(default=False, description="软删除")
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "browser_lab_case"
+        table_description = "智能浏览器用例"
+
+
+class BrowserLabTask(models.Model):
+    """智能浏览器（browser-use）演示/探索任务"""
+    id = fields.IntField(pk=True)
+    project = fields.ForeignKeyField(
+        "models.Project",
+        related_name="browser_lab_tasks",
+        description="所属项目",
+    )
+    case_id = fields.IntField(null=True, description="来源用例ID")
+    case_name = fields.CharField(max_length=200, null=True, description="用例名称快照")
+    source_task_id = fields.IntField(null=True, description="重跑来源任务ID")
+    created_by = fields.CharField(max_length=50, default="", description="创建人")
+    task_text = fields.TextField(description="自然语言任务描述")
+    start_url = fields.CharField(max_length=500, description="起始 URL")
+    status = fields.CharField(
+        max_length=20,
+        default="pending",
+        description="pending|running|done|failed|stopped",
+    )
+    engine = fields.CharField(max_length=32, default="browser_use", description="执行引擎")
+    config_json = fields.JSONField(default=dict, description="运行配置")
+    step_log = fields.JSONField(default=list, description="步骤事件日志")
+    result_summary = fields.TextField(null=True, description="最终结果摘要")
+    tokens_used = fields.IntField(default=0, description="Token 消耗（估算）")
+    steps_count = fields.IntField(default=0, description="实际步数")
+    gif_path = fields.CharField(max_length=500, null=True, description="回放 GIF 相对路径")
+    error_message = fields.TextField(null=True, description="失败原因")
+    ai_config_id = fields.IntField(null=True, description="使用的 AI 配置")
+    started_at = fields.DatetimeField(null=True)
+    finished_at = fields.DatetimeField(null=True)
+    create_time = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "browser_lab_task"
+        table_description = "智能浏览器任务"
 
 
 class AssistantSession(models.Model):

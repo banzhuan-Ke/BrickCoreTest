@@ -31,7 +31,8 @@ class GlobalHeaderPolicy(BaseModel):
 class ApiDefinitionBase(BaseModel):
     """接口定义基础模型"""
     name: str = Field(..., max_length=100, description="接口名称")
-    method: str = Field(..., description="请求方法 GET/POST/PUT/DELETE/PATCH")
+    protocol: str = Field(default="http", description="协议 http/websocket")
+    method: str = Field(..., description="请求方法 GET/POST/PUT/DELETE/PATCH/WS")
     path: str = Field(..., max_length=500, description="接口路径")
     description: Optional[str] = Field(None, description="接口描述")
     base_url: Optional[str] = Field(None, description="基础URL")
@@ -41,12 +42,13 @@ class ApiDefinitionBase(BaseModel):
     body: Optional[Any] = Field(default=None, description="请求体")
     body_type: str = Field(default="json", description="请求体类型 json/form/xml/raw")
     body_fields: List[Dict[str, Any]] = Field(default=[], description="form-data 字段")
+    ws_config: Dict[str, Any] = Field(default_factory=dict, description="WebSocket 默认配置")
     response_schema: Optional[Dict[str, Any]] = Field(default=None, description="响应结构定义")
 
-    @field_validator("global_header_policy", "headers", "params", "body_fields", mode="before")
+    @field_validator("global_header_policy", "headers", "params", "body_fields", "ws_config", mode="before")
     @classmethod
     def coerce_json_list_or_dict(cls, v, info):
-        if info.field_name == "global_header_policy":
+        if info.field_name in ("global_header_policy", "ws_config"):
             return v if isinstance(v, dict) else {}
         return v if isinstance(v, list) else []
 
@@ -204,6 +206,28 @@ class ApiDebugResponse(BaseModel):
     request: ApiDebugRequest = Field(..., description="请求信息")
 
 
+class WsDebugRequest(BaseModel):
+    """WebSocket 调试请求"""
+    url: str = Field(..., description="WebSocket URL 或路径")
+    headers: List[Dict[str, Any]] = Field(default=[], description="连接 Headers")
+    steps: List[Dict[str, Any]] = Field(default=[], description="步骤：send/receive/wait/close")
+    assertions: List[Dict[str, Any]] = Field(default=[], description="断言规则")
+    timeout: int = Field(default=30, description="超时(秒)")
+    env_id: Optional[int] = Field(None, description="环境ID")
+    project_id: Optional[int] = Field(None, description="项目ID")
+    variables: Optional[Dict[str, Any]] = Field(default={}, description="变量")
+
+
+class WsDebugResponse(BaseModel):
+    """WebSocket 调试响应"""
+    success: bool = Field(..., description="是否成功")
+    messages: List[Dict[str, Any]] = Field(default=[], description="消息流")
+    assertions: List[Dict[str, Any]] = Field(default=[], description="断言结果")
+    response_body: Dict[str, Any] = Field(default={}, description="聚合响应体")
+    elapsed_ms: float = Field(default=0, description="耗时(ms)")
+    error: Optional[str] = Field(None, description="错误信息")
+
+
 # ============ 分页相关 ============
 
 class ApiListResponse(BaseModel):
@@ -218,7 +242,7 @@ class ApiListResponse(BaseModel):
 
 class ApiAssertion(BaseModel):
     """断言规则"""
-    type: str = Field(..., description="断言类型: status_code/json_path/header/contains/not_contains")
+    type: str = Field(..., description="断言类型: status_code/json_path/header/contains/ws_contains/ws_json_path/ws_message_count")
     target: Optional[str] = Field(None, description="目标字段/路径")
     operator: str = Field(..., description="操作符: equals/not_equals/contains/gt/lt")
     expected: Any = Field(..., description="期望值")
@@ -244,6 +268,7 @@ class ApiTestCaseBase(BaseModel):
     request_body: Optional[Any] = Field(default=None, description="请求体覆盖")
     request_body_type: str = Field(default="json", description="请求体类型")
     request_body_fields: List[Dict[str, Any]] = Field(default=[], description="form-data 字段覆盖")
+    ws_steps: List[Dict[str, Any]] = Field(default=[], description="WebSocket 步骤序列")
     assertions: List[ApiAssertion] = Field(default=[], description="断言规则")
     assertion_groups: List[Dict[str, Any]] = Field(default=[], description="条件分支断言组")
     extractors: List[ApiExtractor] = Field(default=[], description="变量提取规则")
@@ -268,6 +293,7 @@ class ApiTestCaseBase(BaseModel):
     @field_validator(
         "request_params",
         "request_body_fields",
+        "ws_steps",
         "assertions",
         "assertion_groups",
         "extractors",
@@ -301,6 +327,7 @@ class ApiTestCaseOut(ApiTestCaseBase):
     api_name: Optional[str] = None
     api_method: Optional[str] = None
     api_path: Optional[str] = None
+    api_protocol: Optional[str] = Field(None, description="关联接口协议")
     project_id: int
     catalog_id: Optional[int] = None
     catalog_name: Optional[str] = None

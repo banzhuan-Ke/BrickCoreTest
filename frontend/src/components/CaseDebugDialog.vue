@@ -2,7 +2,7 @@
   <el-dialog
     v-model="visibleProxy"
     :title="`调试至第 ${throughIndex + 1} 步`"
-    width="560px"
+    width="780px"
     destroy-on-close
     @open="onOpen"
     @closed="resetState"

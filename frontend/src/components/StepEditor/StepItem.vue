@@ -1,13 +1,14 @@
 <template>
   <div class="step-item-wrapper" :style="{marginLeft: depth > 0 ? '20px' : '0'}">
-    <div class="step" :class="{'is-nested': depth > 0, 'is-condition': step.method === 'condition_branch'}">
+    <div class="step" :class="{'is-nested': depth > 0, 'is-condition': step.method === 'condition_branch', 'is-fragment': step.method === 'fragment_ref'}">
       <div class="line1">
         <!--步骤序号-->
         <span class="step-index">步骤 {{ index + 1 }}</span>
         <!--图标-->
-        <el-icon class="header-icon" size="18px" :color="step.method === 'condition_branch' ? '#e6a23c' : 'var(--el-color-primary)'">
-          <Operation v-if="step.method !== 'condition_branch'" />
-          <Share v-else />
+        <el-icon class="header-icon" size="18px" :color="stepIconColor">
+          <Collection v-if="step.method === 'fragment_ref'" />
+          <Share v-else-if="step.method === 'condition_branch'" />
+          <Operation v-else />
         </el-icon>
         <!--名称-->
         <div class="name">
@@ -17,6 +18,11 @@
         <!--标签显示-->
         <div class="tags" v-if="step.method === 'condition_branch'">
           <el-tag size="small" type="warning">{{ step.branches?.length || 0 }} 个分支</el-tag>
+        </div>
+        <div class="tags" v-if="step.method === 'fragment_ref'">
+          <el-tag size="small" type="success">片段引用</el-tag>
+          <el-tag v-if="step.params?.fragment_version" size="small" type="info">v{{ step.params.fragment_version }}</el-tag>
+          <el-tag v-if="fragmentOutdated" size="small" type="warning">有新版本</el-tag>
         </div>
         <!--按钮-->
         <div class="btn">
@@ -28,11 +34,30 @@
             :icon="VideoPlay"
             @click="handleDebug"
           >调试到此步</el-button>
-          <el-button plain size="small" type="primary" :icon="Edit" @click='handleEdit'>编辑</el-button>
+          <el-button plain size="small" type="primary" :icon="Edit" @click='handleEdit'>
+            {{ step.method === 'fragment_ref' ? '配置' : '编辑' }}
+          </el-button>
           <el-button plain size="small" type="danger" :icon="Delete" @click='handleDelete'>删除</el-button>
         </div>
       </div>
       
+      <!-- 片段引用展示 -->
+      <div v-if="step.method === 'fragment_ref'" class="fragment-ref-box">
+        <p>引用片段：<strong>{{ step.params?.fragment_name || step.desc }}</strong></p>
+        <p v-if="step.params?.fragment_id" class="muted">ID: {{ step.params.fragment_id }} · 锁定版本 v{{ step.params?.fragment_version || '?' }}</p>
+        <div v-if="fragmentVarEntries.length" class="fragment-vars">
+          <span class="muted">入参：</span>
+          <el-tag v-for="item in fragmentVarEntries" :key="item.key" size="small" type="info">
+            {{ item.key }}={{ item.value || '（空）' }}
+          </el-tag>
+        </div>
+        <p class="hint">执行时将自动展开为片段内步骤；修改片段后引用处自动生效（版本号仅作提示）。</p>
+        <div class="fragment-actions">
+          <el-button v-if="fragmentOutdated" link type="warning" size="small" @click="syncFragmentVersion">同步至最新版本号</el-button>
+          <el-button link type="primary" size="small" @click="handleExpandFragment">展开为普通步骤</el-button>
+        </div>
+      </div>
+
       <!-- 条件分支展示 -->
       <div v-if="step.method === 'condition_branch'" class="branches-container">
         <div 
@@ -85,8 +110,8 @@
         </div>
       </div>
       
-      <!-- 步骤参数预览（非条件分支） -->
-      <div class="line2" v-if="step.method !== 'condition_branch' && hasParams">
+      <!-- 步骤参数预览（非条件分支、非片段引用） -->
+      <div class="line2" v-if="step.method !== 'condition_branch' && step.method !== 'fragment_ref' && hasParams">
         <p>{{ getParamsDisplay(step.params) }}</p>
       </div>
     </div>
@@ -94,8 +119,10 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
-import { Operation, Share, ArrowDown, ArrowRight, Edit, Delete, Plus, VideoPlay } from '@element-plus/icons-vue'
+import { ref, computed, onMounted, watch, inject } from 'vue'
+import { Operation, Share, ArrowDown, ArrowRight, Edit, Delete, Plus, VideoPlay, Collection } from '@element-plus/icons-vue'
+import { uiFragmentApi } from '@/api/modules/ui'
+import { ProjectStore } from '@/stores/module/ProjectStore'
 import BranchStepList from './BranchStepList.vue'
 
 const props = defineProps({
@@ -117,7 +144,63 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug'])
+const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug', 'expand-fragment'])
+
+const fragmentRefEdit = inject('fragmentRefEdit', null)
+const expandFragmentStep = inject('expandFragmentStep', null)
+const proStore = ProjectStore()
+const latestFragmentVersion = ref(null)
+const fragmentOutdated = ref(false)
+
+const fragmentVarEntries = computed(() => {
+  const vars = props.step.params?.variables
+  if (!vars || typeof vars !== 'object') return []
+  return Object.entries(vars).map(([key, value]) => ({ key, value: value ?? '' }))
+})
+
+const stepIconColor = computed(() => {
+  if (props.step.method === 'fragment_ref') return '#67c23a'
+  if (props.step.method === 'condition_branch') return '#e6a23c'
+  return 'var(--el-color-primary)'
+})
+
+async function checkFragmentVersion() {
+  if (props.step.method !== 'fragment_ref') return
+  const fid = props.step.params?.fragment_id
+  const projectId = proStore.projectInfo?.id
+  if (!fid || !projectId) return
+  try {
+    const res = await uiFragmentApi.getDetail(fid, projectId)
+    latestFragmentVersion.value = res.data?.data?.version
+    const pinned = props.step.params?.fragment_version
+    fragmentOutdated.value = pinned != null && latestFragmentVersion.value != null && pinned < latestFragmentVersion.value
+  } catch {
+    fragmentOutdated.value = false
+  }
+}
+
+function syncFragmentVersion() {
+  if (!latestFragmentVersion.value) return
+  const updated = {
+    ...props.step,
+    params: {
+      ...props.step.params,
+      fragment_version: latestFragmentVersion.value,
+    },
+  }
+  emit('update:step', updated)
+  fragmentOutdated.value = false
+}
+
+async function handleExpandFragment() {
+  if (!expandFragmentStep) return
+  await expandFragmentStep(props.step, (expanded) => {
+    emit('expand-fragment', { index: props.index, expanded })
+  })
+}
+
+onMounted(checkFragmentVersion)
+watch(() => props.step.params?.fragment_id, checkFragmentVersion)
 
 // 当前路径
 const currentPath = computed(() => [...props.parentPath, props.index])
@@ -157,6 +240,10 @@ function updateBranch(bIndex, newBranch) {
 
 // 编辑
 function handleEdit() {
+  if (props.step.method === 'fragment_ref' && fragmentRefEdit) {
+    fragmentRefEdit(props.step, (updated) => emit('update:step', updated))
+    return
+  }
   emit('edit')
 }
 
@@ -408,5 +495,48 @@ function getParamsDisplay(params) {
   padding: 8px 12px;
   text-align: center;
   border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.step.is-fragment {
+  border-color: var(--el-color-success-light-5);
+  background: var(--el-color-success-light-9);
+}
+
+.fragment-ref-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px dashed var(--el-color-success-light-5);
+  font-size: 13px;
+
+  p {
+    margin: 0 0 6px;
+  }
+
+  .muted {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+  }
+
+  .hint {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+  }
+
+  .fragment-vars {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+
+  .fragment-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
 }
 </style>

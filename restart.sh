@@ -1,12 +1,14 @@
 #!/bin/bash
 
 # ============================================================
-# FastAPI UI 测试平台 - 快速重启脚本
+# BrickCore - 快速重启脚本
 # 适用：服务器上拉取最新代码后快速更新前后端
 # 用法：./restart.sh [backend|frontend|nginx|all]
+# 环境变量：GIT_BRANCH=master 可覆盖自动检测的远程分支
 # ============================================================
 
-cd /opt/autotest || exit 1
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
 
 MODE="${1:-all}"
 
@@ -26,17 +28,34 @@ echo "  开始更新并重启服务"
 echo "=========================================="
 
 # 1. 拉取最新代码（nginx 模式可跳过）
-# 部署机与远程不一致时（如 force-push），用 fetch + reset 对齐 origin/main
+# 部署机与远程不一致时（如 force-push），用 fetch + reset 对齐远程默认分支
 if [ "$MODE" != "nginx" ]; then
     echo "[1/3] 拉取最新代码..."
     git checkout -- deploy.sh restart.sh 2>/dev/null
     OLD_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "")
-    if ! git fetch origin main; then
-        echo "[ERROR] git fetch 失败，已中止，未重启服务"
+
+    GIT_BRANCH="${GIT_BRANCH:-}"
+    if [ -z "$GIT_BRANCH" ]; then
+        GIT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+    fi
+    if [ -z "$GIT_BRANCH" ]; then
+        if git ls-remote --exit-code --heads origin master >/dev/null 2>&1; then
+            GIT_BRANCH=master
+        elif git ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
+            GIT_BRANCH=main
+        else
+            GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        fi
+    fi
+    echo "      远程分支: $GIT_BRANCH"
+
+    if ! git fetch origin "$GIT_BRANCH"; then
+        echo "[ERROR] git fetch origin $GIT_BRANCH 失败，已中止，未重启服务"
+        echo "       可尝试: git fetch origin && git branch -r"
         exit 1
     fi
-    if ! git reset --hard origin/main; then
-        echo "[ERROR] 无法同步到 origin/main，已中止，未重启服务"
+    if ! git reset --hard "origin/$GIT_BRANCH"; then
+        echo "[ERROR] 无法同步到 origin/$GIT_BRANCH，已中止，未重启服务"
         exit 1
     fi
     NEW_HEAD=$(git rev-parse HEAD)
@@ -97,6 +116,12 @@ fi
 if [ "$MODE" == "frontend" ] || [ "$MODE" == "nginx" ] || [ "$MODE" == "all" ]; then
     echo "[3/3] 重启 Nginx..."
     docker compose restart nginx
+fi
+
+# 5. 清理悬空镜像（backend 重建后释放磁盘，避免 <none> 镜像堆积）
+if [ "$MODE" == "backend" ] || [ "$MODE" == "all" ]; then
+    echo "清理悬空 Docker 镜像..."
+    docker image prune -f
 fi
 
 echo ""

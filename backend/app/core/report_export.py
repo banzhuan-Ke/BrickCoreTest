@@ -495,6 +495,9 @@ def parse_step_to_log_html(step: Any) -> str:
         time_str = step.get('time') or step.get('timestamp') or datetime.now().strftime('%H:%M:%S')
         
         message = step.get('message') or step.get('msg') or step.get('content') or step.get('keyword', '')
+        frag = step.get('_from_fragment')
+        if isinstance(frag, dict) and frag.get('name'):
+            message = f'[片段·{frag["name"]}] {message}'
         if not message and 'name' in step:
             message = step['name']
         if not message:

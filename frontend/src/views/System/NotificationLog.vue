@@ -13,6 +13,7 @@
           <el-option label="邮件" value="email"/>
           <el-option label="钉钉" value="dingtalk"/>
           <el-option label="企微" value="wechat"/>
+          <el-option label="飞书" value="feishu"/>
         </el-select>
         <el-select v-model="filter.notify_type" placeholder="通知类型" clearable style="width: 120px;">
           <el-option label="告警" value="alert"/>
@@ -49,6 +50,7 @@
             <el-tag v-if="scope.row.channel_type === 'email'" type="primary">邮件</el-tag>
             <el-tag v-else-if="scope.row.channel_type === 'dingtalk'" type="warning">钉钉</el-tag>
             <el-tag v-else-if="scope.row.channel_type === 'wechat'" type="success">企微</el-tag>
+            <el-tag v-else-if="scope.row.channel_type === 'feishu'" type="info">飞书</el-tag>
             <span v-else>{{ scope.row.channel_type }}</span>
           </template>
         </el-table-column>

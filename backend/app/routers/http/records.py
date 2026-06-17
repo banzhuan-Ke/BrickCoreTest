@@ -57,6 +57,8 @@ class ApiRunRecordUnifiedOut(BaseModel):
     id: int
     record_type: str          # suite / plan
     name: str                 # 套件名/计划名
+    suite_id: Optional[int] = None
+    plan_id: Optional[int] = None
     project_id: int
     status: str
     trigger_type: str
@@ -200,6 +202,8 @@ async def get_all_run_records(
             id=record.id,
             record_type="suite",
             name=name,
+            suite_id=record.suite_id,
+            plan_id=None,
             project_id=record.project_id,
             status=record.status,
             trigger_type=record.trigger_type,
@@ -229,6 +233,8 @@ async def get_all_run_records(
             id=record.id,
             record_type="plan",
             name=name,
+            suite_id=None,
+            plan_id=record.plan_id,
             project_id=record.project_id,
             status=record.status,
             trigger_type=record.trigger_type,

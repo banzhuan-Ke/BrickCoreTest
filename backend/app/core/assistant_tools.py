@@ -496,6 +496,57 @@ READONLY_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "list_data_factory_datasources",
+            "description": "列出数据工厂数据源（只读，不含密码明文）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "environment_id": {"type": "integer", "description": "按环境 ID 筛选"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_sql_templates",
+            "description": "列出数据工厂 SQL 模板（setup/teardown 等，只读）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "environment_id": {"type": "integer", "description": "按环境 ID 筛选"},
+                    "template_type": {"type": "string", "description": "setup / teardown / 留空表示全部"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_sql_template",
+            "description": "获取单个 SQL 模板详情（只读）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "template_id": {"type": "integer", "description": "SQL 模板 ID"},
+                },
+                "required": ["template_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_api_cron_jobs",
             "description": "列出项目接口定时任务",
             "parameters": {

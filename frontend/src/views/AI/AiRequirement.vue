@@ -1,34 +1,79 @@
 <template>
-  <PageCard>
-    <template #title>
+  <div :class="{ 'requirement-embed-host': embedMode }">
+  <PageCard :class="{ 'embed-hidden-card': embedMode }">
+    <template v-if="!embedMode" #title>
       <div style="font-size: 18px; font-weight: bold;">📄 需求 → 功能用例</div>
     </template>
     <template #main>
       <!-- 工具栏 -->
-      <div class="toolbar">
+      <div v-if="!embedMode" class="toolbar">
         <el-button type="primary" @click="openUpload" icon="Upload">上传需求文档</el-button>
         <el-button @click="loadList" icon="Refresh">刷新</el-button>
+        <TableColumnPicker
+          :items="reqListPickerItems"
+          @toggle="setReqListColumnVisible"
+          @reorder="setReqListPickerOrder"
+          @reset="resetReqListColumns"
+        />
       </div>
 
       <!-- 需求列表 -->
-      <el-table :data="reqList" v-loading="listLoading" stripe border style="margin-top: 12px;">
-        <el-table-column prop="id" label="ID" width="70" />
-        <el-table-column prop="name" label="需求名称" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="source_type" label="类型" width="80">
-          <template #default="{ row }">
-            <el-tag size="small">{{ row.source_type?.toUpperCase() }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="image_count" label="图片" width="70" align="center" />
-        <el-table-column prop="case_count" label="用例数" width="80" align="center" />
-        <el-table-column prop="parse_status" label="状态" width="90">
-          <template #default="{ row }">
-            <el-tag :type="row.parse_status === 'parsed' ? 'success' : 'info'" size="small">
-              {{ statusLabel(row.parse_status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="create_time" label="创建时间" width="170" />
+      <el-table v-if="!embedMode" :key="reqListTableKey" :data="reqList" v-loading="listLoading" stripe border style="margin-top: 12px;">
+        <template v-for="col in reqListActiveColumns" :key="col.key">
+          <el-table-column
+            v-if="col.key === 'id'"
+            prop="id"
+            label="ID"
+            :width="col.width"
+          />
+          <el-table-column
+            v-else-if="col.key === 'name'"
+            prop="name"
+            label="需求名称"
+            :min-width="col.minWidth || 160"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            v-else-if="col.key === 'source_type'"
+            label="类型"
+            :width="col.width"
+          >
+            <template #default="{ row }">
+              <el-tag size="small">{{ row.source_type?.toUpperCase() }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            v-else-if="col.key === 'image_count'"
+            prop="image_count"
+            label="图片"
+            :width="col.width"
+            align="center"
+          />
+          <el-table-column
+            v-else-if="col.key === 'case_count'"
+            prop="case_count"
+            label="用例数"
+            :width="col.width"
+            align="center"
+          />
+          <el-table-column
+            v-else-if="col.key === 'parse_status'"
+            label="状态"
+            :width="col.width"
+          >
+            <template #default="{ row }">
+              <el-tag :type="row.parse_status === 'parsed' ? 'success' : 'info'" size="small">
+                {{ statusLabel(row.parse_status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            v-else-if="col.key === 'create_time'"
+            prop="create_time"
+            label="创建时间"
+            :width="col.width"
+          />
+        </template>
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">用例</el-button>
@@ -80,8 +125,14 @@
       </el-dialog>
 
       <!-- 详情 / 用例抽屉 -->
-      <el-drawer v-model="detailVisible" size="85%" destroy-on-close>
-        <template #header>
+      <TestingEmbedShell
+        :inline="embedMode"
+        v-model="detailVisible"
+        :drawer-size="embedMode ? '100%' : '85%'"
+        :with-header="!embedMode"
+        :destroy-on-close="!embedMode"
+      >
+        <template v-if="!embedMode" #header>
           <span class="dialog-title-with-tip drawer-title-with-tip">
             {{ currentReq?.name || '需求用例' }}
             <el-tooltip
@@ -96,7 +147,7 @@
           </span>
         </template>
         <div v-if="currentReq" class="detail-panel">
-          <el-descriptions :column="4" border size="small" class="req-meta">
+          <el-descriptions v-if="showEmbedSection('meta')" :column="4" border size="small" class="req-meta">
             <el-descriptions-item label="文档">{{ currentReq.file_name || '-' }}</el-descriptions-item>
             <el-descriptions-item label="字数">{{ currentReq.text_length || 0 }}</el-descriptions-item>
             <el-descriptions-item label="图片">{{ currentReq.image_count || 0 }} 张</el-descriptions-item>
@@ -104,7 +155,7 @@
           </el-descriptions>
 
           <el-alert
-            v-if="currentReq.image_count > 0"
+            v-if="showEmbedSection('meta') && currentReq.image_count > 0"
             type="info"
             :closable="false"
             show-icon
@@ -112,8 +163,39 @@
             :title="`文档含 ${currentReq.image_count} 张图片：读图建议选 VL/Vision 模型（如 qwen-vl-max）；下拉列出全部已启用配置，可按名称自由切换`"
           />
 
+          <!-- 导出与集成 -->
+          <el-card v-if="showEmbedSection('config')" shadow="never" class="export-profile-card">
+            <template #header>
+              <div class="report-header">
+                <b>导出与集成</b>
+                <el-tag size="small" type="info">{{ exportProfileLabel }}</el-tag>
+              </div>
+            </template>
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 12px;"
+              title="禅道模式需填写产品/模块/研发需求后再生成或导出；通用模式可直接生成，导出通用 XLSX（无禅道专属列）。命名槽位告警仅检查标题模板中实际用到的变量。"
+            />
+            <el-form :inline="true" class="export-defaults-form">
+              <el-form-item label="导出目标">
+                <el-radio-group v-model="exportProfile">
+                  <el-radio
+                    v-for="opt in exportProfileOptions"
+                    :key="opt.value"
+                    :label="opt.value"
+                  >{{ opt.label }}</el-radio>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item>
+                <el-button :loading="savingExportProfile" @click="saveExportProfile">保存到项目</el-button>
+              </el-form-item>
+            </el-form>
+          </el-card>
+
           <!-- 禅道导入配置（无 API，手工绑定） -->
-          <el-card shadow="never" class="zentao-card">
+          <el-card v-if="showEmbedSection('config') && exportProfile === 'zentao'" shadow="never" class="zentao-card">
             <template #header>
               <div class="report-header">
                 <b>禅道导入配置</b>
@@ -126,7 +208,7 @@
               :closable="false"
               show-icon
               style="margin-bottom: 12px;"
-              title="所属产品、所属模块、相关研发需求需在禅道后台查准后填写，保存到项目或本需求；AI 只生成功能模块与用例内容。适用阶段：优先级 1→冒烟测试阶段，2~4→系统测试阶段（自动）。"
+              title="所属产品、所属模块、相关研发需求需在禅道后台查准后填写；研发需求建议填「编号:名称」，编号仅用于标题前缀（可选）。适用阶段：优先级 1→冒烟测试阶段，2~4→系统测试阶段（自动）。"
             />
             <div class="zentao-section-title">项目级（当前项目，所有需求默认继承）</div>
             <el-form :inline="true" :model="projectZentao" class="export-defaults-form">
@@ -173,7 +255,7 @@
           </el-card>
 
           <!-- 用例命名规范（项目级模板，管理员可改） -->
-          <el-card shadow="never" class="naming-card">
+          <el-card v-if="showEmbedSection('config')" shadow="never" class="naming-card">
             <template #header>
               <div class="report-header">
                 <b>用例命名规范</b>
@@ -188,31 +270,34 @@
               :closable="false"
               show-icon
               style="margin-bottom: 12px;"
-              title="标题由平台按 Jinja 模板组装：模型输出 main_module / sub_module / feature_point / case_description，最终写入禅道「用例标题」一列（含描述）。"
-            />
+            >
+              <template #title>
+                <span>
+                  标题由平台按 Jinja 模板组装：AI 输出语义字段后拼成最终标题。
+                  内置模板：禅道·含编号 / 禅道·无编号 / 通用·简洁。
+                  <el-button link type="primary" size="small" @click="namingSlotsHelpVisible = true">查看模板变量说明</el-button>
+                </span>
+              </template>
+            </el-alert>
             <div class="zentao-section-title">本需求命名设置</div>
             <el-form :inline="true" class="gen-inline-form">
-              <el-form-item label="需求类型">
-                <el-input
-                  v-model="reqNamingMeta.requirement_type"
-                  placeholder="default"
-                  style="width: 120px;"
-                />
-              </el-form-item>
               <el-form-item label="指定模板">
                 <el-select
                   v-model="reqNamingMeta.naming_template_id"
                   clearable
-                  placeholder="按类型自动匹配"
-                  style="width: 200px;"
+                  placeholder="按导出目标自动匹配"
+                  style="width: 240px;"
                 >
                   <el-option
                     v-for="t in namingConfig.templates"
                     :key="t.id"
-                    :label="t.name"
+                    :label="formatNamingTemplateOption(t)"
                     :value="t.id"
                   />
                 </el-select>
+              </el-form-item>
+              <el-form-item v-if="suggestedTemplateId" label="推荐">
+                <el-tag size="small" type="success">{{ suggestedTemplateName }}</el-tag>
               </el-form-item>
               <el-form-item>
                 <el-button :loading="savingReqNaming" @click="saveReqNamingMeta">保存本需求</el-button>
@@ -225,7 +310,7 @@
             </el-form>
             <div v-if="canEditNaming" class="naming-admin-block">
               <div class="zentao-section-title">项目级模板（管理员）</div>
-              <el-form label-width="88px" class="naming-template-form">
+              <el-form label-width="108px" label-position="right" class="naming-template-form">
                 <el-form-item label="当前模板">
                   <el-select v-model="namingEditTemplateId" style="width: 220px;" @change="onNamingTemplateSelect">
                     <el-option
@@ -253,7 +338,13 @@
                     style="width: 420px;"
                   />
                 </el-form-item>
-                <el-form-item label="标题模板">
+                <el-form-item>
+                  <template #label>
+                    <span class="naming-label-with-help">
+                      标题模板
+                      <el-button link type="primary" size="small" @click="namingSlotsHelpVisible = true">变量说明</el-button>
+                    </span>
+                  </template>
                   <el-input
                     v-model="namingEditTemplate.title_template"
                     type="textarea"
@@ -273,13 +364,13 @@
                 </el-form-item>
                 <el-form-item label="预览样例">
                   <div class="naming-preview-grid">
-                    <el-input v-model="namingPreviewSample.story_no" placeholder="story_no" size="small" />
-                    <el-input v-model="namingPreviewSample.main_module" placeholder="main_module" size="small" />
-                    <el-input v-model="namingPreviewSample.sub_module" placeholder="sub_module" size="small" />
-                    <el-input v-model="namingPreviewSample.feature_point" placeholder="feature_point" size="small" />
+                    <el-input v-model="namingPreviewSample.story_no" placeholder="需求编号 story_no" size="small" />
+                    <el-input v-model="namingPreviewSample.main_module" placeholder="主模块 main_module" size="small" />
+                    <el-input v-model="namingPreviewSample.sub_module" placeholder="子模块 sub_module" size="small" />
+                    <el-input v-model="namingPreviewSample.feature_point" placeholder="功能点 feature_point" size="small" />
                     <el-input
                       v-model="namingPreviewSample.case_description"
-                      placeholder="case_description"
+                      placeholder="用例描述 case_description"
                       size="small"
                       style="grid-column: span 2;"
                     />
@@ -313,12 +404,21 @@
           </el-card>
 
           <!-- 生成范围 + 侧栏队列 -->
-          <el-card shadow="never" class="scope-card">
+          <el-card v-if="showEmbedSection('document')" shadow="never" class="scope-card">
             <template #header>
               <div class="report-header">
                 <b>生成范围</b>
                 <el-button link type="primary" @click="selectAllSections">全选</el-button>
                 <el-button link @click="clearSectionSelection">清空</el-button>
+                <el-button
+                  link
+                  type="success"
+                  :loading="selectingUncovered"
+                  :disabled="!docSections.length"
+                  @click="selectUncoveredSections"
+                >
+                  选未覆盖
+                </el-button>
                 <el-button link type="warning" :loading="reparsing" @click="handleReparseDocument">
                   重新解析
                 </el-button>
@@ -566,8 +666,39 @@
             </template>
           </el-dialog>
 
+          <el-dialog
+            v-model="namingSlotsHelpVisible"
+            title="标题模板变量说明"
+            width="720px"
+            destroy-on-close
+          >
+            <p class="naming-help-intro">
+              标题模板使用 Jinja2 语法，变量写作 <code v-pre>{{ 变量名 }}</code>。可自由组合括号、标点与固定文字；修改后点「预览标题」查看效果，保存后才会用于生成与导出。
+            </p>
+            <el-table :data="namingSlotHelpRows" border size="small" class="naming-slot-help-table">
+              <el-table-column prop="name" label="变量" width="148">
+                <template #default="{ row }">
+                  <code>{{ formatNamingSlotVar(row.name) }}</code>
+                </template>
+              </el-table-column>
+              <el-table-column prop="label" label="含义" width="108" />
+              <el-table-column prop="source" label="取值来源" min-width="200" show-overflow-tooltip />
+              <el-table-column prop="example" label="示例" width="140" show-overflow-tooltip />
+            </el-table>
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              style="margin-top: 12px;"
+              title="feature_point 与 case_description 由 AI 按用例生成；story_no 来自禅道「相关研发需求」首部数字（可选，缺失时回退需求短码/ID）；main_module / sub_module 优先取 AI 输出，缺失时回退为文档章节标题。缺槽告警仅针对标题模板中用到的变量。"
+            />
+            <template #footer>
+              <el-button type="primary" @click="namingSlotsHelpVisible = false">知道了</el-button>
+            </template>
+          </el-dialog>
+
           <!-- 生成配置 -->
-          <el-card shadow="never" class="gen-card">
+          <el-card v-if="showEmbedSection('document')" shadow="never" class="gen-card">
             <template #header><b>AI 生成配置</b></template>
             <el-alert
               type="info"
@@ -651,6 +782,18 @@
                 <el-switch v-model="genForm.replace_existing" />
               </el-form-item>
             </el-form>
+            <el-form :model="genForm" label-width="88px" class="extra-instructions-form">
+              <el-form-item label="额外要求">
+                <el-input
+                  v-model="genForm.extra_instructions"
+                  type="textarea"
+                  :rows="3"
+                  maxlength="2000"
+                  show-word-limit
+                  placeholder="例如：多用边界/异常场景；步骤写细到具体按钮与提示文案；不要生成登录相关用例。&#10;标题、禅道导出字段等由平台自动处理，无需在此填写。"
+                />
+              </el-form-item>
+            </el-form>
             <el-alert
               v-if="batchProgress"
               :type="batchProgress.failed ? 'warning' : 'success'"
@@ -691,17 +834,48 @@
           </el-card>
 
           <!-- AI 生成报告 -->
-          <el-card v-if="generateReport" shadow="never" class="report-card">
+          <el-card
+            v-if="showEmbedSection('document') && (generateReport || generateJobHistory.length)"
+            shadow="never"
+            class="report-card"
+          >
             <template #header>
-              <div class="report-header">
+              <div class="report-header report-header-wrap">
                 <b>AI 生成报告</b>
+                <el-select
+                  v-if="generateJobHistory.length"
+                  v-model="selectedReportJobId"
+                  placeholder="历史生成记录"
+                  size="small"
+                  style="width: 320px; margin-left: 8px;"
+                  @change="onSelectGenerateJob"
+                >
+                  <el-option
+                    v-for="j in generateJobHistory"
+                    :key="j.id"
+                    :label="jobHistoryLabel(j)"
+                    :value="j.id"
+                  />
+                </el-select>
+                <el-button
+                  v-if="selectedReportJobId && canDeleteGenerateJob"
+                  link
+                  type="danger"
+                  size="small"
+                  @click="deleteGenerateJobRecord"
+                >删除记录</el-button>
                 <span v-if="reportMeta.time" class="report-meta">{{ reportMeta.time }}</span>
                 <span v-if="reportMeta.duration_ms" class="report-meta">
                   耗时 {{ (reportMeta.duration_ms / 1000).toFixed(1) }}s · Token {{ reportMeta.tokens_used || 0 }}
                 </span>
               </div>
             </template>
-            <el-collapse v-model="reportCollapse">
+            <el-empty
+              v-if="!generateReport"
+              description="请选择一条生成记录查看报告"
+              :image-size="48"
+            />
+            <el-collapse v-else v-model="reportCollapse">
               <el-collapse-item
                 v-if="generateReport.batch_mode && (generateReport.batch_results?.length || generateReport.in_progress)"
                 name="batch"
@@ -724,6 +898,11 @@
                 </template>
                 <el-table :data="generateReport.batch_results" border size="small">
                   <el-table-column prop="name" label="批次" min-width="120" />
+                  <el-table-column label="章节范围" min-width="180" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span class="report-meta">{{ batchReportSectionSummary(row) }}</span>
+                    </template>
+                  </el-table-column>
                   <el-table-column label="模式" width="72" align="center">
                     <template #default="{ row }">
                       <el-tag v-if="row.supplement" type="warning" size="small">补充</el-tag>
@@ -835,10 +1014,10 @@
                 <template #title>
                   <span>用例生成</span>
                   <el-tag
-                    :type="generateReport.case_gen?.success ? 'success' : 'danger'"
+                    :type="caseGenStatusType"
                     size="small"
                     style="margin-left: 8px;"
-                  >{{ generateReport.case_gen?.success ? '解析成功' : '解析失败' }}</el-tag>
+                  >{{ caseGenStatusText }}</el-tag>
                   <span class="report-sub" v-if="generateReport.case_gen?.model">
                     {{ generateReport.case_gen.config_name }} ({{ generateReport.case_gen.model }})
                   </span>
@@ -884,7 +1063,83 @@
             </el-collapse>
           </el-card>
 
+          <!-- 本次生成用例 · 快速审核 -->
+          <el-card
+            v-if="showEmbedSection('document') && lastSessionCaseIds.length"
+            shadow="never"
+            class="session-card"
+          >
+            <template #header>
+              <div class="session-header">
+                <b>本次生成用例</b>
+                <el-tag size="small" type="primary">{{ lastSessionCaseIds.length }} 条</el-tag>
+                <el-tag size="small" type="success">已入库 {{ sessionImportedCount }}</el-tag>
+                <el-tag size="small" type="warning">待审核 {{ sessionPendingCount }}</el-tag>
+                <span v-if="reportMeta.time" class="report-meta">{{ reportMeta.time }}</span>
+              </div>
+            </template>
+            <div class="session-toolbar">
+              <el-button
+                size="small"
+                :type="sessionFilterOnly ? 'primary' : 'default'"
+                @click="sessionFilterOnly = !sessionFilterOnly"
+              >
+                {{ sessionFilterOnly ? '取消「只看本次」' : '在列表中只看本次' }}
+              </el-button>
+              <el-button
+                v-if="canImportLibrary && sessionPendingCount"
+                size="small"
+                type="success"
+                :loading="importingToLibrary"
+                @click="handleSessionImportPending"
+              >
+                批量审核入库 ({{ sessionPendingCount }})
+              </el-button>
+              <el-select
+                v-if="canImportLibrary"
+                v-model="importDuplicateMode"
+                size="small"
+                style="width: 120px"
+                title="库中标题+模块重复时的处理方式"
+              >
+                <el-option label="重复跳过" value="skip" />
+                <el-option label="重复覆盖" value="overwrite" />
+              </el-select>
+              <el-button
+                v-if="canImportLibrary && sessionPendingCount"
+                size="small"
+                @click="selectSessionPending"
+              >
+                勾选待审核
+              </el-button>
+            </div>
+            <el-table :data="sessionCasePreview" border size="small" max-height="280">
+              <el-table-column prop="title" label="用例标题" min-width="220" show-overflow-tooltip />
+              <el-table-column prop="module" label="AI功能模块" width="120" show-overflow-tooltip />
+              <el-table-column prop="priority" label="优先级" width="72" align="center" />
+              <el-table-column label="入库状态" width="100" align="center">
+                <template #default="{ row }">
+                  <el-tag v-if="isCaseInLibrary(row)" size="small" type="success">已入库</el-tag>
+                  <el-tag v-else size="small" type="info">待审核</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="100" fixed="right">
+                <template #default="{ row }">
+                  <el-button
+                    v-if="canImportLibrary && !isCaseInLibrary(row)"
+                    link
+                    type="primary"
+                    :loading="importingOneId === row.id"
+                    @click="handleImportOneToLibrary(row.id)"
+                  >审核入库</el-button>
+                  <span v-else-if="isCaseInLibrary(row)" class="report-meta">×{{ libraryCopyCount(row) }}</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+
           <!-- 用例表格 -->
+          <template v-if="showEmbedSection('cases')">
           <el-alert
             v-if="caseList.length"
             type="info"
@@ -893,10 +1148,20 @@
             class="cases-module-hint"
             title="「AI功能模块」来自模型语义拆分（用于标题命名）；导出 XLSX 的「所属产品 / 所属模块 / 相关研发需求」取自上方「禅道导入配置」，二者含义不同。"
           />
+          <el-alert
+            v-if="caseFilterHint"
+            type="info"
+            :closable="false"
+            show-icon
+            class="cases-filter-hint"
+          >
+            <template #title>筛选说明</template>
+            <p class="cases-filter-hint-body">{{ caseFilterHint }}</p>
+          </el-alert>
           <div class="cases-toolbar">
             <span>
               共 {{ caseList.length }} 条用例
-              <template v-if="caseFilterSectionId || caseFilterSourceRef || caseFilterPointId">
+              <template v-if="caseFilterSectionId || caseFilterSourceRef || caseFilterPointId || caseFilterLibraryStatus || sessionFilterOnly">
                 （筛选后 {{ filteredCaseList.length }} 条）
               </template>
             </span>
@@ -906,12 +1171,12 @@
                 clearable
                 placeholder="按来源章节"
                 size="small"
-                style="width: 200px;"
+                style="width: 220px;"
               >
                 <el-option
-                  v-for="s in docSections"
+                  v-for="s in sectionFilterOptions"
                   :key="s.id"
-                  :label="s.title"
+                  :label="s.label"
                   :value="s.id"
                 />
               </el-select>
@@ -920,7 +1185,7 @@
                 clearable
                 placeholder="按来源批次"
                 size="small"
-                style="width: 220px;"
+                style="width: 260px;"
               >
                 <el-option
                   v-for="o in caseSourceRefOptions"
@@ -928,6 +1193,16 @@
                   :label="o.label"
                   :value="o.value"
                 />
+              </el-select>
+              <el-select
+                v-model="caseFilterLibraryStatus"
+                clearable
+                placeholder="入库状态"
+                size="small"
+                style="width: 120px;"
+              >
+                <el-option label="待审核" value="pending" />
+                <el-option label="已入库" value="imported" />
               </el-select>
               <el-select
                 v-if="caseTestPointFilterOptions.length"
@@ -944,14 +1219,32 @@
                   :value="o.value"
                 />
               </el-select>
+              <el-button
+                v-if="lastSessionCaseIds.length"
+                size="small"
+                :type="sessionFilterOnly ? 'primary' : 'default'"
+                @click="sessionFilterOnly = !sessionFilterOnly"
+              >
+                {{ sessionFilterOnly ? '取消本次筛选' : `只看本次 (${lastSessionCaseIds.length})` }}
+              </el-button>
             </div>
+            <el-select
+              v-if="selectedCaseIds.length && canImportLibrary"
+              v-model="importDuplicateMode"
+              size="small"
+              style="width: 120px"
+              title="库中标题+模块重复时的处理方式"
+            >
+              <el-option label="重复跳过" value="skip" />
+              <el-option label="重复覆盖" value="overwrite" />
+            </el-select>
             <el-button
               v-if="selectedCaseIds.length && canImportLibrary"
               type="primary"
               size="small"
               :loading="importingToLibrary"
               @click="handleImportToLibrary"
-            >导入到用例库 ({{ selectedCaseIds.length }})</el-button>
+            >审核入库 ({{ selectedCaseIds.length }})</el-button>
             <el-button
               v-if="selectedCaseIds.length"
               type="danger"
@@ -992,12 +1285,14 @@
               <template #default="{ row }">
                 <template v-if="row._isFirstStep">
                   <span>{{ row.title }}</span>
-                  <el-tag
-                    v-if="row._case?.extra?.library_copies?.length"
-                    size="small"
-                    type="info"
-                    style="margin-left: 6px;"
-                  >已入库×{{ row._case.extra.library_copies.length }}</el-tag>
+                </template>
+              </template>
+            </el-table-column>
+            <el-table-column label="入库状态" width="96" align="center">
+              <template #default="{ row }">
+                <template v-if="row._isFirstStep">
+                  <el-tag v-if="isCaseInLibrary(row._case)" size="small" type="success">已入库</el-tag>
+                  <el-tag v-else size="small" type="warning">待审核</el-tag>
                 </template>
               </template>
             </el-table-column>
@@ -1011,20 +1306,29 @@
                 <span v-if="row._isFirstStep">{{ row.stage }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="120" fixed="right">
+            <el-table-column label="操作" width="168" fixed="right">
               <template #default="{ row }">
                 <template v-if="row._isFirstStep">
+                  <el-button
+                    v-if="canImportLibrary && !isCaseInLibrary(row._case)"
+                    link
+                    type="success"
+                    :loading="importingOneId === row._case.id"
+                    @click="handleImportOneToLibrary(row._case.id)"
+                  >审核入库</el-button>
                   <el-button link type="primary" @click="openEditCase(row._case)">编辑</el-button>
                   <el-button link type="danger" @click="handleDeleteOneCase(row._case)">删除</el-button>
                 </template>
               </template>
             </el-table-column>
           </el-table>
+          </template>
         </div>
-      </el-drawer>
+        <div v-else-if="embedMode" v-loading="true" class="embed-loading-holder" />
+      </TestingEmbedShell>
 
       <!-- 编辑用例 -->
-      <el-dialog v-model="editVisible" title="编辑用例" width="720px" destroy-on-close>
+      <el-dialog v-model="editVisible" title="编辑用例" width="760px" destroy-on-close>
         <el-form v-if="editForm" label-width="110px">
           <el-alert
             type="info"
@@ -1045,7 +1349,9 @@
             </el-select>
           </el-form-item>
           <el-form-item label="用例类型">
-            <el-input v-model="editForm.type" placeholder="功能测试" />
+            <el-select v-model="editForm.type" style="width: 100%;">
+              <el-option v-for="t in ZENTAO_CASE_TYPES" :key="t" :label="t" :value="t" />
+            </el-select>
           </el-form-item>
           <el-form-item label="适用阶段">
             <el-input :model-value="editForm.stage" disabled style="width: 200px;" />
@@ -1062,8 +1368,15 @@
           </el-form-item>
           <el-form-item label="步骤">
             <div v-for="(st, idx) in editForm.steps" :key="idx" class="step-row">
-              <el-input v-model="st.step" placeholder="步骤" style="margin-bottom: 6px;" />
-              <el-input v-model="st.expect" placeholder="预期" />
+              <div class="step-block-head">步骤 {{ idx + 1 }}</div>
+              <div class="step-field">
+                <span class="step-field-label">操作步骤</span>
+                <el-input v-model="st.step" type="textarea" :rows="2" placeholder="具体操作（对象 + 动作 + 关键数据）" />
+              </div>
+              <div class="step-field">
+                <span class="step-field-label">预期结果</span>
+                <el-input v-model="st.expect" type="textarea" :rows="2" placeholder="该步操作后可观察、可判定的结果" />
+              </div>
               <el-button link type="danger" @click="editForm.steps.splice(idx, 1)">删除</el-button>
             </div>
             <el-button size="small" @click="editForm.steps.push({ step: '', expect: '' })">+ 添加步骤</el-button>
@@ -1076,6 +1389,7 @@
       </el-dialog>
     </template>
   </PageCard>
+  </div>
 </template>
 
 <script setup>
@@ -1084,14 +1398,36 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import PageCard from '@/components/PageCard.vue'
+import TableColumnPicker from '@/components/TableColumnPicker.vue'
+import TestingEmbedShell from '@/components/TestingEmbedShell.vue'
+import { useTableColumns } from '@/composables/useTableColumns.js'
 import { aiRequirementApi, aiConfigApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+import { ZENTAO_CASE_TYPES } from '@/constants/zentaoCaseTypes.js'
 import {
   buildCaseSourceRefOptions,
   caseMatchesSourceFilter,
-  formatCaseSourceRefLabel
+  caseMatchesSectionFilter,
+  summarizePendingBySource,
+  formatCaseSourceRefLabel,
+  isCaseInLibraryCopy
 } from '@/utils/aiCaseSource.js'
+
+const props = defineProps({
+  embedMode: { type: Boolean, default: false },
+  embedReqId: { type: Number, default: null },
+  embedSection: { type: String, default: '' },
+  highlightPointId: { type: Number, default: null }
+})
+
+const showEmbedSection = (name) => {
+  if (!props.embedMode || !props.embedSection) return true
+  if (props.embedSection === 'document') return name === 'document' || name === 'config'
+  if (props.embedSection === 'cases') return name === 'cases'
+  if (props.embedSection === 'config') return name === 'config' || name === 'document'
+  return true
+}
 
 const proStore = ProjectStore()
 const uStore = UserStore()
@@ -1099,7 +1435,47 @@ const route = useRoute()
 const router = useRouter()
 const canEditNaming = computed(() => uStore.hasPermission('project:edit'))
 const canImportLibrary = computed(() => uStore.hasPermission('ai_test:execute'))
+const canDeleteGenerateJob = computed(() => uStore.hasPermission('ai_test:execute'))
 const importingToLibrary = ref(false)
+const importDuplicateMode = ref('skip')
+const importingOneId = ref(null)
+const lastSessionCaseIds = ref([])
+const sessionFilterOnly = ref(false)
+
+const namingSlotsHelpVisible = ref(false)
+const formatNamingSlotVar = (name) => `{{ ${name} }}`
+const namingSlotHelpRows = [
+  {
+    name: 'story_no',
+    label: '需求编号',
+    source: '禅道「相关研发需求」中提取首部数字',
+    example: '3174'
+  },
+  {
+    name: 'main_module',
+    label: '主功能模块',
+    source: 'AI 生成；缺失时取文档一级章节标题',
+    example: '基础资料录入'
+  },
+  {
+    name: 'sub_module',
+    label: '子功能模块',
+    source: 'AI 生成；缺失时取当前生成范围章节标题',
+    example: '原因代码作业'
+  },
+  {
+    name: 'feature_point',
+    label: '功能点',
+    source: 'AI 为单条用例命名的功能点，同批次勿重复',
+    example: '导出功能01'
+  },
+  {
+    name: 'case_description',
+    label: '用例描述',
+    source: 'AI 描述本条用例的验证点，会拼入最终标题',
+    example: '导入成功，已存在失败'
+  }
+]
 
 /** 上传弹窗：简要说明 */
 const uploadUsageTooltip = `
@@ -1116,7 +1492,7 @@ const detailUsageTooltip = `
 <b>① 禅道配置（必填）</b><br/>
 在「禅道导入配置」填写所属产品、所属模块、相关研发需求（禅道后台查准后填写）；可保存到项目级，本需求可覆盖。AI 不生成这三项；适用阶段按优先级自动：1→冒烟，2~4→系统测试。<br/><br/>
 <b>② 生成范围</b><br/>
-左侧章节树按标题层级展示父子章节；勾选要覆盖的段落，可全选/清空。范围过大时系统会提示缩小勾选。下方「章节覆盖检查」可查看已覆盖/未覆盖节数。<br/><br/>
+左侧章节树按标题层级展示父子章节；勾选要覆盖的段落，可全选/清空/选未覆盖（仅勾选尚无对应用例的章节，便于补生成）。范围过大时系统会提示缩小勾选。下方「章节覆盖检查」可查看已覆盖/未覆盖节数；右侧队列可拆多批。补缺口：选未覆盖 → 加入队列 → 对该批点「补充」。<br/><br/>
 <b>③ 批量队列（推荐大文档）</b><br/>
 · 勾选「场景一」等相关章节 → 点「将当前勾选加入队列」<br/>
 · 再勾选其他场景重复入队，右侧队列可改批次名、条数、排序<br/>
@@ -1138,6 +1514,15 @@ const uploadVisible = ref(false)
 const uploading = ref(false)
 const uploadForm = reactive({ name: '', file: null })
 
+const {
+  activeColumns: reqListActiveColumns,
+  pickerItems: reqListPickerItems,
+  tableRenderKey: reqListTableKey,
+  setColumnVisible: setReqListColumnVisible,
+  setPickerOrder: setReqListPickerOrder,
+  resetColumns: resetReqListColumns
+} = useTableColumns('ai.requirements.list')
+
 const detailVisible = ref(false)
 const currentReq = ref(null)
 const caseList = ref([])
@@ -1150,12 +1535,21 @@ const genForm = reactive({
   vision_config_id: null,
   case_gen_config_id: null,
   count: 15,
-  replace_existing: false
+  replace_existing: false,
+  extra_instructions: ''
 })
 
-const projectZentao = reactive({ product: '', module: '', related_story: '' })
+const projectZentao = reactive({ export_profile: 'zentao', product: '', module: '', related_story: '' })
 const reqZentao = reactive({ product: '', module: '', related_story: '' })
 const effectiveZentao = reactive({ product: '', module: '', related_story: '' })
+const exportProfile = ref('zentao')
+const exportProfileOptions = ref([
+  { value: 'zentao', label: '禅道 XLSX' },
+  { value: 'generic', label: '通用 XLSX' }
+])
+const savingExportProfile = ref(false)
+const suggestedTemplateId = ref('')
+const builtinTemplateCatalog = ref([])
 const savingProjectZentao = ref(false)
 const savingReqZentao = ref(false)
 
@@ -1194,6 +1588,8 @@ const selectedSectionIds = ref([])
 const scopeEstimate = ref(null)
 const sectionTreeRef = ref(null)
 const reparsing = ref(false)
+const selectingUncovered = ref(false)
+const treeSyncing = ref(false)
 
 let batchKeySeq = 0
 const batchQueue = ref([])
@@ -1229,6 +1625,17 @@ const caseCountVarianceTag = computed(() => {
   if (got < req) return { type: 'warning', text: `少 ${req - got} 条` }
   return { type: 'info', text: `多 ${got - req} 条` }
 })
+
+/** 批量进行中时 job.generate_report 尚未汇总，回退取最近一批的 case_gen */
+const pickCaseGenFromReport = (gr, batchResults = []) => {
+  if (gr?.case_gen) return gr.case_gen
+  const batches = batchResults || []
+  for (let i = batches.length - 1; i >= 0; i -= 1) {
+    const cg = batches[i]?.generate_report?.case_gen
+    if (cg) return cg
+  }
+  return null
+}
 
 const batchQueueImageCount = computed(() => {
   let n = 0
@@ -1271,11 +1678,29 @@ const buildSectionTree = (sections) => {
   return roots
 }
 
+/** 某 id 是否为另一章节的祖先 */
+const isSectionAncestor = (sections, ancestorId, descId) => {
+  const byId = new Map(sections.map(s => [s.id, s]))
+  let cur = byId.get(descId)
+  while (cur?.parent_id) {
+    if (cur.parent_id === ancestorId) return true
+    cur = byId.get(cur.parent_id)
+  }
+  return false
+}
+
+/** 去掉被其它未覆盖节包含的祖先 id，避免 el-tree 级联勾选整棵子树 */
+const leafOnlySectionIds = (sections, ids) => {
+  const arr = [...new Set((ids || []).filter(Boolean))]
+  return arr.filter(id => !arr.some(other => other !== id && isSectionAncestor(sections, id, other)))
+}
+
 const sectionTreeData = computed(() => buildSectionTree(docSections.value))
 
 const sectionCoverage = ref(null)
 const caseFilterSectionId = ref('')
 const caseFilterSourceRef = ref('')
+const caseFilterLibraryStatus = ref('')
 const caseFilterPointId = ref(null)
 const batchZentaoVisible = ref(false)
 const batchZentaoForm = ref(null)
@@ -1321,12 +1746,49 @@ const zentaoBindingsReady = computed(() => {
   return !!(e.product?.trim() && e.module?.trim() && e.related_story?.trim())
 })
 
+const exportBindingsReady = computed(() => {
+  if (exportProfile.value === 'generic') return true
+  return zentaoBindingsReady.value
+})
+
+const exportProfileLabel = computed(() => {
+  const opt = exportProfileOptions.value.find(o => o.value === exportProfile.value)
+  return opt?.label || '禅道 XLSX'
+})
+
+const suggestedTemplateName = computed(() => {
+  const tpl = namingConfig.templates.find(t => t.id === suggestedTemplateId.value)
+  if (tpl?.name) return tpl.name
+  const cat = builtinTemplateCatalog.value.find(t => t.id === suggestedTemplateId.value)
+  return cat?.name || suggestedTemplateId.value
+})
+
+const formatNamingTemplateOption = (tpl) => {
+  if (!tpl) return ''
+  const cat = builtinTemplateCatalog.value.find(c => c.id === tpl.id)
+  return cat?.description ? `${tpl.name} — ${cat.description}` : tpl.name
+}
+
 const editVisible = ref(false)
 const editForm = ref(null)
 const editSaving = ref(false)
 
+function normalizeCaseSteps(steps) {
+  if (!Array.isArray(steps) || !steps.length) return [{ step: '', expect: '' }]
+  return steps.map((st) => {
+    if (typeof st === 'string') return { step: st, expect: '' }
+    if (!st || typeof st !== 'object') return { step: '', expect: '' }
+    return {
+      step: st.step || st.action || st['步骤'] || st['操作'] || '',
+      expect: st.expect || st.expected || st['预期'] || st['期望'] || ''
+    }
+  })
+}
+
 const generateReport = ref(null)
 const reportMeta = ref({})
+const generateJobHistory = ref([])
+const selectedReportJobId = ref(null)
 const reportCollapse = ref([])
 
 /** 启发式：是否更适合读图（仅用于选项标注，不限制下拉） */
@@ -1370,7 +1832,58 @@ const caseSourceLabel = (c) => {
   return parts.length ? parts.join(' · ') : '-'
 }
 
-const caseSourceRefOptions = computed(() => buildCaseSourceRefOptions(caseList.value))
+const caseSourceRefOptions = computed(() =>
+  buildCaseSourceRefOptions(caseList.value, {
+    withCounts: true,
+    libraryStatus: caseFilterLibraryStatus.value
+  })
+)
+
+const sectionFilterOptions = computed(() => {
+  const sections = docSections.value || []
+  const pool = caseList.value
+  return sections.map(s => {
+    const n = pool.filter(c =>
+      caseMatchesSectionFilter(c.section_ids, s.id, sections)
+    ).length
+    return {
+      id: s.id,
+      label: n > 0 ? `${s.title}（${n}）` : s.title
+    }
+  })
+})
+
+const pendingSourceSummary = computed(() => summarizePendingBySource(caseList.value))
+
+const caseFilterHint = computed(() => {
+  if (!caseList.value.length) return ''
+  const parts = []
+  const ps = pendingSourceSummary.value
+  if (ps.total > 0) {
+    const details = []
+    if (ps.doc) details.push(`文档批次 ${ps.doc}`)
+    if (ps.unlabeled) details.push(`未标注批次 ${ps.unlabeled}`)
+    if (ps.testPoints) details.push(`测试点 ${ps.testPoints}`)
+    parts.push(
+      details.length
+        ? `待审核共 ${ps.total} 条（${details.join(' · ')}）。`
+        : `待审核共 ${ps.total} 条。`
+    )
+  }
+  parts.push(
+    '「待审核」= 尚未复制到功能用例库；「来源批次」仅统计带批次名的用例（批量队列或单次生成会自动命名）；「来源章节」含所选节及其子节。多个筛选项同时生效（取交集）。'
+  )
+  if (
+    caseFilterLibraryStatus.value === 'pending' &&
+    (caseFilterSourceRef.value || caseFilterSectionId.value) &&
+    filteredCaseList.value.length < ps.total
+  ) {
+    parts.push(
+      `当前组合筛选 ${filteredCaseList.value.length} 条，少于全部待审核 ${ps.total} 条，可清空批次/章节或选「未标注批次」查看其余。`
+    )
+  }
+  return parts.join('')
+})
 
 const caseTestPointFilterOptions = computed(() => {
   const map = new Map()
@@ -1385,21 +1898,64 @@ const caseTestPointFilterOptions = computed(() => {
     .map(([id, n]) => ({ value: id, label: `测试点 #${id}（${n} 条用例）` }))
 })
 
+const isCaseInLibrary = (c) => isCaseInLibraryCopy(c)
+const libraryCopyCount = (c) => (c?.extra?.library_copies?.length) || 0
+
+const syncSessionFromReport = (report, fallbackCases = null, { autoFilter = true } = {}) => {
+  let ids = report?.created_case_ids
+  if ((!ids || !ids.length) && Array.isArray(fallbackCases) && fallbackCases.length) {
+    ids = fallbackCases.map(c => c.id).filter(Boolean)
+  }
+  if (!ids?.length) return
+  const idSet = new Set(ids)
+  const matched = caseList.value.filter(c => idSet.has(c.id)).map(c => c.id)
+  if (!matched.length) return
+  lastSessionCaseIds.value = [...new Set(matched)]
+  if (autoFilter) sessionFilterOnly.value = true
+}
+
+const sessionCases = computed(() => {
+  if (!lastSessionCaseIds.value.length) return []
+  const idSet = new Set(lastSessionCaseIds.value)
+  return caseList.value.filter(c => idSet.has(c.id))
+})
+
+const sessionCasePreview = computed(() => sessionCases.value.slice(0, 50))
+
+const sessionImportedCount = computed(() =>
+  sessionCases.value.filter(c => isCaseInLibrary(c)).length
+)
+
+const sessionPendingCount = computed(() =>
+  sessionCases.value.filter(c => !isCaseInLibrary(c)).length
+)
+
 const filteredCaseList = computed(() => {
   let list = caseList.value
+  if (sessionFilterOnly.value && lastSessionCaseIds.value.length) {
+    const idSet = new Set(lastSessionCaseIds.value)
+    list = list.filter(c => idSet.has(c.id))
+  }
   if (caseFilterSectionId.value) {
-    list = list.filter(c => (c.section_ids || []).includes(caseFilterSectionId.value))
+    list = list.filter(c =>
+      caseMatchesSectionFilter(c.section_ids, caseFilterSectionId.value, docSections.value)
+    )
   }
   list = list.filter(c =>
     caseMatchesSourceFilter(c, caseFilterSourceRef.value, caseFilterPointId.value)
   )
+  if (caseFilterLibraryStatus.value === 'pending') {
+    list = list.filter(c => !isCaseInLibrary(c))
+  } else if (caseFilterLibraryStatus.value === 'imported') {
+    list = list.filter(c => isCaseInLibrary(c))
+  }
   return list
 })
 
 const flatCaseRows = computed(() => {
   const rows = []
   for (const c of filteredCaseList.value) {
-    const steps = c.steps?.length ? c.steps : [{ step: '', expect: '' }]
+    const steps = normalizeCaseSteps(c.steps?.length ? c.steps : [{ step: '', expect: '' }])
     steps.forEach((st, i) => {
       rows.push({
         _case: c,
@@ -1444,12 +2000,135 @@ const visionStatusText = computed(() => {
   return '全部失败'
 })
 
-const applyGenerateReport = (report, meta = {}) => {
+const caseGenStatusType = computed(() => {
+  const cg = generateReport.value?.case_gen
+  if (generateReport.value?.in_progress && !cg) return 'warning'
+  if (!cg) return 'info'
+  return cg.success ? 'success' : 'danger'
+})
+
+const caseGenStatusText = computed(() => {
+  const cg = generateReport.value?.case_gen
+  if (generateReport.value?.in_progress && !cg) return '执行中'
+  if (!cg) return '暂无'
+  return cg.success ? '解析成功' : '解析失败'
+})
+
+const applyGenerateReport = (report, meta = {}, fallbackCases = null, opts = {}) => {
   const r = report ? { ...report, in_progress: false } : null
   generateReport.value = r
   reportMeta.value = meta || {}
+  if (opts.syncSession) {
+    syncSessionFromReport(r, fallbackCases, { autoFilter: opts.autoFilterSession !== false })
+  }
   // 默认全部收起；批量模式仅展开「批量执行」摘要
   reportCollapse.value = r?.batch_mode ? ['batch'] : []
+}
+
+const formatJobTime = (job) => {
+  const raw = job?.finish_time || job?.create_time
+  if (!raw) return ''
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return String(raw)
+  return d.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  })
+}
+
+const jobHistoryLabel = (job) => {
+  const time = formatJobTime(job)
+  const batches = (job.total_batches || 0) > 1 ? `${job.total_batches}批` : '单批'
+  const count = job.case_count ?? job.generate_report?.created_case_ids?.length ?? 0
+  let status = `${count}条`
+  if (job.status === 'running' || job.status === 'pending') status = '执行中'
+  else if (job.status === 'failed') status = '失败'
+  return `#${job.id} · ${time || '—'} · ${batches} · ${status}`
+}
+
+const applyGenerateJobRecord = (job) => {
+  if (!job) return
+  selectedReportJobId.value = job.id
+  applyGenerateReport(job.generate_report, {
+    time: formatJobTime(job),
+    duration_ms: job.duration_ms,
+    tokens_used: job.tokens_used
+  })
+}
+
+const loadGenerateJobHistory = async (reqId) => {
+  if (!reqId || !proStore.projectInfo?.id) {
+    generateJobHistory.value = []
+    return
+  }
+  try {
+    const res = await aiRequirementApi.listGenerateJobs(reqId, proStore.projectInfo.id, {
+      page: 1,
+      size: 50
+    })
+    if (res.data?.code === 200) {
+      generateJobHistory.value = res.data.data?.list || []
+    }
+  } catch (_) {
+    generateJobHistory.value = []
+  }
+}
+
+const refreshGenerateJobAfterSave = async (reqId, jobId) => {
+  if (!reqId) return
+  await loadGenerateJobHistory(reqId)
+  if (jobId) {
+    const job = generateJobHistory.value.find(j => j.id === jobId)
+    if (job) applyGenerateJobRecord(job)
+    else selectedReportJobId.value = jobId
+  } else if (generateJobHistory.value.length) {
+    applyGenerateJobRecord(generateJobHistory.value[0])
+  }
+}
+
+const onSelectGenerateJob = (jobId) => {
+  const job = generateJobHistory.value.find(j => j.id === jobId)
+  if (!job) return
+  if (job.status === 'running' || job.status === 'pending') {
+    selectedReportJobId.value = job.id
+    syncGenerateReportFromJob(job)
+    if (batchJobId.value !== job.id) startBatchJobPolling(job.id)
+    return
+  }
+  applyGenerateJobRecord(job)
+}
+
+const deleteGenerateJobRecord = async () => {
+  const jobId = selectedReportJobId.value
+  if (!jobId || !currentReq.value) return
+  const job = generateJobHistory.value.find(j => j.id === jobId)
+  if (job?.status === 'running' || job?.status === 'pending') {
+    ElMessage.warning('任务执行中，无法删除')
+    return
+  }
+  try {
+    await ElMessageBox.confirm('仅删除生成记录，已生成的用例不会删除。确定继续？', '删除记录', {
+      type: 'warning'
+    })
+    const res = await aiRequirementApi.deleteGenerateJob(jobId, proStore.projectInfo.id)
+    if (res.data?.code === 200) {
+      ElMessage.success('已删除')
+      await loadGenerateJobHistory(currentReq.value.id)
+      if (generateJobHistory.value.length) {
+        applyGenerateJobRecord(generateJobHistory.value[0])
+      } else {
+        selectedReportJobId.value = null
+        generateReport.value = null
+        reportMeta.value = {}
+      }
+    }
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(apiErrorMsg(e, '删除失败'))
+  }
 }
 
 /** 新批量任务开始：清空上次 last_generate，避免误显示「2/3 成功」 */
@@ -1483,7 +2162,7 @@ const syncGenerateReportFromJob = (job) => {
     job_id: job.id,
     batch_results: br,
     vision: gr.vision || null,
-    case_gen: gr.case_gen || null,
+    case_gen: pickCaseGenFromReport(gr, br),
     tokens_used: job.tokens_used
   }
   reportMeta.value = {
@@ -1502,6 +2181,24 @@ const batchSectionSummary = (ids) => {
   if (!titles.length) return `${ids.length} 节`
   if (titles.length <= 2) return titles.join('、')
   return `${titles[0]} 等 ${titles.length} 节`
+}
+
+/** 生成报告批次表：优先用记录内章节标题，兼容旧数据嵌套 scope */
+const batchReportSectionSummary = (row) => {
+  const titles = row?.scope_section_titles?.length
+    ? row.scope_section_titles
+    : (row?.generate_report?.scope?.section_titles || [])
+  if (titles.length) {
+    const clean = titles.map(t => (t || '').trim()).filter(Boolean)
+    if (!clean.length) return '—'
+    if (clean.length <= 2) return clean.join('、')
+    return `${clean[0]} 等 ${clean.length} 节`
+  }
+  const ids = row?.scope_section_ids?.length
+    ? row.scope_section_ids
+    : (row?.generate_report?.scope?.section_ids || [])
+  if (!ids.length) return '—'
+  return batchSectionSummary(ids)
 }
 
 const inferBatchName = (ids) => {
@@ -1529,7 +2226,8 @@ const buildGeneratePayload = (row, { supplement = false } = {}) => {
     case_gen_config_id: genForm.case_gen_config_id || undefined,
     vision_config_id: genForm.vision_config_id || undefined,
     scope_section_ids: row.scope_section_ids,
-    supplement_batch_name: supplement ? batchName : undefined
+    supplement_batch_name: supplement ? batchName : undefined,
+    extra_instructions: (genForm.extra_instructions || '').trim() || undefined
   }
   const hasBatchZentao =
     row.useCustomZentao ||
@@ -1610,7 +2308,7 @@ const openSectionPicker = (row) => {
   sectionPickerTarget.value = row
   sectionPickerVisible.value = true
   nextTick(() => {
-    pickerTreeRef.value?.setCheckedKeys(row.scope_section_ids || [])
+    syncTreeCheckedKeys(pickerTreeRef.value, row.scope_section_ids || [])
   })
 }
 
@@ -1665,8 +2363,7 @@ const loadDocumentStructure = async () => {
       docSections.value = res.data.data?.sections || []
       const ids = docSections.value.map(s => s.id)
       selectedSectionIds.value = [...ids]
-      await nextTick()
-      sectionTreeRef.value?.setCheckedKeys(ids)
+      await syncTreeCheckedKeys(sectionTreeRef.value, ids)
       scopeEstimate.value = res.data.data?.estimate_all || null
       if (ids.length) await refreshScopeEstimate()
       await refreshSectionCoverage()
@@ -1720,7 +2417,26 @@ const getExplicitCheckedSectionIds = (tree) => {
   return [...new Set(tree.getCheckedKeys(false) || [])]
 }
 
+/** 同步树勾选；默认 leafOnly 避免祖先节点级联误勾选子树；全选时传 allNodes */
+const syncTreeCheckedKeys = async (tree, keys, { allNodes = false } = {}) => {
+  if (!tree) return
+  treeSyncing.value = true
+  try {
+    const sections = docSections.value || []
+    const idSet = allNodes
+      ? new Set((keys || []).filter(Boolean))
+      : new Set(leafOnlySectionIds(sections, keys || []))
+    for (const s of sections) {
+      tree.setChecked(s.id, idSet.has(s.id), false)
+    }
+    await nextTick()
+  } finally {
+    treeSyncing.value = false
+  }
+}
+
 const onSectionCheck = () => {
+  if (treeSyncing.value) return
   const tree = sectionTreeRef.value
   if (!tree) return
   selectedSectionIds.value = getExplicitCheckedSectionIds(tree)
@@ -1758,17 +2474,44 @@ const saveBatchZentaoDialog = () => {
   batchZentaoVisible.value = false
 }
 
-const selectAllSections = () => {
+const selectAllSections = async () => {
   const ids = docSections.value.map(s => s.id)
   selectedSectionIds.value = ids
-  sectionTreeRef.value?.setCheckedKeys(ids)
+  await syncTreeCheckedKeys(sectionTreeRef.value, ids, { allNodes: true })
   refreshScopeEstimate()
 }
 
-const clearSectionSelection = () => {
+const clearSectionSelection = async () => {
   selectedSectionIds.value = []
-  sectionTreeRef.value?.setCheckedKeys([])
+  await syncTreeCheckedKeys(sectionTreeRef.value, [])
   scopeEstimate.value = null
+}
+
+const selectUncoveredSections = async () => {
+  if (!docSections.value.length) return
+  selectingUncovered.value = true
+  try {
+    await refreshSectionCoverage()
+    const uncovered = sectionCoverage.value?.uncovered_sections || []
+    if (!uncovered.length) {
+      ElMessage.info('所有章节均已覆盖，无需补充')
+      return
+    }
+    const ids = leafOnlySectionIds(
+      docSections.value,
+      uncovered.map(s => s.id).filter(Boolean)
+    )
+    if (!ids.length) {
+      ElMessage.info('所有章节均已覆盖，无需补充')
+      return
+    }
+    selectedSectionIds.value = ids
+    await syncTreeCheckedKeys(sectionTreeRef.value, ids)
+    await refreshScopeEstimate()
+    ElMessage.success(`已勾选 ${ids.length} 个未覆盖章节`)
+  } finally {
+    selectingUncovered.value = false
+  }
 }
 
 const handleReparseDocument = async () => {
@@ -1804,11 +2547,16 @@ const loadZentaoBindings = async () => {
     if (res.data?.code === 200) {
       const d = res.data.data || {}
       Object.assign(projectZentao, {
+        export_profile: 'zentao',
         product: '',
         module: '',
         related_story: '',
         ...(d.project || {})
       })
+      exportProfile.value = d.export_profile || projectZentao.export_profile || 'zentao'
+      if (Array.isArray(d.export_profile_options) && d.export_profile_options.length) {
+        exportProfileOptions.value = d.export_profile_options
+      }
       Object.assign(reqZentao, {
         product: '',
         module: '',
@@ -1855,6 +2603,9 @@ const loadCaseNaming = async () => {
       namingConfig.active_template_id = cfg.active_template_id || 'default'
       namingConfig.templates = cfg.templates || []
       activeNamingTemplate.value = d.active_template || null
+      exportProfile.value = d.export_profile || exportProfile.value
+      suggestedTemplateId.value = d.suggested_template_id || ''
+      builtinTemplateCatalog.value = d.builtin_templates || []
       reqNamingMeta.requirement_type = d.requirement_type || currentReq.value?.requirement_type || 'default'
       reqNamingMeta.naming_template_id = d.naming_template_id || currentReq.value?.naming_template_id || ''
       const editId = namingConfig.active_template_id || activeNamingTemplate.value?.id || 'default'
@@ -1942,6 +2693,7 @@ const runNamingPreview = async () => {
     const res = await aiRequirementApi.previewCaseNaming(
       {
         template_id: namingEditTemplateId.value,
+        title_template: namingEditTemplate.title_template,
         sample_slots: { ...namingPreviewSample }
       },
       proStore.projectInfo.id,
@@ -2008,12 +2760,35 @@ const handleRecalcTitles = async () => {
   }
 }
 
+const saveExportProfile = async () => {
+  if (!ensureProject()) return
+  savingExportProfile.value = true
+  try {
+    const res = await aiRequirementApi.saveProjectZentaoBindings(
+      { ...projectZentao, export_profile: exportProfile.value },
+      proStore.projectInfo.id
+    )
+    if (res.data?.code === 200) {
+      ElMessage.success('导出目标已保存')
+      await loadZentaoBindings()
+      await loadCaseNaming()
+      if (suggestedTemplateId.value && !reqNamingMeta.naming_template_id) {
+        ElMessage.info(`当前推荐命名模板：${suggestedTemplateName.value}`)
+      }
+    }
+  } catch (e) {
+    ElMessage.error(apiErrorMsg(e, '保存失败'))
+  } finally {
+    savingExportProfile.value = false
+  }
+}
+
 const saveProjectZentao = async () => {
   if (!ensureProject()) return
   savingProjectZentao.value = true
   try {
     const res = await aiRequirementApi.saveProjectZentaoBindings(
-      { ...projectZentao },
+      { ...projectZentao, export_profile: exportProfile.value },
       proStore.projectInfo.id
     )
     if (res.data?.code === 200) {
@@ -2140,12 +2915,16 @@ const openDetail = async (row) => {
   batchProgress.value = null
   caseFilterSectionId.value = ''
   caseFilterSourceRef.value = ''
+  caseFilterLibraryStatus.value = ''
   caseFilterPointId.value = null
   sectionCoverage.value = null
+  lastSessionCaseIds.value = []
+  sessionFilterOnly.value = false
+  generateJobHistory.value = []
+  selectedReportJobId.value = null
   await loadZentaoBindings()
   await loadCaseNaming()
   await loadDocumentStructure()
-  const lg = row.last_generate
   const enabled = enabledConfigs.value
   genForm.vision_config_id =
     enabled.find(c => isLikelyVisionModel(c))?.id
@@ -2159,13 +2938,21 @@ const openDetail = async (row) => {
     || enabled[0]?.id
     || null
   await loadCases(row.id)
+  await loadGenerateJobHistory(row.id)
   const resumed = await resumeLatestGenerateJob(row.id)
   if (!resumed) {
-    applyGenerateReport(lg?.generate_report || null, {
-      time: lg?.time,
-      duration_ms: lg?.duration_ms,
-      tokens_used: lg?.tokens_used
-    })
+    if (generateJobHistory.value.length) {
+      applyGenerateJobRecord(generateJobHistory.value[0])
+    } else {
+      const lg = row.last_generate
+      applyGenerateReport(lg?.generate_report || null, {
+        time: lg?.time,
+        duration_ms: lg?.duration_ms,
+        tokens_used: lg?.tokens_used
+      })
+    }
+  } else if (batchJobId.value) {
+    selectedReportJobId.value = batchJobId.value
   }
 }
 
@@ -2216,30 +3003,31 @@ const applyBatchJobFinish = async (job, silent = false) => {
   }
 
   updateBatchJobProgress(job)
-  if (job.generate_report) {
-    applyGenerateReport(job.generate_report, {
-      time: job.finish_time
-        ? new Date(job.finish_time).toLocaleString('zh-CN', { hour12: false })
-        : new Date().toLocaleString('zh-CN', { hour12: false }),
-      duration_ms: job.duration_ms,
-      tokens_used: job.tokens_used
-    })
-    if (currentReq.value) {
-      currentReq.value.last_generate = {
-        generate_report: job.generate_report,
-        duration_ms: job.duration_ms,
-        tokens_used: job.tokens_used,
-        case_count: caseList.value.length,
-        time: reportMeta.value.time
-      }
-    }
-  }
   if (currentReq.value) {
     await loadCases(currentReq.value.id)
     await loadZentaoBindings()
     await loadList()
     const updated = reqList.value.find(r => r.id === currentReq.value.id)
     if (updated) currentReq.value = { ...currentReq.value, ...updated }
+  }
+  if (job.generate_report) {
+    applyGenerateReport(job.generate_report, {
+      time: formatJobTime(job),
+      duration_ms: job.duration_ms,
+      tokens_used: job.tokens_used
+    }, caseList.value, { syncSession: true })
+    if (currentReq.value) {
+      currentReq.value.last_generate = {
+        generate_report: job.generate_report,
+        created_case_ids: job.generate_report.created_case_ids,
+        duration_ms: job.duration_ms,
+        tokens_used: job.tokens_used,
+        case_count: caseList.value.length,
+        time: reportMeta.value.time
+      }
+      await loadGenerateJobHistory(currentReq.value.id)
+      selectedReportJobId.value = job.id
+    }
   }
 }
 
@@ -2285,6 +3073,7 @@ const resumeLatestGenerateJob = async (reqId) => {
     generating.value = true
     batchProgress.value = { title: '恢复进行中的批量生成任务…', failed: false }
     initInProgressBatchReport(job.total_batches || 0, job.id)
+    selectedReportJobId.value = job.id
     syncGenerateReportFromJob(job)
     startBatchJobPolling(job.id)
     return true
@@ -2317,7 +3106,7 @@ const handleSupplementBatch = async (row) => {
     ElMessage.warning('请先选择本批章节范围')
     return
   }
-  if (!zentaoBindingsReady.value) {
+  if (!exportBindingsReady.value) {
     ElMessage.warning('请先在「禅道导入配置」填写完整')
     return
   }
@@ -2357,7 +3146,8 @@ const handleSupplementBatch = async (row) => {
         time: new Date().toLocaleString('zh-CN', { hour12: false }),
         duration_ms: res.data.data?.duration_ms,
         tokens_used: res.data.data?.tokens_used
-      })
+      }, res.data.data?.cases, { syncSession: true })
+      await refreshGenerateJobAfterSave(currentReq.value.id, res.data.data?.job_id)
     } else {
       ElMessage.error(res.data?.message || '补充生成失败')
     }
@@ -2374,7 +3164,7 @@ const handleGenerate = async () => {
     ElMessage.warning('没有已启用的 AI 配置，请先在 AI 模型配置中创建并启用')
     return
   }
-  if (!zentaoBindingsReady.value) {
+  if (!exportBindingsReady.value) {
     ElMessage.warning('请先在「禅道导入配置」填写所属产品、所属模块、相关研发需求')
     return
   }
@@ -2397,12 +3187,14 @@ const handleGenerate = async () => {
       replace_existing: genForm.replace_existing,
       case_gen_config_id: genForm.case_gen_config_id || undefined,
       vision_config_id: genForm.vision_config_id || undefined,
+      extra_instructions: (genForm.extra_instructions || '').trim() || undefined,
       export_defaults: {
         product: reqZentao.product,
         module: reqZentao.module,
         related_story: reqZentao.related_story
       },
-      scope_section_ids: selectedSectionIds.value
+      scope_section_ids: selectedSectionIds.value,
+      batch_name: inferBatchName(selectedSectionIds.value) || undefined
     }
     const res = await aiRequirementApi.generateCases(
       currentReq.value.id,
@@ -2416,16 +3208,18 @@ const handleGenerate = async () => {
         time: new Date().toLocaleString('zh-CN', { hour12: false }),
         duration_ms: res.data.data?.duration_ms,
         tokens_used: res.data.data?.tokens_used
-      })
+      }, res.data.data?.cases, { syncSession: true })
       if (currentReq.value) {
         currentReq.value.last_generate = {
           generate_report: res.data.data?.generate_report,
+          created_case_ids: res.data.data?.generate_report?.created_case_ids,
           duration_ms: res.data.data?.duration_ms,
           tokens_used: res.data.data?.tokens_used,
           case_count: caseList.value.length,
           time: reportMeta.value.time
         }
       }
+      await refreshGenerateJobAfterSave(currentReq.value.id, res.data.data?.job_id)
       await loadZentaoBindings()
       await loadList()
       const updated = reqList.value.find(r => r.id === currentReq.value.id)
@@ -2452,7 +3246,7 @@ const handleBatchGenerate = async () => {
     ElMessage.warning('没有已启用的 AI 配置')
     return
   }
-  if (!zentaoBindingsReady.value) {
+  if (!exportBindingsReady.value) {
     ElMessage.warning('请先在「禅道导入配置」填写完整')
     return
   }
@@ -2461,7 +3255,7 @@ const handleBatchGenerate = async () => {
       ElMessage.warning(`批次「${item.name}」未选择章节`)
       return
     }
-    if (item.useCustomZentao) {
+    if (exportProfile.value === 'zentao' && item.useCustomZentao) {
       const ok = item.product?.trim() && item.module?.trim() && item.related_story?.trim()
       if (!ok) {
         ElMessage.warning(`批次「${item.name}」已开启自定义禅道，请填写完整`)
@@ -2504,6 +3298,7 @@ const handleBatchGenerate = async () => {
         vision_config_id: genForm.vision_config_id || undefined,
         case_gen_config_id: genForm.case_gen_config_id || undefined,
         replace_existing: genForm.replace_existing,
+        extra_instructions: (genForm.extra_instructions || '').trim() || undefined,
         batches
       },
       proStore.projectInfo.id
@@ -2516,11 +3311,13 @@ const handleBatchGenerate = async () => {
         failed: false
       }
       if (job?.id) {
+        selectedReportJobId.value = job.id
         if (generateReport.value) {
           generateReport.value.job_id = job.id
           generateReport.value.total_batches = job.total_batches || batches.length
         }
         reportMeta.value = { time: `任务 #${job.id} 执行中`, duration_ms: null, tokens_used: 0 }
+        await loadGenerateJobHistory(currentReq.value.id)
         startBatchJobPolling(job.id)
       } else {
         batchGenerating.value = false
@@ -2569,29 +3366,57 @@ const handleDeleteCases = () =>
     `确定删除选中的 ${selectedCaseIds.value.length} 条用例？`
   )
 
-const handleImportToLibrary = async () => {
-  if (!selectedCaseIds.value.length || !currentReq.value) return
-  await ElMessageBox.confirm(
-    `将复制选中的 ${selectedCaseIds.value.length} 条用例到「功能用例库」（工作区原数据保留）`,
-    '导入到用例库',
-    { type: 'info' }
-  )
+const handleImportToLibrary = async (caseIds) => {
+  const ids = Array.isArray(caseIds) ? caseIds : [...selectedCaseIds.value]
+  if (!ids.length || !currentReq.value) return
   importingToLibrary.value = true
   try {
     const res = await aiRequirementApi.importToLibrary(
       currentReq.value.id,
-      selectedCaseIds.value,
-      proStore.projectInfo.id
+      ids,
+      proStore.projectInfo.id,
+      { duplicateTitleMode: importDuplicateMode.value }
     )
     if (res.data?.code === 200) {
-      ElMessage.success(res.data.message || '导入成功')
+      const d = res.data.data || {}
+      const msg = res.data.message || '审核入库成功'
+      if (d.copied_count > 0 || d.overwritten_count > 0) {
+        ElMessage.success(msg)
+      } else if (d.skipped_count > 0) {
+        ElMessage.warning(msg)
+      } else {
+        ElMessage.info(msg)
+      }
       await loadCases(currentReq.value.id)
     }
   } catch (e) {
-    ElMessage.error(apiErrorMsg(e, '导入失败'))
+    ElMessage.error(apiErrorMsg(e, '审核入库失败'))
   } finally {
     importingToLibrary.value = false
   }
+}
+
+const handleImportOneToLibrary = async (caseId) => {
+  if (!caseId || !currentReq.value) return
+  importingOneId.value = caseId
+  try {
+    await handleImportToLibrary([caseId])
+  } finally {
+    importingOneId.value = null
+  }
+}
+
+const handleSessionImportPending = async () => {
+  const pendingIds = sessionCases.value.filter(c => !isCaseInLibrary(c)).map(c => c.id)
+  if (!pendingIds.length) {
+    ElMessage.info('本次生成的用例均已入库')
+    return
+  }
+  await handleImportToLibrary(pendingIds)
+}
+
+const selectSessionPending = () => {
+  selectedCaseIds.value = sessionCases.value.filter(c => !isCaseInLibrary(c)).map(c => c.id)
 }
 
 const handleDeleteOneCase = (c) =>
@@ -2608,7 +3433,7 @@ const openEditCase = (c) => {
     stage: c.stage || '系统测试阶段',
     keywords: c.keywords,
     test_point_ids: [...(c.test_point_ids || [])],
-    steps: JSON.parse(JSON.stringify(c.steps || []))
+    steps: normalizeCaseSteps(c.steps)
   }
   editVisible.value = true
 }
@@ -2643,8 +3468,12 @@ const saveEditCase = async () => {
 }
 
 const handleExport = async () => {
-  if (!zentaoBindingsReady.value) {
-    ElMessage.warning('请先在「禅道导入配置」填写完整后再导出')
+  if (!exportBindingsReady.value) {
+    ElMessage.warning(
+      exportProfile.value === 'generic'
+        ? '暂无用例可导出'
+        : '请先在「禅道导入配置」填写完整后再导出'
+    )
     return
   }
   const uStore = UserStore()
@@ -2660,7 +3489,8 @@ const handleExport = async () => {
     const blob = await res.blob()
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `requirement_${currentReq.value.id}_zentao_cases.xlsx`
+    const suffix = exportProfile.value === 'generic' ? 'cases' : 'zentao_cases'
+    a.download = `requirement_${currentReq.value.id}_${suffix}.xlsx`
     a.click()
     URL.revokeObjectURL(a.href)
     ElMessage.success('导出成功')
@@ -2686,14 +3516,27 @@ const handleDeleteReq = async (row) => {
 const goTestAnalysisPoint = (pointId) => {
   if (!currentReq.value?.id) return
   router.push({
-    path: '/ai-test-analysis',
-    query: { reqId: String(currentReq.value.id), pointId: String(pointId) }
+    name: 'aiTestingWorkspace',
+    params: { reqId: String(currentReq.value.id) },
+    query: { tab: 'points', pointId: String(pointId) }
   })
+}
+
+const openDetailById = async (reqId) => {
+  if (!reqId) return
+  let row = reqList.value.find(r => r.id === reqId)
+  if (!row) {
+    try {
+      const res = await aiRequirementApi.getDetail(reqId, proStore.projectInfo?.id)
+      if (res.data?.code === 200) row = res.data.data
+    } catch (e) { /* ignore */ }
+  }
+  if (row) await openDetail(row)
 }
 
 const applyRouteCaseFilters = () => {
   const sourceRef = route.query.sourceRef
-  const pointId = route.query.pointId
+  const pointId = route.query.pointId || props.highlightPointId
   if (sourceRef) caseFilterSourceRef.value = String(sourceRef)
   if (pointId) caseFilterPointId.value = Number(pointId)
 }
@@ -2718,8 +3561,20 @@ const openDetailFromRoute = async () => {
 onMounted(async () => {
   loadConfigs()
   loadExportTemplate()
+  if (props.embedMode && props.embedReqId) {
+    await openDetailById(Number(props.embedReqId))
+    detailVisible.value = true
+    applyRouteCaseFilters()
+    return
+  }
   await loadList()
   await openDetailFromRoute()
+})
+
+watch(() => props.embedReqId, async (id) => {
+  if (!props.embedMode || !id) return
+  await openDetailById(Number(id))
+  detailVisible.value = true
 })
 
 onUnmounted(() => {
@@ -2858,6 +3713,28 @@ onUnmounted(() => {
   margin-right: 20px;
   margin-bottom: 12px;
 }
+.extra-instructions-form {
+  margin-top: 4px;
+  max-width: 960px;
+}
+.extra-instructions-form :deep(.el-form-item) {
+  margin-bottom: 8px;
+}
+.session-card {
+  margin-top: 12px;
+}
+.session-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.session-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
 .batch-job-progress {
   margin-bottom: 12px;
 }
@@ -2982,6 +3859,28 @@ onUnmounted(() => {
   font-size: 12px;
   word-break: break-all;
 }
+.naming-label-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  flex-wrap: nowrap;
+}
+.naming-help-intro {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #606266;
+}
+.naming-help-intro code {
+  padding: 1px 4px;
+  background: #f5f7fa;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.naming-slot-help-table code {
+  font-size: 12px;
+}
 .naming-warn-list {
   margin: 4px 0 0;
   padding-left: 18px;
@@ -3060,6 +3959,15 @@ onUnmounted(() => {
 .cases-module-hint {
   margin-bottom: 12px;
 }
+.cases-filter-hint {
+  margin-bottom: 12px;
+}
+.cases-filter-hint-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #606266;
+}
 .cases-toolbar {
   display: flex;
   justify-content: space-between;
@@ -3072,6 +3980,21 @@ onUnmounted(() => {
   margin-bottom: 12px;
   padding-bottom: 8px;
   border-bottom: 1px dashed #eee;
+}
+.step-block-head {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  margin-bottom: 8px;
+}
+.step-field {
+  margin-bottom: 8px;
+}
+.step-field-label {
+  display: block;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 4px;
 }
 .dialog-title-with-tip {
   display: inline-flex;
@@ -3110,5 +4033,26 @@ onUnmounted(() => {
   max-width: 420px;
   line-height: 1.55;
   font-size: 13px;
+}
+.requirement-embed-host :deep(.embed-hidden-card > .el-card__header) {
+  display: none;
+}
+.requirement-embed-host :deep(.embed-hidden-card) {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+.requirement-embed-host :deep(.embed-hidden-card > .el-card__body) {
+  padding: 0;
+}
+.embed-loading-holder {
+  min-height: 160px;
+}
+.naming-template-form :deep(.el-form-item__label) {
+  white-space: nowrap;
+  line-height: 32px;
+  height: auto;
+  align-items: flex-start;
+  padding-right: 12px;
 }
 </style>

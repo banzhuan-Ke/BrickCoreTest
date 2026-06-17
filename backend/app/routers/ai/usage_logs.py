@@ -125,7 +125,7 @@ async def usage_logs_summary(
         await period_qs.annotate(call_count=Count("id"), token_sum=Sum("tokens_used"))
         .group_by("scene")
         .order_by("-token_sum")
-        .limit(5)
+        .limit(12)
         .values("scene", "call_count", "token_sum")
     )
     top_scenes = [
@@ -152,7 +152,7 @@ async def usage_logs_summary(
                 "start_date": period_start.strftime("%Y-%m-%d"),
                 "end_date": today_start.strftime("%Y-%m-%d"),
             },
-            "top_scenes": top_scenes[:8],
+            "top_scenes": top_scenes,
         }
     )
 
@@ -284,7 +284,14 @@ async def list_usage_logs(
     total = await qs.count()
     rows = await qs.order_by("-id").offset((page - 1) * size).limit(size)
     items = await _enrich_project_names([_row_to_dict(row) for row in rows])
-    scenes = [{"scene": k, "label": v[0]} for k, v in AI_SCENE_DEFINITIONS.items()]
+    scene_keys = {k for k in AI_SCENE_DEFINITIONS}
+    if date_from:
+        db_scenes = await qs.distinct().values_list("scene", flat=True)
+        scene_keys.update(s for s in db_scenes if s)
+    scenes = sorted(
+        [{"scene": k, "label": _scene_label(k)} for k in scene_keys],
+        key=lambda x: x["label"],
+    )
     return StandardResponse(
         data={
             "list": items,

@@ -1,5 +1,6 @@
 import {defineStore} from 'pinia'
 import http from "@/api/index.js"
+import { UserStore } from '@/stores/module/UserStore.js'
 
 export const ProjectStore = defineStore('proStore', {
     state: () => {
@@ -33,13 +34,23 @@ export const ProjectStore = defineStore('proStore', {
                 default_headers: Array.isArray(pro.default_headers) ? pro.default_headers : [],
             }
             this.isDisabled = false
-            await Promise.all([
+            const uStore = UserStore()
+            const loaders = [
                 this.getEnvironmentList(),
                 this.getCatalogList(),
-                this.getTaskList(),
-                this.getDeviceList(),
                 this.refreshProjectGlobals(),
-            ])
+            ]
+            if (uStore.hasPermission('ui_task:view')) {
+                loaders.push(this.getTaskList())
+            } else {
+                this.taskList = []
+            }
+            if (uStore.hasPermission('device:view')) {
+                loaders.push(this.getDeviceList())
+            } else {
+                this.deviceList = []
+            }
+            await Promise.allSettled(loaders)
             return true
         },
         /** 刷新当前项目的 global_vars（供变量插入等使用） */
@@ -84,19 +95,27 @@ export const ProjectStore = defineStore('proStore', {
         },
         // 获取任务列表
         async getTaskList() {
-            const response = await http.taskApi.getTaskList({
-                project_id: this.projectInfo.id
-            })
-            if (response.status === 200) {
-                // 后端返回 {total, data} 分页格式，提取 data 数组
-                this.taskList = response.data.data || []
+            try {
+                const response = await http.taskApi.getTaskList(
+                    { project_id: this.projectInfo.id },
+                    { silent403: true },
+                )
+                if (response.status === 200) {
+                    this.taskList = response.data.data || []
+                }
+            } catch {
+                this.taskList = []
             }
         },
         // 获取设备列表
         async getDeviceList() {
-            const response = await http.deviceApi.getDeviceList()
-            if (response.status === 200) {
-                this.deviceList = response.data
+            try {
+                const response = await http.deviceApi.getDeviceList(undefined, { silent403: true })
+                if (response.status === 200) {
+                    this.deviceList = response.data
+                }
+            } catch {
+                this.deviceList = []
             }
         },
         // 获取在线设备列表

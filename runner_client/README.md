@@ -1,9 +1,9 @@
 # BrickCore Runner 客户端（GUI）
 
 Windows 桌面程序：登录 BrickCore 平台、选择环境、**上线**执行设备、检查更新。  
-**执行引擎**（Playwright、MQ 消费等）已包含在网盘分发的 `BrickCoreRunner.zip` 内；社区版仓库**不含** `runner/` 引擎源码。
+**执行引擎**（Playwright、MQ 消费等）已包含在网盘分发的 `BrickCoreRunner.zip` 内；本仓库**不含** `runner/` 引擎源码。
 
-## 网盘获取（社区版）
+## 网盘获取
 
 | 方式 | 说明 |
 |------|------|
@@ -16,8 +16,8 @@ Windows 桌面程序：登录 BrickCore 平台、选择环境、**上线**执行
 ## 使用流程
 
 1. 从网盘下载并解压 `BrickCoreRunner.zip`（保留 `exe`、`_internal`、`runner` 目录）
-2. 运行 `BrickCoreRunner.exe`，填写平台地址
-3. 使用平台账号 **登录** → 填写设备名称 → **上线**
+2. 运行 `BrickCoreRunner.exe`，**管理服务器环境** 填 `http://<公网IP>`（Docker 部署**勿写** `:8000`）
+3. 使用平台账号 **登录** → 填写设备名称 → **上线**（需安全组放行 **80、25672、26379、9200**）
 4. 在平台 **设备管理** 确认状态为 **在线**
 
 切换环境：先 **下线**，再更换地址后重新登录/上线。
@@ -27,10 +27,10 @@ Windows 桌面程序：登录 BrickCore 平台、选择环境、**上线**执行
 | 项 | 说明 |
 |----|------|
 | 技术栈 | PySide6 桌面壳 + 调用平台 API |
-| 社区版 | 可阅读、集成参考；**不提供** 引擎打包脚本与 `runner/` 源码 |
-| 商业版 | 含完整 `runner/` 与打包脚本，可自行构建 zip 分发 |
+| 引擎源码 | 不在本 Git 仓库；请使用网盘 `BrickCoreRunner.zip` |
+| 自行打包安装包 | 本仓库未包含引擎打包脚本 |
 
-从源码运行（仅调试 GUI，**仍需**单独准备 `runner/` 引擎目录，社区版默认没有）：
+从源码运行（仅调试 GUI，**仍需**单独准备 `runner/` 引擎目录）：
 
 ```powershell
 cd runner_client
