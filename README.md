@@ -25,7 +25,7 @@
 | 接口自动化 | 接口管理、用例/套件/计划、数据工厂、定时任务 |
 | AI 测试 | 需求生成功能用例、助手、问答评测、失败分析等 |
 | 性能测试 | 场景压测；高并发可配合 **执行机** 中的分布式 Worker |
-| Web UI 自动化 | 用例编排、录制、计划执行；需安装 **Windows 执行器** |
+| Web UI 自动化 | 用例编排、录制、计划执行；需安装 **执行器**（Windows 客户端 / Mac 命令行） |
 
 ---
 
@@ -46,22 +46,35 @@ README 内嵌大图会被 Gitee 压缩变糊，高清说明与录屏见演示站
 
 ---
 
-## 执行器下载（Windows · 约 300MB）
+## 执行器下载
 
 UI 自动化、录制回放、分布式压测 Worker 需安装 **BrickCoreRunner**。
 
-**推荐网盘下载**（免占演示服务器带宽）：
+**推荐网盘下载**（同一百度分享，提取码 `9gbi`）：
+
+| 系统 | 安装包 | 说明 |
+|------|--------|------|
+| **Windows** | `BrickCoreRunner.zip`（约 800MB） | 桌面客户端，双击 `BrickCoreRunner.exe` |
+| **macOS · Apple 芯片** | `BrickCoreRunner-mac-arm64.zip`（约 330MB） | M 系列 Mac，`uname -m` → `arm64` |
+| **macOS · Intel** | `BrickCoreRunner-mac-intel.zip`（约 340MB） | Intel Mac，`uname -m` → `x86_64` |
+
+👉 [百度网盘下载](https://pan.baidu.com/s/1pObFpG-Mt7-Pxo58hklOlg?pwd=9gbi) · 提取码 **`9gbi`**
 
 | 方式 | 说明 |
 |------|------|
-| **百度网盘** | [BrickCoreRunner.zip](https://pan.baidu.com/s/1i0odbTaCLeKkBqmtul-BGg?pwd=n9qu) · 提取码 `n9qu` |
-| **演示平台内** | 登录 [http://43.142.83.156/](http://43.142.83.156/) → **UI 自动化 → 设备管理** → **网盘下载** |
+| **演示平台内** | 登录 [http://43.142.83.156/](http://43.142.83.156/) → **UI 自动化 → 设备管理** → **网盘下载**（Windows） |
 
-安装步骤：
+**Windows 安装：**
 
 1. 下载并解压 `BrickCoreRunner.zip`（路径勿含中文/空格）
 2. 运行 `BrickCoreRunner.exe`，服务器地址填 **`http://43.142.83.156`**
 3. 使用演示账号登录，点击 **上线**；在 **设备管理** 确认在线
+
+**macOS 安装：**
+
+1. 按芯片下载 **arm64** 或 **intel** 包，在 Mac 上解压（勿在 Windows 解压）
+2. 终端执行：`chmod +x connect-mac.sh start-mac.sh` → `./connect-mac.sh` → `./start-mac.sh`
+3. 在平台 **设备管理** 确认在线
 
 更多说明：[docs-site/guide/runner-client.md](docs-site/guide/runner-client.md)
 
@@ -129,24 +142,26 @@ docker exec -i fastapi_mysql mysql --default-character-set=utf8mb4 -uadmin -pBri
 
 ---
 
+## 测试交流群
+
+使用、部署或反馈问题时，欢迎加入 **BrickCoreAI 测试平台交流群**（微信群）：
+
+<p align="center">
+  <img src="assets/readme/image-wechat-group-brickcore.png" width="260" alt="BrickCoreAI 测试平台交流群" /><br />
+  <sub>微信扫码加入 · 交流安装部署、用例编写与平台使用 · 二维码 7 天内有效，过期请联系下方作者微信</sub>
+</p>
+
+---
+
 ## 支持与交流
 
 - 觉得有用欢迎 **Star**
-- 问题与建议欢迎加我微信交流
-- 觉得有用的话，欢迎请作者喝杯奶茶
+- 问题与建议：加入上方 **测试交流群**，或扫下方微信好友二维码私聊
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/readme/image-20260604162222425.png" width="200" alt="微信好友二维码" /><br />
-      <sub>微信好友</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/readme/image-20260604162305940.png" width="200" alt="微信收款码" /><br />
-      <sub>微信赞赏</sub>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="assets/readme/image-20260604162222425.png" width="200" alt="微信好友二维码" /><br />
+  <sub>微信好友</sub>
+</p>
 
 ## License
 

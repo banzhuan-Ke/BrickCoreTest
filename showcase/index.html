@@ -70,6 +70,21 @@
       color: var(--muted);
       font-size: 14px;
     }
+    .support-block {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-top: 8px;
+      text-align: center;
+    }
+    .support-block p { margin: 0 0 16px; color: var(--muted); }
+    .support-block img {
+      width: 200px;
+      height: auto;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
     .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .tag {
       font-size: 12px;
@@ -187,6 +202,13 @@
         <source src="demo/接口用例ai生成快速版.mp4" type="video/mp4" />
         您的浏览器不支持视频播放，请使用 Chrome / Edge 打开。
       </video>
+    </section>
+
+    <section class="support-block" id="support">
+      <h2 style="margin:0 0 8px;font-size:1.1rem;color:var(--accent);">支持作者</h2>
+      <p>觉得演示有帮助，欢迎给开源仓库 Star，或通过下方微信赞赏支持后续更新（自愿、无强制）。</p>
+      <img src="assets/wechat-donate.png" width="200" alt="微信赞赏" /><br />
+      <sub>微信赞赏</sub>
     </section>
   </main>
 
