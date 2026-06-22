@@ -66,6 +66,9 @@ video/
 # 例外：showcase 静态演示页截图
 !showcase/demo/**
 
+# 例外：showcase 静态页内嵌图片（赞赏码等）
+!showcase/assets/**
+
 # 临时文件
 tmp/
 temp/
