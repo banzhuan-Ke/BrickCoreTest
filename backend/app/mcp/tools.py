@@ -1999,7 +1999,17 @@ async def tool_list_perf_records(
     if scene_id:
         qs = qs.filter(scene_id=scene_id)
     total = await qs.count()
-    rows = await qs.order_by("-id").offset((page - 1) * size).limit(size).prefetch_related("scene")
+    rows = await (
+        qs.order_by("-id")
+        .offset((page - 1) * size)
+        .limit(size)
+        .only(
+            "id", "scene_id", "status", "qps", "avg_response_time", "error_rate",
+            "total_requests", "run_by", "started_at", "duration",
+        )
+        .prefetch_related("scene")
+        .all()
+    )
     items = []
     for rec in rows:
         items.append(

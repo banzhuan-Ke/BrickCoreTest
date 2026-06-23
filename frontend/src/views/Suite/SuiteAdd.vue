@@ -47,8 +47,9 @@
       </div>
     </el-aside>
 
-    <!-- 中间：套件信息 + 前置步骤 -->
-    <el-main class="suite-main">
+    <!-- 中间 + 右侧（可拖拽调整宽度） -->
+    <div class="suite-workspace">
+      <div class="suite-main">
       <el-card class="suite-card">
         <!-- 标题 -->
         <div class="card-header">
@@ -119,10 +120,17 @@
           </el-button>
         </div>
       </el-card>
-    </el-main>
+      </div>
 
-    <!-- 右侧：套件用例 + 用例集 -->
-    <el-aside width="420px" class="case-sidebar">
+      <div
+        class="panel-resizer"
+        :class="{ 'is-active': isResizing }"
+        title="拖拽调整宽度"
+        @mousedown="onResizeStart"
+      />
+
+      <!-- 右侧：套件用例 + 用例集 -->
+      <aside class="case-sidebar" :style="{ width: `${rightWidth}px` }">
       <div class="case-section">
         <h3 class="sidebar-title">套件用例</h3>
         <div class="empty-case-tip">
@@ -133,12 +141,13 @@
         <h3 class="sidebar-title">测试用例集</h3>
         <CaseSet />
       </div>
-    </el-aside>
+      </aside>
+    </div>
   </el-container>
 </template>
 
 <script setup>
-import { reactive, ref, computed, watch } from 'vue'
+import { reactive, ref, computed, watch, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { VueDraggable } from 'vue-draggable-plus'
 import { StepEditor } from '@/components/StepEditor'
@@ -149,6 +158,7 @@ import http from '@/api/index'
 import { ElNotification } from 'element-plus'
 import ActionGroup from '@/datas/ActionGroup.js'
 import CaseSet from './componets/CaseSet.vue'
+import { useSplitPanelResize } from '@/composables/useSplitPanelResize'
 import {
   Rank, Check, Close,
   ChromeFilled, Position, Mouse,
@@ -164,8 +174,15 @@ const route = useRoute()
 const proStore = ProjectStore()
 const userStore = UserStore()
 
+const { rightWidth, isResizing, onResizeStart } = useSplitPanelResize({
+  storageKey: 'suite-edit-right-panel-width',
+  defaultWidth: 560,
+})
+
 const formRef = ref()
 const saving = ref(false)
+
+provide('suiteAddedCaseIds', ref(new Set()))
 
 // 套件信息
 const suiteInfo = reactive({
@@ -273,191 +290,12 @@ const goBack = () => {
 </script>
 
 <style scoped lang="scss">
+@use '@/styles/suite-edit-layout.scss';
+
 .suite-strategy-box {
   display: flex;
   flex-direction: column;
   gap: 8px;
   width: 100%;
-}
-
-.suite-edit-container {
-  height: calc(100vh - 50px);
-}
-
-.keyword-sidebar {
-  background: white;
-  border-right: 1px solid var(--el-border-color);
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.sidebar-header {
-  padding: 16px;
-  border-bottom: 1px solid var(--el-border-color);
-  flex-shrink: 0;
-  
-  h3 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 500;
-  }
-}
-
-.keyword-list {
-  flex: 1;
-  padding: 0;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.keyword-collapse {
-  border: none;
-  
-  :deep(.el-collapse-item__header) {
-    padding: 0 12px;
-    font-weight: 500;
-    border-bottom: 1px solid var(--el-border-color-light);
-  }
-  
-  :deep(.el-collapse-item__content) {
-    padding: 8px;
-  }
-  
-  :deep(.el-collapse-item__wrap) {
-    border-bottom: none;
-  }
-}
-
-.group-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  
-  .el-icon {
-    color: var(--el-color-primary);
-  }
-}
-
-.keyword-items {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.keyword-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-  background: var(--el-fill-color-light);
-  border: 1px solid var(--el-border-color);
-  border-radius: 6px;
-  cursor: grab;
-  transition: all 0.2s;
-  
-  &:hover {
-    border-color: var(--el-color-primary);
-    background: var(--el-color-primary-light-9);
-  }
-  
-  &:active {
-    cursor: grabbing;
-  }
-  
-  .drag-icon {
-    margin-left: auto;
-    color: var(--el-text-color-secondary);
-  }
-}
-
-.suite-main {
-  padding: 20px;
-  background: var(--el-fill-color-light);
-  overflow-y: auto;
-  height: 100%;
-}
-
-.suite-card {
-  min-height: auto;
-}
-
-.card-header {
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--el-border-color);
-  
-  h2 {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 500;
-  }
-}
-
-.suite-form {
-  max-width: 600px;
-}
-
-.setup-steps-section {
-  margin-top: 24px;
-  
-  .section-title {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-    
-    span:first-child {
-      font-weight: 500;
-      font-size: 16px;
-    }
-  }
-}
-
-.action-bar {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid var(--el-border-color);
-  display: flex;
-  gap: 12px;
-}
-
-.case-sidebar {
-  background: white;
-  border-left: 1px solid var(--el-border-color);
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow-y: auto;
-}
-
-.sidebar-title {
-  margin: 0;
-  padding: 16px;
-  font-size: 16px;
-  font-weight: 500;
-  border-bottom: 1px solid var(--el-border-color);
-}
-
-.case-section {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  
-  &:first-child {
-    border-bottom: 1px solid var(--el-border-color);
-  }
-}
-
-.empty-case-tip {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.draggable-source {
-  min-height: 200px;
 }
 </style>

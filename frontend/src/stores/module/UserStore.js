@@ -1,11 +1,11 @@
 import {defineStore} from 'pinia'
 import {useDark} from '@vueuse/core'
-import {applyUiTheme, UI_THEMES} from '@/utils/theme'
+import {applyUiTheme, UI_THEMES, isValidUiTheme} from '@/utils/theme'
 
 /** 界面风格单独存 localStorage，与登录会话解耦，退出登录不丢失 */
 export function readUiThemeFromStorage() {
     const dedicated = localStorage.getItem('uiTheme')
-    if (dedicated === UI_THEMES.classic || dedicated === UI_THEMES.pro) {
+    if (isValidUiTheme(dedicated)) {
         return dedicated
     }
     try {
@@ -13,7 +13,7 @@ export function readUiThemeFromStorage() {
         if (raw) {
             const parsed = JSON.parse(raw)
             const legacy = parsed?.uiTheme
-            if (legacy === UI_THEMES.classic || legacy === UI_THEMES.pro) {
+            if (isValidUiTheme(legacy)) {
                 localStorage.setItem('uiTheme', legacy)
                 return legacy
             }
@@ -89,7 +89,7 @@ export const UserStore = defineStore('uStore', {
         },
         // 切换界面风格
         setUiTheme(theme) {
-            this.uiTheme = theme === UI_THEMES.pro ? UI_THEMES.pro : UI_THEMES.classic
+            this.uiTheme = isValidUiTheme(theme) ? theme : UI_THEMES.classic
             localStorage.setItem('uiTheme', this.uiTheme)
             applyUiTheme(this.uiTheme, this.darkMode)
         },

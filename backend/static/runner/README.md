@@ -30,9 +30,9 @@ upload-to-server.bat
 | 平台页面 | **系统管理 → 执行器发布**（DB，推荐） |
 | 本目录文件 | 平台下载（需挂载或 docker cp） |
 | `RUNNER_CLIENT_DOWNLOAD_URL` | 环境变量外链兜底 |
-| `RUNNER_CLIENT_VERSION_LATEST` | 与 zip 内 VERSION.txt 一致（当前 **1.3.14**） |
+| `RUNNER_CLIENT_VERSION_LATEST` | 与 zip 内 VERSION.txt 一致（当前 **1.3.15**） |
 
-## 运行库与测试机要求（v1.3.14）
+## 运行库与测试机要求（v1.3.15）
 
 | 项 | 说明 |
 |----|------|

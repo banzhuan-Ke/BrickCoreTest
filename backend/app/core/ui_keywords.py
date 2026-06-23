@@ -23,7 +23,7 @@ UI_VALID_METHODS = {
     "kw_assert_enabled", "kw_assert_disabled",
     "kw_assert_checked", "kw_assert_empty", "kw_assert_editable", "kw_assert_focused",
     "kw_db_assert",
-    "extract_text", "extract_attribute",
+    "extract_text", "extract_attribute", "extract_page_url",
     "condition_branch",
 }
 
@@ -69,6 +69,7 @@ UI_REQUIRED_PARAMS = {
     "kw_assert_focused": {"locator"},
     "extract_text": {"locator", "var_name"},
     "extract_attribute": {"locator", "attr_name", "var_name"},
+    "extract_page_url": {"var_name"},
     "frame_fill_value": {"frame", "locator"},
     "frame_click_element": {"frame", "locator"},
     "frame_hover": {"frame", "locator"},
@@ -97,6 +98,8 @@ UI_DEFAULT_PARAMS = {
     "wait_for_time": {"timeout": 2000},
     "set_default_timeout": {"timeout": 20000},
     "open_url": {"wait_until": "load", "timeout": 30000},
+    "go_back": {"timeout": 30000},
+    "refresh": {"wait_until": "domcontentloaded", "timeout": 30000},
     "save_page_img": {"name": "screenshot"},
     "mouse_click": {"button": "left", "count": 1},
     "mouse_down": {"button": "left"},
@@ -113,6 +116,7 @@ UI_DEFAULT_PARAMS = {
     "kw_assert_element_text": {"match_mode": "exact"},
     "extract_text": {"index": 1, "timeout": 20000},
     "extract_attribute": {"index": 1, "timeout": 20000},
+    "extract_page_url": {"var_name": ""},
     "frame_fill_value": {"timeout": 20000},
     "frame_click_element": {"index": 1, "button": "left", "force": False, "timeout": 20000},
     "frame_hover": {"timeout": 20000},
@@ -188,5 +192,6 @@ METHOD_TO_KEYWORD = {
     "kw_db_assert": "数据库断言",
     "extract_text": "提取元素文本",
     "extract_attribute": "提取元素属性",
+    "extract_page_url": "提取当前页面url",
     "condition_branch": "条件分支",
 }

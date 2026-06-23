@@ -14,10 +14,17 @@ COMMON_SHORT_TEXTS = frozenset({
     "导入", "导出", "下载", "上传", "预览", "复制", "粘贴", "全选", "清空",
 })
 
+
+def _unsafe_css_has_text(text: str) -> bool:
+    return bool(re.search(r"[\$\\]", text or ""))
+
+
 LOCATOR_METHODS = frozenset({
     "click_ele", "double_click_ele", "hover", "fill_value", "press_key",
     "select_option", "upload_file", "assert_ele", "mouse_click",
 })
+
+DRAG_METHODS = frozenset({"drag_and_drop", "frame_drag_and_drop"})
 
 GENERIC_CLASS_HINTS = (
     "show-name", "text-link", "btn", "button", "link", "item", "cell",
@@ -42,6 +49,7 @@ def _build_candidates_from_meta(meta: dict) -> list[str]:
     tag = (meta.get("tag") or "").lower()
     text = (meta.get("accessibleName") or meta.get("text") or "").strip()
     region = (meta.get("region") or "").strip()
+    popup_root = (meta.get("popupRoot") or "").strip()
     match_index = int(meta.get("matchIndex") or 0)
     elem_id = (meta.get("id") or "").strip()
     name = (meta.get("name") or "").strip()
@@ -78,6 +86,10 @@ def _build_candidates_from_meta(meta: dict) -> list[str]:
         opts.append(f'{prefix}[title="{title}"]')
     if text and len(text) < 30 and not text.isdigit():
         opts.append(f"get_by_text={text}")
+    if popup_root and text and len(text) < 40:
+        opts.append(f"{popup_root} >> get_by_text={text}")
+        if role:
+            opts.append(f"{popup_root} >> get_by_role={role}, {text}")
     if tag and text:
         class_part = f"[@class='{cls.split()[0]}']" if cls else ""
         opts.append(f"//{tag}{class_part}[contains(text(),'{text}')]")
@@ -85,7 +97,8 @@ def _build_candidates_from_meta(meta: dict) -> list[str]:
         opts.append(f"{region} >> get_by_text={text}")
         if role:
             opts.append(f"{region} >> get_by_role={role}, {text}")
-        opts.append(f'{region} {tag}:has-text("{text}")')
+        if not _unsafe_css_has_text(text):
+            opts.append(f'{region} {tag}:has-text("{text}")')
     if is_common and text:
         inferred = role or ("button" if tag in ("button", "a") else "")
         if inferred and f"get_by_role={inferred}, {text}" not in opts:
@@ -128,6 +141,14 @@ def _score_locator(candidate: str, step: dict, ai_suggested: Optional[str] = Non
         for word in COMMON_SHORT_TEXTS:
             if word != primary and word in candidate and primary not in candidate:
                 score -= 50
+
+    popup_root = (meta.get("popupRoot") or "").strip()
+    if popup_root and len(popup_root) > 2:
+        if candidate.startswith(f"{popup_root} >>"):
+            score += 85
+        elif popup_root.startswith(("get_by_", "#", "[")) or "." in popup_root:
+            if candidate.startswith("get_by_text=") and " >> " not in candidate:
+                score -= 35
 
     ambiguous = accessible in COMMON_SHORT_TEXTS or any(t in COMMON_SHORT_TEXTS for t in desc_targets)
     if ambiguous:
@@ -295,6 +316,12 @@ def _step_locator_key(step: dict) -> tuple:
     params = step.get("params") or {}
     if method == "open_url":
         return method, params.get("url") or ""
+    if method in DRAG_METHODS:
+        return (
+            method,
+            params.get("start_selector") or "",
+            params.get("end_selector") or "",
+        )
     return method, params.get("locator") or ""
 
 
@@ -363,6 +390,17 @@ def resolve_locators_after_optimize(optimized_steps: list, original_steps: list)
             if orig_url and opt_params.get("url") != orig_url:
                 opt_params["url"] = orig_url
                 stats["url_restored"] += 1
+            continue
+
+        if method in DRAG_METHODS:
+            restored = False
+            for key in ("start_selector", "end_selector"):
+                orig_val = orig_params.get(key, "")
+                if orig_val and opt_params.get(key) != orig_val:
+                    opt_params[key] = orig_val
+                    restored = True
+            if restored:
+                stats["unchanged"] += 1
             continue
 
         if method not in LOCATOR_METHODS:

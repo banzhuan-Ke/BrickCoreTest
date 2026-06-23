@@ -50,6 +50,10 @@ def build_runner_notices() -> dict[str, Any]:
                 "detail": "升级至 v1.3.6+；AI 优化会从候选列表智能重选默认定位（如区域链式）；仍不准请手动切换下拉备选。",
             },
             {
+                "title": "hover 步骤执行极慢（每次多等约 20 秒）",
+                "detail": "升级至 v1.3.15+；旧版将步骤里的 timeout 误当作悬停后 sleep。升级后 timeout 仅用于定位超时，悬停后默认停留 500ms，可按需设 wait_time。",
+            },
+            {
                 "title": "Playwright 浏览器缺失",
                 "detail": "打包版启动时会提示补装；开发模式在 runner\\venv 内执行 playwright install chromium。",
             },

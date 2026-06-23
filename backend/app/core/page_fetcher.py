@@ -10,7 +10,7 @@ import asyncio
 import os
 from datetime import datetime
 from typing import Any, Optional
-from app.core.locator_utils import normalize_locator
+from app.core.locator_utils import normalize_locator, prefer_popup_elements, resolve_locator_on_page
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,27 @@ EXTRACT_ELEMENTS_JS = """
     
     function escapeQuotes(str) {
         return (str || '').replace(/"/g, '\\"');
+    }
+
+    function isInsidePopup(el) {
+        var node = el;
+        var depth = 0;
+        while (node && node !== document.body && depth < 14) {
+            if (!node.tagName) break;
+            var role = node.getAttribute('role') || '';
+            var cls = (node.className || '').toString();
+            var style = window.getComputedStyle(node);
+            var isFixed = style.position === 'fixed' || style.position === 'absolute';
+            var looksModal = role === 'dialog' || role === 'alertdialog' ||
+                /modal|popup|dialog|overlay|mask|drawer|uni-popup|pay-|recharge/i.test(cls);
+            var rect = node.getBoundingClientRect();
+            if (looksModal && rect.width >= 120 && rect.height >= 60 && (isFixed || role === 'dialog')) {
+                return true;
+            }
+            node = node.parentElement;
+            depth++;
+        }
+        return false;
     }
     
     function getSelector(el) {
@@ -122,6 +143,7 @@ EXTRACT_ELEMENTS_JS = """
             text: text,
             selector: selector,
             clickable: clickable,
+            in_popup: isInsidePopup(el),
         });
     }
     
@@ -217,6 +239,7 @@ async def fetch_page_structure(url: str, timeout: int = 15) -> Optional[dict]:
         await asyncio.sleep(1)
 
         raw_elements = await page.evaluate(EXTRACT_ELEMENTS_JS)
+        raw_elements = prefer_popup_elements(raw_elements)
         title = await page.title()
         current_url = page.url
 
@@ -559,6 +582,11 @@ class SmartPageExplorer:
         title = await self.page.title()
         current_url = self.page.url
 
+        popup_only = prefer_popup_elements(raw_elements if isinstance(raw_elements, list) else [])
+        if popup_only is not raw_elements and popup_only:
+            logger.info("[SmartPageExplorer] 快照优先弹窗内 %s 个元素", len(popup_only))
+            raw_elements = popup_only
+
         elements = []
         for el in raw_elements:
             cleaned = {
@@ -595,31 +623,15 @@ class SmartPageExplorer:
 
     def _resolve_locator(self, locator: Any):
         """
-        解析定位器，支持 Playwright 原生定位 API：
-        - get_by_text=xxx        → page.get_by_text("xxx").first
-        - get_by_role=xxx        → page.get_by_role("xxx").first
-        - get_by_role=xxx, yyy   → page.get_by_role("xxx", name="yyy").first
-        - dict {get_by_role, name} → 同上
-        - 其他 CSS 选择器        → page.locator(locator_str).first
+        解析定位器，支持 Playwright 原生定位 API 与 >> 链式 scope。
         """
         locator_str = self._coerce_locator(locator)
         if not locator_str:
             return None
-        if locator_str.startswith("get_by_text="):
-            return self.page.get_by_text(locator_str[12:]).first
-        if locator_str.startswith("get_by_label="):
-            return self.page.get_by_label(locator_str[13:]).first
-        if locator_str.startswith("get_by_placeholder="):
-            return self.page.get_by_placeholder(locator_str[19:]).first
-        if locator_str.startswith("get_by_role="):
-            role_part = locator_str[12:]
-            parts = [p.strip() for p in role_part.split(",")]
-            role = parts[0]
-            if len(parts) > 1:
-                name = ", ".join(parts[1:])
-                return self.page.get_by_role(role, name=name).first
-            return self.page.get_by_role(role).first
-        return self.page.locator(locator_str).first
+        loc = resolve_locator_on_page(self.page, locator_str)
+        if loc is None:
+            return None
+        return loc.first
 
     async def extract_interactive_elements(self) -> list:
         """提取当前页可见可交互元素（与录制/自愈 DOM 列表一致）"""
@@ -627,7 +639,12 @@ class SmartPageExplorer:
             return []
         try:
             raw = await self.page.evaluate(EXTRACT_ELEMENTS_JS)
-            return raw if isinstance(raw, list) else []
+            if not isinstance(raw, list):
+                return []
+            filtered = prefer_popup_elements(raw)
+            if filtered is not raw:
+                logger.info("[page_fetcher] 检测到弹窗层，优先使用弹窗内 %s 个元素", len(filtered))
+            return filtered[:MAX_ELEMENTS]
         except Exception as e:
             logger.debug("[page_fetcher] extract_interactive_elements: %s", e)
             return []
@@ -637,6 +654,8 @@ class SmartPageExplorer:
         点击时优先匹配 button/link，避免 get_by_text 误点页面说明等非按钮文本。
         """
         locator_str = self._coerce_locator(locator)
+        if " >> " in locator_str or "||" in locator_str:
+            return self._resolve_locator(locator_str)
         if not locator_str.startswith("get_by_text="):
             return self._resolve_locator(locator_str)
         text = locator_str.split("=", 1)[1].strip().strip("'\"")
@@ -657,19 +676,22 @@ class SmartPageExplorer:
 
     def _extract_locator_text(self, locator: Any) -> Optional[str]:
         """从 locator 字符串提取可用于文本/title 匹配的片段"""
+        from app.core.locator_utils import extract_locator_text
+
+        text = extract_locator_text(locator)
+        if text:
+            return text
+
         import re
 
         locator_str = self._coerce_locator(locator)
         if not locator_str:
             return None
-        if locator_str.startswith("get_by_text="):
-            return locator_str[12:].strip()
         if locator_str.startswith("get_by_label="):
             return locator_str[13:].strip()
         if locator_str.startswith("get_by_placeholder="):
             return locator_str[19:].strip()
         for pattern in (
-            r':has-text\("([^"]+)"\)',
             r'\[title="([^"]+)"\]',
             r'text="([^"]+)"',
         ):
@@ -849,8 +871,16 @@ class SmartPageExplorer:
                                 fallback_ok = True
                             except Exception:
                                 pass
-                            # 尝试 div/span:has-text("xxx")
-                            if not fallback_ok:
+                            # 含 $ 时 :has-text 会解析失败，优先 get_by_text
+                            if not fallback_ok and text_content:
+                                try:
+                                    await self.page.get_by_text(text_content, exact=False).first.click()
+                                    logger.info(f"[click_ele] get_by_text 兜底成功: {text_content[:40]}")
+                                    fallback_ok = True
+                                except Exception:
+                                    pass
+                            # 尝试 div/span:has-text("xxx")（文本不含 $ 时）
+                            if not fallback_ok and text_content and "$" not in text_content and "\\" not in text_content:
                                 for tag in ['div', 'span', 'a', 'i']:
                                     try:
                                         await self.page.locator(f'{tag}:has-text("{text_content}")').first.click()

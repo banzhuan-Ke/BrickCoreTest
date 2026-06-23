@@ -58,12 +58,14 @@
         <div v-else class="var-empty">无匹配变量</div>
       </div>
       <div v-if="showEnvEdit && envId" class="var-footer">
-        <el-button type="primary" link size="small" @click="emit('edit-env-vars')">
+        <el-button type="primary" link size="small" @click.stop="openEnvVarEdit">
           管理环境变量…
         </el-button>
       </div>
     </div>
   </el-popover>
+
+  <EnvVarQuickEdit v-model="envVarEditVisible" :env-id="envId" />
 </template>
 
 <script setup>
@@ -74,6 +76,7 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import { httpAuthConfigApi } from '@/api/modules/httpAuth'
 import { BUILTIN_VAR_HINTS, isSecretKey, varsObjectToList } from '@/utils/globalVars.js'
 import { insertVarRef, snapshotInsertTarget } from '@/utils/varInsert.js'
+import EnvVarQuickEdit from '@/components/EnvVarQuickEdit.vue'
 
 const props = defineProps({
   envId: { type: Number, default: null },
@@ -90,6 +93,7 @@ const props = defineProps({
 const emit = defineEmits(['edit-env-vars'])
 
 const proStore = ProjectStore()
+const envVarEditVisible = ref(false)
 const builtinHints = BUILTIN_VAR_HINTS
 const searchKeyword = ref('')
 const authPreview = ref({ auth_name: null, is_enabled: false, items: [] })
@@ -126,6 +130,11 @@ function onPopoverShow() {
   searchKeyword.value = ''
   snapshotInsertTarget()
   loadAuthVariables()
+}
+
+function openEnvVarEdit() {
+  envVarEditVisible.value = true
+  emit('edit-env-vars')
 }
 
 const projectVars = computed(() => {

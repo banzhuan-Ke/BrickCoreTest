@@ -84,6 +84,7 @@ async def copy_ui_case_to_project(
         catalog_id=target_catalog_id,
         description=case.description,
         username=username,
+        update_by=username,
     )
 
 

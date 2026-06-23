@@ -93,6 +93,8 @@ const router = useRouter()
 const suiteCaseList = ref([])
 const originalCases = ref([])
 
+const emit = defineEmits(['cases-change'])
+
 const getSuiteCases = async () => {
   if (!props.suiteId) return
   try {
@@ -114,6 +116,17 @@ watch(() => props.suiteId, (newId) => {
     getSuiteCases()
   }
 }, { immediate: true })
+
+watch(
+  suiteCaseList,
+  (list) => {
+    const ids = list
+      .map((item) => item.cases_id || item.id)
+      .filter((id) => id != null && id !== '')
+    emit('cases-change', ids)
+  },
+  { deep: true, immediate: true }
+)
 
 const removeCase = async (index) => {
   suiteCaseList.value.splice(index, 1)

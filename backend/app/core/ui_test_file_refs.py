@@ -34,6 +34,14 @@ def step_references_file_key(step: dict[str, Any], file_key: str) -> bool:
     if step.get("method") != UPLOAD_FILE_METHOD:
         return False
     params = _step_params(step)
+    mode = (params.get("upload_mode") or "single").strip().lower()
+    if mode == "folder":
+        return False
+    if mode == "multiple":
+        for item in params.get("file_items") or []:
+            if isinstance(item, dict) and item.get("file_key") == file_key:
+                return True
+        return False
     return bool(params.get("file_key")) and params.get("file_key") == file_key
 
 
@@ -42,6 +50,9 @@ def step_is_legacy_files_path(step: dict[str, Any]) -> bool:
     if step.get("method") != UPLOAD_FILE_METHOD:
         return False
     params = _step_params(step)
+    mode = (params.get("upload_mode") or "single").strip().lower()
+    if mode in ("folder", "multiple"):
+        return False
     if params.get("file_key"):
         return False
     file_path = (params.get("file_path") or params.get("path") or params.get("file") or "").strip()
@@ -92,40 +103,50 @@ async def build_file_reference_map(project_id: int) -> dict[str, dict[str, Any]]
             }
         return ref_map[file_key]
 
+    def register_step_refs(step: dict[str, Any], *, target: str, meta: dict[str, Any]) -> bool:
+        """若步骤引用了 MinIO 文件则写入 ref_map，返回是否已处理。"""
+        params = _step_params(step)
+        mode = (params.get("upload_mode") or "single").strip().lower()
+        if step.get("method") != UPLOAD_FILE_METHOD or mode == "folder":
+            return False
+        keys: list[str] = []
+        if mode == "multiple":
+            for item in params.get("file_items") or []:
+                if isinstance(item, dict) and item.get("file_key"):
+                    keys.append(item["file_key"])
+        elif params.get("file_key"):
+            keys.append(params["file_key"])
+        if not keys:
+            return False
+        for fk in keys:
+            bucket_for(fk)[target].append(meta)
+        return True
+
     async for case in Case.filter(project_id=project_id, is_del=False):
         for step in iter_steps(case.steps):
-            params = _step_params(step)
-            file_key = params.get("file_key")
-            if step.get("method") == UPLOAD_FILE_METHOD and file_key:
-                bucket_for(file_key)["cases"].append({
-                    "id": case.id,
-                    "name": case.name,
-                    "step_id": step.get("id"),
-                })
+            if register_step_refs(
+                step,
+                target="cases",
+                meta={"id": case.id, "name": case.name, "step_id": step.get("id")},
+            ):
                 break
 
     async for suite in Suite.filter(project_id=project_id, is_del=False):
         for step in iter_steps(suite.pre_actions):
-            params = _step_params(step)
-            file_key = params.get("file_key")
-            if step.get("method") == UPLOAD_FILE_METHOD and file_key:
-                bucket_for(file_key)["suites"].append({
-                    "id": suite.id,
-                    "name": suite.name,
-                    "location": "pre_actions",
-                })
+            if register_step_refs(
+                step,
+                target="suites",
+                meta={"id": suite.id, "name": suite.name, "location": "pre_actions"},
+            ):
                 break
 
     async for fragment in UiStepFragment.filter(project_id=project_id, is_del=False):
         for step in iter_steps(fragment.steps):
-            params = _step_params(step)
-            file_key = params.get("file_key")
-            if step.get("method") == UPLOAD_FILE_METHOD and file_key:
-                bucket_for(file_key)["fragments"].append({
-                    "id": fragment.id,
-                    "name": fragment.name,
-                    "step_id": step.get("id"),
-                })
+            if register_step_refs(
+                step,
+                target="fragments",
+                meta={"id": fragment.id, "name": fragment.name, "step_id": step.get("id")},
+            ):
                 break
 
     for file_key, bucket in ref_map.items():

@@ -446,34 +446,6 @@ let execPieChart = null
 let aiTrendChart = null
 
 const dateRange = ref([])
-const dateShortcuts = [
-  {
-    text: '近7天',
-    value: () => {
-      const end = new Date()
-      const start = new Date()
-      start.setTime(start.getTime() - 3600 * 1000 * 24 * 6)
-      return [formatDate(start), formatDate(end)]
-    }
-  },
-  {
-    text: '近30天',
-    value: () => {
-      const end = new Date()
-      const start = new Date()
-      start.setTime(start.getTime() - 3600 * 1000 * 24 * 29)
-      return [formatDate(start), formatDate(end)]
-    }
-  },
-  {
-    text: '本月',
-    value: () => {
-      const end = new Date()
-      const start = new Date(end.getFullYear(), end.getMonth(), 1)
-      return [formatDate(start), formatDate(end)]
-    }
-  }
-]
 
 function formatDate(d) {
   const date = new Date(d)
@@ -482,6 +454,51 @@ function formatDate(d) {
   const day = String(date.getDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
 }
+
+function daysAgoRange(daysBack) {
+  const end = new Date()
+  const start = new Date()
+  start.setTime(start.getTime() - 3600 * 1000 * 24 * daysBack)
+  return [formatDate(start), formatDate(end)]
+}
+
+function monthsAgoRange(monthsBack) {
+  const end = new Date()
+  const start = new Date(end)
+  start.setMonth(start.getMonth() - monthsBack)
+  return [formatDate(start), formatDate(end)]
+}
+
+const dateShortcuts = [
+  {
+    text: '近7天',
+    value: () => daysAgoRange(6)
+  },
+  {
+    text: '近30天',
+    value: () => daysAgoRange(29)
+  },
+  {
+    text: '本月',
+    value: () => {
+      const end = new Date()
+      const start = new Date(end.getFullYear(), end.getMonth(), 1)
+      return [formatDate(start), formatDate(end)]
+    }
+  },
+  {
+    text: '近3个月',
+    value: () => monthsAgoRange(3)
+  },
+  {
+    text: '半年',
+    value: () => monthsAgoRange(6)
+  },
+  {
+    text: '一年',
+    value: () => monthsAgoRange(12)
+  }
+]
 
 const goDocs = (docId = 'highlights') => {
   router.push({ path: '/docs', query: docId ? { doc: docId } : {} })
@@ -527,10 +544,7 @@ const copyMcpConfig = async () => {
 
 // 默认近7天
 const initDateRange = () => {
-  const end = new Date()
-  const start = new Date()
-  start.setTime(start.getTime() - 3600 * 1000 * 24 * 6)
-  dateRange.value = [formatDate(start), formatDate(end)]
+  dateRange.value = daysAgoRange(6)
 }
 
 const stats = reactive({

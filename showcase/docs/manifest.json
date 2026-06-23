@@ -1,6 +1,6 @@
 {
   "title": "BrickCore 使用说明",
-  "updated": "2026-06-17",
+  "updated": "2026-06-23",
   "platformUrl": "http://43.142.83.156/",
   "showcaseUrl": "http://43.142.83.156/showcase/",
   "groups": [
@@ -22,6 +22,11 @@
           "id": "highlights",
           "title": "亮点功能",
           "file": "content/highlights.md"
+        },
+        {
+          "id": "release-notes",
+          "title": "版本更新记录",
+          "file": "content/release-notes.md"
         },
         {
           "id": "project-setup",

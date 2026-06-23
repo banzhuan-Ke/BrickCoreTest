@@ -15,7 +15,7 @@ from app.core.ai_usage_log import record_ai_usage
 from app.core.assistant_execution_watch import schedule_execution_watch
 from app.core.assistant_session import load_session_messages, save_session_messages
 from app.core.assistant_tools import (
-    TOOL_SELECTION_SCHEMAS,
+    get_tool_selection_schemas,
     compact_tools_payload,
     extract_pending_confirm,
     invoke_assistant_tool,
@@ -629,7 +629,7 @@ async def _select_tools_with_llm(
             client.chat.completions.create(
                 model=config.model,
                 messages=messages,
-                tools=TOOL_SELECTION_SCHEMAS,
+                tools=get_tool_selection_schemas(),
                 tool_choice="auto",
                 temperature=0.1,
                 max_tokens=800,

@@ -45,7 +45,8 @@ import {ProjectStore} from '@/stores/module/ProjectStore'
 import {UserStore} from '@/stores/module/UserStore'
 import {MenuGroups} from '@/datas/Menu'
 import {useRoute, useRouter} from 'vue-router'
-import {reactive, computed} from 'vue'
+import {reactive, computed, onMounted} from 'vue'
+import {useCommunityEdition} from '@/composables/useCommunityEdition'
 
 // 定义路由
 const router = useRouter()
@@ -53,6 +54,11 @@ const router = useRouter()
 const route = useRoute()
 const proStore = ProjectStore()
 const uStore = UserStore()
+const { isCommunityEdition, loadCommunityEdition } = useCommunityEdition()
+
+onMounted(() => {
+  loadCommunityEdition()
+})
 
 // 使用响应式数据管理菜单展开状态
 const menuGroups = reactive(MenuGroups.map(g => ({
@@ -64,6 +70,9 @@ const menuGroups = reactive(MenuGroups.map(g => ({
 const filteredMenuGroups = computed(() => {
   return menuGroups.map(group => {
     const items = group.items.filter(item => {
+      if (isCommunityEdition.value && item.path === '/ai-qa-eval') {
+        return false
+      }
       if (item.anyPermissions?.length) {
         return item.anyPermissions.some((p) => uStore.hasPermission(p))
       }

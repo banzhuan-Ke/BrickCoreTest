@@ -3,7 +3,7 @@
     <div class="filter-bar">
       <el-input
         v-model="searchName"
-        placeholder="标题"
+        placeholder="按用例名称搜索"
         clearable
         size="small"
         class="filter-title"
@@ -29,6 +29,7 @@
       </el-select>
       <el-button size="small" type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
     </div>
+    <div class="filter-hint">已加入当前套件的用例会标记为「已加入」</div>
 
     <div class="case-list-container" v-infinite-scroll="loadMore" :infinite-scroll-disabled="disabled">
       <div class="case-list">
@@ -36,12 +37,22 @@
           v-for="item in caseList"
           :key="item.id"
           class="case-item"
+          :class="{ 'case-item--added': isCaseInSuite(item.id) }"
           draggable="true"
           @dragstart="handleDragStart($event, item)"
         >
           <div class="case-info">
             <el-icon><Document /></el-icon>
             <span class="case-name" :title="item.name">{{ item.name }}</span>
+            <el-tag
+              v-if="isCaseInSuite(item.id)"
+              type="success"
+              size="small"
+              effect="plain"
+              class="added-tag"
+            >
+              已加入
+            </el-tag>
             <el-tag v-if="item.level" size="small" :type="levelTagType(item.level)" class="level-tag">
               {{ item.level }}
             </el-tag>
@@ -67,14 +78,14 @@
       </div>
 
       <div v-if="!loading && caseList.length === 0" class="empty-tip">
-        <el-empty description="暂无数据" :image-size="60" />
+        <el-empty :description="searchName.trim() || searchLevel ? '未找到匹配的用例' : '暂无数据'" :image-size="60" />
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, inject } from 'vue'
 import { useRouter } from 'vue-router'
 import { Document, Edit, Loading, Search } from '@element-plus/icons-vue'
 import http from '@/api/index'
@@ -89,6 +100,9 @@ defineProps({
 
 const router = useRouter()
 const proStore = ProjectStore()
+
+const suiteAddedCaseIds = inject('suiteAddedCaseIds', ref(new Set()))
+const isCaseInSuite = (caseId) => suiteAddedCaseIds.value.has(caseId)
 
 const caseList = ref([])
 const loading = ref(false)
@@ -195,6 +209,14 @@ resetAndLoad()
   flex-shrink: 0;
 }
 
+.filter-hint {
+  padding: 0 12px 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
+  border-bottom: 1px solid var(--el-border-color-light);
+}
+
 .case-list-container {
   flex: 1;
   overflow-y: auto;
@@ -227,6 +249,11 @@ resetAndLoad()
   &:active {
     cursor: grabbing;
   }
+
+  &.case-item--added {
+    border-color: var(--el-color-success-light-5);
+    background: var(--el-color-success-light-9);
+  }
 }
 
 .case-info {
@@ -249,6 +276,10 @@ resetAndLoad()
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.added-tag {
+  flex-shrink: 0;
 }
 
 .level-tag {

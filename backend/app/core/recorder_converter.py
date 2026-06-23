@@ -6,10 +6,16 @@
 日期：2026-04-22
 """
 
+import re
 import time
 from typing import List, Dict, Any
 
-from app.core.recorder_quality import apply_index_from_meta, assess_step_quality, collect_step_locator_candidates
+from app.core.recorder_quality import (
+    apply_index_from_meta,
+    assess_step_quality,
+    collect_step_locator_candidates,
+    pick_best_locator,
+)
 from app.core.ui_keywords import METHOD_TO_KEYWORD
 
 
@@ -21,11 +27,13 @@ ACTION_TO_METHOD = {
     "select": "select_option",
     "navigate": "open_url",
     "wait": "wait_for_time",
+    "wait_popup": "wait_for_element",
     "hover": "hover",
     "keydown": "press_key",
     "scroll": "scroll",
     "contextmenu": "mouse_click",
     "file": "upload_file",
+    "drag_and_drop": "drag_and_drop",
 }
 
 # Method 默认参数
@@ -36,11 +44,21 @@ METHOD_DEFAULTS = {
     "select_option": {"locator": "", "value": "", "timeout": 20000},
     "open_url": {"url": "", "wait_until": "load", "timeout": 30000},
     "wait_for_time": {"timeout": 2000},
+    "wait_for_element": {"locator": "", "timeout": 20000},
     "hover": {"locator": "", "wait_time": 500},
     "press_key": {"key": "", "locator": "", "timeout": 20000},
     "scroll": {"x": 0, "y": 0},
     "mouse_click": {"x": 0, "y": 0, "button": "right", "locator": "", "timeout": 20000},
     "upload_file": {"locator": "", "file_path": "", "timeout": 20000},
+    "drag_and_drop": {
+        "start_selector": "",
+        "end_selector": "",
+        "source_position_x": "",
+        "source_position_y": "",
+        "target_position_x": "",
+        "target_position_y": "",
+        "timeout": 20000,
+    },
 }
 
 
@@ -67,9 +85,12 @@ def convert_actions_to_steps(raw_actions: List[dict]) -> List[dict]:
     # 第三步：插入等待
     with_waits = _insert_wait_actions(merged)
 
+    # 第三步半：首次进入弹窗时插入 wait_for_element
+    with_popup_waits = _insert_popup_wait_actions(with_waits)
+
     # 第四步：转换为平台步骤
     steps = []
-    for action in with_waits:
+    for action in with_popup_waits:
         step = _action_to_step(action)
         if step:
             steps.append(step)
@@ -169,6 +190,49 @@ def _insert_wait_actions(actions: List[dict]) -> List[dict]:
     return result
 
 
+def _popup_root(meta: dict) -> str:
+    return ((meta or {}).get("popupRoot") or "").strip()
+
+
+def _popup_wait_locator(action: dict) -> str:
+    """为首次进入弹窗生成 wait_for_element 定位符。"""
+    meta = action.get("meta") or {}
+    popup_root = _popup_root(meta)
+    text = (action.get("element_text") or meta.get("text") or meta.get("accessibleName") or "").strip()
+    if popup_root.startswith("get_by_role="):
+        return popup_root
+    if "$" in text:
+        m = re.search(r"\$\d+\.?\d*", text)
+        if m:
+            if popup_root:
+                return f"{popup_root} >> get_by_text={m.group(0)}"
+            return f"get_by_text={m.group(0)}"
+    if popup_root and text:
+        return popup_root
+    if popup_root:
+        return popup_root
+    return "get_by_role=dialog"
+
+
+def _insert_popup_wait_actions(actions: List[dict]) -> List[dict]:
+    """检测到首次进入弹窗层时，自动插入 wait_for_element。"""
+    result: List[dict] = []
+    for i, action in enumerate(actions):
+        curr_root = _popup_root(action.get("meta"))
+        prev_root = _popup_root(actions[i - 1].get("meta")) if i > 0 else ""
+        if curr_root and not prev_root and action.get("action_type") in (
+            "click", "dblclick", "fill", "select", "hover"
+        ):
+            result.append({
+                "action_type": "wait_popup",
+                "selector": _popup_wait_locator(action),
+                "timestamp": max(0, int(action.get("timestamp", 0)) - 50),
+                "meta": {"popupRoot": curr_root},
+            })
+        result.append(action)
+    return result
+
+
 def _action_to_step(action: dict) -> dict:
     """将单个原始操作转换为平台步骤"""
     action_type = action.get("action_type", "")
@@ -200,6 +264,10 @@ def _action_to_step(action: dict) -> dict:
     elif action_type == "wait":
         params["timeout"] = int(action.get("value", 2000))
         desc = f"等待 {params['timeout'] // 1000} 秒"
+    elif action_type == "wait_popup":
+        params["locator"] = action.get("selector", "")
+        params["timeout"] = 20000
+        desc = "等待弹窗出现"
     elif action_type == "hover":
         params["locator"] = action.get("selector", "")
         element_text = action.get("element_text", "")
@@ -234,6 +302,18 @@ def _action_to_step(action: dict) -> dict:
         params["locator"] = action.get("selector", "")
         params["file_path"] = ""
         desc = f"上传文件到: {params['locator']}"
+    elif action_type == "drag_and_drop":
+        params["start_selector"] = action.get("selector", "")
+        params["end_selector"] = (
+            action.get("value", "")
+            or (action.get("meta") or {}).get("end_selector", "")
+        )
+        source_label = action.get("element_text", "")
+        target_label = (action.get("meta") or {}).get("target_label", "")
+        if source_label and target_label:
+            desc = f"拖拽 '{source_label}' 到 '{target_label}'"
+        else:
+            desc = f"拖拽元素到目标: {params['end_selector']}"
     else:
         desc = f"执行操作: {action_type}"
 
@@ -256,6 +336,14 @@ def _action_to_step(action: dict) -> dict:
         "children": [],
         "meta": meta,
     }
+    if method in ("click_ele", "double_click_ele", "hover", "fill_value", "wait_for_element") and params.get("locator"):
+        # 录制器已给出弹窗 scope 链式定位时不再用候选池覆盖
+        if " >> " not in str(params.get("locator") or ""):
+            best, _source, updates = pick_best_locator(step, original_locator=params.get("locator"))
+            if best:
+                step["params"]["locator"] = best
+                meta.update(updates)
+                step["meta"] = meta
     step = apply_index_from_meta(step)
     return assess_step_quality(step)
 

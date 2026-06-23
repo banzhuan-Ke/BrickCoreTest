@@ -55,6 +55,11 @@
           </template>
         </el-table-column>
         <el-table-column prop="username" label="创建人"/>
+        <el-table-column prop="update_by" label="最后更新人" width="110">
+          <template #default="scope">
+            {{ scope.row.update_by || scope.row.username || '—' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="create_time" label="创建时间" min-width="150">
           <template #default="scope">
             {{ dateTools.rTime(scope.row.create_time) }}

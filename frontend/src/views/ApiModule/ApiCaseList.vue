@@ -299,7 +299,6 @@
       <VarInsertButton
         :env-id="envDialog.env_id"
         label="插入变量"
-        @edit-env-vars="varEditVisible = true"
       />
       <el-button type="primary" link size="small" @click="varEditVisible = true" icon="Edit">编辑环境变量</el-button>
     </div>
@@ -851,7 +850,7 @@ import { useTableColumns } from '@/composables/useTableColumns.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 import CaseEdit from './components/CaseEdit.vue'
 import ApiCaseGenerator from '@/views/AI/components/ApiCaseGenerator.vue'
-import EnvVarQuickEdit from './components/EnvVarQuickEdit.vue'
+import EnvVarQuickEdit from '@/components/EnvVarQuickEdit.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import VariablePreviewPanel from '@/components/VariablePreviewPanel.vue'
 import BatchRunResultDialog from './components/BatchRunResultDialog.vue'

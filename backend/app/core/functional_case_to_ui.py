@@ -478,6 +478,7 @@ async def import_functional_cases_to_ui(
                 source_functional_case_title=(fc.title or "")[:500],
                 description=case_description or None,
                 username=username,
+                update_by=username,
                 is_del=False,
             )
             await _set_ui_import_status(

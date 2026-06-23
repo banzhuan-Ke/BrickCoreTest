@@ -21,6 +21,7 @@ class CaseSchemas(BaseModel):
     source_functional_case_title: Optional[str] = Field(default=None, description="来源功能用例标题")
     description: Optional[str] = Field(default=None, description="用例描述")
     username: str = Field(description="创建人")
+    update_by: Optional[str] = Field(default=None, description="最后更新人")
     is_del: bool = Field(description="是否删除", default=False)
     catalog_id: Optional[int] = Field(default=None, description="所属目录id")
 
@@ -69,6 +70,7 @@ class SuiteSchemas(BaseModel):
         default=False, description="是否将链路用例变量传递给后续链路用例"
     )
     username: str = Field(description="创建人")
+    update_by: Optional[str] = Field(default=None, description="最后更新人")
     is_del: bool = Field(description="是否删除", default=False)
 
     class Config:
@@ -158,6 +160,7 @@ class TaskSchemas(BaseModel):
     project_id: int = Field(description="所属项目")
     catalog_id: Optional[int] = Field(default=None, description="所属目录id")
     username: str = Field(description="创建人")
+    update_by: Optional[str] = Field(default=None, description="最后更新人")
     parallel: bool = Field(default=False, description="计划级并行执行")
     is_del: bool = Field(description="是否删除", default=False)
 

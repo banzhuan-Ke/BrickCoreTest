@@ -10,6 +10,7 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 // 导入项目的全局css样式文件
 import '@/style/main.css'
 import '@/style/theme-pro.css'
+import '@/style/theme-compact.css'
 import pinia from '@/stores/index'
 // 引入nprogress样式
 import 'nprogress/nprogress.css'

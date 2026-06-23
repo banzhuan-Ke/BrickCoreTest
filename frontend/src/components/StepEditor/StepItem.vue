@@ -1,7 +1,14 @@
 <template>
   <div class="step-item-wrapper" :style="{marginLeft: depth > 0 ? '20px' : '0'}">
-    <div class="step" :class="{'is-nested': depth > 0, 'is-condition': step.method === 'condition_branch', 'is-fragment': step.method === 'fragment_ref'}">
+    <div class="step" :class="stepClasses">
       <div class="line1">
+        <el-checkbox
+          v-if="selectable"
+          :model-value="selected"
+          class="step-select-box"
+          @click.stop
+          @change="handleToggleSelect"
+        />
         <!--步骤序号-->
         <span class="step-index">步骤 {{ index + 1 }}</span>
         <!--图标-->
@@ -37,6 +44,7 @@
           <el-button plain size="small" type="primary" :icon="Edit" @click='handleEdit'>
             {{ step.method === 'fragment_ref' ? '配置' : '编辑' }}
           </el-button>
+          <el-button plain size="small" type="info" :icon="CopyDocument" @click="handleCopy">复制</el-button>
           <el-button plain size="small" type="danger" :icon="Delete" @click='handleDelete'>删除</el-button>
         </div>
       </div>
@@ -120,7 +128,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch, inject } from 'vue'
-import { Operation, Share, ArrowDown, ArrowRight, Edit, Delete, Plus, VideoPlay, Collection } from '@element-plus/icons-vue'
+import { Operation, Share, ArrowDown, ArrowRight, Edit, Delete, Plus, VideoPlay, Collection, CopyDocument } from '@element-plus/icons-vue'
 import { uiFragmentApi } from '@/api/modules/ui'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import BranchStepList from './BranchStepList.vue'
@@ -141,10 +149,18 @@ const props = defineProps({
   parentPath: {
     type: Array,
     default: () => []
+  },
+  selectable: {
+    type: Boolean,
+    default: false
+  },
+  selected: {
+    type: Boolean,
+    default: false
   }
 })
 
-const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug', 'expand-fragment'])
+const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug', 'copy', 'expand-fragment', 'toggle-select'])
 
 const fragmentRefEdit = inject('fragmentRefEdit', null)
 const expandFragmentStep = inject('expandFragmentStep', null)
@@ -163,6 +179,13 @@ const stepIconColor = computed(() => {
   if (props.step.method === 'condition_branch') return '#e6a23c'
   return 'var(--el-color-primary)'
 })
+
+const stepClasses = computed(() => ({
+  'is-nested': props.depth > 0,
+  'is-condition': props.step.method === 'condition_branch',
+  'is-fragment': props.step.method === 'fragment_ref',
+  'is-selected': props.selectable && props.selected,
+}))
 
 async function checkFragmentVersion() {
   if (props.step.method !== 'fragment_ref') return
@@ -249,6 +272,14 @@ function handleEdit() {
 
 function handleDebug() {
   emit('debug', props.index)
+}
+
+function handleCopy() {
+  emit('copy')
+}
+
+function handleToggleSelect() {
+  emit('toggle-select')
 }
 
 // 删除
@@ -354,12 +385,22 @@ function getParamsDisplay(params) {
     border-color: #e6a23c;
     background: #fdf6ec;
   }
+
+  &.is-selected {
+    border-color: var(--el-color-primary);
+    box-shadow: 0 0 0 1px var(--el-color-primary-light-7);
+  }
 }
 
 .line1 {
   display: flex;
   align-items: center;
   gap: 8px;
+
+  .step-select-box {
+    flex-shrink: 0;
+    margin-right: -4px;
+  }
   
   .step-index {
     flex-shrink: 0;

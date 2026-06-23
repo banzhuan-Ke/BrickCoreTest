@@ -140,7 +140,8 @@
           来源标识：<code>requirement_copy</code>（需求复制）、<code>zentao_xlsx</code>（禅道导入）、<code>manual</code>（手工新建）。
         </p>
 
-        <h4>三-A、问答准确性评测（知识库 / 问答机器人）</h4>
+        <h4 v-if="!isCommunityEdition">三-A、问答准确性评测（知识库 / 问答机器人）</h4>
+        <template v-if="!isCommunityEdition">
         <p>路径：<strong>AI 测试 → 问答准确性评测</strong>。维护标准问答集，批量调用被测 API 并输出统计与对比报告。</p>
         <ol>
           <li><strong>评测集</strong>：下载 Excel 模板导入（问题、标准答案必填；序号、问答目录、多轮、问题类型等）</li>
@@ -149,6 +150,7 @@
           <li><strong>报告</strong>：统计报告（优秀率/场景类型分析）、单题报告、人工审核、合并导出与迭代对比</li>
         </ol>
         <p style="color:#909399;font-size:13px;">评判模型在「AI 模型配置 → 场景绑定 → 问答准确性评判」。</p>
+        </template>
 
         <h4>四、AI 生成 API 测试用例</h4>
         <ol>
@@ -910,7 +912,14 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
+import { useCommunityEdition } from '@/composables/useCommunityEdition.js'
+
+const { isCommunityEdition, loadCommunityEdition } = useCommunityEdition()
+
+onMounted(() => {
+  loadCommunityEdition()
+})
 
 defineProps({
   isHelpFullscreen: {

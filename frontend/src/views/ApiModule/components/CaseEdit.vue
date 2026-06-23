@@ -131,15 +131,12 @@
             :env-id="refEnvId"
             :extra-vars="extractorVarNames"
             hint-text="不含工厂标签；标签与内联工具请用右侧按钮。"
-            @edit-env-vars="envVarEditVisible = true"
           />
           <ToolInsertButton :extra-vars="extractorVarNames" />
           <el-button type="info" link size="small" @click="tagPickerVisible = true">数据工厂标签</el-button>
         </div>
         <span class="var-toolbar-hint">先点击下方输入框再插入；变量 <code v-pre>${{名}}</code> / 标签 <code v-pre>${{df:标签}}</code> / 工具 <code v-pre>${{dt:md5|text=@a}}</code></span>
       </div>
-
-      <EnvVarQuickEdit v-model="envVarEditVisible" :env-id="refEnvId" />
 
       <!-- 请求配置覆盖 -->
       <el-collapse v-model="activeCollapse" class="request-config-collapse">
@@ -734,7 +731,6 @@ import { catalogApi, buildCatalogTree } from '@/api/modules/catalog'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ApiCaseUsedVarsPanel from '@/components/ApiCaseUsedVarsPanel.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
-import EnvVarQuickEdit from './EnvVarQuickEdit.vue'
 import DbAssertionsEditor from './DbAssertionsEditor.vue'
 import AssertionGroupsEditor from './AssertionGroupsEditor.vue'
 import JsonTextarea from '@/components/JsonTextarea.vue'
@@ -789,7 +785,6 @@ const apiLoading = ref(false)
 const filteredApis = ref([])
 const activeCollapse = ref(['headers', 'params'])
 const refEnvId = ref(null)
-const envVarEditVisible = ref(false)
 provide('varInsertEnvId', refEnvId)
 
 const isEdit = computed(() => !!props.data)

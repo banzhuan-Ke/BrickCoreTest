@@ -7,10 +7,15 @@ from app.models.ui import Suite
 from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.schemas.ui import AddTaskForm, TaskSchemas, UpdateTaskForm, AddSuiteToTaskForm, TaskDetailSchemas
 from app.models.ui import Task
-from app.core.auth import is_authenticated, require_permissions
+from app.core.auth import is_authenticated, require_permissions, get_current_username
 from app.core.permissions import UI_TASK_VIEW, UI_TASK_EDIT
 
 router = APIRouter(prefix="/tasks", tags=['测试计划'], dependencies=[Depends(is_authenticated)])
+
+
+async def _touch_task_updated(task: Task, username: str) -> None:
+    task.update_by = username
+    await task.save(update_fields=["update_by", "update_time"])
 
 
 class UpdateTaskSuitesForm(BaseModel):
@@ -28,7 +33,7 @@ async def create_task(item: AddTaskForm):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="传入的项目ID不存在或已被删除")
     if item.catalog_id is not None:
         await resolve_catalog(item.project_id, item.catalog_id)
-    task = await Task.create(**item.model_dump(), is_del=False)
+    task = await Task.create(**item.model_dump(), is_del=False, update_by=item.username)
     return task
 
 
@@ -63,6 +68,7 @@ async def get_task(project_id: int, page: int = 1, size: int = 10,
             "id": task.id,
             "name": task.name,
             "username": task.username,
+            "update_by": task.update_by or task.username,
             "catalog_id": task.catalog_id,
             "parallel": bool(task.parallel),
             "status": state,
@@ -92,7 +98,11 @@ async def delete_task(task_id: int):
 # 修改测试计划名称
 @router.put("/{task_id}", summary="修改任务", response_model=TaskSchemas, status_code=status.HTTP_200_OK,
             dependencies=[Depends(require_permissions(UI_TASK_EDIT))])
-async def update_task(task_id: int, item: UpdateTaskForm):
+async def update_task(
+    task_id: int,
+    item: UpdateTaskForm,
+    username: str = Depends(get_current_username),
+):
     task = await Task.get_or_none(id=task_id, is_del=False)
     if not task:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="传入的任务ID不存在或已被删除")
@@ -104,6 +114,7 @@ async def update_task(task_id: int, item: UpdateTaskForm):
         task.catalog_id = item.catalog_id
     if item.parallel is not None:
         task.parallel = item.parallel
+    task.update_by = username
     await task.save()
     return task
 
@@ -112,7 +123,11 @@ async def update_task(task_id: int, item: UpdateTaskForm):
 @router.post("/{task_id}/suites", tags=['测试计划'], summary="任务中添加套件", status_code=status.HTTP_201_CREATED,
              response_model=TaskSchemas,
              dependencies=[Depends(require_permissions(UI_TASK_EDIT))])
-async def add_step(task_id: int, item: AddSuiteToTaskForm):
+async def add_step(
+    task_id: int,
+    item: AddSuiteToTaskForm,
+    username: str = Depends(get_current_username),
+):
     # 检查任务是否存在且未删除
     task = await Task.get_or_none(id=task_id, is_del=False)
     if not task:
@@ -126,13 +141,18 @@ async def add_step(task_id: int, item: AddSuiteToTaskForm):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="只能添加同一项目下的套件到任务中")
     # 往多对多的关联字段中添加数据
     await task.suites.add(suite)
+    await _touch_task_updated(task, username)
     return task
 
 
 # 更新任务中的套件列表（覆盖式）
 @router.put("/{task_id}/suites", summary="更新任务中的套件列表", status_code=status.HTTP_200_OK,
             dependencies=[Depends(require_permissions(UI_TASK_EDIT))])
-async def update_task_suites(task_id: int, item: UpdateTaskSuitesForm):
+async def update_task_suites(
+    task_id: int,
+    item: UpdateTaskSuitesForm,
+    username: str = Depends(get_current_username),
+):
     task = await Task.get_or_none(id=task_id, is_del=False)
     if not task:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="任务不存在或已被删除")
@@ -145,13 +165,18 @@ async def update_task_suites(task_id: int, item: UpdateTaskSuitesForm):
         suite = await Suite.get_or_none(id=suite_id, is_del=False)
         if suite and suite.project_id == task.project_id:
             await task.suites.add(suite)
+    await _touch_task_updated(task, username)
     return await get_task_detail(task_id)
 
 
 # 删除任务中的套件
 @router.delete("/{task_id}/suites/{suite_id}", summary="删除任务中套件", status_code=status.HTTP_204_NO_CONTENT,
                dependencies=[Depends(require_permissions(UI_TASK_EDIT))])
-async def delete_step(task_id: int, suite_id: int):
+async def delete_step(
+    task_id: int,
+    suite_id: int,
+    username: str = Depends(get_current_username),
+):
     # 检查任务是否存在且未删除
     task = await Task.get_or_none(id=task_id, is_del=False)
     if not task:
@@ -162,6 +187,7 @@ async def delete_step(task_id: int, suite_id: int):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="传入的套件ID不存在")
     # 移除多对多关联
     await task.suites.remove(suite)
+    await _touch_task_updated(task, username)
 
 
 # 获取任务中的套件列表

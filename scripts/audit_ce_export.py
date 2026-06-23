@@ -53,6 +53,13 @@ EXCLUDE_FILES = {
     "backend/check_migration.py",
     "backend/check_migration2.py",
     "backend/test_stream_debug.py",
+    "backend/app/core/qa_judge_prompt.py",
+    "backend/app/core/qa_eval_service.py",
+    "backend/app/core/qa_eval_target_client.py",
+    "backend/app/core/qa_eval_report.py",
+    "backend/app/core/qa_eval_compare.py",
+    "backend/app/routers/ai/qa_eval.py",
+    "frontend/src/views/AI/AiQaEval.vue",
     "import_ui_case.py",
     "restart-all.bat",
     "restart-dev.bat",
@@ -82,6 +89,8 @@ CE_DOC_STUBS: dict[str, str] = {
     "docs-site/guide/runner-packaging.md": "scripts/ce-stubs/docs-runner-packaging-ce.md",
     "docs-site/guide/system-admin.md": "scripts/ce-stubs/docs-system-admin-ce.md",
     "docs-site/guide/data-factory.md": "scripts/ce-stubs/docs-data-factory-ce.md",
+    "docs-site/guide/ai-testing.md": "scripts/ce-stubs/docs-ai-testing-ce.md",
+    "docs-site/guide/platform-assistant.md": "scripts/ce-stubs/docs-platform-assistant-ce.md",
     "docs-site/guide/runner-linux-server.md": "scripts/ce-stubs/docs-runner-linux-server-ce.md",
 }
 
@@ -98,6 +107,12 @@ MUST_NOT_EXIST_IN_CE = [
     "scripts/build_runner_client.ps1",
     "backend/static/runner/BrickCoreRunner.zip",
     "backend/app/core/qa_judge_prompt.py",
+    "backend/app/core/qa_eval_service.py",
+    "backend/app/core/qa_eval_target_client.py",
+    "backend/app/core/qa_eval_report.py",
+    "backend/app/core/qa_eval_compare.py",
+    "backend/app/routers/ai/qa_eval.py",
+    "frontend/src/views/AI/AiQaEval.vue",
 ]
 
 # User-facing copy must not mention edition split (help center / Gitee / showcase).

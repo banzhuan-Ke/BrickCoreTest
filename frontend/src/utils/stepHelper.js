@@ -43,6 +43,79 @@ export function cloneStep(step) {
 }
 
 /**
+ * 复制步骤并生成新的 id（含条件分支内嵌步骤）
+ * @param {Object} step 步骤对象
+ * @returns {Object} 复制后的步骤
+ */
+export function duplicateStepWithNewIds(step) {
+  const cloned = cloneStep(step)
+  return assignNewStepIds(cloned)
+}
+
+/**
+ * 去掉展开片段时附带的溯源字段，便于写入新片段
+ * @param {Object} step
+ * @returns {Object}
+ */
+export function stripStepProvenance(step) {
+  const next = cloneStep(step)
+  delete next._from_fragment
+  if (next.method === 'condition_branch' && Array.isArray(next.branches)) {
+    next.branches = next.branches.map((branch) => ({
+      ...branch,
+      steps: (branch.steps || []).map(stripStepProvenance),
+    }))
+  }
+  return next
+}
+
+/**
+ * 按索引提取步骤并生成新 id（用于从用例生成片段）
+ * @param {Array} steps
+ * @param {number[]} indices
+ * @returns {Array}
+ */
+export function extractStepsWithNewIds(steps, indices) {
+  const sorted = [...indices].sort((a, b) => a - b)
+  return sorted
+    .filter((index) => index >= 0 && index < steps.length)
+    .map((index) => assignNewStepIds(stripStepProvenance(steps[index])))
+}
+
+/**
+ * 构建片段引用步骤
+ * @param {{ id: number, name: string, version?: number, description?: string }} fragment
+ * @returns {Object}
+ */
+export function buildFragmentRefStep(fragment) {
+  return {
+    id: generateStepId(),
+    method: 'fragment_ref',
+    keyword: `片段：${fragment.name}`,
+    desc: fragment.description || fragment.name,
+    params: {
+      fragment_id: fragment.id,
+      fragment_version: fragment.version,
+      fragment_name: fragment.name,
+      variables: {},
+    },
+    is_fragment_ref: true,
+  }
+}
+
+function assignNewStepIds(step) {
+  const next = { ...step, id: generateStepId() }
+  if (next.method === 'condition_branch' && Array.isArray(next.branches)) {
+    next.branches = next.branches.map((branch) => ({
+      ...branch,
+      id: `branch_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      steps: (branch.steps || []).map(assignNewStepIds),
+    }))
+  }
+  return next
+}
+
+/**
  * 查找步骤在数组中的索引
  * @param {Array} steps 步骤数组
  * @param {string} stepId 步骤ID

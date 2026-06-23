@@ -215,8 +215,8 @@ class PromptManager:
 
 【页面操作】
 - open_url: {url, wait_until:"load", timeout:30000}
-- refresh: {}
-- go_back: {}
+- refresh: {wait_until:"domcontentloaded", timeout:30000}
+- go_back: {timeout:30000, fallback_url:""}
 - scroll_to_height: {height}
 - execute_script: {script, args:[]}
 - save_page_img: {name}
@@ -286,19 +286,22 @@ class PromptManager:
 【变量提取】
 - extract_text: {locator, var_name, index:1, timeout:20000}
 - extract_attribute: {locator, attr_name, var_name, index:1, timeout:20000}
+- extract_page_url: {var_name}
 
 【条件分支】
 - condition_branch: {branches:[{name, condition:{type, locator, expected_value}, steps:[]}]}
 
 生成规则：
 1. 每个页面操作后建议加 wait_for_time 或 wait_for_element 确保稳定
-2. 优先使用稳定选择器：#id > [name='xxx'] > [aria-label='xxx'] > .class
-3. 避免使用动态 class（含 random/hash 的 class）
-4. 输入操作使用 fill_value；需要模拟真实键盘输入用 type_value
-5. 引用环境变量或动态值时，params 中的字符串统一使用 ${{变量名}}，如 ${{username}}、${{password}}、auto_${{random_int}}
-6. 如果需求没提到关闭浏览器，最后一步不加 close
-7. 严禁输出列表中不存在的 method 或参数名
-8. 输出必须是可直接解析的 JSON 数组，不要任何解释文字""",
+2. **点击触发弹窗/浮层后**，必须加 wait_for_element 等待弹窗内稳定元素（如 get_by_role=dialog 或弹窗容器），再在弹窗内 click/fill
+3. 弹窗内元素 locator 优先使用 `弹窗容器 >> get_by_text=`，避免裸 get_by_text 全页匹配
+4. 优先使用稳定选择器：#id > [name='xxx'] > [aria-label='xxx'] > .class
+5. 避免使用动态 class（含 random/hash 的 class）
+6. 输入操作使用 fill_value；需要模拟真实键盘输入用 type_value
+7. 引用环境变量或动态值时，params 中的字符串统一使用 ${{变量名}}，如 ${{username}}、${{password}}、auto_${{random_int}}
+8. 如果需求没提到关闭浏览器，最后一步不加 close
+9. 严禁输出列表中不存在的 method 或参数名
+10. 输出必须是可直接解析的 JSON 数组，不要任何解释文字""",
             "examples": [],
         },
         "ui_agent_plan": {
@@ -385,14 +388,17 @@ Snapshot 类型：{{snapshot_type}}
 }
 
 定位器规则（与平台一致，必须是字符串，禁止 Playwright 函数写法）：
-- 正确：get_by_placeholder=密码、get_by_role=textbox, 账号、#loginBtn
-- 错误：get_by_placeholder("密码")、page.get_by_role(...)
+- 正确：get_by_placeholder=密码、get_by_role=row, 0302、#loginBtn
+- 错误：get_by_placeholder("密码")、page.get_by_role(...)、get_by_role='row'（role/name 禁止加引号）、row=0302（必须用 get_by_role=row, 0302）
 - 优先 data-testid、#id、name、get_by_role=、get_by_placeholder=、get_by_label=
 - get_by_text= 对 input placeholder 无效；失败定位器为「请输入…」或短 placeholder 文案时改用 get_by_placeholder=
 - 严禁返回与失败定位器完全相同的字符串
+- **错误含 element is not visible 时**：禁止继续用 (//xpath)[1] 等纯序号定位；改用可见结构特征（如含操作按钮的行、唯一 id、title 等）
 - **步骤描述 step_desc 是业务意图**：新定位器必须能完成 step_desc 描述的操作（如「点击基础设置」必须点到「基础设置」，不能改成「设置」）
 - 页面上有多个相似文案时，选与 step_desc **完全匹配** 或 **更长更具体** 的那个，禁止用更短子串替代（例：失败 get_by_text=基础设置 时禁止改成 get_by_text=设置）
 - 常见短词（设置、登录、确定等）易重复，优先用带区域/结构信息的定位（侧栏菜单、顶栏导航、父级 class 等），必要时配合 index
+- **弹窗/浮层内元素**：优先 `弹窗容器 >> get_by_text=` 或 `get_by_role=dialog >> ...`；禁止裸 `get_by_text` 全页搜索
+- **文本含 $ 或反斜杠时禁止** `tag:has-text("...")`（Playwright CSS 会报 BADSTRING），必须用 `get_by_text=` 或 `父级 >> get_by_text=`
 - 只输出 JSON 对象""",
             "examples": [],
         },

@@ -150,7 +150,12 @@ QUICK_PROMPTS = [
     dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
 )
 async def get_quick_prompts():
-    return StandardResponse(data={"items": QUICK_PROMPTS})
+    from app.core.edition import qa_eval_feature_enabled
+
+    items = QUICK_PROMPTS
+    if not qa_eval_feature_enabled():
+        items = [p for p in QUICK_PROMPTS if p.get("key") != "qa_eval"]
+    return StandardResponse(data={"items": items})
 
 
 @router.get(

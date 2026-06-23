@@ -17,6 +17,19 @@ from app.models.ui import Case, UiCaseExecution
 # 创建路由对象，并指定依赖项为is_authenticated的验证，确保用户已通过身份验证
 router = APIRouter(prefix="/cases", dependencies=[Depends(is_authenticated)], tags=["测试用例"])
 
+_UI_CASE_FAIL_STATUSES = frozenset({"fail", "failed"})
+
+
+def _match_case_run_status(state: str, filter_status: str | None) -> bool:
+    """用例最近运行状态筛选（Runner 落库为 failed，筛选项/模型为 fail）。"""
+    if not filter_status:
+        return True
+    if state == filter_status:
+        return True
+    if filter_status in _UI_CASE_FAIL_STATUSES and state in _UI_CASE_FAIL_STATUSES:
+        return True
+    return False
+
 
 # 创建测试用例的接口
 @router.post("", summary="创建用例", status_code=status.HTTP_201_CREATED, response_model=CaseSchemas,
@@ -29,7 +42,7 @@ async def create_case(item: AddCaseForm):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="创建用例失败，传入的项目不存在")
     if item.catalog_id is not None:
         await resolve_catalog(item.project_id, item.catalog_id)
-    cases = await Case.create(**item.model_dump(exclude_unset=True), is_del=False)
+    cases = await Case.create(**item.model_dump(exclude_unset=True), is_del=False, update_by=item.username)
     return cases
 
 
@@ -50,6 +63,7 @@ async def update_case(
     if item.catalog_id is not None:
         await resolve_catalog(cases.project_id, item.catalog_id)
     await cases.update_from_dict(item.model_dump(exclude_unset=True))
+    cases.update_by = user_info.get("username") or cases.username
     await cases.save()
     return cases
 
@@ -149,7 +163,10 @@ async def batch_delete_cases(
 
 @router.post("/batch-update-catalog", summary="批量修改用例目录", status_code=status.HTTP_200_OK,
              dependencies=[Depends(require_permissions(UI_CASE_EDIT))])
-async def batch_update_case_catalog(item: UiCaseBatchUpdateCatalogRequest):
+async def batch_update_case_catalog(
+    item: UiCaseBatchUpdateCatalogRequest,
+    user_info: dict = Depends(require_permissions(UI_CASE_EDIT)),
+):
     """批量修改 UI 用例所属目录"""
     if not item.case_ids:
         raise HTTPException(status_code=400, detail="请选择要修改的用例")
@@ -161,6 +178,7 @@ async def batch_update_case_catalog(item: UiCaseBatchUpdateCatalogRequest):
         if item.catalog_id is not None:
             await resolve_catalog(case.project_id, item.catalog_id)
         case.catalog_id = item.catalog_id
+        case.update_by = user_info.get("username") or case.username
         await case.save()
         updated += 1
     return {"updated": updated}
@@ -253,6 +271,7 @@ async def import_ui_cases(
                 level=c.get("level") or "P2",
                 description=(c.get("description") or "").strip() or None,
                 username=username,
+                update_by=username,
                 is_del=False,
             )
             created_names.append(new_name)
@@ -294,12 +313,13 @@ async def get_case(project_id: int, page: int = 1, size: int = 10,
         # 获取最近一次执行状态
         run_record = await UiCaseExecution.filter(case=i).order_by("-id").first()
         state = run_record.status if run_record else 'no_run'
-        if status and state != status:
+        if not _match_case_run_status(state, status):
             continue
         result.append({
             "id": i.id,
             "name": i.name,
             "username": i.username,
+            "update_by": i.update_by or i.username,
             "status": state,
             "run_count": run_count,
             "steps_count": len(i.steps),

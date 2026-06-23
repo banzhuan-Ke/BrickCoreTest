@@ -1,7 +1,25 @@
 //设置高度，滑动到底部自动加载内容
 .main_box {
-  height: 100%;
+  height: calc(100% - 72px);
   overflow-y: auto;
+}
+
+.suite-toolbar {
+  margin-bottom: 10px;
+
+  .suite-toolbar-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    line-height: 1.4;
+  }
+}
+
+.empty-tip {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
 //加载状态
@@ -10,9 +28,9 @@
 }
 
 .line {
-  height: 30px;
+  min-height: 30px;
   border: 1px dashed var(--primary-color-line);
-  padding: 0 10px;
+  padding: 4px 10px;
   margin: 5px 0;
   display: flex;
   align-items: center;
@@ -20,12 +38,27 @@
   border-radius: 5px;
   cursor: move;
 
+  &.line--added {
+    border-color: var(--el-color-success-light-5);
+    background: var(--el-color-success-light-9);
+  }
+
   .module {
     font-weight: bold
   }
 
   .name {
-    font-weight: bold
+    flex: 1;
+    min-width: 0;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .added-tag {
+    flex-shrink: 0;
   }
 
   .create_time {

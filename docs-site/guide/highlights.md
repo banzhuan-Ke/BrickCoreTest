@@ -29,7 +29,7 @@ BrickCore 将 **UI 自动化、接口自动化、性能测试、AI 测试** 整�
 | [**UI 自动化**](#ui-automation) | 可视化编排、录制回放、套件与执行计划、定时任务、截图/视频报告 |
 | [**接口自动化**](#api-automation) | Swagger / Postman / cURL 导入、测试计划、Mock、数据驱动、Token 授权、数据工厂与库断言 |
 | [**性能测试**](#perf-testing) | 场景压测、梯度加压、分布式 Worker、报告对比 |
-| [**AI 测试**](#ai-testing) | 需求生成功能用例、问答准确性评测、录制优化、失败分析 |
+| [**AI 测试**](#ai-testing) | 需求生成功能用例、录制优化、失败分析 |
 | **平台能力** | 数据看板、[MCP 外部接入](#mcp-server)、[平台助手「小测」](#platform-assistant)、通知、RBAC、文档中心 |
 
 > **UI / 录制 / 分布式压测 Worker** 依赖网盘分发的 **BrickCoreRunner**（见 [执行器使用说明](#runner-client)）。
@@ -41,7 +41,6 @@ BrickCore 将 **UI 自动化、接口自动化、性能测试、AI 测试** 整�
 | 需求 → 功能用例 | 上传 PRD，AI 批量生成 → [AI 测试](#ai-testing) |
 | 录制 + AI 优化 | Playwright 录制步骤 → [UI 自动化](#ui-automation) |
 | 失败根因 / 报告摘要 | 执行后一键分析 |
-| 问答准确性评测 | 标准题集 + SSE 被测 API + 统计报告 → [AI 测试](#ai-testing) |
 | 平台助手 / MCP | 自然语言查数 → [平台内 AI 助手](#platform-assistant) · [MCP 外部接入](#mcp-server) |
 
 ## 建议上手路径

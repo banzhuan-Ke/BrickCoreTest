@@ -118,10 +118,10 @@
             :type="actionTypeColor(action.action_type)"
           >
             <span class="action-tag">{{ actionTypeLabel(action.action_type) }}</span>
-            <span class="action-detail">{{ action.selector || action.url || action.value || '' }}</span>
+            <span class="action-detail">{{ formatActionDetail(action) }}</span>
           </el-timeline-item>
         </el-timeline>
-        <el-empty v-else description="暂无操作记录，请在浏览器中点击或输入" />
+        <el-empty v-else description="暂无操作记录，请在浏览器中点击、输入或拖拽" />
       </div>
 
       <div class="dialog-footer">
@@ -824,22 +824,36 @@ const formatTime = (seconds) => {
 }
 
 const actionTypeColor = (type) => {
-  const map = { click: 'primary', fill: 'success', navigate: 'warning', wait: 'info' }
+  const map = {
+    click: 'primary', fill: 'success', navigate: 'warning', wait: 'info',
+    drag_and_drop: 'warning', dblclick: 'danger', hover: '', keydown: 'info',
+    scroll: 'info', contextmenu: 'danger', file: 'success', select: 'success',
+  }
   return map[type] || ''
 }
 
 const actionTypeLabel = (type) => {
   const map = {
     click: '点击', fill: '输入', navigate: '导航', wait: '等待',
-    dblclick: '双击', select: '选择', hover: '悬停'
+    dblclick: '双击', select: '选择', hover: '悬停', drag_and_drop: '拖拽',
+    keydown: '按键', scroll: '滚动', contextmenu: '右键', file: '上传',
   }
   return map[type] || type
+}
+
+const formatActionDetail = (action) => {
+  if (action.action_type === 'drag_and_drop') {
+    const end = action.value || action.meta?.end_selector || ''
+    return end ? `${action.selector || ''} → ${end}` : (action.selector || '')
+  }
+  return action.selector || action.url || action.value || ''
 }
 
 const stepTagType = (method) => {
   const map = {
     click_ele: 'primary', fill_value: 'success', open_url: 'warning',
-    wait_for_time: 'info', double_click_ele: 'danger', hover: ''
+    wait_for_time: 'info', double_click_ele: 'danger', hover: '',
+    drag_and_drop: 'warning',
   }
   if (String(method || '').startsWith('kw_assert_')) return 'success'
   return map[method] || ''
