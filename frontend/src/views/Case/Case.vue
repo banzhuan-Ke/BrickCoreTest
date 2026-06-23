@@ -135,6 +135,16 @@
             label="创建人"
           />
           <el-table-column
+            v-else-if="col.key === 'update_by'"
+            prop="update_by"
+            label="最后更新人"
+            :width="col.width"
+          >
+            <template #default="scope">
+              {{ scope.row.update_by || scope.row.username || '—' }}
+            </template>
+          </el-table-column>
+          <el-table-column
             v-else-if="col.key === 'level'"
             prop="level"
             label="用例级别"
@@ -193,7 +203,7 @@
               <el-button type="primary" plain icon="MoreFilled" style="margin-left:10px">更多</el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item @click="router.push({name: 'editCase',params:{id: scope.row.id}})" icon="Edit">
+                  <el-dropdown-item @click="goEditCase(scope.row.id)" icon="Edit">
                     编辑
                   </el-dropdown-item>
                   <el-dropdown-item @click="CopyCase(scope.row.id)" icon="DocumentCopy">
@@ -221,8 +231,8 @@
           :page-sizes="[10, 20, 30, 40]"
           layout="total, sizes, prev, pager, next, jumper"
           :total="pageConfig.total"
-          @current-change="getCasesList"
-          @size-change="getCasesList"
+          @current-change="handlePageChange"
+          @size-change="handlePageChange"
       />
     </template>
   </PageCard>
@@ -451,6 +461,65 @@ const searchForm = reactive({
   level: ''
 })
 
+const buildRouteQuery = () => {
+  const query = {}
+  if (searchForm.name) query.name = searchForm.name
+  if (searchForm.catalog_id) query.catalog_id = String(searchForm.catalog_id)
+  if (searchForm.status) query.status = searchForm.status
+  if (searchForm.level) query.level = searchForm.level
+  if (showFavoritesOnly.value) query.favorites = '1'
+  if (pageConfig.page > 1) query.page = String(pageConfig.page)
+  if (pageConfig.size !== 10) query.size = String(pageConfig.size)
+  return query
+}
+
+const isSameRouteQuery = (nextQuery) => {
+  const keys = new Set([...Object.keys(nextQuery), ...Object.keys(route.query)])
+  for (const key of keys) {
+    if (String(nextQuery[key] ?? '') !== String(route.query[key] ?? '')) {
+      return false
+    }
+  }
+  return true
+}
+
+const applyRouteQuery = (query = route.query) => {
+  searchForm.name = typeof query.name === 'string' ? query.name : ''
+  searchForm.catalog_id = query.catalog_id ? Number(query.catalog_id) || null : null
+  searchForm.status = typeof query.status === 'string' ? query.status : ''
+  searchForm.level = typeof query.level === 'string' ? query.level : ''
+  showFavoritesOnly.value = query.favorites === '1'
+  pageConfig.page = query.page ? Number(query.page) || 1 : 1
+  pageConfig.size = query.size ? Number(query.size) || 10 : 10
+}
+
+let skipRouteWatch = false
+
+const syncRouteQuery = async () => {
+  const query = buildRouteQuery()
+  if (isSameRouteQuery(query)) {
+    await getCasesList()
+    return
+  }
+  skipRouteWatch = true
+  await router.replace({ name: route.name, query })
+  skipRouteWatch = false
+  await getCasesList()
+}
+
+const refreshListFromRoute = () => {
+  applyRouteQuery()
+  getCasesList()
+}
+
+const goEditCase = (id) => {
+  const query = buildRouteQuery()
+  if (!isSameRouteQuery(query)) {
+    router.replace({ name: route.name, query })
+  }
+  router.push({ name: 'editCase', params: { id } })
+}
+
 // 获取用例数据
 const getCasesList = async () => {
   await loadFavorites()
@@ -470,21 +539,22 @@ const getCasesList = async () => {
 }
 
 onMounted(() => {
-  const qName = route.query.name
-  if (qName && typeof qName === 'string') {
-    searchForm.name = qName
-  }
-  getCasesList()
+  refreshListFromRoute()
 })
 
 watch(
-  () => route.query.name,
-  (qName) => {
-    if (qName && typeof qName === 'string') {
-      searchForm.name = qName
-      pageConfig.page = 1
-      getCasesList()
-    }
+  () => [
+    route.query.name,
+    route.query.catalog_id,
+    route.query.status,
+    route.query.level,
+    route.query.favorites,
+    route.query.page,
+    route.query.size,
+  ],
+  () => {
+    if (skipRouteWatch) return
+    refreshListFromRoute()
   },
 )
 
@@ -495,18 +565,23 @@ const openCopyDialog = (row) => {
 
 const submitCopyCase = (payload) => uiCaseApi.copy(copyDialog.row.id, payload)
 
-const handleSearch = () => {
+const handleSearch = async () => {
   pageConfig.page = 1
-  getCasesList()
+  await syncRouteQuery()
 }
 
-const resetSearch = () => {
+const handlePageChange = async () => {
+  await syncRouteQuery()
+}
+
+const resetSearch = async () => {
   searchForm.catalog_id = null
   searchForm.name = ''
   searchForm.status = ''
   searchForm.level = ''
+  showFavoritesOnly.value = false
   pageConfig.page = 1
-  getCasesList()
+  await syncRouteQuery()
 }
 
 // 是否显示运行用例对话框

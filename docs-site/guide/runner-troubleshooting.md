@@ -55,7 +55,7 @@ cd E:\project2026\fastapi_ui_new\runner
 
 ## 六、客户端版本过低
 
-平台 `.env` 可设 `RUNNER_CLIENT_VERSION_MIN`。设备管理列表会标「需升级」。请下载与 `RUNNER_CLIENT_VERSION_LATEST` 一致的 zip（当前 **1.3.14**）。
+平台 `.env` 可设 `RUNNER_CLIENT_VERSION_MIN`。设备管理列表会标「需升级」。请下载与 `RUNNER_CLIENT_VERSION_LATEST` 一致的 zip（当前 **1.3.15**）。
 
 ## 七、相关文档
 

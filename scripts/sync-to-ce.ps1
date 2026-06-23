@@ -60,6 +60,12 @@ $ExcludeFiles = @(
     "backend\check_migration2.py",
     "backend\test_stream_debug.py",
     "backend\app\core\qa_judge_prompt.py",
+    "backend\app\core\qa_eval_service.py",
+    "backend\app\core\qa_eval_target_client.py",
+    "backend\app\core\qa_eval_report.py",
+    "backend\app\core\qa_eval_compare.py",
+    "backend\app\routers\ai\qa_eval.py",
+    "frontend\src\views\AI\AiQaEval.vue",
     "import_ui_case.py",
     "restart-all.bat",
     "restart-dev.bat",
@@ -166,7 +172,10 @@ function Write-CeStubs {
         @("docs-ui-automation-ce.md", (Join-Path "docs-site" (Join-Path "guide" "ui-automation.md"))),
         @("docs-system-admin-ce.md", (Join-Path "docs-site" (Join-Path "guide" "system-admin.md"))),
         @("docs-data-factory-ce.md", (Join-Path "docs-site" (Join-Path "guide" "data-factory.md"))),
+        @("docs-ai-testing-ce.md", (Join-Path "docs-site" (Join-Path "guide" "ai-testing.md"))),
+        @("docs-platform-assistant-ce.md", (Join-Path "docs-site" (Join-Path "guide" "platform-assistant.md"))),
         @("docs-runner-linux-server-ce.md", (Join-Path "docs-site" (Join-Path "guide" "runner-linux-server.md"))),
+        @("docs-runner-install-guide-ce.md", (Join-Path "docs-site" (Join-Path "guide" "runner-install-guide.md"))),
         @("runner-client-README.md", (Join-Path "runner_client" "README.md"))
     )
     foreach ($pair in $demoMaps) {
@@ -228,6 +237,22 @@ Get-ChildItem -Path $ProRoot -Recurse -File -Force -ErrorAction SilentlyContinue
 
 if (-not $DryRun) {
     Write-CeStubs
+    $qaEvalPrune = @(
+        "backend\app\core\qa_judge_prompt.py",
+        "backend\app\core\qa_eval_service.py",
+        "backend\app\core\qa_eval_target_client.py",
+        "backend\app\core\qa_eval_report.py",
+        "backend\app\core\qa_eval_compare.py",
+        "backend\app\routers\ai\qa_eval.py",
+        "frontend\src\views\AI\AiQaEval.vue"
+    )
+    foreach ($rel in $qaEvalPrune) {
+        $target = Join-Path $CeRoot $rel
+        if (Test-Path -LiteralPath $target) {
+            Remove-Item -LiteralPath $target -Force
+            Write-Host "  CE prune: removed $rel"
+        }
+    }
 }
 
 $leak = Join-Path $CeRoot "runner\WebEngine"

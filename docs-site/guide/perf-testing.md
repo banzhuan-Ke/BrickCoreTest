@@ -139,8 +139,8 @@ python perf_worker.py --master http://后端地址 \
 
 | 配置 | 当前推荐值 | 说明 |
 |------|------------|------|
-| BrickCoreRunner 客户端 | **≥ 1.3.14** | 与 `runner_client/__init__.py`、`VERSION.txt` 一致 |
-| `RUNNER_CLIENT_VERSION_LATEST` | `1.3.14` | 服务器 `.env` / `docker-compose.yml` |
+| BrickCoreRunner 客户端 | **≥ 1.3.15** | 与 `runner_client/__init__.py`、`VERSION.txt` 一致 |
+| `RUNNER_CLIENT_VERSION_LATEST` | `1.3.15` | 服务器 `.env` / `docker-compose.yml` |
 | `RUNNER_ENGINE_VERSION` | `1.0.2` | 与 `runner/settings.py` 中 `RUNNER_VERSION` 一致 |
 
 生产环境浏览器访问平台一般为 **80 端口**（Nginx），`--master` / 客户端服务器地址 **不要写 :8000**（8000 为容器内 Backend）。

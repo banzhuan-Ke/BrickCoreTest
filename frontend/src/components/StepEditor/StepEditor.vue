@@ -1,5 +1,24 @@
 <template>
   <div class="step-editor">
+    <div v-if="selectionMode" class="selection-toolbar">
+      <span class="selection-summary">已选 <strong>{{ selectedCount }}</strong> 步</span>
+      <el-button link type="primary" @click="selectAll">全选</el-button>
+      <el-button link @click="clearSelection">清空</el-button>
+      <el-button
+        type="primary"
+        size="small"
+        :disabled="selectedCount === 0"
+        @click="openCreateFragmentDialog"
+      >
+        生成片段
+      </el-button>
+      <el-button link @click="exitSelectionMode">退出多选</el-button>
+    </div>
+    <div v-else-if="localSteps.length > 0" class="selection-toolbar is-compact">
+      <el-button link type="primary" @click="enterSelectionMode">多选步骤</el-button>
+      <el-text type="info" size="small">勾选多个步骤后可生成可复用片段</el-text>
+    </div>
+
     <!-- 步骤列表 -->
     <div class="step-list" :class="{ 'is-empty': steps.length === 0 }">
       <VueDraggable
@@ -21,8 +40,12 @@
             :step="step"
             :index="index"
             :parent-path="[]"
+            :selectable="selectionMode"
+            :selected="selectedIndices.has(index)"
+            @toggle-select="toggleStepSelection(index)"
             @edit="openEditDialog(step, index)"
             @debug="onDebugStep"
+            @copy="copyStep(index)"
             @update:step="updateStep(index, $event)"
             @delete="deleteStep(index)"
             @add-branch="addBranch(index)"
@@ -54,6 +77,13 @@
       :step="editingFragmentStep"
       @save="handleFragmentSave"
     />
+
+    <CreateFragmentFromStepsDialog
+      v-model="createFragmentVisible"
+      :selected-count="selectedCount"
+      :steps="pendingFragmentSteps"
+      @created="handleFragmentCreated"
+    />
   </div>
 </template>
 
@@ -64,8 +94,15 @@ import { Plus } from '@element-plus/icons-vue'
 import StepItem from './StepItem.vue'
 import StepEditDialog from './StepEditDialog.vue'
 import FragmentRefEditDialog from './FragmentRefEditDialog.vue'
+import CreateFragmentFromStepsDialog from './CreateFragmentFromStepsDialog.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { generateStepId, normalizeExpandedFragmentSteps } from '@/utils/stepHelper'
+import {
+  generateStepId,
+  normalizeExpandedFragmentSteps,
+  duplicateStepWithNewIds,
+  extractStepsWithNewIds,
+  buildFragmentRefStep,
+} from '@/utils/stepHelper'
 import { uiFragmentApi } from '@/api/modules/ui'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 
@@ -95,6 +132,12 @@ const fragmentDialogVisible = ref(false)
 const editingFragmentStep = ref(null)
 const editingFragmentIndex = ref(-1)
 const fragmentOnSave = ref(null)
+const selectionMode = ref(false)
+const selectedIndices = ref(new Set())
+const createFragmentVisible = ref(false)
+const pendingFragmentSteps = ref([])
+
+const selectedCount = computed(() => selectedIndices.value.size)
 
 provide('fragmentRefEdit', (step, onSave) => {
   editingFragmentStep.value = JSON.parse(JSON.stringify(step))
@@ -168,8 +211,76 @@ function handleFragmentSave(updatedStep) {
   fragmentDialogVisible.value = false
 }
 
+function enterSelectionMode() {
+  selectionMode.value = true
+  selectedIndices.value = new Set()
+}
+
+function exitSelectionMode() {
+  selectionMode.value = false
+  selectedIndices.value = new Set()
+}
+
+function toggleStepSelection(index) {
+  const next = new Set(selectedIndices.value)
+  if (next.has(index)) {
+    next.delete(index)
+  } else {
+    next.add(index)
+  }
+  selectedIndices.value = next
+}
+
+function selectAll() {
+  selectedIndices.value = new Set(localSteps.value.map((_, index) => index))
+}
+
+function clearSelection() {
+  selectedIndices.value = new Set()
+}
+
+function openCreateFragmentDialog() {
+  if (selectedCount.value === 0) {
+    ElMessage.warning('请先勾选要生成片段的步骤')
+    return
+  }
+  pendingFragmentSteps.value = extractStepsWithNewIds(
+    localSteps.value,
+    [...selectedIndices.value],
+  )
+  createFragmentVisible.value = true
+}
+
+function handleFragmentCreated({ fragment, replaceWithRef }) {
+  if (!fragment?.id) return
+
+  if (replaceWithRef) {
+    const indices = [...selectedIndices.value].sort((a, b) => a - b)
+    const insertAt = indices[0]
+    const steps = [...localSteps.value]
+    for (let i = indices.length - 1; i >= 0; i -= 1) {
+      steps.splice(indices[i], 1)
+    }
+    steps.splice(insertAt, 0, buildFragmentRefStep(fragment))
+    localSteps.value = steps
+  }
+
+  exitSelectionMode()
+}
+
 function onDebugStep(index) {
   emit('debug-step', index)
+}
+
+function copyStep(index) {
+  const steps = [...localSteps.value]
+  const duplicated = duplicateStepWithNewIds(steps[index])
+  steps.splice(index + 1, 0, duplicated)
+  localSteps.value = steps
+  if (selectionMode.value) {
+    exitSelectionMode()
+  }
+  ElMessage.success('步骤已复制')
 }
 
 // 处理拖拽添加（从左侧关键字面板拖入）
@@ -223,6 +334,9 @@ function onStepAdd(evt) {
   // 插入新步骤
   steps.splice(newIndex, 0, newStep)
   localSteps.value = steps
+  if (selectionMode.value) {
+    exitSelectionMode()
+  }
   
   // 打开编辑弹窗
   editingStep.value = newStep
@@ -233,7 +347,9 @@ function onStepAdd(evt) {
 
 // 处理拖拽排序结束
 function onDragEnd() {
-  // 可以在这里添加排序后的处理逻辑
+  if (selectionMode.value) {
+    exitSelectionMode()
+  }
 }
 
 // 更新步骤
@@ -261,6 +377,9 @@ async function deleteStep(index) {
     const steps = [...localSteps.value]
     steps.splice(index, 1)
     localSteps.value = steps
+    if (selectionMode.value) {
+      exitSelectionMode()
+    }
     ElMessage.success('删除成功')
   } catch {
     // 取消删除
@@ -353,6 +472,28 @@ function handleStepCancel() {
 <style scoped lang="scss">
 .step-editor {
   min-height: 300px;
+}
+
+.selection-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  background: var(--el-color-primary-light-9);
+  border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 8px;
+
+  &.is-compact {
+    background: transparent;
+    border-style: dashed;
+    border-color: var(--el-border-color);
+  }
+}
+
+.selection-summary {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
 }
 
 .step-list {

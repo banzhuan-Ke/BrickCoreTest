@@ -20,6 +20,7 @@
           :depth="parentPath.length"
           :parent-path="parentPath"
           @update:step="(newStep) => updateSubStep(sIndex, newStep)"
+          @copy="copySubStep(sIndex)"
           @delete="deleteSubStep(sIndex)"
           @add-branch="() => handleAddBranch(sIndex)"
           @delete-branch="(bIndex) => handleDeleteBranch(sIndex, bIndex)"
@@ -44,7 +45,7 @@ import { VueDraggable } from 'vue-draggable-plus'
 import { Plus } from '@element-plus/icons-vue'
 import StepItem from './StepItem.vue'
 import { ElMessage } from 'element-plus'
-import { generateStepId } from '@/utils/stepHelper'
+import { generateStepId, duplicateStepWithNewIds } from '@/utils/stepHelper'
 
 const props = defineProps({
   branch: { type: Object, required: true },
@@ -141,6 +142,14 @@ function updateSubStep(index, newStep) {
 
 function deleteSubStep(index) {
   updateParent(localSteps.value.filter((_, i) => i !== index))
+}
+
+function copySubStep(index) {
+  const steps = [...localSteps.value]
+  const duplicated = duplicateStepWithNewIds(steps[index])
+  steps.splice(index + 1, 0, duplicated)
+  updateParent(steps)
+  ElMessage.success('步骤已复制')
 }
 
 function handleAddBranch(stepIndex) {

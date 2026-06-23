@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, status
 
-from app.core.auth import verify_runner_token
+from app.core.auth import verify_runner_or_internal
 from app.core.device_log_publisher import publish_device_log_line, publish_device_screen
 from app.schemas.runner import (
     RunnerDeviceLogBatchRequest,
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/runner", tags=["Runner 客户端"])
 )
 async def runner_device_log(
     item: RunnerDeviceLogRequest,
-    ctx: dict = Depends(verify_runner_token),
+    ctx: dict = Depends(verify_runner_or_internal),
 ):
     device_id = item.device_id or ctx.get("device_id") or ""
     await publish_device_log_line(device_id, item.message)
@@ -35,7 +35,7 @@ async def runner_device_log(
 )
 async def runner_device_log_batch(
     item: RunnerDeviceLogBatchRequest,
-    ctx: dict = Depends(verify_runner_token),
+    ctx: dict = Depends(verify_runner_or_internal),
 ):
     device_id = item.device_id or ctx.get("device_id") or ""
     for msg in item.messages:
@@ -51,7 +51,7 @@ async def runner_device_log_batch(
 )
 async def runner_device_screen(
     item: RunnerDeviceScreenRequest,
-    ctx: dict = Depends(verify_runner_token),
+    ctx: dict = Depends(verify_runner_or_internal),
 ):
     device_id = item.device_id or ctx.get("device_id") or ""
     fmt = (item.format or "jpeg").lower().strip()

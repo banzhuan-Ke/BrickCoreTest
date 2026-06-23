@@ -1,7 +1,7 @@
 from typing import List
 from fastapi import APIRouter, HTTPException, Depends, status, Query
 from app.models.sys import Project, TestCatalog
-from app.core.auth import is_authenticated, require_permissions
+from app.core.auth import is_authenticated, require_permissions, get_current_username
 from app.core.permissions import UI_SUITE_VIEW, UI_SUITE_EDIT
 from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.schemas.ui import AddSuiteForm, SuiteSchemas, UpdateSuiteForm, AddStepForm, StepSchemas, StepListSchemas, UpdateSuiteCaseSortForm
@@ -10,6 +10,11 @@ from app.models.ui import Suite, Step, Case, UiCaseExecution, UiSuiteExecution
 
 # 创建路由对象
 router = APIRouter(prefix="/suites", dependencies=[Depends(is_authenticated)])
+
+
+async def _touch_suite_updated(suite: Suite, username: str) -> None:
+    suite.update_by = username
+    await suite.save(update_fields=["update_by", "update_time"])
 
 
 # 创建测试套件
@@ -23,7 +28,7 @@ async def create_suite(item: AddSuiteForm):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="项目不存在或已被删除")
     if item.catalog_id is not None:
         await resolve_catalog(item.project_id, item.catalog_id)
-    suite = await Suite.create(**item.model_dump(exclude_unset=True), is_del=False)
+    suite = await Suite.create(**item.model_dump(exclude_unset=True), is_del=False, update_by=item.username)
     return suite
 
 
@@ -70,6 +75,7 @@ async def get_suite(project: int | None = None, project_id: int | None = None,
             "id": suite.id,
             "name": suite.name,
             "username": suite.username,
+            "update_by": suite.update_by or suite.username,
             "status": latest_status,
             "suite_type": suite.suite_type,
             "case_count": len(cases),
@@ -113,7 +119,11 @@ async def delete_suite(suite_id: int):
 @router.put("/{suite_id}", tags=["测试套件"], summary="更新套件", response_model=SuiteSchemas,
             status_code=status.HTTP_200_OK,
             dependencies=[Depends(require_permissions(UI_SUITE_EDIT))])
-async def update_suite(suite_id: int, item: UpdateSuiteForm):
+async def update_suite(
+    suite_id: int,
+    item: UpdateSuiteForm,
+    username: str = Depends(get_current_username),
+):
     """更新套件信息的接口"""
     suite = await Suite.get_or_none(id=suite_id, is_del=False)
     if not suite:
@@ -121,6 +131,7 @@ async def update_suite(suite_id: int, item: UpdateSuiteForm):
     if item.catalog_id is not None:
         await resolve_catalog(suite.project_id, item.catalog_id)
     await suite.update_from_dict(item.model_dump(exclude_unset=True))
+    suite.update_by = username
     await suite.save()
     return suite
 
@@ -129,7 +140,11 @@ async def update_suite(suite_id: int, item: UpdateSuiteForm):
 @router.post("/{suite_id}/cases", tags=["套件用例"], summary="套件中添加用例", status_code=status.HTTP_201_CREATED,
              response_model=StepSchemas,
              dependencies=[Depends(require_permissions(UI_SUITE_EDIT))])
-async def add_step(suite_id: int, item: AddStepForm):
+async def add_step(
+    suite_id: int,
+    item: AddStepForm,
+    username: str = Depends(get_current_username),
+):
     """往套件中添加用例的接口"""
     suite = await Suite.get_or_none(id=suite_id, is_del=False)
     if not suite:
@@ -147,6 +162,7 @@ async def add_step(suite_id: int, item: AddStepForm):
         run_mode=default_run_mode,
         is_del=False,
     )
+    await _touch_suite_updated(suite, username)
     return step
 
 
@@ -154,13 +170,20 @@ async def add_step(suite_id: int, item: AddStepForm):
 @router.delete("/{suite_id}/cases/{case_id}", tags=["套件用例"], summary="删除套件中的用例",
                status_code=status.HTTP_204_NO_CONTENT,
                dependencies=[Depends(require_permissions(UI_SUITE_EDIT))])
-async def delete_step(case_id: int, suite_id: int):
+async def delete_step(
+    case_id: int,
+    suite_id: int,
+    username: str = Depends(get_current_username),
+):
     """删除套件中的用例的接口"""
     step = await Step.get_or_none(id=case_id, suite_id=suite_id, is_del=False)
     if not step:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="操作的套件用例不存在或已被删除")
     step.is_del = True
     await step.save()
+    suite = await Suite.get_or_none(id=suite_id, is_del=False)
+    if suite:
+        await _touch_suite_updated(suite, username)
 
 
 # 获取套件中的所有用例（只返回未删除的）
@@ -192,20 +215,31 @@ async def get_step(suite_id: int):
             status_code=status.HTTP_200_OK,
             response_model=StepSchemas,
             dependencies=[Depends(require_permissions(UI_SUITE_EDIT))])
-async def update_step(case_id: int, suite_id: int):
+async def update_step(
+    case_id: int,
+    suite_id: int,
+    username: str = Depends(get_current_username),
+):
     """套件中修改用例跳过执行"""
     step = await Step.get_or_none(id=case_id, suite_id=suite_id, is_del=False)
     if not step:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="操作的套件用例不存在或已被删除")
     step.skip = not step.skip
     await step.save()
+    suite = await Suite.get_or_none(id=suite_id, is_del=False)
+    if suite:
+        await _touch_suite_updated(suite, username)
     return step
 
 
 # 覆盖式更新套件中的所有用例
 @router.put("/{suite_id}/cases", tags=["套件用例"], summary="覆盖式更新套件用例", status_code=status.HTTP_200_OK,
             dependencies=[Depends(require_permissions(UI_SUITE_EDIT))])
-async def update_suite_cases(suite_id: int, data: dict):
+async def update_suite_cases(
+    suite_id: int,
+    data: dict,
+    username: str = Depends(get_current_username),
+):
     """覆盖式更新套件中的用例列表"""
     suite = await Suite.get_or_none(id=suite_id, is_del=False)
     if not suite:
@@ -227,6 +261,7 @@ async def update_suite_cases(suite_id: int, data: dict):
                 is_del=False,
                 run_mode=old_steps.get(case_id, default_run_mode),
             )
+    await _touch_suite_updated(suite, username)
     return await get_step(suite_id)
 
 
@@ -265,8 +300,13 @@ async def batch_copy_cases(suite_id: int, data: dict):
 @router.post("/{suite_id}/cases/sort", tags=["套件用例"], summary="修改用例执行的顺序",
              status_code=status.HTTP_200_OK,
              dependencies=[Depends(require_permissions(UI_SUITE_EDIT))])
-async def update_sort(suite_id: int, item: UpdateSuiteCaseSortForm):
+async def update_sort(
+    suite_id: int,
+    item: UpdateSuiteCaseSortForm,
+    username: str = Depends(get_current_username),
+):
     """修改用例执行的顺序"""
+    suite = await Suite.get_or_none(id=suite_id, is_del=False)
     for i in item.case_orders:
         step = await Step.get_or_none(suite_id=suite_id, cases_id=i.cases_id, is_del=False)
         if step:
@@ -282,4 +322,6 @@ async def update_sort(suite_id: int, item: UpdateSuiteCaseSortForm):
                     )
                 step.run_mode = run_mode
             await step.save()
+    if suite:
+        await _touch_suite_updated(suite, username)
     return await Step.filter(suite_id=suite_id, is_del=False).order_by('sort')

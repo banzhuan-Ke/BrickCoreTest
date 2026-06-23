@@ -25,6 +25,15 @@ from app.core.stream_phase import detail_to_excel_row, is_stream_burst_mode, nor
 
 router = APIRouter(prefix="/records", tags=["性能测试记录"])
 
+# 列表页仅需摘要字段；避免 SELECT 大 JSON 列后在 ORDER BY 时触发 sort buffer 溢出
+_RECORD_LIST_FIELDS = (
+    "id", "scene_id", "project_id", "status", "trigger_type",
+    "config_snapshot", "total_requests", "success_count", "fail_count",
+    "qps", "avg_response_time", "error_rate", "median_response_time",
+    "p90_response_time", "std_dev_response_time", "received_kb_per_sec",
+    "sent_kb_per_sec", "duration", "started_at", "ended_at", "run_by",
+)
+
 
 @router.get("", summary="执行记录列表")
 async def get_records(
@@ -62,11 +71,18 @@ async def get_records(
             query = query.filter(started_at__lte=end_date)
 
     total = await query.count()
-    records = await query.order_by("-id").offset((page - 1) * size).limit(size).all()
-    
+    records = await (
+        query.order_by("-id")
+        .offset((page - 1) * size)
+        .limit(size)
+        .only(*_RECORD_LIST_FIELDS)
+        .prefetch_related("scene")
+        .all()
+    )
+
     result = []
     for record in records:
-        scene = await record.scene
+        scene = record.scene
         result.append({
             "id": record.id,
             "scene_id": record.scene_id,

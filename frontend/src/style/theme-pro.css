@@ -91,6 +91,9 @@ html.theme-pro .el-card {
 html.theme-pro .el-table {
     --el-table-border-color: var(--pro-line);
     --el-table-header-bg-color: #f7f9fe;
+    --el-table-bg-color: #ffffff;
+    --el-table-tr-bg-color: #ffffff;
+    --el-fill-color-lighter: #fafbfd;
     border-radius: var(--border-radius-large);
     overflow: hidden;
 }
@@ -98,6 +101,16 @@ html.theme-pro .el-table {
 html.theme-pro .el-table th.el-table__cell {
     font-weight: 700;
     color: #3d4454;
+    background: #f7f9fe !important;
+}
+
+html.theme-pro .el-table td.el-table__cell {
+    background-color: #fff;
+    color: #3d4454;
+}
+
+html.theme-pro .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+    background: #fafbfd !important;
 }
 
 html.theme-pro .el-table tr:hover > td.el-table__cell {

@@ -375,12 +375,14 @@ import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
 import { aiWorkbenchApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+import { useCommunityEdition } from '@/composables/useCommunityEdition.js'
 
 echarts.use([BarChart, LineChart, FunnelChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 const router = useRouter()
 const proStore = ProjectStore()
 const uStore = UserStore()
+const { isCommunityEdition, loadCommunityEdition } = useCommunityEdition()
 
 const loading = ref(false)
 const stats = ref({})
@@ -495,7 +497,8 @@ const primaryEntries = computed(() => [
   }
 ])
 
-const secondaryEntries = computed(() => [
+const secondaryEntries = computed(() => {
+  const items = [
   {
     name: '接口 AI 生成',
     desc: '接口管理 / 用例 → AI 生成',
@@ -524,7 +527,12 @@ const secondaryEntries = computed(() => [
     icon: ChatLineRound,
     disabled: !canAiTest.value
   }
-])
+  ]
+  if (isCommunityEdition.value) {
+    return items.filter((item) => item.path !== '/ai-qa-eval')
+  }
+  return items
+})
 
 const go = (card) => {
   if (card.disabled) return
@@ -741,6 +749,7 @@ const handleFunnelResize = () => {
 }
 
 onMounted(() => {
+  loadCommunityEdition()
   loadOverview()
   window.addEventListener('resize', handleFunnelResize)
 })

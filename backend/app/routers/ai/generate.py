@@ -39,6 +39,15 @@ UI_AGENT_MAX_STEPS = 30
 UI_AGENT_DEFAULT_STEPS = 15
 UI_AGENT_DAILY_LIMIT = int(__import__("os").getenv("UI_AGENT_DAILY_LIMIT", "100"))
 
+_POPUP_FLOW_KEYWORDS = re.compile(
+    r"弹窗|弹出|弹层|浮层|充值|对话框|drawer|modal|popup|弹.*支付|支付.*弹",
+    re.IGNORECASE,
+)
+
+
+def _description_suggests_popup_flow(description: str) -> bool:
+    return bool(_POPUP_FLOW_KEYWORDS.search(description or ""))
+
 
 # ========== JSON 提取与清洗工具 ==========
 
@@ -459,8 +468,9 @@ async def generate_ui_case(
     # 1. 获取 LLM 配置
     config = await _get_ai_config(body.ai_config_id, scene="ui_case_generate")
 
-    # 2. 多轮探索模式
-    if body.auto_explore and body.page_url:
+    # 2. 多轮探索模式（显式开启，或描述涉及弹窗/支付等动态浮层）
+    use_explore = body.auto_explore or _description_suggests_popup_flow(body.description)
+    if use_explore and body.page_url:
         return await _generate_ui_case_explore(body, config, project_id, user_info, start_time)
 
     # 3. 单页面模式（原有逻辑）

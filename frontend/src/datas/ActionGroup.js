@@ -20,12 +20,18 @@ const pageSteps = [
     {
         keyword: '刷新页面',
         method: "refresh",
-        params: {}
+        params: {
+            wait_until: 'commit',
+            timeout: 30000
+        }
     },
     {
         keyword: '页面后退',
         method: "go_back",
-        params: {}
+        params: {
+            timeout: 30000,
+            fallback_url: ''
+        }
     },
     {
         keyword: '清空Cookie',
@@ -174,6 +180,10 @@ const elementSteps = [
         params: {
             start_selector: "",
             end_selector: "",
+            source_position_x: "",
+            source_position_y: "",
+            target_position_x: "",
+            target_position_y: "",
             timeout: 20000
         }
     },
@@ -321,6 +331,10 @@ const IframeSteps = [
             frame: "",
             start_selector: "",
             end_selector: '',
+            source_position_x: "",
+            source_position_y: "",
+            target_position_x: "",
+            target_position_y: "",
             timeout: 20000
         }
     }
@@ -497,6 +511,17 @@ const assertSteps = [
         }
     },
     {
+        keyword: '断言元素顺序',
+        method: "kw_assert_element_order",
+        params: {
+            first_locator: "",
+            second_locator: "",
+            order: "before",
+            first_index: 1,
+            second_index: 1
+        }
+    },
+    {
         keyword: '数据库断言',
         method: "kw_db_assert",
         params: {
@@ -516,10 +541,16 @@ const otherSteps = [
         method: "upload_file",
         params: {
             locator: '',
+            upload_mode: 'single',
             file_path: '',
             file_key: '',
             file_bucket: '',
             file_name: '',
+            upload_as_name: '',
+            file_items: [],
+            folder_key: '',
+            folder_bucket: '',
+            folder_name: '',
             timeout: 20000
         }
     },
@@ -542,6 +573,13 @@ const otherSteps = [
             var_name: '',
             index: 1,
             timeout: 20000
+        }
+    },
+    {
+        keyword: '提取当前页面url',
+        method: "extract_page_url",
+        params: {
+            var_name: ''
         }
     }
 ]

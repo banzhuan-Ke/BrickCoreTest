@@ -183,8 +183,8 @@
   }
 }
 
-// 暗黑模式适配
-.dark {
+// 暗黑模式适配（Pro 主题不走暗黑样式，避免 classic 切 Pro 后表格残留深色）
+html.dark:not(.theme-pro) {
   .el-main {
     :deep(.el-card) {
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.3);

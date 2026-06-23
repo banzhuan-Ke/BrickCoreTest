@@ -161,12 +161,19 @@
   
   .el-menu-item {
     &:hover {
-      background: var(--el-color-primary-dark-2);
+      background: var(--el-color-primary-light-9);
+      color: var(--el-text-color-primary);
     }
     
     &.is-active {
-      background: var(--el-color-primary-dark-2);
+      background: var(--el-color-primary-light-9);
+      color: #fff;
+      border-left: 3px solid var(--el-color-primary-light-3);
       box-shadow: 0 2px 8px rgba(16, 125, 236, 0.25);
+
+      .el-icon {
+        color: #fff;
+      }
     }
   }
 }

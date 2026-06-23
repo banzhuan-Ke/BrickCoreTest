@@ -19,6 +19,7 @@ class Case(models.Model):
     )
     description = fields.TextField(null=True, description="用例描述（功能背景/步骤预期，供 AI 优化）")
     username = fields.CharField(max_length=50, description="创建人")
+    update_by = fields.CharField(max_length=50, null=True, description="最后更新人")
     is_del = fields.BooleanField(description="是否删除", default=False)
     catalog = fields.ForeignKeyField(
         "models.TestCatalog", null=True, related_name="ui_cases", description="所属目录"
@@ -49,6 +50,7 @@ class Suite(models.Model):
         default=False, description="是否将链路用例变量传递给后续链路用例"
     )
     username = fields.CharField(max_length=50, description="创建人")
+    update_by = fields.CharField(max_length=50, null=True, description="最后更新人")
     is_del = fields.BooleanField(description="是否删除", default=False)
 
     class Meta:
@@ -87,6 +89,7 @@ class Task(models.Model):
         "models.TestCatalog", null=True, related_name="ui_tasks", description="所属目录"
     )
     username = fields.CharField(max_length=50, description="创建人")
+    update_by = fields.CharField(max_length=50, null=True, description="最后更新人")
     is_del = fields.BooleanField(description="是否删除", default=False)
     parallel = fields.BooleanField(default=False, description="计划级并行（按执行器权重分配套件）")
 
@@ -213,3 +216,23 @@ class UiTestFile(models.Model):
     class Meta:
         table = "ui_test_file"
         table_description = "UI自动化测试文件"
+
+
+class UiTestFolder(models.Model):
+    """Web 自动化文件夹上传测试素材（MinIO 前缀 + 相对路径保留目录结构）"""
+    id = fields.IntField(pk=True, auto_increment=True)
+    project = fields.ForeignKeyField("models.Project", related_name="ui_test_folders", description="所属项目")
+    folder_name = fields.CharField(max_length=255, description="文件夹显示名称")
+    folder_key = fields.CharField(max_length=500, description="MinIO 对象前缀 project_id/uuid")
+    file_bucket = fields.CharField(max_length=100, description="MinIO bucket")
+    file_count = fields.IntField(default=0, description="文件数量")
+    total_size = fields.IntField(default=0, description="总大小（字节）")
+    entries = fields.JSONField(default=list, description="文件清单 [{relative_path, object_key, size, mime_type}]")
+    username = fields.CharField(max_length=50, description="上传人")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+    create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    update_time = fields.DatetimeField(auto_now=True, description="更新时间")
+
+    class Meta:
+        table = "ui_test_folder"
+        table_description = "UI自动化测试文件夹"

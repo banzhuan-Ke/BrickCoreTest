@@ -34,6 +34,7 @@ from app.routers.ui.tasks import router as task_router
 from app.routers.ui.records import router as runner_router
 from app.routers.ui.exec import router as ui_exec_router
 from app.routers.ui.files import router as ui_files_router
+from app.routers.ui.folders import router as ui_folders_router
 from app.routers.sys.devices import router as device_router
 from app.routers.runner import router as runner_client_router
 from app.routers.schedule.jobs import router as cronjob_router
@@ -321,6 +322,7 @@ app.include_router(task_router, prefix="/ui", dependencies=_project_access_dep)
 app.include_router(runner_router, prefix="/ui", dependencies=_project_access_dep)
 app.include_router(ui_exec_router, prefix="/ui", dependencies=_project_access_dep)
 app.include_router(ui_files_router, prefix="/ui", dependencies=_project_access_dep)
+app.include_router(ui_folders_router, prefix="/ui", dependencies=_project_access_dep)
 
 app.include_router(cronjob_router, prefix="/schedule", dependencies=_project_access_dep)
 

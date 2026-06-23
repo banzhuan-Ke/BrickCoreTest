@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
 from app.core.config import MCP_HTTP_PATH
+from app.core.edition import qa_eval_feature_enabled
 from app.core.mcp_config_service import get_mcp_runtime_config, resolve_public_base_url
 from app.mcp import tools as mcp_tools
 from app.mcp.auth import resolve_mcp_auth
@@ -146,10 +147,11 @@ _register("confirm_run_api_suite", mcp_tools.tool_confirm_run_api_suite, "确认
 _register("confirm_run_api_plan", mcp_tools.tool_confirm_run_api_plan, "确认异步执行接口测试计划")
 _register("preview_run_api_case", mcp_tools.tool_preview_run_api_case, "预览单条接口用例执行")
 _register("confirm_run_api_case", mcp_tools.tool_confirm_run_api_case, "确认执行单条接口用例")
-_register("list_qa_eval_sets", mcp_tools.tool_list_qa_eval_sets, "列出问答准确性评测集")
-_register("get_qa_eval_run", mcp_tools.tool_get_qa_eval_run, "查询问答评测跑批进度")
-_register("preview_run_qa_eval", mcp_tools.tool_preview_run_qa_eval, "预览问答准确性评测跑批")
-_register("confirm_run_qa_eval", mcp_tools.tool_confirm_run_qa_eval, "确认提交问答准确性评测")
+if qa_eval_feature_enabled():
+    _register("list_qa_eval_sets", mcp_tools.tool_list_qa_eval_sets, "列出问答准确性评测集")
+    _register("get_qa_eval_run", mcp_tools.tool_get_qa_eval_run, "查询问答评测跑批进度")
+    _register("preview_run_qa_eval", mcp_tools.tool_preview_run_qa_eval, "预览问答准确性评测跑批")
+    _register("confirm_run_qa_eval", mcp_tools.tool_confirm_run_qa_eval, "确认提交问答准确性评测")
 _register("preview_run_ui_case", mcp_tools.tool_preview_run_ui_case, "预览单条 Web UI 用例执行")
 _register("confirm_run_ui_case", mcp_tools.tool_confirm_run_ui_case, "确认执行单条 Web UI 用例")
 _register("preview_run_ui_task", mcp_tools.tool_preview_run_ui_task, "预览 UI 测试计划执行影响")

@@ -398,6 +398,13 @@ watch(visible, (val) => {
   emit('update:modelValue', val)
 })
 
+const POPUP_FLOW_PATTERN = /弹窗|弹出|弹层|浮层|充值|对话框|modal|popup|弹.*支付|支付.*弹/i
+watch(() => form.description, (val) => {
+  if (POPUP_FLOW_PATTERN.test(val || '') && form.generation_mode === 'single' && form.page_url.trim()) {
+    form.generation_mode = 'explore'
+  }
+})
+
 const resetForm = () => {
   form.description = ''
   form.page_url = ''

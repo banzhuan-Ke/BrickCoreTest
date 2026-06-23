@@ -49,7 +49,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { uiFragmentApi } from '@/api/modules/ui'
 import { ProjectStore } from '@/stores/module/ProjectStore'
-import { generateStepId } from '@/utils/stepHelper'
+import { buildFragmentRefStep } from '@/utils/stepHelper'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -98,19 +98,7 @@ function confirm() {
     return
   }
   const frag = selected.value
-  emit('insert', {
-    id: generateStepId(),
-    method: 'fragment_ref',
-    keyword: `片段：${frag.name}`,
-    desc: frag.description || frag.name,
-    params: {
-      fragment_id: frag.id,
-      fragment_version: frag.version,
-      fragment_name: frag.name,
-      variables: {},
-    },
-    is_fragment_ref: true,
-  })
+  emit('insert', buildFragmentRefStep(frag))
   visible.value = false
   selected.value = null
 }

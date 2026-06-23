@@ -1,0 +1,44 @@
+/* 紧凑经典 — 更高信息密度，支持暗黑模式 */
+html.theme-compact {
+    --border-radius-small: 4px;
+    --border-radius-base: 6px;
+    --border-radius-large: 8px;
+}
+
+html.theme-compact .el-container > .el-aside {
+    width: 200px !important;
+}
+
+html.theme-compact .menu-container .el-menu-item {
+    height: 40px;
+    line-height: 40px;
+    margin: 2px 8px;
+    font-size: 13px;
+}
+
+html.theme-compact .menu-group-header {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+html.theme-compact .el-container > .el-container > .el-header {
+    height: 48px !important;
+    padding: 0 12px;
+}
+
+html.theme-compact .el-container > .el-container > .el-main {
+    padding: 12px;
+}
+
+html.theme-compact .page-card,
+html.theme-compact .catalog-list-layout {
+    padding: 12px 14px;
+}
+
+html.theme-compact .el-table {
+    font-size: 13px;
+}
+
+html.theme-compact .el-button {
+    padding: 6px 12px;
+}

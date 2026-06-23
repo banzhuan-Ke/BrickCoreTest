@@ -585,16 +585,6 @@ const routes = [
                 }
             },
             {
-                path: '/ai-qa-eval',
-                name: 'aiQaEval',
-                component: () => import('../views/AI/AiQaEval.vue'),
-                meta: {
-                    title: '问答准确性评测',
-                    icon: 'ChatLineRound',
-                    permission: 'ai_test:view'
-                }
-            },
-            {
                 path: '/browser-lab',
                 component: () => import('../views/AI/browserLab/BrowserLabLayout.vue'),
                 meta: { title: '智能浏览器', icon: 'Monitor', permission: 'ai_test:view' },

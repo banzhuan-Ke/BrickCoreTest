@@ -45,3 +45,12 @@
 - **文档中心**：**帮助中心 → 文档中心**
 - **接口文档（Swagger）**：**系统管理 → 接口文档**（若已开放）
 - **开源仓库**：[Gitee BrickCore](https://gitee.com/BanZhuanKeOrz/BrickCore)
+
+## 支持作者
+
+觉得文档或演示有帮助，欢迎给开源仓库 **Star**，或通过下方微信赞赏支持后续更新（自愿、无强制）。
+
+<p align="center">
+  <img src="../assets/wechat-donate.png" width="200" alt="微信赞赏" /><br />
+  <sub>微信赞赏</sub>
+</p>

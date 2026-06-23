@@ -375,13 +375,25 @@ async def get_perf_cron_records(
     if not job:
         raise HTTPException(status_code=404, detail="定时任务不存在")
 
-    query = PerfRecord.filter(cron_job_id=job_id).order_by("-id")
+    query = PerfRecord.filter(cron_job_id=job_id)
     total = await query.count()
-    records = await query.offset((page - 1) * size).limit(size).all()
+    records = await (
+        query.order_by("-id")
+        .offset((page - 1) * size)
+        .limit(size)
+        .only(
+            "id", "scene_id", "status", "trigger_type",
+            "total_requests", "success_count", "fail_count",
+            "qps", "avg_response_time", "error_rate", "duration",
+            "started_at", "ended_at",
+        )
+        .prefetch_related("scene")
+        .all()
+    )
 
     result = []
     for r in records:
-        scene = await r.scene
+        scene = r.scene
         result.append({
             "id": r.id,
             "scene_id": r.scene_id,

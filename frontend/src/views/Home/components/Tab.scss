@@ -156,7 +156,8 @@ html.theme-pro .box .tabs {
             }
             
             &.is-active {
-              background: var(--el-color-primary-dark-2);
+              background: var(--el-color-primary-light-9);
+              color: #fff;
               box-shadow: 0 2px 6px rgba(16, 125, 236, 0.25);
             }
           }

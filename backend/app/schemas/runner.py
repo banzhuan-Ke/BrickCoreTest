@@ -157,3 +157,23 @@ class RunnerDownloadPresignResponse(BaseModel):
     file_key: str
     bucket: str
     expires_in: int = 3600
+
+
+class RunnerFolderManifestRequest(BaseModel):
+    folder_key: str = Field(..., min_length=1, max_length=500)
+    bucket: str = Field(default="", max_length=100, description="MinIO bucket，默认 ui-test-files")
+
+
+class RunnerFolderManifestFile(BaseModel):
+    relative_path: str
+    object_key: str
+    download_url: str
+    size: int = 0
+
+
+class RunnerFolderManifestResponse(BaseModel):
+    folder_key: str
+    folder_name: str = ""
+    bucket: str
+    files: list[RunnerFolderManifestFile]
+    expires_in: int = 3600

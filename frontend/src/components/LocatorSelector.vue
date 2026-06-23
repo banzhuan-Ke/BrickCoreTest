@@ -21,7 +21,7 @@
             • get_by_role: <code>get_by_role=button, 提交</code><br/>
             • get_by_label: <code>get_by_label=用户名</code><br/>
             • get_by_placeholder: <code>get_by_placeholder=请输入</code><br/>
-            • iframe 嵌套: <code>iframe||#id</code><br/>
+            • iframe 嵌套: <code>iframe||#id</code>、<code>iframe||get_by_text=提交</code><br/>
             • 区域链式: <code>header >> get_by_text=设置</code>
           </div>
         </template>
@@ -74,6 +74,11 @@ watch(inputValue, (val) => {
   emit('update:modelValue', val || '')
 })
 
+// 文本含 $ 时 Playwright 的 :has-text() CSS 会解析失败，应只用 get_by_text
+function isUnsafeHasText(text) {
+  return /[$\\]/.test(text || '')
+}
+
 // 常见短词：在页面上极易重复出现，不适合单独用 get_by_text 定位
 const COMMON_SHORT_TEXTS = new Set([
   '登入', '登录', '确定', '取消', '提交', '保存', '新增', '删除', '编辑',
@@ -109,6 +114,7 @@ function buildMetaFallbackOptions(m) {
   const tag = (m.tag || '').toLowerCase()
   const text = (m.accessibleName || m.text || '').trim()
   const region = (m.region || '').trim()
+  const popupRoot = (m.popupRoot || '').trim()
   const matchIndex = Number(m.matchIndex) || 0
   const id = (m.id || '').trim()
   const name = (m.name || '').trim()
@@ -157,6 +163,12 @@ function buildMetaFallbackOptions(m) {
     const textLabel = isCommonShortText ? `文本定位(常见词慎用): get_by_text=${text}` : `文本定位: get_by_text=${text}`
     opts.push({ label: textLabel, value: `get_by_text=${text}` })
   }
+  if (popupRoot && text && text.length < 40) {
+    opts.push({ label: `弹窗内定位: ${popupRoot} >> get_by_text=${text}`, value: `${popupRoot} >> get_by_text=${text}` })
+    if (role) {
+      opts.push({ label: `弹窗内角色: ${popupRoot} >> get_by_role=${role}, ${text}`, value: `${popupRoot} >> get_by_role=${role}, ${text}` })
+    }
+  }
   if (tag && text) {
     const classPart = cls ? `[@class='${cls.split(/\s+/)[0]}']` : ''
     opts.push({
@@ -169,7 +181,9 @@ function buildMetaFallbackOptions(m) {
     if (role) {
       opts.push({ label: `区域+角色: ${region} >> get_by_role=${role}, ${text}`, value: `${region} >> get_by_role=${role}, ${text}` })
     }
-    opts.push({ label: `区域+has-text: ${region} ${tag}:has-text("${text}")`, value: `${region} ${tag}:has-text("${text}")` })
+    if (!isUnsafeHasText(text)) {
+      opts.push({ label: `区域+has-text: ${region} ${tag}:has-text("${text}")`, value: `${region} ${tag}:has-text("${text}")` })
+    }
   }
   if (matchIndex > 1 && text) {
     opts.push({

@@ -16,6 +16,19 @@
         :value="item.id"
       />
     </el-select>
+    <div class="name-row">
+      <span class="name-label">上传显示名</span>
+      <div class="param-input-row">
+        <el-input
+          v-model="uploadAsName"
+          placeholder="留空则用原文件名，如 ${{orderNo}}_报告.docx"
+          style="flex: 1"
+          @input="emitUploadAsName"
+        />
+        <VarInsertButton v-if="envId" :env-id="envId" label="变量" />
+      </div>
+    </div>
+    <p class="name-hint">执行时按此名称交给浏览器（支持变量）；平台里仍保存原文件名。</p>
     <div class="picker-actions">
       <el-upload
         :show-file-list="false"
@@ -65,6 +78,7 @@ const uploading = ref(false)
 const fileList = ref([])
 const selectedId = ref(null)
 const legacyPath = ref('')
+const uploadAsName = ref('')
 
 function formatSize(bytes) {
   if (!bytes) return '0 B'
@@ -80,6 +94,7 @@ function emitParams(patch) {
 function syncFromModel() {
   const p = props.modelValue || {}
   legacyPath.value = p.file_path || ''
+  uploadAsName.value = p.upload_as_name || ''
   if (p.file_key) {
     const match = fileList.value.find((f) => f.file_key === p.file_key)
     selectedId.value = match?.id ?? null
@@ -101,27 +116,43 @@ async function loadFiles() {
   }
 }
 
+function emitUploadAsName() {
+  emitParams({ upload_as_name: uploadAsName.value })
+}
+
 function onSelectChange(id) {
   if (!id) {
-    emitParams({ file_key: '', file_bucket: '', file_name: '' })
+    emitParams({
+      upload_mode: 'single',
+      file_key: '', file_bucket: '', file_name: '',
+      upload_as_name: uploadAsName.value,
+      file_items: [],
+      folder_key: '', folder_bucket: '', folder_name: '',
+    })
     return
   }
   const row = fileList.value.find((f) => f.id === id)
   if (!row) return
   emitParams({
+    upload_mode: 'single',
     file_key: row.file_key,
     file_bucket: row.file_bucket,
     file_name: row.file_name,
+    upload_as_name: uploadAsName.value,
     file_path: '',
+    file_items: [],
+    folder_key: '', folder_bucket: '', folder_name: '',
   })
 }
 
 function emitLegacy() {
   emitParams({
+    upload_mode: 'single',
     file_path: legacyPath.value,
-    file_key: '',
-    file_bucket: '',
-    file_name: '',
+    upload_as_name: uploadAsName.value,
+    file_key: '', file_bucket: '', file_name: '',
+    file_items: [],
+    folder_key: '', folder_bucket: '', folder_name: '',
   })
   selectedId.value = null
 }
@@ -142,10 +173,14 @@ async function onUpload(uploadFile) {
     await loadFiles()
     selectedId.value = data.id
     emitParams({
+      upload_mode: 'single',
       file_key: data.file_key,
       file_bucket: data.file_bucket,
       file_name: data.file_name,
+      upload_as_name: uploadAsName.value,
       file_path: '',
+      file_items: [],
+      folder_key: '', folder_bucket: '', folder_name: '',
     })
   } catch (e) {
     ElMessage.error(e?.response?.data?.detail || '上传失败')
@@ -166,6 +201,21 @@ onMounted(loadFiles)
   display: flex;
   gap: 12px;
   margin-top: 8px;
+}
+.name-row {
+  margin-top: 12px;
+}
+.name-label {
+  display: block;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  margin-bottom: 6px;
+}
+.name-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
 }
 .legacy-hint {
   margin: 8px 0 0;

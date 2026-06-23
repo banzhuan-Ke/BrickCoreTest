@@ -53,22 +53,79 @@
         />
       </el-form-item>
 
-      <!-- input 文件上传：平台 MinIO 文件选择 -->
-      <el-form-item label="测试文件" v-if="isUploadFileStep">
+      <!-- input 文件上传：平台 MinIO 文件/文件夹选择 -->
+      <el-form-item label="上传模式" v-if="isUploadFileStep">
+        <el-radio-group v-model="uploadMode">
+          <el-radio value="single">单文件</el-radio>
+          <el-radio value="multiple">多文件</el-radio>
+          <el-radio value="folder">文件夹</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item label="测试文件" v-if="isUploadFileStep && uploadMode === 'single'">
         <UiTestFilePicker v-model="form.params" :env-id="varInsertEnvId" />
+      </el-form-item>
+      <el-form-item label="测试文件" v-if="isUploadFileStep && uploadMode === 'multiple'">
+        <UiTestMultiFilePicker v-model="form.params" :env-id="varInsertEnvId" />
+      </el-form-item>
+      <el-form-item label="测试文件夹" v-if="isUploadFileStep && uploadMode === 'folder'">
+        <UiTestFolderPicker v-model="form.params" :env-id="varInsertEnvId" />
       </el-form-item>
 
       <!-- 参数配置 -->
       <el-form-item :label="paramsSectionLabel" v-if="hasParams && !isDbAssertStep">
         <div class="params-container">
+          <el-alert
+            v-if="isDragDropStep"
+            type="info"
+            :closable="false"
+            show-icon
+            class="drag-position-hint"
+          >
+            <template #title>拖拽落点坐标</template>
+            <p>坐标相对元素<strong>左上角</strong>，单位像素；X/Y 需成对填写才生效，留空则落在元素中心。</p>
+            <p class="drag-position-example">
+              例：把「拖拽目录2」插到「拖拽目录1」前面 →
+              起始=<code>目录2</code>，结束=<code>目录1</code>，目标 X=<code>20</code>，目标 Y=<code>5</code>
+            </p>
+          </el-alert>
+          <el-alert
+            v-if="isElementOrderStep"
+            type="info"
+            :closable="false"
+            show-icon
+            class="drag-position-hint"
+          >
+            <template #title>元素顺序断言</template>
+            <p>按 <strong>DOM 文档顺序</strong>判断两个元素谁先谁后，适用于列表、表格行、树节点同级排序等场景。</p>
+            <p class="drag-position-example">
+              例：拖拽后断言「目录2」在「目录1」前面 →
+              靠前元素=<code>#treebox nz-tree-node-title[title="拖拽目录2"]</code>，
+              参照元素=<code>…[title="拖拽目录1"]</code>，
+              期望顺序=<code>前面</code>
+            </p>
+            <p class="drag-position-example">
+              断言「1 在 2 后面」可设期望顺序为「后面」，或交换两个定位表达式并保持「前面」。
+            </p>
+          </el-alert>
           <div 
             class="param-item" 
             v-for="(value, key) in filteredParams" 
             :key="key"
           >
             <div class="param-label">
-              {{ getParamLabel(form.method, key, paramLabelMap[key]) }}
+              <span>{{ getParamLabel(form.method, key, paramLabelMap[key]) }}</span>
               <span v-if="isRequiredParam(key)" class="required-mark">*</span>
+              <el-tooltip
+                v-if="getParamTooltip(form.method, key)"
+                placement="top"
+                :show-after="200"
+                popper-class="param-tip-popper"
+              >
+                <template #content>
+                  <div class="param-tip-content">{{ getParamTooltip(form.method, key) }}</div>
+                </template>
+                <el-icon class="param-tip-icon"><QuestionFilled /></el-icon>
+              </el-tooltip>
             </div>
             
             <!-- 根据参数类型渲染不同输入框 -->
@@ -203,7 +260,7 @@
 
 <script setup>
 import { ref, computed, watch, inject } from 'vue'
-import { ArrowDown } from '@element-plus/icons-vue'
+import { ArrowDown, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import ConditionEdit from './ConditionEdit.vue'
 import LocatorSelector from '@/components/LocatorSelector.vue'
@@ -212,9 +269,11 @@ import ToolInsertButton from '@/components/ToolInsertButton.vue'
 import DataFactoryTagPicker from '@/views/ApiModule/components/DataFactoryTagPicker.vue'
 import UiDbAssertStepFields from './UiDbAssertStepFields.vue'
 import UiTestFilePicker from './UiTestFilePicker.vue'
+import UiTestMultiFilePicker from './UiTestMultiFilePicker.vue'
+import UiTestFolderPicker from './UiTestFolderPicker.vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { insertVarRef } from '@/utils/varInsert.js'
-import { getOrderedVisibleParams, getParamLabel, isAssertionMethod } from '@/utils/uiStepMeta.js'
+import { getOrderedVisibleParams, getParamLabel, getParamTooltip, isDragDropMethod, isElementOrderMethod, isAssertionMethod } from '@/utils/uiStepMeta.js'
 import { aiGenerateApi } from '@/api/modules/ai.js'
 
 const proStore = ProjectStore()
@@ -289,11 +348,26 @@ const isDbAssertStep = computed(() => form.value.method === 'kw_db_assert')
 
 const isUploadFileStep = computed(() => form.value.method === 'upload_file')
 
+const uploadMode = computed({
+  get: () => (form.value.params?.upload_mode || 'single'),
+  set: (val) => {
+    if (!form.value.params) form.value.params = {}
+    form.value.params.upload_mode = val
+  },
+})
+
+const isDragDropStep = computed(() => isDragDropMethod(form.value.method))
+
+const isElementOrderStep = computed(() => isElementOrderMethod(form.value.method))
+
 const paramsSectionLabel = computed(() =>
   isAssertionMethod(form.value.method) ? '断言参数' : '配置参数'
 )
 
-const uploadFileHiddenKeys = new Set(['file_path', 'file_key', 'file_bucket', 'file_name'])
+const uploadFileHiddenKeys = new Set([
+  'file_path', 'file_key', 'file_bucket', 'file_name', 'upload_as_name', 'file_items',
+  'upload_mode', 'folder_key', 'folder_bucket', 'folder_name',
+])
 
 // 表单校验规则
 const formRules = {
@@ -341,6 +415,7 @@ function isRequiredParam(key) {
     kw_assert_empty: ['locator'],
     kw_assert_editable: ['locator'],
     kw_assert_focused: ['locator'],
+    kw_assert_element_order: ['first_locator', 'second_locator'],
   }
   if (assertionRequired[method]) {
     return assertionRequired[method].includes(key)
@@ -372,6 +447,15 @@ const paramLabelMap = {
   count: '点击次数',
   start_selector: '起始元素定位',
   end_selector: '结束元素定位',
+  first_locator: '靠前元素定位',
+  second_locator: '靠后参照元素定位',
+  first_index: '靠前元素索引',
+  second_index: '参照元素索引',
+  order: '期望顺序',
+  source_position_x: '起始落点X(像素)',
+  source_position_y: '起始落点Y(像素)',
+  target_position_x: '目标落点X(像素)',
+  target_position_y: '目标落点Y(像素)',
   delay: '时长(秒)',
   
   // 鼠标键盘
@@ -458,13 +542,13 @@ function isNumber(value) {
 
 // 判断是否为下拉选择
 function isSelect(key) {
-  const selectKeys = ['wait_until', 'browser_type', 'operator', 'key', 'button', 'match_mode']
+  const selectKeys = ['wait_until', 'browser_type', 'operator', 'key', 'button', 'match_mode', 'order']
   return selectKeys.includes(key)
 }
 
 // 是否为定位表达式参数（使用 LocatorSelector 组件）
 function isLocatorKey(key) {
-  return ['locator', 'selector'].includes(key)
+  return ['locator', 'selector', 'first_locator', 'second_locator'].includes(key)
 }
 
 function canInsertVar(key) {
@@ -570,6 +654,10 @@ function getOptions(key) {
     match_mode: [
       { label: '完全相等', value: 'exact' },
       { label: '包含', value: 'contains' }
+    ],
+    order: [
+      { label: '前面（第一个在第二个之前）', value: 'before' },
+      { label: '后面（第一个在第二个之后）', value: 'after' }
     ]
   }
   return options[key] || []
@@ -592,11 +680,28 @@ async function handleSave() {
   } else if (!isConditionBranch.value) {
     if (isUploadFileStep.value) {
       const p = form.value.params || {}
-      const hasPlatformFile = !!(p.file_key && p.file_bucket)
-      const hasLegacyPath = !!(p.file_path && String(p.file_path).trim())
-      if (!hasPlatformFile && !hasLegacyPath) {
-        ElMessage.warning('请选择测试文件，或填写 Runner 本地路径')
-        return
+      const mode = (p.upload_mode || 'single').toLowerCase()
+      if (mode === 'folder') {
+        const hasPlatformFolder = !!(p.folder_key && p.folder_bucket)
+        const hasLegacyPath = !!(p.file_path && String(p.file_path).trim())
+        if (!hasPlatformFolder && !hasLegacyPath) {
+          ElMessage.warning('请选择测试文件夹，或填写 Runner 本地路径')
+          return
+        }
+      } else if (mode === 'multiple') {
+        const items = Array.isArray(p.file_items) ? p.file_items : []
+        const hasItems = items.some((it) => it?.file_key && it?.file_bucket)
+        if (!hasItems) {
+          ElMessage.warning('请至少选择一个测试文件')
+          return
+        }
+      } else {
+        const hasPlatformFile = !!(p.file_key && p.file_bucket)
+        const hasLegacyPath = !!(p.file_path && String(p.file_path).trim())
+        if (!hasPlatformFile && !hasLegacyPath) {
+          ElMessage.warning('请选择测试文件，或填写 Runner 本地路径')
+          return
+        }
       }
     }
     // 额外校验必填参数
@@ -670,17 +775,50 @@ function handleClose() {
   width: 100%;
 }
 
+.drag-position-hint {
+  margin-bottom: 4px;
+
+  p {
+    margin: 0 0 6px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--el-text-color-regular);
+  }
+
+  .drag-position-example {
+    margin-bottom: 0;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+
+    code {
+      padding: 0 4px;
+      border-radius: 3px;
+      background: var(--el-fill-color);
+      font-size: 12px;
+    }
+  }
+}
+
 .param-item {
   width: 100%;
   
   .param-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 13px;
     color: var(--el-text-color-secondary);
     margin-bottom: 6px;
     
     .required-mark {
       color: var(--el-color-danger);
-      margin-left: 4px;
+    }
+
+    .param-tip-icon {
+      font-size: 14px;
+      color: var(--el-color-primary);
+      cursor: help;
+      vertical-align: middle;
     }
   }
   
@@ -791,5 +929,17 @@ function handleClose() {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.5;
+}
+</style>
+
+<style lang="scss">
+.param-tip-popper {
+  max-width: 360px;
+
+  .param-tip-content {
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre-line;
+  }
 }
 </style>

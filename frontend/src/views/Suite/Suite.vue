@@ -124,6 +124,16 @@
             :width="col.width"
           />
           <el-table-column
+            v-else-if="col.key === 'update_by'"
+            prop="update_by"
+            label="最后更新人"
+            :width="col.width"
+          >
+            <template #default="scope">
+              {{ scope.row.update_by || scope.row.username || '—' }}
+            </template>
+          </el-table-column>
+          <el-table-column
             v-else-if="col.key === 'create_time'"
             prop="create_time"
             label="创建时间"

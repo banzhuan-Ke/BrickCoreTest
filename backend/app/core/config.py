@@ -94,7 +94,7 @@ TOKEN_TIMEOUT = 60 * 60 * 24 * 1
 RUNNER_TOKEN_TIMEOUT = int(os.getenv("RUNNER_TOKEN_TIMEOUT", str(60 * 60 * 24 * 7)))
 RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.0.2")
 RUNNER_CLIENT_VERSION_MIN = os.getenv("RUNNER_CLIENT_VERSION_MIN", "1.3.8")
-RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.3.14")
+RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.3.15")
 # Runner 客户端安装包下载地址（zip 或文档页）；为空时客户端根据平台地址推导
 RUNNER_CLIENT_DOWNLOAD_URL = os.getenv("RUNNER_CLIENT_DOWNLOAD_URL", "").strip()
 # Phase 6：connect 下发按设备隔离的 MQ/Redis 凭证（需 RabbitMQ Management + Redis ACL）
@@ -182,3 +182,5 @@ UI_TEST_FILE_BUCKET = os.getenv('UI_TEST_FILE_BUCKET', 'ui-test-files')
 
 # Web 自动化测试文件单文件上限（字节），默认 50MB
 UI_TEST_FILE_MAX_BYTES = int(os.getenv('UI_TEST_FILE_MAX_BYTES', str(50 * 1024 * 1024)))
+UI_TEST_FOLDER_MAX_BYTES = int(os.getenv('UI_TEST_FOLDER_MAX_BYTES', str(200 * 1024 * 1024)))
+UI_TEST_FOLDER_MAX_FILES = int(os.getenv('UI_TEST_FOLDER_MAX_FILES', '500'))

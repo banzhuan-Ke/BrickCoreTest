@@ -33,7 +33,6 @@
           v-if="selectedEnvId"
           :env-id="selectedEnvId"
           hint-text="不含工厂标签；请用「数据工厂标签」或「插入工具」。"
-          @edit-env-vars="varEditVisible = true"
         />
         <ToolInsertButton v-if="selectedEnvId" />
         <el-button
@@ -272,7 +271,7 @@ import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import http from '@/api/index'
-import EnvVarQuickEdit from './EnvVarQuickEdit.vue'
+import EnvVarQuickEdit from '@/components/EnvVarQuickEdit.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
 import DataFactoryTagPicker from './DataFactoryTagPicker.vue'

@@ -81,7 +81,7 @@
 import PageCard from "@/components/PageCard.vue"
 import {useRoute, useRouter} from "vue-router"
 import http from '@/api/index'
-import {reactive, ref} from 'vue'
+import {reactive, ref, provide, computed} from 'vue'
 import SuiteSet from './componets/SuiteSet.vue'
 import {ElNotification, ElMessageBox, ElMessage} from "element-plus"
 import draggable from 'vuedraggable'
@@ -115,6 +115,13 @@ const getTaskDetail = async () => {
   taskInfo.suites = response.data.suites
 }
 getTaskDetail()
+
+const addedSuiteIdSet = computed(() => {
+  const suites = taskInfo.suites
+  if (!Array.isArray(suites)) return new Set()
+  return new Set(suites.map((s) => s.suite_id))
+})
+provide('taskAddedSuiteIds', addedSuiteIdSet)
 
 // 校验计划
 const formUpdateDataRules = reactive({

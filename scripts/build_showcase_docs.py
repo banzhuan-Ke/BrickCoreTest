@@ -15,6 +15,7 @@ SOURCES: list[tuple[str, str, str]] = [
     ("home", "scripts/ce-stubs/docs-index-ce.md", "使用说明"),
     ("quick-start", "docs-site/guide/quick-start.md", "平台概览"),
     ("highlights", "scripts/ce-stubs/docs-highlights-ce.md", "亮点功能"),
+    ("release-notes", "docs-site/guide/release-notes.md", "版本更新记录"),
     ("project-setup", "docs-site/guide/project-setup.md", "项目与环境"),
     ("test-catalog", "docs-site/guide/test-catalog.md", "测试目录"),
     ("ui-automation", "scripts/ce-stubs/docs-ui-automation-ce.md", "UI 自动化"),
@@ -24,8 +25,8 @@ SOURCES: list[tuple[str, str, str]] = [
     ("data-factory", "scripts/ce-stubs/docs-data-factory-ce.md", "数据工厂"),
     ("api-auth", "docs-site/guide/api-auth.md", "Token 授权"),
     ("perf-testing", "docs-site/guide/perf-testing.md", "性能测试"),
-    ("ai-testing", "docs-site/guide/ai-testing.md", "AI 测试"),
-    ("platform-assistant", "docs-site/guide/platform-assistant.md", "平台内 AI 助手"),
+    ("ai-testing", "scripts/ce-stubs/docs-ai-testing-ce.md", "AI 测试"),
+    ("platform-assistant", "scripts/ce-stubs/docs-platform-assistant-ce.md", "平台内 AI 助手"),
     ("mcp-server", "docs-site/guide/mcp-server.md", "MCP 外部接入"),
     ("system-admin", "scripts/ce-stubs/docs-system-admin-ce.md", "系统管理"),
 ]
@@ -66,17 +67,17 @@ def main() -> None:
             {
                 "id": "group-start",
                 "title": "快速开始",
-                "children": [child(d, t) for d, _, t in SOURCES[:5]],
+                "children": [child(d, t) for d, _, t in SOURCES[:6]],
             },
             {
                 "id": "group-guide",
                 "title": "功能模块",
-                "children": [child(d, t) for d, _, t in SOURCES[5:15]],
+                "children": [child(d, t) for d, _, t in SOURCES[6:16]],
             },
             {
                 "id": "group-system",
                 "title": "系统管理",
-                "children": [child(d, t) for d, _, t in SOURCES[15:]],
+                "children": [child(d, t) for d, _, t in SOURCES[16:]],
             },
         ],
     }

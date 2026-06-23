@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Awaitable
 
+from app.core.edition import QA_EVAL_TOOL_NAMES, qa_eval_feature_enabled
 from app.core.mcp_confirm import consume_confirm_token, create_confirm_token
 from app.mcp.auth import McpAuthContext
 
@@ -871,6 +872,24 @@ PREVIEW_TOOL_SCHEMAS: list[dict[str, Any]] = [
 
 TOOL_SELECTION_SCHEMAS: list[dict[str, Any]] = READONLY_TOOL_SCHEMAS + PREVIEW_TOOL_SCHEMAS
 
+
+def get_tool_selection_schemas() -> list[dict[str, Any]]:
+    if qa_eval_feature_enabled():
+        return TOOL_SELECTION_SCHEMAS
+    return [
+        schema
+        for schema in TOOL_SELECTION_SCHEMAS
+        if schema.get("function", {}).get("name") not in QA_EVAL_TOOL_NAMES
+    ]
+
+
+def _assistant_allowed_tool_names() -> set[str]:
+    allowed = set(READONLY_TOOL_NAMES) | set(PREVIEW_TOOL_NAMES)
+    if not qa_eval_feature_enabled():
+        allowed -= QA_EVAL_TOOL_NAMES
+    return allowed
+
+
 _handler_map_cache: dict[str, ToolHandler] | None = None
 
 
@@ -1139,7 +1158,7 @@ async def invoke_assistant_tool(
     arguments: dict[str, Any],
     default_project_id: int | None = None,
 ) -> dict[str, Any]:
-    allowed = set(READONLY_TOOL_NAMES) | set(PREVIEW_TOOL_NAMES)
+    allowed = _assistant_allowed_tool_names()
     if name not in allowed:
         return {"error": f"工具 {name} 不可用"}
     if name == "preview_analyze_failure":

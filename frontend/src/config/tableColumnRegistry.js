@@ -159,7 +159,7 @@ export const TABLE_COLUMN_REGISTRY = {
 
   'ui.cases': {
     pageId: 'ui.cases',
-    version: 2,
+    version: 3,
     columns: [
       col('index', '序号', { width: 70, required: true }),
       col('name', '用例名称', { minWidth: 160, required: true, prop: 'name' }),
@@ -167,17 +167,18 @@ export const TABLE_COLUMN_REGISTRY = {
       col('status', '最近运行结果', { width: 120 }),
       col('step_count', '步骤数'),
       col('username', '创建人'),
+      col('update_by', '最后更新人', { width: 110 }),
       col('level', '用例级别', { width: 100 }),
       col('source_functional_case', '来源功能用例', { minWidth: 160 }),
       col('create_time', '创建时间', { width: 180 }),
       col('update_time', '更新时间', { minWidth: 180, prop: 'update_time' })
     ],
-    defaultVisible: ['index', 'name', 'run_count', 'status', 'step_count', 'level', 'update_time']
+    defaultVisible: ['index', 'name', 'run_count', 'status', 'step_count', 'level', 'update_time', 'update_by']
   },
 
   'ui.suites': {
     pageId: 'ui.suites',
-    version: 2,
+    version: 3,
     columns: [
       col('index', '序号', { width: 80, required: true }),
       col('name', '套件名称', { minWidth: 160, required: true, prop: 'name' }),
@@ -188,9 +189,10 @@ export const TABLE_COLUMN_REGISTRY = {
       col('run_count', '执行次数', { width: 100 }),
       col('status', '状态', { width: 120 }),
       col('username', '创建人', { width: 100 }),
+      col('update_by', '最后更新人', { width: 110 }),
       col('create_time', '创建时间', { width: 160 })
     ],
-    defaultVisible: ['index', 'name', 'suite_type', 'catalog_name', 'case_count', 'run_count', 'status', 'username', 'create_time']
+    defaultVisible: ['index', 'name', 'suite_type', 'catalog_name', 'case_count', 'run_count', 'status', 'username', 'update_by', 'create_time']
   },
 
   'execution.records': {
