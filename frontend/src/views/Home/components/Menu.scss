@@ -3,22 +3,22 @@
   display: flex;
   align-items: center;
   justify-content: center;
+
   .logo-mark {
     height: 40px;
     width: 40px;
     flex-shrink: 0;
     border-radius: 12px;
-    box-shadow: 0 8px 20px rgba(75, 111, 255, .22);
+    box-shadow: 0 6px 16px rgba(75, 111, 255, 0.16);
   }
 
-  //标题样式
   .title {
     margin-left: 12px;
     font-size: 16px;
     font-weight: bold;
     overflow: hidden;
     white-space: nowrap;
-    color: var(--el-color-primary);
+    color: var(--el-text-color-primary);
   }
 }
 
@@ -27,209 +27,297 @@
   height: calc(100vh - 60px);
   overflow-y: auto;
   overflow-x: hidden;
+  background: transparent;
+  padding: 6px 0 20px;
 }
 
-// 菜单分组头部样式（可点击展开/收起）
-.menu-group-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 15px 10px 20px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  user-select: none;
-  
-  &:hover {
-    background: var(--el-fill-color-light);
-    
-    .expand-icon {
+.menu-group {
+  position: relative;
+  margin: 0 8px 2px;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+    background: var(--el-color-primary);
+    opacity: 0;
+    transform: scaleY(0.6);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+  }
+
+  &.is-expanded.is-current {
+    background: rgba(75, 111, 255, 0.055);
+
+    &::before {
+      opacity: 1;
+      transform: scaleY(1);
+    }
+  }
+
+  &.is-current:not(.is-expanded) .menu-group-header {
+    .group-label {
+      color: var(--el-color-primary);
+      font-weight: 600;
+    }
+
+    .group-icon-wrap {
       color: var(--el-color-primary);
     }
   }
 }
 
-// 分组标题样式
-.menu-group-title {
+.menu-group-header {
   display: flex;
   align-items: center;
-  font-size: 13px;  // 字体比子菜单大
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  
-  .group-icon {
-    margin-right: 10px;
+  width: 100%;
+  gap: 10px;
+  margin: 0;
+  padding: 11px 12px 11px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 8px;
+  font: inherit;
+  text-align: left;
+  transition: background 0.18s ease;
+  user-select: none;
+
+  &:hover {
+    background: rgba(75, 111, 255, 0.06);
+  }
+
+  .group-icon-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    color: #64748b;
+    transition: color 0.18s ease;
+
+    :deep(svg) {
+      width: 18px;
+      height: 18px;
+    }
+  }
+
+  .group-label {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: #475569;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color 0.18s ease;
+  }
+
+  .group-chevron {
+    flex-shrink: 0;
+    color: #b0bac8;
+    transition: transform 0.22s ease, color 0.18s ease;
+
+    :deep(svg) {
+      width: 12px;
+      height: 12px;
+    }
+
+    &.is-open {
+      transform: rotate(90deg);
+    }
+  }
+}
+
+.menu-group.is-expanded.is-current .menu-group-header .group-chevron.is-open {
+  color: var(--el-color-primary);
+}
+
+.menu-group.is-expanded.is-current .menu-group-header {
+  .group-icon-wrap,
+  .group-label {
     color: var(--el-color-primary);
   }
-  
-  span {
-    font-size: 13px;
+
+  .group-label {
+    font-weight: 600;
   }
 }
 
-// 展开/收起图标
-.expand-icon {
-  color: var(--el-text-color-secondary);
-  transition: all 0.3s ease;
-  
-  &.is-expanded {
-    transform: rotate(180deg);
-  }
-}
-
-// 菜单项容器（用于动画过渡）
-.menu-items-wrapper {
+.menu-group-panel {
   overflow: hidden;
-  transition: all 0.3s ease;
-  max-height: 500px; // 足够大以容纳所有子菜单
+  transition: max-height 0.26s ease, opacity 0.2s ease, padding 0.2s ease;
+  max-height: 720px;
   opacity: 1;
-  
+  padding: 0 10px 8px 14px;
+
   &.is-collapsed {
     max-height: 0;
     opacity: 0;
-  }
-}
-
-// 分组分隔线
-.menu-divider {
-  height: 1px;
-  margin: 8px 20px;
-  background: linear-gradient(90deg, transparent, var(--el-border-color-lighter), transparent);
-}
-
-//自定义菜单的样式
-.el-menu-item {
-  border-radius: 8px;
-  width: calc(100% - 20px);
-  height: 42px;
-  margin: 3px 10px;
-  padding-left: 20px !important;
-  font-size: 13px;
-  font-weight: 500;
-  transition: all 0.3s ease;
-  
-  //鼠标悬浮时样式
-  &:hover {
-    background: var(--el-color-primary-light-9);
-    color: var(--el-color-primary);
-    transform: translateX(3px);
+    padding-top: 0;
+    padding-bottom: 0;
   }
 
-  //菜单激活时的样式
-  &.is-active {
-    background: var(--el-color-primary-light-9);
-    color: var(--el-color-primary);
-    font-weight: 600;
-    border-left: 3px solid var(--el-color-primary);
-    box-shadow: 0 2px 8px rgba(16, 125, 236, 0.15);
-  }
-  
-  // 图标样式
-  .el-icon {
-    transition: all 0.3s ease;
-  }
-  
-  &:hover .el-icon {
-    transform: scale(1.1);
-  }
-}
+  :deep(.el-menu-item) {
+    width: 100%;
+    height: 34px;
+    margin: 1px 0;
+    padding-left: 30px !important;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 400;
+    color: #64748b;
+    transition: color 0.18s ease, background 0.18s ease;
 
-// 暗黑模式适配
-.dark {
-  .menu-group-header {
+    .item-icon-wrap {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      margin-right: 9px !important;
+      color: #94a3b8;
+      transition: color 0.18s ease;
+
+      :deep(svg) {
+        width: 14px;
+        height: 14px;
+      }
+    }
+
     &:hover {
-      background: var(--el-fill-color-dark);
+      background: rgba(75, 111, 255, 0.06);
+      color: #334155;
+
+      .item-icon-wrap {
+        color: #64748b;
+      }
     }
-  }
-  
-  .menu-group-title {
-    color: var(--el-text-color-primary);
-    
-    .group-icon {
-      color: var(--el-color-primary-light-3);
-    }
-  }
-  
-  .expand-icon {
-    color: var(--el-text-color-regular);
-  }
-  
-  .menu-divider {
-    background: linear-gradient(90deg, transparent, var(--el-border-color-darker), transparent);
-  }
-  
-  .el-menu-item {
-    &:hover {
-      background: var(--el-color-primary-light-9);
-      color: var(--el-text-color-primary);
-    }
-    
+
     &.is-active {
-      background: var(--el-color-primary-light-9);
-      color: #fff;
-      border-left: 3px solid var(--el-color-primary-light-3);
-      box-shadow: 0 2px 8px rgba(16, 125, 236, 0.25);
+      background: transparent;
+      color: var(--el-color-primary);
+      font-weight: 500;
+      box-shadow: none;
 
-      .el-icon {
-        color: #fff;
+      .item-icon-wrap {
+        color: var(--el-color-primary);
       }
     }
   }
 }
 
-/* 清新 Pro：浅色侧栏 + 圆角激活态 */
-html.theme-pro {
+.dark {
   .logo .title {
-    font-weight: 800;
-    letter-spacing: 0.02em;
+    color: var(--el-text-color-primary);
   }
 
-  .menu-container {
-    background: transparent;
+  .menu-group {
+    &.is-expanded.is-current {
+      background: rgba(64, 158, 255, 0.1);
+    }
   }
 
-  .menu-group-header:hover {
-    background: rgba(255, 255, 255, .55);
-    border-radius: 10px;
+  .menu-group-header {
+    &:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .group-label {
+      color: var(--el-text-color-regular);
+    }
   }
 
-  .el-menu-item {
-    border-radius: 12px;
-    border-left: none !important;
+  .menu-group-panel :deep(.el-menu-item) {
+    color: var(--el-text-color-secondary);
 
-    &:hover,
-    &.is-active {
-      background: #fff;
-      color: var(--el-color-primary);
-      box-shadow: 0 10px 24px rgba(67, 95, 189, .1);
-      transform: none;
+    .item-icon-wrap {
+      color: var(--el-text-color-placeholder);
+    }
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--el-text-color-primary);
     }
 
     &.is-active {
-      font-weight: 700;
+      background: transparent;
+      color: var(--el-color-primary);
+
+      .item-icon-wrap {
+        color: var(--el-color-primary);
+      }
     }
   }
 }
 
-// 折叠状态适配
+html.theme-pro {
+  .menu-group.is-expanded.is-current {
+    background: rgba(75, 111, 255, 0.06);
+  }
+
+  .menu-group-header:hover {
+    background: rgba(0, 0, 0, 0.03);
+  }
+
+  .menu-group-panel :deep(.el-menu-item.is-active) {
+    background: transparent;
+    color: var(--el-color-primary);
+  }
+}
+
 :deep(.el-menu--collapse) {
+  .menu-group {
+    margin: 2px 6px;
+
+    &::before {
+      display: none;
+    }
+  }
+
   .menu-group-header {
     display: none;
   }
-  
-  .menu-divider {
-    margin: 8px 10px;
+
+  .menu-group-panel {
+    max-height: none !important;
+    opacity: 1 !important;
+    padding: 0 !important;
+
+    &.is-collapsed {
+      max-height: none;
+      opacity: 1;
+    }
   }
-  
+
   .el-menu-item {
-    width: calc(100% - 16px);
-    margin: 4px 8px;
+    width: calc(100% - 12px);
+    margin: 3px 6px;
     padding-left: 0 !important;
     justify-content: center;
-    
-    .el-icon {
+    height: 40px;
+    border-radius: 8px;
+
+    .item-icon-wrap {
       margin-right: 0 !important;
+      width: 20px;
+      height: 20px;
+
+      :deep(svg) {
+        width: 18px;
+        height: 18px;
+      }
+    }
+
+    &.is-active {
+      background: rgba(75, 111, 255, 0.1);
     }
   }
 }

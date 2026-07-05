@@ -362,7 +362,11 @@ def playwright_browsers_path_for_engine(runner_dir: Path) -> str | None:
     return None
 
 
-def diagnose_runner_runtime(runner_dir: Path) -> tuple[bool, str, RepairKind]:
+def diagnose_runner_runtime(
+    runner_dir: Path,
+    *,
+    require_playwright_browser: bool = True,
+) -> tuple[bool, str, RepairKind]:
     """
     返回 (是否就绪, 说明, 可自动修复类型)。
     开发模式：venv + 系统默认 ms-playwright 有 Chromium 即视为就绪。
@@ -387,6 +391,9 @@ def diagnose_runner_runtime(runner_dir: Path) -> tuple[bool, str, RepairKind]:
         if is_packaged_app():
             return False, format_runner_deps_error(runner_dir, missing, detail=detail), None
         return False, format_runner_deps_error(runner_dir, missing, detail=detail), "deps"
+
+    if not require_playwright_browser:
+        return True, "", None
 
     if playwright_browsers_path_for_engine(runner_dir):
         return True, "", None
@@ -427,6 +434,52 @@ def diagnose_perf_runtime(runner_dir: Path) -> tuple[bool, str, RepairKind]:
             return False, format_runner_deps_error(runner_dir, missing, detail=detail), None
         return False, format_runner_deps_error(runner_dir, missing, detail=detail), "deps"
 
+    return True, "", None
+
+
+def diagnose_app_runtime(runner_dir: Path) -> tuple[bool, str, RepairKind]:
+    """App 自动化运行时检查（adb / uiautomator2 / 在线 Android 设备）。"""
+    from runner_client.app.engine_capabilities import probe_app_toolchain
+
+    ensure_runner_venv_home(runner_dir)
+    py = runner_venv_python(runner_dir)
+    if not py.is_file():
+        if is_packaged_app():
+            return (
+                False,
+                "打包版缺少 runner\\venv 运行时，请重新下载官方 BrickCoreRunner 安装包。",
+                None,
+            )
+        return False, "开发模式请先在 runner 目录创建 venv 并安装依赖。", "deps"
+
+    toolchain = probe_app_toolchain()
+    if not toolchain["adb_ok"]:
+        return (
+            False,
+            "App 自动化需要 adb：请安装 Android SDK platform-tools 并加入 PATH。",
+            None,
+        )
+    if not toolchain["u2_ok"]:
+        if is_packaged_app():
+            return (
+                False,
+                "runner\\venv 缺少 uiautomator2，请重新下载官方 BrickCoreRunner 安装包。",
+                None,
+            )
+        return (
+            False,
+            "runner\\venv 缺少 uiautomator2，请在 runner 目录执行：\n"
+            "  venv\\Scripts\\python.exe -m pip install -r requirements.txt",
+            "deps",
+        )
+    if not toolchain["app_udid"]:
+        return (
+            False,
+            "未检测到在线 Android 设备。请确认 adb devices 为 device（支持 USB / WiFi / 模拟器）。\n"
+            "WiFi：开发者选项 → 无线调试 → adb pair + adb connect；公司 WiFi 不通可改手机热点。\n"
+            "详见解压目录《执行器安装指南》→ App 自动化。",
+            None,
+        )
     return True, "", None
 
 

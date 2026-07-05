@@ -20,6 +20,7 @@ from app.core.ai_dashboard_stats import (
 from app.models.ui import Case as UiCase, Suite as UiSuite, UiCaseExecution, UiPlanExecution
 from app.models.http import ApiTestCase, ApiTestSuite, ApiRunRecord, ApiSuiteRunRecord, ApiCronJob
 from app.models.perf import PerfScene, PerfRecord, PerfCronJob
+from app.models.app import AppCase, AppSuite, AppCaseExecution, AppPlanExecution, AppSuiteExecution, AppCronJob
 from app.models.schedule import Cronjob
 from app.models.ai import AiGenerateRecord, AiRequirementGenerateJob
 from app.models.sys import Device
@@ -112,6 +113,29 @@ async def _collect_pending_cron_jobs(project_id: Optional[int], limit: int = 5) 
             "_sort": nxt or datetime.max,
         })
 
+    app_q = AppCronJob.filter(is_del=False, state=True)
+    if project_id:
+        app_q = app_q.filter(project_id=project_id)
+    for job in await app_q.all():
+        nxt = compute_next_run(job.run_type, job.interval, job.run_date, job.crontab, now=now)
+        if not within_hours(nxt, 48):
+            continue
+        target = ""
+        if job.plan_id:
+            plan = await job.plan
+            target = plan.name if plan else "App 计划"
+        elif job.suite_id:
+            suite = await job.suite
+            target = suite.name if suite else "App 套件"
+        pending.append({
+            "id": job.id,
+            "name": job.name,
+            "type": "App",
+            "target": target or "App 任务",
+            "next_run_time": nxt.strftime("%Y-%m-%d %H:%M:%S") if nxt else "",
+            "_sort": nxt or datetime.max,
+        })
+
     return sort_pending_jobs(pending, limit)
 
 
@@ -194,6 +218,24 @@ async def get_dashboard(
 
     api_execution_trend = [{"date": d, **api_trend_map[d]} for d in date_list]
 
+    # App 用例执行记录
+    app_q = AppCaseExecution.filter(start_time__gte=s_dt, start_time__lte=e_dt, is_del=False)
+    if project_id:
+        app_case_ids = await AppCase.filter(project_id=project_id, is_del=False).values_list("id", flat=True)
+        app_q = app_q.filter(case_id__in=app_case_ids)
+    app_records = await app_q.all()
+
+    app_trend_map = {d: {"success": 0, "fail": 0} for d in date_list}
+    for r in app_records:
+        d = r.start_time.strftime("%Y-%m-%d") if r.start_time else None
+        if d and d in app_trend_map:
+            if r.status == "success":
+                app_trend_map[d]["success"] += 1
+            elif r.status in ("fail", "error", "failed"):
+                app_trend_map[d]["fail"] += 1
+
+    app_execution_trend = [{"date": d, **app_trend_map[d]} for d in date_list]
+
     # 性能测试执行记录
     perf_q = PerfRecord.filter(started_at__gte=s_dt, started_at__lte=e_dt)
     if project_id:
@@ -217,18 +259,24 @@ async def get_dashboard(
     # ========== 用例/套件总数统计 ==========
     ui_case_filter = {"is_del": False}
     ui_suite_filter = {"is_del": False}
+    app_case_filter = {"is_del": False}
+    app_suite_filter = {"is_del": False}
     api_case_filter = {"is_del": False}
     api_suite_filter = {"is_del": False}
     perf_scene_filter = {"is_del": False}
     if project_id:
         ui_case_filter["project_id"] = project_id
         ui_suite_filter["project_id"] = project_id
+        app_case_filter["project_id"] = project_id
+        app_suite_filter["project_id"] = project_id
         api_case_filter["project_id"] = project_id
         api_suite_filter["project_id"] = project_id
         perf_scene_filter["project_id"] = project_id
 
     ui_case_total = await UiCase.filter(**ui_case_filter).count()
     ui_suite_total = await UiSuite.filter(**ui_suite_filter).count()
+    app_case_total = await AppCase.filter(**app_case_filter).count()
+    app_suite_total = await AppSuite.filter(**app_suite_filter).count()
     api_case_total = await ApiTestCase.filter(**api_case_filter).count()
     api_suite_total = await ApiTestSuite.filter(**api_suite_filter).count()
     perf_scene_total = await PerfScene.filter(**perf_scene_filter).count()
@@ -242,14 +290,16 @@ async def get_dashboard(
     stats = {
         "ui_case_total": ui_case_total,
         "ui_suite_total": ui_suite_total,
+        "app_case_total": app_case_total,
+        "app_suite_total": app_suite_total,
         "api_case_total": api_case_total,
         "api_suite_total": api_suite_total,
         "perf_scene_total": perf_scene_total,
         "perf_exec_total": perf_exec_total,
         "perf_avg_qps": perf_avg_qps,
         "perf_avg_error_rate": perf_avg_error_rate,
-        "total_case": ui_case_total + api_case_total,
-        "total_suite": ui_suite_total + api_suite_total,
+        "total_case": ui_case_total + app_case_total + api_case_total,
+        "total_suite": ui_suite_total + app_suite_total + api_suite_total,
     }
 
     # ========== Top 5 失败用例（时间范围内） ==========
@@ -285,7 +335,23 @@ async def get_dashboard(
             api_fail_map[cid] = {"case_name": case.name if case else "未知", "type": "接口", "count": 0}
         api_fail_map[cid]["count"] += 1
 
-    all_fails = list(ui_fail_map.values()) + list(api_fail_map.values())
+    # App 失败用例聚合
+    app_failed_q = AppCaseExecution.filter(
+        start_time__gte=s_dt, start_time__lte=e_dt, status__in=["fail", "error", "failed"], is_del=False,
+    )
+    if project_id:
+        app_failed_q = app_failed_q.filter(case_id__in=app_case_ids)
+    app_failed_records = await app_failed_q.prefetch_related("case").all()
+
+    app_fail_map: Dict[int, Dict] = {}
+    for r in app_failed_records:
+        cid = r.case_id
+        case = await r.case
+        if cid not in app_fail_map:
+            app_fail_map[cid] = {"case_name": case.name if case else "未知", "type": "App", "count": 0}
+        app_fail_map[cid]["count"] += 1
+
+    all_fails = list(ui_fail_map.values()) + list(app_fail_map.values()) + list(api_fail_map.values())
     all_fails.sort(key=lambda x: x["count"], reverse=True)
     top_failed_cases = all_fails[:5]
 
@@ -352,6 +418,77 @@ async def get_dashboard(
             "report_path": f"/api-module/report/{r.id}?type=suite",
         })
 
+    # App 计划执行记录
+    app_exec_q = AppPlanExecution.filter(is_del=False).order_by("-start_time").limit(5)
+    if project_id:
+        app_exec_q = app_exec_q.filter(project_id=project_id)
+    app_exec_records = await app_exec_q.prefetch_related("plan").all()
+    for r in app_exec_records:
+        plan = await r.plan
+        recent_executions.append({
+            "id": r.id,
+            "name": plan.name if plan else "未知 App 计划",
+            "type": "App",
+            "record_type": "app_plan",
+            "plan_id": plan.id if plan else None,
+            "run_by": r.username,
+            "start_time": r.start_time.strftime("%Y-%m-%d %H:%M:%S") if r.start_time else None,
+            "status": r.status,
+            "pass_rate": r.pass_rate,
+            "total_cases": r.case_count,
+            "report_path": f"/app-record/report/plan/{r.id}",
+        })
+
+    # App 套件执行（非计划内）
+    app_suite_exec_q = (
+        AppSuiteExecution.filter(is_del=False, plan_execution_id=None)
+        .order_by("-start_time")
+        .limit(5)
+    )
+    if project_id:
+        app_suite_exec_q = app_suite_exec_q.filter(suite__project_id=project_id)
+    app_suite_exec_records = await app_suite_exec_q.prefetch_related("suite").all()
+    for r in app_suite_exec_records:
+        suite = await r.suite
+        recent_executions.append({
+            "id": r.id,
+            "name": suite.name if suite else "未知 App 套件",
+            "type": "App",
+            "record_type": "app_suite",
+            "suite_id": r.suite_id,
+            "run_by": r.username,
+            "start_time": r.start_time.strftime("%Y-%m-%d %H:%M:%S") if r.start_time else None,
+            "status": r.status,
+            "pass_rate": r.pass_rate,
+            "total_cases": r.case_count,
+            "report_path": f"/app-record/report/suite/{r.id}",
+        })
+
+    # App 单用例执行
+    app_case_exec_q = (
+        AppCaseExecution.filter(is_del=False, suite_execution_id=None)
+        .order_by("-start_time")
+        .limit(5)
+    )
+    if project_id:
+        app_case_exec_q = app_case_exec_q.filter(case__project_id=project_id)
+    app_case_exec_records = await app_case_exec_q.prefetch_related("case").all()
+    for r in app_case_exec_records:
+        case = await r.case
+        recent_executions.append({
+            "id": r.id,
+            "name": case.name if case else "未知 App 用例",
+            "type": "App",
+            "record_type": "app_case",
+            "case_id": r.case_id,
+            "run_by": r.username,
+            "start_time": r.start_time.strftime("%Y-%m-%d %H:%M:%S") if r.start_time else None,
+            "status": r.status,
+            "pass_rate": 100.0 if r.status == "success" else 0.0,
+            "total_cases": 1,
+            "report_path": f"/app-record?record_type=case&case_id={r.case_id}",
+        })
+
     # 性能测试执行记录（按 id 倒序走主键，避免对大表按 started_at 排序导致 sort buffer 溢出）
     perf_exec_filter: Dict[str, Any] = {}
     if project_id:
@@ -388,14 +525,16 @@ async def get_dashboard(
 
     ui_success = sum(i["success"] for i in ui_execution_trend)
     ui_fail = sum(i["fail"] for i in ui_execution_trend)
+    app_success = sum(i["success"] for i in app_execution_trend)
+    app_fail = sum(i["fail"] for i in app_execution_trend)
     api_success = sum(i["success"] for i in api_execution_trend)
     api_fail = sum(i["fail"] for i in api_execution_trend)
     perf_success = sum(i["success"] for i in perf_execution_trend)
     perf_fail = sum(i["fail"] for i in perf_execution_trend)
 
-    case_proportion = build_case_proportion(ui_case_total, api_case_total, perf_scene_total)
+    case_proportion = build_case_proportion(ui_case_total, api_case_total, perf_scene_total, app_case_total)
     execution_proportion = build_execution_proportion(
-        ui_success, ui_fail, api_success, api_fail, perf_success, perf_fail,
+        ui_success, ui_fail, api_success, api_fail, perf_success, perf_fail, app_success, app_fail,
     )
     pending_cron_jobs = await _collect_pending_cron_jobs(project_id)
     ai_summary = await _collect_ai_summary(project_id)
@@ -406,6 +545,7 @@ async def get_dashboard(
     return {
         "date_range": date_list,
         "ui_execution_trend": ui_execution_trend,
+        "app_execution_trend": app_execution_trend,
         "api_execution_trend": api_execution_trend,
         "perf_execution_trend": perf_execution_trend,
         "stats": stats,

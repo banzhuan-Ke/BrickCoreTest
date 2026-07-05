@@ -12,6 +12,7 @@ from app.core.ui_project_guard import assert_user_project_member, assert_user_pr
 from app.core.ui_execution_stale import cleanup_stale_ui_executions
 from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.schemas.ui import CaseSchemas, AddCaseForm, UpdateCaseForm, UiCaseBatchExportRequest, UiCaseImportResult, UiCaseBatchUpdateCatalogRequest
+from app.core.case_execution_hints import build_execution_hints_response, resolve_latest_failure_record
 from app.models.ui import Case, UiCaseExecution
 
 # 创建路由对象，并指定依赖项为is_authenticated的验证，确保用户已通过身份验证
@@ -98,6 +99,36 @@ async def get_case_detail(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="用例不存在")
     await assert_user_project_viewer(user_info, cases.project_id)
     return cases
+
+
+@router.get(
+    "/{case_id}/execution-hints",
+    summary="用例最近失败执行提示（编辑页步骤高亮）",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permissions(UI_CASE_VIEW))],
+)
+async def get_case_execution_hints(
+    case_id: int,
+    execution_id: int | None = None,
+    user_info: dict = Depends(require_permissions(UI_CASE_VIEW)),
+):
+    """返回最近一次失败（或指定 execution_id）的步骤失败信息与日志摘要。"""
+    case = await Case.get_or_none(id=case_id, is_del=False)
+    if not case:
+        raise HTTPException(status_code=422, detail="用例不存在")
+    await assert_user_project_viewer(user_info, case.project_id)
+
+    if execution_id:
+        record = await UiCaseExecution.get_or_none(id=execution_id, is_del=False)
+        if not record or record.case_id != case_id:
+            raise HTTPException(status_code=422, detail="执行记录不存在")
+    else:
+        record = await resolve_latest_failure_record(UiCaseExecution, case_id)
+
+    if not record:
+        return build_execution_hints_response(None)
+
+    return build_execution_hints_response(record)
 
 
 class CopyCaseRequest(BaseModel):

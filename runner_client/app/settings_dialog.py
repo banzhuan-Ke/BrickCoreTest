@@ -8,8 +8,11 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGroupBox,
     QLabel,
     QMessageBox,
+    QPushButton,
+    QSpinBox,
     QVBoxLayout,
 )
 
@@ -19,11 +22,21 @@ from runner_client.app.preferences import (
     save_preferences,
     set_windows_autostart,
 )
+from runner_client.app.runner_execution_config import (
+    DEFAULT_CASE_ERROR_RETRIES,
+    DEFAULT_VIEWPORT_HEIGHT,
+    DEFAULT_VIEWPORT_WIDTH,
+    MAX_CASE_ERROR_RETRIES,
+    MIN_VIEWPORT_HEIGHT,
+    MIN_VIEWPORT_WIDTH,
+    normalize_execution_prefs,
+    save_execution_prefs,
+)
 from runner_client.app.runtime_check import is_packaged_app
 
 
 def _is_public_source_tree() -> bool:
-    """公开仓库无 runner/WebEngine 与打包脚本。"""
+    """开发环境无 runner/WebEngine 与打包脚本。"""
     here = Path(__file__).resolve()
     for root in here.parents:
         if (root / "docs-site").is_dir():
@@ -49,11 +62,13 @@ def _settings_hint_text() -> str:
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, runner_online: bool = False) -> None:
         super().__init__(parent)
         self.setWindowTitle("客户端设置")
-        self.resize(420, 280)
+        self.resize(480, 420)
+        self._runner_online = runner_online
         self._prefs = load_preferences()
+        exec_prefs = normalize_execution_prefs(self._prefs)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -74,6 +89,44 @@ class SettingsDialog(QDialog):
         form.addRow(self.autostart_cb)
 
         layout.addLayout(form)
+
+        exec_box = QGroupBox("Web 执行配置")
+        exec_form = QFormLayout(exec_box)
+
+        self.viewport_width_spin = QSpinBox()
+        self.viewport_width_spin.setRange(MIN_VIEWPORT_WIDTH, 3840)
+        self.viewport_width_spin.setSingleStep(10)
+        self.viewport_width_spin.setValue(exec_prefs["runner_viewport_width"])
+        self.viewport_width_spin.setSuffix(" px")
+        exec_form.addRow("无头视口宽度", self.viewport_width_spin)
+
+        self.viewport_height_spin = QSpinBox()
+        self.viewport_height_spin.setRange(MIN_VIEWPORT_HEIGHT, 2160)
+        self.viewport_height_spin.setSingleStep(10)
+        self.viewport_height_spin.setValue(exec_prefs["runner_viewport_height"])
+        self.viewport_height_spin.setSuffix(" px")
+        exec_form.addRow("无头视口高度", self.viewport_height_spin)
+
+        self.error_retries_spin = QSpinBox()
+        self.error_retries_spin.setRange(0, MAX_CASE_ERROR_RETRIES)
+        self.error_retries_spin.setValue(exec_prefs["runner_case_error_retries"])
+        self.error_retries_spin.setToolTip(
+            "用例因异常（error）失败时的额外重跑次数；断言失败（fail）不会重跑。"
+        )
+        exec_form.addRow("异常重跑次数", self.error_retries_spin)
+
+        exec_hint = QLabel(
+            "无头模式下截图/录屏分辨率与视口一致。异常重跑 0 表示关闭；"
+            f"默认 {DEFAULT_CASE_ERROR_RETRIES} 表示最多跑 2 次。"
+        )
+        exec_hint.setWordWrap(True)
+        exec_form.addRow(exec_hint)
+
+        reset_btn = QPushButton("恢复 Web 执行默认")
+        reset_btn.clicked.connect(self._reset_execution_defaults)
+        exec_form.addRow(reset_btn)
+
+        layout.addWidget(exec_box)
         layout.addWidget(QLabel(_settings_hint_text()))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -81,20 +134,46 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _reset_execution_defaults(self) -> None:
+        self.viewport_width_spin.setValue(DEFAULT_VIEWPORT_WIDTH)
+        self.viewport_height_spin.setValue(DEFAULT_VIEWPORT_HEIGHT)
+        self.error_retries_spin.setValue(DEFAULT_CASE_ERROR_RETRIES)
+
     def _save(self) -> None:
-        prefs: dict[str, Any] = {
-            "remember_password": self.remember_cb.isChecked(),
-            "minimize_to_tray": True,
-            "close_hides_to_tray": self.tray_cb.isChecked(),
-            "autostart": self.autostart_cb.isChecked(),
-        }
+        prefs: dict[str, Any] = dict(load_preferences())
+        prefs.update(
+            {
+                "remember_password": self.remember_cb.isChecked(),
+                "minimize_to_tray": True,
+                "close_hides_to_tray": self.tray_cb.isChecked(),
+                "autostart": self.autostart_cb.isChecked(),
+            }
+        )
         ok, err = set_windows_autostart(prefs["autostart"])
         if not ok and prefs["autostart"]:
             QMessageBox.warning(self, "开机自启", err)
             prefs["autostart"] = False
             self.autostart_cb.setChecked(False)
-        save_preferences(prefs)
-        self._prefs = prefs
+
+        exec_changed = (
+            self.viewport_width_spin.value() != prefs.get("runner_viewport_width", DEFAULT_VIEWPORT_WIDTH)
+            or self.viewport_height_spin.value() != prefs.get("runner_viewport_height", DEFAULT_VIEWPORT_HEIGHT)
+            or self.error_retries_spin.value() != prefs.get("runner_case_error_retries", DEFAULT_CASE_ERROR_RETRIES)
+        )
+
+        self._prefs = save_execution_prefs(
+            self.viewport_width_spin.value(),
+            self.viewport_height_spin.value(),
+            self.error_retries_spin.value(),
+            base_prefs=prefs,
+        )
+
+        if exec_changed and self._runner_online:
+            QMessageBox.information(
+                self,
+                "Web 执行配置",
+                "执行参数已保存。请先「下线」再「上线」，新配置才会生效。",
+            )
         self.accept()
 
     def preferences(self) -> dict[str, Any]:

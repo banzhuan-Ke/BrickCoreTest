@@ -13,6 +13,11 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "minimize_to_tray": True,
     "close_hides_to_tray": True,
     "autostart": False,
+    "engine_web_enabled": True,
+    "engine_app_enabled": False,
+    "runner_viewport_width": 1920,
+    "runner_viewport_height": 1080,
+    "runner_case_error_retries": 1,
 }
 
 

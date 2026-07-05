@@ -42,6 +42,7 @@
               <el-tag v-if="scope.row.api_auto_push_report" size="small" type="success" style="margin-left: 6px;">API自动推送</el-tag>
               <el-tag v-if="scope.row.ui_auto_push_report" size="small" type="info" style="margin-left: 6px;">Web自动推送</el-tag>
               <el-tag v-if="scope.row.perf_auto_push_report" size="small" type="warning" style="margin-left: 6px;">压测自动推送</el-tag>
+              <el-tag v-if="scope.row.app_auto_push_report" size="small" type="primary" style="margin-left: 6px;">App自动推送</el-tag>
             </span>
             <span v-else-if="scope.row.channel_type === 'dingtalk'">
               Webhook：{{ scope.row.config.webhook_url }}
@@ -108,6 +109,7 @@
             <el-switch v-model="formData.api_auto_push_report" active-text="API套件执行完成后自动发送报告"/>
             <el-switch v-model="formData.ui_auto_push_report" active-text="UI计划执行完成后自动发送报告"/>
             <el-switch v-model="formData.perf_auto_push_report" active-text="性能测试执行完成后自动发送报告"/>
+            <el-switch v-model="formData.app_auto_push_report" active-text="App计划/套件执行完成后自动发送报告"/>
           </div>
         </el-form-item>
       </template>
@@ -179,6 +181,7 @@ const formData = reactive({
   api_auto_push_report: false,
   ui_auto_push_report: false,
   perf_auto_push_report: false,
+  app_auto_push_report: false,
 })
 const recipientsText = ref('')
 
@@ -192,6 +195,7 @@ watch(() => formData.channel_type, (val) => {
     formData.api_auto_push_report = false
     formData.ui_auto_push_report = false
     formData.perf_auto_push_report = false
+    formData.app_auto_push_report = false
     delete formData.config.recipients
     recipientsText.value = ''
   }
@@ -248,6 +252,7 @@ const openAddDialog = () => {
   formData.api_auto_push_report = false
   formData.ui_auto_push_report = false
   formData.perf_auto_push_report = false
+  formData.app_auto_push_report = false
   recipientsText.value = ''
   dialogVisible.value = true
 }
@@ -261,6 +266,7 @@ const openEditDialog = (row) => {
   formData.api_auto_push_report = row.api_auto_push_report || false
   formData.ui_auto_push_report = row.ui_auto_push_report || false
   formData.perf_auto_push_report = row.perf_auto_push_report || false
+  formData.app_auto_push_report = row.app_auto_push_report || false
   if (row.channel_type === 'email') {
     recipientsText.value = (row.config.recipients || []).join(',')
   }
@@ -284,6 +290,7 @@ const submitForm = async () => {
     api_auto_push_report: formData.api_auto_push_report,
     ui_auto_push_report: formData.ui_auto_push_report,
     perf_auto_push_report: formData.perf_auto_push_report,
+    app_auto_push_report: formData.app_auto_push_report,
   }
 
   try {
@@ -316,6 +323,7 @@ const toggleEnabled = async (row) => {
       api_auto_push_report: row.api_auto_push_report,
       ui_auto_push_report: row.ui_auto_push_report,
       perf_auto_push_report: row.perf_auto_push_report,
+      app_auto_push_report: row.app_auto_push_report || false,
     })
     ElMessage.success('状态更新成功')
   } catch (error) {

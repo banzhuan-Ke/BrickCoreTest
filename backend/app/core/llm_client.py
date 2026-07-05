@@ -87,7 +87,7 @@ class OpenAIStyleClient(BaseLLMClient):
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            extra_body=extra_body,
+            **({"extra_body": extra_body} if extra_body else {}),
             **kwargs,
         )
         msg = resp.choices[0].message
@@ -131,7 +131,7 @@ class OpenAIStyleClient(BaseLLMClient):
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            extra_body=extra_body,
+            **({"extra_body": extra_body} if extra_body else {}),
             **kwargs,
         )
         msg = resp.choices[0].message
@@ -156,7 +156,7 @@ class OpenAIStyleClient(BaseLLMClient):
             temperature=temperature,
             max_tokens=max_tokens,
             stream=True,
-            extra_body=extra_body,
+            **({"extra_body": extra_body} if extra_body else {}),
             **kwargs,
         )
         async for chunk in stream:

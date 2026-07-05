@@ -41,6 +41,7 @@ runner/profiles/local.env
 runner/profiles/online.env
 runner/logs/
 runner/venv/
+runner/work/
 # Playwright 本地下载的浏览器（体积大，各环境自行 playwright install）
 runner/browsers/
 # 本地启动标记（start-local 等生成的状态文件）
@@ -86,6 +87,10 @@ dist/
 build/
 scripts/.cache/
 *.egg-info/
+
+# Runner 客户端本地打包产物（build_runner_client.ps1 输出，勿提交）
+runner_client/dist/
+runner_client/dist_staging/
 
 # 前端
 frontend/node_modules/

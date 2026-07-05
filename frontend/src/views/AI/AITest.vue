@@ -17,7 +17,7 @@
       />
 
       <p class="intro">
-        集中入口：从需求文档到测试分析、功能用例，再到接口/UI 自动化。各能力在对应业务菜单中执行，此处提供快捷跳转与最近动态。
+        集中入口：从需求文档到测试分析、功能用例，再到接口/Web 自动化。各能力在对应业务菜单中执行，此处提供快捷跳转与最近动态。
       </p>
 
       <!-- 进行中任务 -->
@@ -163,7 +163,7 @@
           <el-icon><ArrowRight /></el-icon>
           <span class="flow-step clickable" @click="router.push('/ai-functional-cases')">功能用例库</span>
           <el-icon><ArrowRight /></el-icon>
-          <span class="flow-step muted">接口 / UI 自动化（可选）</span>
+          <span class="flow-step muted">接口 / Web 自动化（可选）</span>
         </div>
       </el-card>
 

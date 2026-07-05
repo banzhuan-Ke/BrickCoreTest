@@ -91,6 +91,8 @@ const props = defineProps({
   steps: { type: Array, default: () => [] },
   initialDescription: { type: String, default: '' },
   projectId: { type: [Number, String], default: null },
+  /** ui | app */
+  stepModule: { type: String, default: 'ui' },
 })
 
 const emit = defineEmits(['update:modelValue', 'apply'])
@@ -154,6 +156,7 @@ const handleOptimize = async () => {
       append_assertions: optimizeOptions.append_assertions,
       use_page_context: false,
       project_id: props.projectId ? Number(props.projectId) : undefined,
+      step_module: props.stepModule || 'ui',
     })
     if (res.status === 200 && res.data?.code === 200) {
       const d = res.data.data || {}

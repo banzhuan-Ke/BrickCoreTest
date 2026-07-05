@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.core.auth import get_current_username, require_permissions
 from app.core.edition import is_community_edition
 from app.core.docs_catalog import (
+    BUILTIN_DOC_IDS,
     build_manage_builtin_items,
     get_builtin_doc_entries,
     get_builtin_doc_tree,
@@ -41,15 +43,34 @@ ALLOWED_UPLOAD_EXT = {
 }
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200MB
 
+_MD_DOC_LINK_RE = re.compile(
+    r"(?<!!)\[([^\]]+)\]\((?:\./)?([a-zA-Z0-9_-]+)\.md([^)]*)\)",
+)
+
+
+def _rewrite_md_doc_links(md: str) -> str:
+    """将 Markdown 内 .md 相对链接改写为文档中心路由，避免浏览器请求 /xxx.md 404。"""
+
+    def repl(match: re.Match[str]) -> str:
+        label, stem, tail = match.group(1), match.group(2).lower(), match.group(3) or ""
+        doc_id = "home" if stem == "index" else stem
+        if doc_id not in BUILTIN_DOC_IDS:
+            return match.group(0)
+        frag = tail if tail.startswith("#") else ""
+        return f"[{label}](/docs?doc={doc_id}{frag})"
+
+    return _MD_DOC_LINK_RE.sub(repl, md)
+
 
 def _md_to_html(text: str) -> str:
     if not text:
         return ""
+    text = _rewrite_md_doc_links(text)
     try:
         import markdown as md_lib
         return md_lib.markdown(
             text,
-            extensions=["tables", "fenced_code", "nl2br", "sane_lists"],
+            extensions=["tables", "fenced_code", "nl2br", "sane_lists", "attr_list"],
         )
     except Exception:
         return f"<pre>{text}</pre>"

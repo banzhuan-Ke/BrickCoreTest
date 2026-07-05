@@ -299,6 +299,7 @@ import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import { useTableColumns } from '@/composables/useTableColumns.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
+import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 
 const {
   activeColumns,
@@ -415,7 +416,7 @@ const getDeviceList = async () => {
   try {
     const res = await http.deviceApi.getDeviceList({ status: '在线' })
     if (res.status === 200) {
-      deviceList.value = res.data || []
+      deviceList.value = filterWebRunnerDevices(res.data || [])
       // 如果只有一个在线设备，默认选中
       if (deviceList.value.length === 1) {
         runParams.device_id = deviceList.value[0].id

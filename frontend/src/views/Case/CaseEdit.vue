@@ -106,6 +106,30 @@
         </el-form>
 
         <CaseUsedVarsPanel :steps="caseInfo.steps" />
+
+        <el-collapse
+          v-if="executionHints?.has_failure"
+          v-model="hintsExpanded"
+          class="execution-hints-collapse"
+        >
+          <el-collapse-item name="failure">
+            <template #title>
+              <span class="execution-hints-collapse-title">
+                <el-icon color="#f56c6c"><WarningFilled /></el-icon>
+                最近一次执行未通过（点击展开详情）
+              </span>
+            </template>
+            <div class="execution-hints-body">
+              <p v-if="executionHints.error_msg" class="execution-hints-error">{{ executionHints.error_msg }}</p>
+              <pre v-if="executionHints.log_excerpt" class="execution-hints-log">{{ executionHints.log_excerpt }}</pre>
+              <p v-else-if="executionHints.log_tail" class="execution-hints-log-muted">{{ executionHints.log_tail }}</p>
+              <p v-if="executionHints.start_time" class="execution-hints-meta">
+                执行时间：{{ dateTools.rTime(executionHints.start_time) }}
+                <span v-if="executionHints.execution_id"> · 记录 #{{ executionHints.execution_id }}</span>
+              </p>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
         
         <!-- AI 生成/录制步骤按钮 -->
         <div class="ai-gen-bar">
@@ -121,7 +145,7 @@
             <span>执行步骤</span>
             <el-text type="info" size="small">编辑步骤时在弹窗内插入变量/工具/标签；参数支持 <code v-pre>${{变量名}}</code>、<code v-pre>${{df:标签名}}</code>、<code v-pre>${{dt:md5|text=@a}}</code></el-text>
           </div>
-          <StepEditor v-model:steps="caseInfo.steps" @debug-step="openDebugDialog" />
+          <StepEditor v-model:steps="caseInfo.steps" :execution-hints="executionHints" @debug-step="openDebugDialog" />
         </div>
 
         <CaseDebugDialog
@@ -169,7 +193,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, onMounted, computed, provide } from 'vue'
+import { reactive, ref, onMounted, computed, provide, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueDraggable } from 'vue-draggable-plus'
 import { StepEditor } from '@/components/StepEditor'
@@ -185,7 +209,10 @@ import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import { resolveCaseDescriptionForContext, extractOpenUrlFromSteps, normalizeRecorderApplyPayload } from '@/utils/caseDescription.js'
 import http from '@/api/index'
 import { ElNotification, ElMessage } from 'element-plus'
+import dateTools from '@/tools/dateTools'
 import ActionGroup from '@/datas/ActionGroup.js'
+import { cloneKeywordForDrag } from '@/utils/stepHelper'
+import { parseExecutionIdQuery } from '@/utils/caseExecutionHints'
 import {
   Rank, Check, Close,
   ChromeFilled, Position, Mouse,
@@ -194,7 +221,7 @@ import {
   FullScreen, View, Timer,
   ArrowDown, ArrowUp, Delete,
   Document, Edit, Clock, Search,
-  MessageBox, MoreFilled, Share
+  MessageBox, MoreFilled, Share, WarningFilled
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -213,6 +240,8 @@ const recordDialogVisible = ref(false)
 const optimizeDialogVisible = ref(false)
 const debugDialogVisible = ref(false)
 const debugThroughIndex = ref(0)
+const executionHints = ref(null)
+const hintsExpanded = ref([])
 
 // 默认展开所有分组
 const activeGroups = ref(['1', '2', '3', '4', '5', '6', '7', '8'])
@@ -274,13 +303,7 @@ const keywordList = computed(() => {
   return list
 })
 
-// 克隆关键字（拖拽时）
-function cloneKeyword(keyword) {
-  return {
-    ...keyword,
-    params: { ...keyword.params }
-  }
-}
+const cloneKeyword = cloneKeywordForDrag
 
 // 表单校验规则
 const formRules = {
@@ -291,6 +314,21 @@ const formRules = {
   level: [
     { required: true, message: '请选择用例级别', trigger: 'change' }
   ]
+}
+
+async function loadExecutionHints() {
+  try {
+    const params = {}
+    const executionId = parseExecutionIdQuery(route.query.execution_id)
+    if (executionId) {
+      params.execution_id = executionId
+    }
+    const res = await http.caseApi.getExecutionHints(caseId, params)
+    const payload = res.data?.data ?? res.data
+    executionHints.value = payload?.has_failure ? payload : null
+  } catch {
+    executionHints.value = null
+  }
 }
 
 // 获取用例详情
@@ -380,11 +418,69 @@ function openDebugDialog(index) {
   debugDialogVisible.value = true
 }
 
-onMounted(() => {
-  getCaseDetail()
+onMounted(async () => {
+  await getCaseDetail()
+  await loadExecutionHints()
 })
+
+watch(
+  () => route.query.execution_id,
+  () => {
+    loadExecutionHints()
+  }
+)
 </script>
 
 <style scoped lang="scss">
 @use '@/styles/case-step-editor-layout.scss';
+
+.execution-hints-collapse {
+  margin-bottom: 16px;
+  border: 1px solid var(--el-color-danger-light-5);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.execution-hints-collapse-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--el-color-danger);
+  font-weight: 500;
+}
+
+.execution-hints-body {
+  p, pre {
+    margin: 6px 0 0;
+  }
+}
+
+.execution-hints-error {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.execution-hints-log {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.execution-hints-log-muted {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: pre-wrap;
+}
+
+.execution-hints-meta {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
 </style>

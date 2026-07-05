@@ -32,11 +32,14 @@ EXCLUDE_DIRS = {
     "__pycache__",
     "scripts/.cache",
     "runner_client/dist",
+    "runner_client/dist_staging",
     "runner_client/build",
     "runner_client/venv",
     "frontend/node_modules",
     "frontend/dist",
     "backend/venv",
+    "backend/tests",
+    "backend/.pytest_cache",
     "runner/browsers",
     "runner/venv",
     "runner/logs",
@@ -49,6 +52,7 @@ EXCLUDE_FILES = {
     "scripts/update_resume_2026.py",
     "scripts/reset-local-docker.ps1",
     "scripts/verify_runner_dist.ps1",
+    "scripts/pack-demo-runner.ps1",
     "backend/static/runner/BrickCoreRunner.zip",
     "backend/check_migration.py",
     "backend/check_migration2.py",
@@ -86,11 +90,13 @@ CE_DOC_STUBS: dict[str, str] = {
     "docs-site/index.md": "scripts/ce-stubs/docs-index-ce.md",
     "docs-site/guide/highlights.md": "scripts/ce-stubs/docs-highlights-ce.md",
     "docs-site/guide/ui-automation.md": "scripts/ce-stubs/docs-ui-automation-ce.md",
+    "docs-site/guide/app-automation.md": "scripts/ce-stubs/docs-app-automation-ce.md",
     "docs-site/guide/runner-packaging.md": "scripts/ce-stubs/docs-runner-packaging-ce.md",
     "docs-site/guide/system-admin.md": "scripts/ce-stubs/docs-system-admin-ce.md",
     "docs-site/guide/data-factory.md": "scripts/ce-stubs/docs-data-factory-ce.md",
     "docs-site/guide/ai-testing.md": "scripts/ce-stubs/docs-ai-testing-ce.md",
     "docs-site/guide/platform-assistant.md": "scripts/ce-stubs/docs-platform-assistant-ce.md",
+    "docs-site/guide/release-notes.md": "scripts/ce-stubs/docs-release-notes-ce.md",
     "docs-site/guide/runner-linux-server.md": "scripts/ce-stubs/docs-runner-linux-server-ce.md",
 }
 
@@ -112,7 +118,9 @@ MUST_NOT_EXIST_IN_CE = [
     "backend/app/core/qa_eval_report.py",
     "backend/app/core/qa_eval_compare.py",
     "backend/app/routers/ai/qa_eval.py",
-    "frontend/src/views/AI/AiQaEval.vue",
+    "scripts/pack-demo-runner.ps1",
+    "backend/tests",
+    "backend/.pytest_cache",
 ]
 
 # User-facing copy must not mention edition split (help center / Gitee / showcase).

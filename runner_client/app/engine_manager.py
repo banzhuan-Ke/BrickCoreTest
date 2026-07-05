@@ -116,6 +116,14 @@ def build_engine_env(connect: dict[str, Any], device_name: str) -> dict[str, str
         "RUNNER_LEGACY",
     ):
         env.pop(key, None)
+
+    internal_key = connect.get("internal_api_key")
+    if internal_key:
+        env["INTERNAL_API_KEY"] = str(internal_key)
+
+    from runner_client.app.runner_execution_config import apply_execution_config_to_env
+
+    apply_execution_config_to_env(env)
     return env
 
 
@@ -222,20 +230,33 @@ class EngineManager:
             lines.append(line)
         return "\n".join(lines)
 
-    def read_new_log_lines(self, max_lines: int = 200) -> str:
+    def read_new_log_lines(self, max_lines: int = 500) -> str:
         """从 UTF-8 日志文件读取本次上线后的新行（避免 stdout 编码乱码）。"""
         if not self.log_path.exists():
+            self._log_offset = 0
             return ""
         try:
-            with self.log_path.open("r", encoding="utf-8", errors="replace") as fh:
-                fh.seek(self._log_offset)
-                lines: list[str] = []
-                for line in fh:
-                    lines.append(line.rstrip("\n\r"))
-                    if len(lines) >= max_lines:
-                        break
-                self._log_offset = fh.tell()
-            return "\n".join(lines)
+            file_size = self.log_path.stat().st_size
+            if self._log_offset > file_size:
+                self._log_offset = 0
+            chunks: list[str] = []
+            total_lines = 0
+            while total_lines < max_lines:
+                with self.log_path.open("r", encoding="utf-8", errors="replace") as fh:
+                    fh.seek(self._log_offset)
+                    batch: list[str] = []
+                    for line in fh:
+                        batch.append(line.rstrip("\n\r"))
+                        if len(batch) >= max_lines - total_lines:
+                            break
+                    self._log_offset = fh.tell()
+                if not batch:
+                    break
+                chunks.append("\n".join(batch))
+                total_lines += len(batch)
+                if self._log_offset >= file_size:
+                    break
+            return "\n".join(part for part in chunks if part)
         except Exception:
             return ""
 

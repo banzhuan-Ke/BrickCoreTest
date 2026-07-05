@@ -168,6 +168,7 @@ import { UserStore } from '@/stores/module/UserStore'
 import http from '@/api/index'
 import { ElNotification, ElMessage } from 'element-plus'
 import ActionGroup from '@/datas/ActionGroup.js'
+import { cloneKeywordForDrag } from '@/utils/stepHelper'
 import {
   Rank, Check, Close,
   ChromeFilled, Position, Mouse,
@@ -248,13 +249,7 @@ const caseInfo = reactive({
 const recordingDescription = computed(() => resolveCaseDescriptionForContext(caseInfo))
 const recordingInitialUrl = computed(() => extractOpenUrlFromSteps(caseInfo.steps))
 
-// 克隆关键字（拖拽时）
-function cloneKeyword(keyword) {
-  return {
-    ...keyword,
-    params: { ...keyword.params }
-  }
-}
+const cloneKeyword = cloneKeywordForDrag
 
 // 表单校验规则
 const formRules = {

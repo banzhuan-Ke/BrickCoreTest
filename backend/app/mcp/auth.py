@@ -65,3 +65,12 @@ def ensure_permission(ctx: McpAuthContext, *perms: str) -> None:
         return
     if not set(perms).issubset(ctx.permissions):
         raise ValueError(f"权限不足，需要: {', '.join(perms)}")
+
+
+def ensure_any_permission(ctx: McpAuthContext, *perms: str) -> None:
+    if ctx.is_api_key or ctx.is_superuser:
+        return
+    if not perms:
+        return
+    if not any(p in ctx.permissions for p in perms):
+        raise ValueError(f"权限不足，需要以下权限之一: {', '.join(perms)}")

@@ -5,6 +5,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, date
 from typing import Any, Optional
 
+import re
+
 from app.models.ai import (
     AiFunctionalCase,
     AiGenerateRecord,
@@ -14,8 +16,9 @@ from app.models.ai import (
 )
 from app.models.http import ApiRunRecord, ApiSuiteRunRecord
 from app.models.perf import PerfRecord
-from app.models.sys import OperationLog
+from app.models.sys import Device, OperationLog, User
 from app.models.ui import UiPlanExecution
+from app.models.app import AppCaseExecution, AppPlanExecution, AppSuiteExecution
 
 
 def build_workbench_funnel(stats: dict[str, int]) -> list[dict[str, Any]]:
@@ -142,7 +145,7 @@ async def build_workbench_todos(project_id: int) -> list[dict[str, Any]]:
     if pending_ui:
         todos.append({
             "type": "pending_ui",
-            "title": "待转 UI 自动化",
+            "title": "待转 Web 自动化",
             "count": pending_ui,
             "path": "/ai-functional-cases",
             "query": {},
@@ -232,51 +235,112 @@ async def collect_generate_trend(project_id: Optional[int], days: int = 7) -> li
     return [{"date": d, **day_map[d]} for d in sorted(day_map.keys())]
 
 
+_RUNNER_USERNAME_RE = re.compile(r"^(.+)\(([^)]+)\)$")
+
+
+def _normalize_activity_username(raw: str, device_ids: set[str], runner_mq_users: set[str]) -> str | None:
+    name = (raw or "").strip()
+    if not name:
+        return None
+    if name.startswith("runner_") or name in runner_mq_users:
+        return None
+    match = _RUNNER_USERNAME_RE.match(name)
+    if match:
+        base, suffix = match.group(1).strip(), match.group(2).strip()
+        if suffix in device_ids or (suffix.isdigit() and len(suffix) >= 8):
+            return base or None
+    return name
+
+
+async def _load_runner_identity_sets() -> tuple[set[str], set[str]]:
+    device_ids: set[str] = set()
+    runner_mq_users: set[str] = set()
+    for row in await Device.filter(is_del=False).values("id", "runner_mq_username"):
+        did = (row.get("id") or "").strip()
+        if did:
+            device_ids.add(did)
+        mq_user = (row.get("runner_mq_username") or "").strip()
+        if mq_user:
+            runner_mq_users.add(mq_user)
+    return device_ids, runner_mq_users
+
+
+async def _format_activity_display(usernames: list[str]) -> list[dict[str, Any]]:
+    users = await User.filter(username__in=usernames, is_del=False).values("username", "nickname")
+    nick_map = {u["username"]: (u.get("nickname") or u["username"]) for u in users}
+    rows = []
+    for username in usernames:
+        nick = nick_map.get(username) or username
+        if nick == username:
+            display_name = username
+        else:
+            display_name = f"{nick}（{username}）"
+        rows.append({"username": display_name, "activity_score": 0})
+    return rows
+
+
 async def collect_user_activity_top(
     project_id: Optional[int],
     start_dt: datetime,
     end_dt: datetime,
     limit: int = 5,
 ) -> list[dict[str, Any]]:
+    device_ids, runner_mq_users = await _load_runner_identity_sets()
     counts: dict[str, int] = defaultdict(int)
 
-    log_q = OperationLog.filter(create_time__gte=start_dt, create_time__lte=end_dt)
+    def bump(raw: str, weight: int = 1) -> None:
+        key = _normalize_activity_username(raw, device_ids, runner_mq_users)
+        if key:
+            counts[key] += weight
+
+    log_q = OperationLog.filter(create_time__gte=start_dt, create_time__lte=end_dt).exclude(
+        path__startswith="/runner/"
+    )
     for row in await log_q.values("username"):
-        name = (row.get("username") or "").strip()
-        if name:
-            counts[name] += 1
+        bump(row.get("username") or "", 1)
 
     ui_q = UiPlanExecution.filter(start_time__gte=start_dt, start_time__lte=end_dt, is_del=False)
     if project_id:
         ui_q = ui_q.filter(project_id=project_id)
     for row in await ui_q.values("username"):
-        name = (row.get("username") or "").strip()
-        if name:
-            counts[name] += 2
+        bump(row.get("username") or "", 2)
 
     api_q = ApiRunRecord.filter(start_time__gte=start_dt, start_time__lte=end_dt)
     if project_id:
         api_q = api_q.filter(project_id=project_id)
     for row in await api_q.values("run_by"):
-        name = (row.get("run_by") or "").strip()
-        if name:
-            counts[name] += 2
+        bump(row.get("run_by") or "", 2)
 
     suite_q = ApiSuiteRunRecord.filter(start_time__gte=start_dt, start_time__lte=end_dt)
     if project_id:
         suite_q = suite_q.filter(project_id=project_id)
     for row in await suite_q.values("run_by"):
-        name = (row.get("run_by") or "").strip()
-        if name:
-            counts[name] += 2
+        bump(row.get("run_by") or "", 2)
 
     perf_q = PerfRecord.filter(started_at__gte=start_dt, started_at__lte=end_dt)
     if project_id:
         perf_q = perf_q.filter(project_id=project_id)
     for row in await perf_q.values("run_by"):
-        name = (row.get("run_by") or "").strip()
-        if name:
-            counts[name] += 2
+        bump(row.get("run_by") or "", 2)
+
+    app_plan_q = AppPlanExecution.filter(start_time__gte=start_dt, start_time__lte=end_dt, is_del=False)
+    app_suite_q = AppSuiteExecution.filter(start_time__gte=start_dt, start_time__lte=end_dt, is_del=False)
+    app_case_q = AppCaseExecution.filter(start_time__gte=start_dt, start_time__lte=end_dt, is_del=False)
+    if project_id:
+        app_plan_q = app_plan_q.filter(project_id=project_id)
+        app_suite_q = app_suite_q.filter(suite__project_id=project_id)
+        app_case_q = app_case_q.filter(case__project_id=project_id)
+    for row in await app_plan_q.values("username"):
+        bump(row.get("username") or "", 2)
+    for row in await app_suite_q.values("username"):
+        bump(row.get("username") or "", 2)
+    for row in await app_case_q.values("username"):
+        bump(row.get("username") or "", 2)
 
     ranked = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:limit]
-    return [{"username": u, "activity_score": c} for u, c in ranked]
+    if not ranked:
+        return []
+    display_rows = await _format_activity_display([u for u, _ in ranked])
+    for i, (_, score) in enumerate(ranked):
+        display_rows[i]["activity_score"] = score
+    return display_rows

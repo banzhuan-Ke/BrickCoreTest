@@ -410,6 +410,7 @@ import TableColumnPicker from '@/components/TableColumnPicker.vue'
 import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import { useTableColumns } from '@/composables/useTableColumns.js'
 import CaseRecord from "@/views/Case/componets/CaseRecord.vue"
+import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 import BatchCatalogDialog from '@/components/BatchCatalogDialog.vue'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
 import {UserStore} from "@/stores/module/UserStore.js"
@@ -615,7 +616,7 @@ const getDeviceList = async () => {
   try {
     const res = await http.deviceApi.getList({ status: '在线' })
     if (res.status === 200) {
-      deviceList.value = res.data || []
+      deviceList.value = filterWebRunnerDevices(res.data || [])
     }
   } catch (error) {
     console.error('获取设备列表失败:', error)
@@ -688,7 +689,7 @@ async function runCase() {
         duration: 2500,
       })
       // 显示执行设备状态
-      if (runParams.case_id) {
+      if (runParams.case_id && dispatched) {
         showDeviceDlg.value = true
       }
       // 刷新页面数据

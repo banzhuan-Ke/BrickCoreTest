@@ -114,6 +114,7 @@ import { normalizeRecorderApplyPayload } from '@/utils/caseDescription.js'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
 import ActionGroup from '@/datas/ActionGroup.js'
+import { cloneKeywordForDrag } from '@/utils/stepHelper'
 import { ElNotification, ElMessage } from 'element-plus'
 import {
   Rank, Check, Close, Document, Edit, Mouse, Clock, Search, MessageBox, MoreFilled, Share, Collection
@@ -164,9 +165,7 @@ const keywordGroups = computed(() =>
   }))
 )
 
-function cloneKeyword(keyword) {
-  return { ...keyword, params: { ...keyword.params } }
-}
+const cloneKeyword = cloneKeywordForDrag
 
 async function loadDetail() {
   if (isNew.value) return

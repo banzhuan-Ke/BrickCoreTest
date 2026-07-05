@@ -17,6 +17,14 @@ class RunnerConnectRequest(BaseModel):
     version: str = ""
     hostname: str = ""
     client_version: str = "1.0.0"
+    runner_engine_types: list[str] = Field(
+        default_factory=lambda: ["web"],
+        description="Runner 引擎能力：web|app|perf",
+    )
+    app_platform: str = Field(default="", description="App 平台 android|ios|harmony")
+    app_udid: str = Field(default="", description="adb/hdc 设备序列号")
+    app_connection: str = Field(default="", description="usb|wifi")
+    toolchain_status: dict[str, Any] = Field(default_factory=dict, description="工具链探活状态")
 
 
 class RunnerMqConfig(BaseModel):
@@ -53,6 +61,8 @@ class RunnerConnectResponse(BaseModel):
     client_version_latest: str
     storage_type: str = "minio"
     upload_mode: str = "presigned"
+    """Runner 子进程鉴权兜底（与 Backend INTERNAL_API_KEY 一致，仅 connect 下发给已登录用户的 Runner）"""
+    internal_api_key: str = ""
     mq: RunnerMqConfig
     redis: RunnerRedisConfig
     database: Optional[RunnerDatabaseConfig] = None
@@ -76,6 +86,7 @@ class RunnerVersionResponse(BaseModel):
     middleware_isolation: bool = True
     runner_notices: Optional[dict[str, Any]] = None
     community_edition: bool = False
+    platform_version: str = "1.2.0"
 
 
 class RunnerReleaseConfigForm(BaseModel):
@@ -90,6 +101,12 @@ class RunnerDisconnectRequest(BaseModel):
 class RunnerHeartbeatRequest(BaseModel):
     device_id: Optional[str] = None
     client_version: str = ""
+    runner_engine_types: Optional[list[str]] = None
+    app_platform: str = ""
+    app_udid: str = ""
+    app_connection: str = ""
+    app_capabilities: Optional[dict[str, Any]] = None
+    toolchain_status: Optional[dict[str, Any]] = None
 
 
 class RunnerResultsPayload(BaseModel):
@@ -157,6 +174,20 @@ class RunnerDownloadPresignResponse(BaseModel):
     file_key: str
     bucket: str
     expires_in: int = 3600
+
+
+class RunnerAppTemplateDownloadRequest(BaseModel):
+    object_key: str = Field(..., min_length=1, max_length=500)
+
+    @field_validator("object_key")
+    @classmethod
+    def validate_object_key(cls, value: str) -> str:
+        name = value.replace("\\", "/").lstrip("/")
+        if not name or ".." in name:
+            raise ValueError("非法 object key")
+        if not re.match(r"^app-elements/\d+/[a-f0-9]{12}\.(png|jpe?g|webp)$", name, re.I):
+            raise ValueError("object key 格式不正确")
+        return name
 
 
 class RunnerFolderManifestRequest(BaseModel):

@@ -17,7 +17,7 @@ from app.core.ai_prompts import PromptManager
 from app.core.ai_usage_log import log_ai_usage
 from app.core.auth import is_authenticated, require_permissions
 from app.core.encryption import decrypt_value
-from app.core.failure_context import build_api_failure_context, build_ui_failure_context
+from app.core.failure_context import build_api_failure_context, build_app_failure_context, build_ui_failure_context
 from app.core.report_summary_context import (
     ReportType,
     build_report_execution_data,
@@ -29,6 +29,7 @@ from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW
 from app.models.ai import AiConfig, AiGenerateRecord
 from app.models.http import ApiRunRecord
 from app.models.ui import UiCaseExecution
+from app.models.app import AppCaseExecution
 from app.routers.ai.generate import _build_extra_body, _call_llm, _get_ai_config
 from app.core.ai_scene_config import resolve_vision_config
 from app.routers.ai.requirements import _resolve_project_id
@@ -43,7 +44,7 @@ REPORT_SUMMARY_CACHE_HOURS = 24
 
 
 class AnalyzeFailureRequest(BaseModel):
-    target_type: Literal["api", "ui"]
+    target_type: Literal["api", "ui", "app"]
     target_id: int = Field(..., description="ApiRunRecord.id 或 UiCaseExecution.id")
     ai_config_id: Optional[int] = Field(None, description="文本分析模型，不传用默认配置")
     vision_config_id: Optional[int] = Field(None, description="UI 截图 Vision 模型，不传则自动匹配")
@@ -51,7 +52,7 @@ class AnalyzeFailureRequest(BaseModel):
 
 
 class FailureTargetItem(BaseModel):
-    target_type: Literal["api", "ui"]
+    target_type: Literal["api", "ui", "app"]
     target_id: int
 
 
@@ -251,7 +252,7 @@ async def _execute_failure_analysis(
     t0 = time.time()
     usage_scene = "failure_analysis"
 
-    use_vision = target_type == "ui" and image_payload is not None
+    use_vision = target_type in ("ui", "app") and image_payload is not None
     if use_vision:
         vision_config = await _get_vision_config(vision_config_id)
         if not vision_config:
@@ -365,6 +366,18 @@ async def _load_target(
             raise HTTPException(status_code=400, detail="仅支持分析失败或错误的执行记录")
         ctx = await build_api_failure_context(record)
         return ctx, None, None, ctx.get("case_name") or ""
+
+    if target_type == "app":
+        record = await AppCaseExecution.get_or_none(id=target_id, is_del=False).prefetch_related("case")
+        if not record:
+            raise HTTPException(status_code=404, detail="App 执行记录不存在")
+        case = await record.case
+        if case and int(case.project_id) != project_id:
+            raise HTTPException(status_code=403, detail="无权访问该执行记录")
+        if record.status not in ("fail", "failed", "error"):
+            raise HTTPException(status_code=400, detail="仅支持分析失败或错误的执行记录")
+        ctx, image_payload, screenshot_url = await build_app_failure_context(record)
+        return ctx, image_payload, screenshot_url, ctx.get("case_name") or ""
 
     record = await UiCaseExecution.get_or_none(id=target_id, is_del=False).prefetch_related("case")
     if not record:
@@ -610,7 +623,7 @@ async def get_report_summary_by_record(
     dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
 )
 async def get_analysis_by_target(
-    target_type: Literal["api", "ui"] = Query(...),
+    target_type: Literal["api", "ui", "app"] = Query(...),
     target_id: int = Query(...),
     project_id: Optional[int] = Query(None),
     user_info: dict = Depends(is_authenticated),

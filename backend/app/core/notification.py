@@ -484,6 +484,132 @@ class NotificationService:
             print(f"[AutoReport] Perf report auto push failed: {e}")
 
     @staticmethod
+    async def send_app_plan_report(plan_execution_id: int, recipients: Optional[List[str]] = None):
+        """发送 App 计划执行报告邮件"""
+        from app.models.app import AppPlanExecution
+        from app.routers.app.records import _build_report_context
+
+        record_data, suite_records, case_records, filename, img_options = await _build_report_context(
+            plan_execution_id, "task", False, "none", False, None
+        )
+        project_id = None
+        record = await AppPlanExecution.get_or_none(id=plan_execution_id, is_del=False).prefetch_related("project")
+        if record:
+            project = await record.project
+            project_id = project.id if project else record.project_id
+
+        html_content = generate_html_report(record_data, "task", suite_records, case_records, img_options)
+        subject = f"[App测试报告] {record_data.get('task_name', '计划')} - {record_data.get('status', '')}"
+        body_html = f"""
+        <h3>App 测试执行报告</h3>
+        <p><b>计划名称：</b>{record_data.get('task_name', '')}</p>
+        <p><b>执行状态：</b>{record_data.get('status', '')}</p>
+        <p><b>总用例数：</b>{record_data.get('case_count', 0)}</p>
+        <p><b>成功：</b>{record_data.get('success', 0)} / <b>失败：</b>{int(record_data.get('fail', 0) or 0) + int(record_data.get('error', 0) or 0)}</p>
+        <p><b>执行人：</b>{record_data.get('username', '')}</p>
+        <p>详细报告请查看附件。</p>
+        """
+        to_list = recipients
+        if not to_list:
+            email_cfg = await NotificationConfig.filter(
+                project_id=project_id, channel_type="email", enabled=True
+            ).first()
+            if email_cfg:
+                to_list = email_cfg.config.get("recipients", [])
+        if not to_list:
+            raise ValueError("未配置邮件收件人")
+
+        status_flag = "failed"
+        error_text = ""
+        try:
+            await NotificationService._send_email(
+                to=to_list,
+                subject=subject,
+                body_html=body_html,
+                attachments=[(filename, html_content, "text/html")],
+            )
+            status_flag = "success"
+        except Exception as e:
+            error_text = str(e)
+            raise
+        finally:
+            await NotificationService._log(
+                project_id=project_id,
+                channel_type="email",
+                notify_type="report",
+                title=subject,
+                content_summary={"task_name": record_data.get("task_name"), "status": record_data.get("status")},
+                recipients=to_list,
+                status=status_flag,
+                error_msg=error_text,
+                related_id=plan_execution_id,
+                related_type="app_plan_execution",
+            )
+
+    @staticmethod
+    async def send_app_suite_report(suite_execution_id: int, recipients: Optional[List[str]] = None):
+        """发送 App 套件执行报告邮件"""
+        from app.routers.app.records import _build_report_context
+        from app.models.app import AppSuiteExecution
+
+        record_data, suite_records, case_records, filename, img_options = await _build_report_context(
+            suite_execution_id, "suite", False, "none", False, None
+        )
+        suite_record = await AppSuiteExecution.get_or_none(id=suite_execution_id, is_del=False).prefetch_related("suite")
+        project_id = None
+        if suite_record:
+            suite = await suite_record.suite
+            project_id = suite.project_id if suite else None
+
+        html_content = generate_html_report(record_data, "suite", suite_records, case_records, img_options)
+        subject = f"[App测试报告] {record_data.get('suite_name', '套件')} - {record_data.get('status', '')}"
+        body_html = f"""
+        <h3>App 套件执行报告</h3>
+        <p><b>套件名称：</b>{record_data.get('suite_name', '')}</p>
+        <p><b>执行状态：</b>{record_data.get('status', '')}</p>
+        <p><b>总用例数：</b>{record_data.get('case_count', 0)}</p>
+        <p><b>成功：</b>{record_data.get('success', 0)} / <b>失败：</b>{int(record_data.get('fail', 0) or 0) + int(record_data.get('error', 0) or 0)}</p>
+        <p><b>执行人：</b>{record_data.get('username', '')}</p>
+        <p>详细报告请查看附件。</p>
+        """
+        to_list = recipients
+        if not to_list:
+            email_cfg = await NotificationConfig.filter(
+                project_id=project_id, channel_type="email", enabled=True
+            ).first()
+            if email_cfg:
+                to_list = email_cfg.config.get("recipients", [])
+        if not to_list:
+            raise ValueError("未配置邮件收件人")
+
+        status_flag = "failed"
+        error_text = ""
+        try:
+            await NotificationService._send_email(
+                to=to_list,
+                subject=subject,
+                body_html=body_html,
+                attachments=[(filename, html_content, "text/html")],
+            )
+            status_flag = "success"
+        except Exception as e:
+            error_text = str(e)
+            raise
+        finally:
+            await NotificationService._log(
+                project_id=project_id,
+                channel_type="email",
+                notify_type="report",
+                title=subject,
+                content_summary={"suite_name": record_data.get("suite_name"), "status": record_data.get("status")},
+                recipients=to_list,
+                status=status_flag,
+                error_msg=error_text,
+                related_id=suite_execution_id,
+                related_type="app_suite_execution",
+            )
+
+    @staticmethod
     async def _send_email(to: List[str], subject: str, body_html: str, attachments: Optional[List[tuple]] = None):
         """底层邮件发送"""
         smtp = await SystemSmtpConfig.first()

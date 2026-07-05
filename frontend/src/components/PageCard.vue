@@ -1,6 +1,6 @@
 <template>
-  <el-main>
-    <el-card style="border-radius: 10px;	border: solid 1px #107dec;" body-style="padding: 0 10px;">
+  <el-main class="page-card-host">
+    <el-card class="page-card-panel" body-style="padding: 0 10px;">
       <!--标题-->
       <div class="title">
         <slot name="title"></slot>

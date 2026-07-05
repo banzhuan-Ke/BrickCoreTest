@@ -5,6 +5,7 @@ import logging
 
 from app.core.runner_middleware import revoke_device_middleware
 from app.core.ui_execution_stop import stop_executions_for_device
+from app.core.app_execution_stop import stop_executions_for_device as stop_app_executions_for_device
 from app.models.sys import Device
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,11 @@ async def force_stop_runner_device(device: Device) -> None:
         await stop_executions_for_device(device.id)
     except Exception as exc:
         logger.warning("停止设备 %s 时联动停止 UI 执行失败: %s", device.id, exc)
+
+    try:
+        await stop_app_executions_for_device(device.id)
+    except Exception as exc:
+        logger.warning("停止设备 %s 时联动停止 App 执行失败: %s", device.id, exc)
 
     try:
         await revoke_device_middleware(

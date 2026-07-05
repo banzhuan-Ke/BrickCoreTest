@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import get_current_username
 from app.models.http import ApiDefinition, ApiTestCase, ApiTestPlan, ApiTestSuite
+from app.models.app import AppCase, AppElement, AppPlan, AppSuite
 from app.models.sys import Project
 from app.models.ui import Case, Suite, Task
 from app.schemas.ai import StandardResponse
@@ -110,5 +111,41 @@ async def project_search(
         if len(api_plans) >= limit:
             break
     await add_group("api_plan", "接口计划", "/api-plan", api_plans)
+
+    app_cases = []
+    async for row in AppCase.filter(project_id=project_id, is_del=False).order_by("-id").limit(200):
+        if _match_fields(keyword, row, "name", "description"):
+            app_cases.append({"id": row.id, "name": row.name, "subtitle": row.driver_mode or ""})
+        if len(app_cases) >= limit:
+            break
+    await add_group("app_case", "App 用例", "/app-case", app_cases)
+
+    app_suites = []
+    async for row in AppSuite.filter(project_id=project_id, is_del=False).order_by("-id").limit(200):
+        if _match_fields(keyword, row, "name"):
+            app_suites.append({"id": row.id, "name": row.name, "subtitle": ""})
+        if len(app_suites) >= limit:
+            break
+    await add_group("app_suite", "App 套件", "/app-suite", app_suites)
+
+    app_plans = []
+    async for row in AppPlan.filter(project_id=project_id, is_del=False).order_by("-id").limit(200):
+        if _match_fields(keyword, row, "name"):
+            app_plans.append({"id": row.id, "name": row.name, "subtitle": ""})
+        if len(app_plans) >= limit:
+            break
+    await add_group("app_plan", "App 计划", "/app-plan", app_plans)
+
+    app_elements = []
+    async for row in AppElement.filter(project_id=project_id, is_del=False).order_by("-id").limit(200):
+        if _match_fields(keyword, row, "name", "remark", "element_type"):
+            app_elements.append({
+                "id": row.id,
+                "name": row.name,
+                "subtitle": row.element_type or "",
+            })
+        if len(app_elements) >= limit:
+            break
+    await add_group("app_element", "App 元素", "/app-elements", app_elements)
 
     return StandardResponse(data={"groups": groups, "total": total, "keyword": keyword})

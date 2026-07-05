@@ -15,6 +15,7 @@ from app.core.recorder_quality import (
     assess_step_quality,
     collect_step_locator_candidates,
     pick_best_locator,
+    should_repick_locator,
 )
 from app.core.ui_keywords import METHOD_TO_KEYWORD
 
@@ -337,8 +338,7 @@ def _action_to_step(action: dict) -> dict:
         "meta": meta,
     }
     if method in ("click_ele", "double_click_ele", "hover", "fill_value", "wait_for_element") and params.get("locator"):
-        # 录制器已给出弹窗 scope 链式定位时不再用候选池覆盖
-        if " >> " not in str(params.get("locator") or ""):
+        if should_repick_locator(step):
             best, _source, updates = pick_best_locator(step, original_locator=params.get("locator"))
             if best:
                 step["params"]["locator"] = best

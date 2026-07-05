@@ -1,6 +1,6 @@
 {
   "title": "BrickCore 使用说明",
-  "updated": "2026-06-23",
+  "updated": "2026-07-01",
   "platformUrl": "http://43.142.83.156/",
   "showcaseUrl": "http://43.142.83.156/showcase/",
   "groups": [
@@ -46,8 +46,13 @@
       "children": [
         {
           "id": "ui-automation",
-          "title": "UI 自动化",
+          "title": "Web 自动化",
           "file": "content/ui-automation.md"
+        },
+        {
+          "id": "app-automation",
+          "title": "App 自动化",
+          "file": "content/app-automation.md"
         },
         {
           "id": "runner-client",
@@ -83,6 +88,11 @@
           "id": "ai-testing",
           "title": "AI 测试",
           "file": "content/ai-testing.md"
+        },
+        {
+          "id": "browser-lab",
+          "title": "智能浏览器",
+          "file": "content/browser-lab.md"
         },
         {
           "id": "platform-assistant",

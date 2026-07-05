@@ -8,6 +8,7 @@ from app.models.sys import TestCatalog, Project
 from app.models.ui import Case, Suite, Task
 from app.models.http import ApiDefinition, ApiTestCase, ApiTestSuite, ApiTestPlan
 from app.models.perf import PerfScene
+from app.models.app import AppCase, AppSuite, AppPlan
 from app.core.auth import is_authenticated, require_permissions, get_current_username
 from app.core.permissions import MODULE_VIEW, MODULE_EDIT
 from app.core.catalog_utils import build_catalog_tree, resolve_catalog, apply_catalog_filter
@@ -46,30 +47,46 @@ def _counts_to_row_fields(
     api_counts: Dict[int, int],
     case_counts: Dict[int, int],
     ui_case_counts: Dict[int, int],
+    app_case_counts: Dict[int, int],
     ui_suite_counts: Dict[int, int],
+    app_suite_counts: Dict[int, int],
     api_suite_counts: Dict[int, int],
     ui_task_counts: Dict[int, int],
+    app_plan_counts: Dict[int, int],
     api_plan_counts: Dict[int, int],
     perf_scene_counts: Dict[int, int],
 ) -> dict:
     api_n = api_counts.get(catalog_id, 0)
     case_n = case_counts.get(catalog_id, 0)
-    ui_case_n = ui_case_counts.get(catalog_id, 0)
-    suite_n = ui_suite_counts.get(catalog_id, 0) + api_suite_counts.get(catalog_id, 0)
+    web_case_n = ui_case_counts.get(catalog_id, 0)
+    app_case_n = app_case_counts.get(catalog_id, 0)
+    web_suite_n = ui_suite_counts.get(catalog_id, 0)
+    app_suite_n = app_suite_counts.get(catalog_id, 0)
+    api_suite_n = api_suite_counts.get(catalog_id, 0)
+    suite_n = web_suite_n + app_suite_n + api_suite_n
     return {
         "api_count": api_n,
         "case_count": case_n,
-        "ui_case_count": ui_case_n,
+        "ui_case_count": web_case_n,
+        "web_case_count": web_case_n,
+        "app_case_count": app_case_n,
         "suite_count": suite_n,
+        "web_suite_count": web_suite_n,
+        "app_suite_count": app_suite_n,
         "ui_task_count": ui_task_counts.get(catalog_id, 0),
+        "web_task_count": ui_task_counts.get(catalog_id, 0),
+        "app_plan_count": app_plan_counts.get(catalog_id, 0),
         "api_plan_count": api_plan_counts.get(catalog_id, 0),
         "perf_scene_count": perf_scene_counts.get(catalog_id, 0),
         "api_defs": api_n,
         "api_cases": case_n,
-        "ui_cases": ui_case_n,
-        "ui_suites": ui_suite_counts.get(catalog_id, 0),
-        "api_suites": api_suite_counts.get(catalog_id, 0),
+        "ui_cases": web_case_n,
+        "app_cases": app_case_n,
+        "ui_suites": web_suite_n,
+        "app_suites": app_suite_n,
+        "api_suites": api_suite_n,
         "ui_tasks": ui_task_counts.get(catalog_id, 0),
+        "app_plans": app_plan_counts.get(catalog_id, 0),
         "api_plans": api_plan_counts.get(catalog_id, 0),
         "perf_scenes": perf_scene_counts.get(catalog_id, 0),
     }
@@ -89,15 +106,19 @@ async def _attach_counts_to_catalog_rows(flat: List[dict], project_id: Optional[
     api_counts = await _count_by_catalog(ApiDefinition, catalog_ids, project_id)
     case_counts = await _count_by_catalog(ApiTestCase, catalog_ids, project_id)
     ui_case_counts = await _count_by_catalog(Case, catalog_ids, project_id)
+    app_case_counts = await _count_by_catalog(AppCase, catalog_ids, project_id)
     ui_suite_counts = await _count_by_catalog(Suite, catalog_ids, project_id)
+    app_suite_counts = await _count_by_catalog(AppSuite, catalog_ids, project_id)
     api_suite_counts = await _count_by_catalog(ApiTestSuite, catalog_ids, project_id)
     ui_task_counts = await _count_by_catalog(Task, catalog_ids, project_id)
+    app_plan_counts = await _count_by_catalog(AppPlan, catalog_ids, project_id)
     api_plan_counts = await _count_by_catalog(ApiTestPlan, catalog_ids, project_id)
     perf_scene_counts = await _count_by_catalog(PerfScene, catalog_ids, project_id)
     for item in flat:
         item.update(_counts_to_row_fields(
-            item["id"], api_counts, case_counts, ui_case_counts, ui_suite_counts, api_suite_counts,
-            ui_task_counts, api_plan_counts, perf_scene_counts,
+            item["id"], api_counts, case_counts, ui_case_counts, app_case_counts,
+            ui_suite_counts, app_suite_counts, api_suite_counts,
+            ui_task_counts, app_plan_counts, api_plan_counts, perf_scene_counts,
         ))
 
 
@@ -105,25 +126,37 @@ async def _get_asset_counts(catalog_id: int) -> dict:
     api_n = await ApiDefinition.filter(catalog_id=catalog_id, is_del=False).count()
     case_n = await ApiTestCase.filter(catalog_id=catalog_id, is_del=False).count()
     ui_case_n = await Case.filter(catalog_id=catalog_id, is_del=False).count()
+    app_case_n = await AppCase.filter(catalog_id=catalog_id, is_del=False).count()
     ui_suite_n = await Suite.filter(catalog_id=catalog_id, is_del=False).count()
+    app_suite_n = await AppSuite.filter(catalog_id=catalog_id, is_del=False).count()
     api_suite_n = await ApiTestSuite.filter(catalog_id=catalog_id, is_del=False).count()
     ui_task_n = await Task.filter(catalog_id=catalog_id, is_del=False).count()
+    app_plan_n = await AppPlan.filter(catalog_id=catalog_id, is_del=False).count()
     api_plan_n = await ApiTestPlan.filter(catalog_id=catalog_id, is_del=False).count()
     perf_scene_n = await PerfScene.filter(catalog_id=catalog_id, is_del=False).count()
     return {
         "api_count": api_n,
         "case_count": case_n,
         "ui_case_count": ui_case_n,
-        "suite_count": ui_suite_n + api_suite_n,
+        "web_case_count": ui_case_n,
+        "app_case_count": app_case_n,
+        "suite_count": ui_suite_n + app_suite_n + api_suite_n,
+        "web_suite_count": ui_suite_n,
+        "app_suite_count": app_suite_n,
         "ui_task_count": ui_task_n,
+        "web_task_count": ui_task_n,
+        "app_plan_count": app_plan_n,
         "api_plan_count": api_plan_n,
         "perf_scene_count": perf_scene_n,
         "ui_cases": ui_case_n,
+        "app_cases": app_case_n,
         "ui_suites": ui_suite_n,
+        "app_suites": app_suite_n,
         "api_defs": api_n,
         "api_cases": case_n,
         "api_suites": api_suite_n,
         "ui_tasks": ui_task_n,
+        "app_plans": app_plan_n,
         "api_plans": api_plan_n,
         "perf_scenes": perf_scene_n,
     }
@@ -156,6 +189,12 @@ async def _list_catalog_assets(catalog_id: int, project_id: int, include_childre
         items.append(_asset_row("ui_suite", suite.id, suite.name, suite.username, suite.create_time))
     for task in await fetch(Task):
         items.append(_asset_row("ui_task", task.id, task.name, task.username, task.create_time))
+    for case in await fetch(AppCase):
+        items.append(_asset_row("app_case", case.id, case.name, case.username, case.create_time))
+    for suite in await fetch(AppSuite):
+        items.append(_asset_row("app_suite", suite.id, suite.name, suite.username, suite.create_time))
+    for plan in await fetch(AppPlan):
+        items.append(_asset_row("app_plan", plan.id, plan.name, plan.username, plan.create_time))
     for api in await fetch(ApiDefinition):
         items.append(_asset_row("api_def", api.id, api.name, api.create_by, api.create_time))
     for case in await fetch(ApiTestCase):
@@ -168,6 +207,36 @@ async def _list_catalog_assets(catalog_id: int, project_id: int, include_childre
         items.append(_asset_row("perf_scene", scene.id, scene.name, scene.create_by, scene.create_time))
 
     return items
+
+
+async def _get_project_asset_totals(project_id: int) -> dict:
+    """项目级资产总数（含未归属目录的资产）。"""
+    web_case_n = await Case.filter(project_id=project_id, is_del=False).count()
+    app_case_n = await AppCase.filter(project_id=project_id, is_del=False).count()
+    web_suite_n = await Suite.filter(project_id=project_id, is_del=False).count()
+    app_suite_n = await AppSuite.filter(project_id=project_id, is_del=False).count()
+    api_suite_n = await ApiTestSuite.filter(project_id=project_id, is_del=False).count()
+    web_task_n = await Task.filter(project_id=project_id, is_del=False).count()
+    app_plan_n = await AppPlan.filter(project_id=project_id, is_del=False).count()
+    api_n = await ApiDefinition.filter(project_id=project_id, is_del=False).count()
+    api_case_n = await ApiTestCase.filter(project_id=project_id, is_del=False).count()
+    api_plan_n = await ApiTestPlan.filter(project_id=project_id, is_del=False).count()
+    perf_scene_n = await PerfScene.filter(project_id=project_id, is_del=False).count()
+    catalog_n = await TestCatalog.filter(project_id=project_id, is_del=False).count()
+    return {
+        "catalog_count": catalog_n,
+        "api_count": api_n,
+        "case_count": api_case_n,
+        "web_case_count": web_case_n,
+        "app_case_count": app_case_n,
+        "web_suite_count": web_suite_n,
+        "app_suite_count": app_suite_n,
+        "suite_count": web_suite_n + app_suite_n + api_suite_n,
+        "web_task_count": web_task_n,
+        "app_plan_count": app_plan_n,
+        "api_plan_count": api_plan_n,
+        "perf_scene_count": perf_scene_n,
+    }
 
 
 @router.post("", summary="创建目录", status_code=status.HTTP_201_CREATED, response_model=TestCatalogOut,
@@ -198,6 +267,7 @@ async def list_catalogs(
     project_id: int | None = None,
     tree: bool = Query(False, description="是否返回树形结构"),
     include_counts: bool = Query(False, description="是否附带各目录资产计数"),
+    include_project_totals: bool = Query(False, description="是否附带项目级资产总数"),
 ):
     query = TestCatalog.filter(is_del=False).order_by("sort", "-id")
     if project_id:
@@ -212,6 +282,12 @@ async def list_catalogs(
 
     if include_counts:
         await _attach_counts_to_catalog_rows(flat, project_id)
+
+    if include_project_totals and project_id and include_counts and not tree:
+        return {
+            "items": flat,
+            "project_totals": await _get_project_asset_totals(project_id),
+        }
 
     if not tree:
         return flat
@@ -275,6 +351,9 @@ async def delete_catalog(catalog_id: int):
     await Case.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
     await Suite.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
     await Task.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
+    await AppCase.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
+    await AppSuite.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
+    await AppPlan.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
     await ApiDefinition.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
     await ApiTestCase.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
     await ApiTestSuite.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)

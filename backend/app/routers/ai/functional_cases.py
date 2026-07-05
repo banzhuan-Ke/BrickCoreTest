@@ -22,7 +22,13 @@ from app.core.functional_case_to_ui import (
     import_functional_cases_to_ui,
     preview_functional_cases_to_ui,
 )
-from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, UI_CASE_EDIT
+from app.core.functional_case_to_app import (
+    MAX_APP_PREVIEW_BATCH,
+    AppGenerationContext,
+    import_functional_cases_to_app,
+    preview_functional_cases_to_app,
+)
+from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, APP_CASE_EDIT, UI_CASE_EDIT
 from app.core.zentao_bindings import bindings_for_export, load_project_bindings
 from app.core.zentao_case_export import ZENTAO_EXPORT_COLUMNS, build_xlsx_bytes, case_to_export_row
 from app.core.zentao_case_import import parse_zentao_xlsx_to_cases
@@ -251,6 +257,41 @@ class ImportUiCaseItem(BaseModel):
 
 class ImportUiBody(UiContextBody):
     items: list[ImportUiCaseItem] = Field(..., min_length=1)
+
+
+class AppContextBody(BaseModel):
+    app_id: Optional[str] = Field(default=None, max_length=200, description="Android 包名或 launch_app 的 app_id")
+    driver_mode: str = Field(
+        default="hybrid",
+        description="native|vision|hybrid|hybrid_web|mobile_chrome",
+    )
+    ai_config_id: Optional[int] = None
+    test_username: Optional[str] = Field(default=None, max_length=128)
+    test_password: Optional[str] = Field(default=None, max_length=128)
+    login_app_case_id: Optional[int] = None
+    login_strategy: str = Field(
+        default="none",
+        description="none/credentials/prepend_login/both",
+    )
+    extra_context: Optional[str] = Field(default=None, max_length=800)
+
+
+class ToAppPreviewBody(AppContextBody):
+    case_ids: list[int] = Field(..., min_length=1, max_length=MAX_APP_PREVIEW_BATCH)
+
+
+class ImportAppCaseItem(BaseModel):
+    functional_case_id: int
+    steps: list = Field(default_factory=list)
+    case_name: Optional[str] = Field(default=None, max_length=100)
+    level: Optional[str] = Field(default=None, max_length=10)
+    driver_mode: Optional[str] = Field(default=None, max_length=20)
+    case_description: Optional[str] = Field(default=None, max_length=4000)
+    record_id: Optional[int] = None
+
+
+class ImportAppBody(AppContextBody):
+    items: list[ImportAppCaseItem] = Field(..., min_length=1)
 
 
 def _case_to_xlsx_row(case_dict: dict, defaults: dict) -> dict:
@@ -524,6 +565,57 @@ async def import_to_ui(
         items=items,
     )
     msg = f"已导入 {data['imported_count']} 条 UI 用例"
+    if data["failed_count"]:
+        msg += f"，失败 {data['failed_count']} 条"
+    return StandardResponse(data=data, message=msg)
+
+
+@router.post(
+    "/to-app/preview",
+    summary="功能用例 → App 步骤预览",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def preview_to_app(
+    body: ToAppPreviewBody,
+    project_id: Optional[int] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    pid = _resolve_project_id(user_info, project_id)
+    user_info = {**user_info, "project_id": pid, "current_project_id": pid}
+    ctx = AppGenerationContext.from_dict(body.model_dump())
+    data = await preview_functional_cases_to_app(
+        project_id=pid,
+        case_ids=body.case_ids,
+        ctx=ctx,
+        user_info=user_info,
+    )
+    msg = f"预览完成：成功 {data['success_count']} 条"
+    if data["failed_count"]:
+        msg += f"，失败 {data['failed_count']} 条"
+    return StandardResponse(data=data, message=msg)
+
+
+@router.post(
+    "/import-app",
+    summary="导入 App 自动化用例",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE, APP_CASE_EDIT))],
+)
+async def import_to_app(
+    body: ImportAppBody,
+    project_id: Optional[int] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    pid = _resolve_project_id(user_info, project_id)
+    username = user_info.get("username") or user_info.get("sub") or "system"
+    ctx = AppGenerationContext.from_dict(body.model_dump())
+    items = [it.model_dump() for it in body.items]
+    data = await import_functional_cases_to_app(
+        project_id=pid,
+        username=username,
+        ctx=ctx,
+        items=items,
+    )
+    msg = f"已导入 {data['imported_count']} 条 App 用例"
     if data["failed_count"]:
         msg += f"，失败 {data['failed_count']} 条"
     return StandardResponse(data=data, message=msg)

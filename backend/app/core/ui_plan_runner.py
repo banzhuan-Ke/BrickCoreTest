@@ -32,6 +32,12 @@ async def _validate_online_devices(device_assignments: list[tuple[str, int, int]
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"执行器 {dev_id} 不存在或不在线",
             )
+        types = device.runner_engine_types or ["web"]
+        if "web" not in types:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"执行器 {dev_id} 未启用 Web 自动化，请选择勾选了 Web 的 Runner",
+            )
 
 
 async def _prepare_suite_execution(

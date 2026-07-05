@@ -414,6 +414,31 @@ export const mcpApi = {
     }
 }
 
+// ========== SSE 解析配置 ==========
+export const streamParserConfigApi = {
+    async getBuiltinParsers() {
+        return await http.get('/sys/stream-parser-configs/builtin-parsers')
+    },
+    async getList(params) {
+        return await http.get('/sys/stream-parser-configs', { params })
+    },
+    async getDetail(configId) {
+        return await http.get(`/sys/stream-parser-configs/${configId}`)
+    },
+    async create(data) {
+        return await http.post('/sys/stream-parser-configs', data)
+    },
+    async update(configId, data) {
+        return await http.put(`/sys/stream-parser-configs/${configId}`, data)
+    },
+    async delete(configId) {
+        return await http.delete(`/sys/stream-parser-configs/${configId}`)
+    },
+    async test(data) {
+        return await http.post('/sys/stream-parser-configs/test', data)
+    }
+}
+
 // ========== 登录页配置 ==========
 const LOGIN_PAGE_API_TIMEOUT = 30000
 

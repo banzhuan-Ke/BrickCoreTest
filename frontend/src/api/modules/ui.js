@@ -19,6 +19,9 @@ export const uiCaseApi = {
     async getDetail(case_id) {
         return await http.get(`/ui/cases/${case_id}`)
     },
+    async getExecutionHints(case_id, params = {}) {
+        return await http.get(`/ui/cases/${case_id}/execution-hints`, { params })
+    },
     // 更新用例
     async update(case_id, data) {
         return await http.put(`/ui/cases/${case_id}`, data)
@@ -62,6 +65,9 @@ export const uiCaseApi = {
 export const uiFragmentApi = {
     async getList(params) {
         return await http.get('/ui/fragments', { params })
+    },
+    list(params) {
+        return this.getList(params)
     },
     async getDetail(fragment_id, project_id) {
         return await http.get(`/ui/fragments/${fragment_id}`, { params: { project_id } })

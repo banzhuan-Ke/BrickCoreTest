@@ -13,6 +13,7 @@ import io
 import requests
 from PIL import Image
 from app.core.config import MINIO_CONFIG
+from app.core.app_execution_env import driver_mode_display, trigger_source_label
 
 
 @dataclass
@@ -30,6 +31,50 @@ def _should_include_image(img_options: ImageExportOptions, case_status: str) -> 
     if img_options.image_mode == "failed":
         return case_status in ["fail", "error", "failed"]
     return True
+
+
+def _storage_bucket_marker() -> str:
+    bucket = MINIO_CONFIG.get("bucket_name") or ""
+    return f"/{bucket}/" if bucket else ""
+
+
+def _is_storage_media_url(url: str) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    marker = _storage_bucket_marker()
+    if marker and marker in url:
+        return True
+    lowered = url.lower()
+    return ":9200/" in url or "minio" in lowered or "192.168." in url or "aliyuncs.com" in lowered
+
+
+def _storage_object_key(url: str) -> str | None:
+    if not url or not isinstance(url, str):
+        return None
+    import urllib.parse
+
+    marker = _storage_bucket_marker()
+    if marker and marker in url:
+        return urllib.parse.unquote(url.split(marker, 1)[-1].split("?")[0])
+    return urllib.parse.unquote(url.split("/")[-1].split("?")[0])
+
+
+def _sanitize_env_for_export(env: Any) -> Any:
+    if not isinstance(env, dict):
+        return env
+    sensitive = {"password", "secret", "token", "apk_base64", "base64", "general_password"}
+    out: Dict[str, Any] = {}
+    for key, value in env.items():
+        key_lower = str(key).lower()
+        if key_lower in sensitive or "password" in key_lower or key_lower.endswith("_token"):
+            out[key] = "******" if value else value
+        elif isinstance(value, str) and len(value) > 200:
+            out[key] = f"{value[:120]}…（已省略，共 {len(value)} 字符）"
+        elif isinstance(value, dict):
+            out[key] = _sanitize_env_for_export(value)
+        else:
+            out[key] = value
+    return out
 
 
 
@@ -85,6 +130,7 @@ def generate_html_report(
         except:
             env = {}
     
+    is_app_engine = isinstance(env, dict) and env.get("engine_type") == "app"
     browser_type = env.get('browser_type', 'chromium') if isinstance(env, dict) else 'chromium'
     browser_map = {'chromium': '谷歌浏览器', 'firefox': '火狐浏览器', 'webkit': 'Safari'}
     
@@ -105,8 +151,16 @@ def generate_html_report(
     start_time = format_time(record_data.get('start_time'))
     duration = round(record_data.get('duration', 0), 2)
     username = record_data.get('username', '未知')
-    browser = browser_map.get(browser_type, browser_type)
-    host = env.get('host', '未知') if isinstance(env, dict) else '未知'
+    if is_app_engine:
+        runtime_label = "设备 UDID"
+        runtime_value = (env.get("device_udid") or record_data.get("device_id") or "未知") if isinstance(env, dict) else "未知"
+        env_label = "执行引擎"
+        env_value = "App 自动化"
+    else:
+        runtime_label = "浏览器"
+        runtime_value = browser_map.get(browser_type, browser_type)
+        env_label = "环境地址"
+        env_value = env.get('host', '未知') if isinstance(env, dict) else '未知'
     pass_rate = record_data.get('pass_rate', 0)
     success = record_data.get('success', 0)
     fail = record_data.get('fail', 0)
@@ -230,12 +284,12 @@ def generate_html_report(
                     <span class="value">{username}</span>
                 </div>
                 <div class="info-item">
-                    <span class="label">浏览器：</span>
-                    <span class="value">{browser}</span>
+                    <span class="label">{runtime_label}：</span>
+                    <span class="value">{runtime_value}</span>
                 </div>
                 <div class="info-item">
-                    <span class="label">环境地址</span>
-                    <span class="value">{host}</span>
+                    <span class="label">{env_label}：</span>
+                    <span class="value">{env_value}</span>
                 </div>
                 <div class="info-item">
                     <span class="label">通过率：</span>
@@ -332,13 +386,43 @@ def generate_env_section(env: Dict[str, Any]) -> str:
     """生成环境数据部分"""
     if not env:
         return ''
-    
-    env_str = json.dumps(env, ensure_ascii=False, indent=2)
-    
+    if isinstance(env, str):
+        try:
+            env = json.loads(env)
+        except Exception:
+            return ''
+
+    env = _sanitize_env_for_export(env)
+    if isinstance(env, dict) and env.get("engine_type") == "app":
+        rows = [
+            ("执行引擎", "App 自动化"),
+            ("驱动模式", driver_mode_display(env.get("driver_mode"))),
+            ("设备 UDID", env.get("device_udid") or "—"),
+            ("应用包名", env.get("app_id") or "—"),
+            ("项目 ID", env.get("project_id", "—")),
+            ("环境 ID", env.get("environment_id", "—")),
+            ("隐式等待(秒)", env.get("implicit_wait", "—")),
+            ("自动授权", "是" if env.get("auto_grant_permissions") else "否"),
+            ("录制视频", "是" if env.get("record_video", False) else "否"),
+            ("触发来源", trigger_source_label(env.get("trigger_source"))),
+        ]
+        row_html = "".join(
+            f'<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;color:#666;width:140px;">{k}</td>'
+            f'<td style="padding:8px 12px;border-bottom:1px solid #eee;">{escape_html(str(v))}</td></tr>'
+            for k, v in rows
+        )
+        return f'''
+        <div class="section">
+            <h2>⚙️ 执行环境</h2>
+            <table style="width:100%;border-collapse:collapse;background:#fafafa;border-radius:6px;overflow:hidden;font-size:13px;">{row_html}</table>
+        </div>
+        '''
+
+    env_str = escape_html(json.dumps(env, ensure_ascii=False, indent=2))
     return f'''
         <div class="section">
             <h2>⚙️ 执行环境数据</h2>
-            <div class="env-data">{env_str}</div>
+            <div class="env-data"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;">{env_str}</pre></div>
         </div>
     '''
 
@@ -403,9 +487,17 @@ def generate_logs_section(record_data: Dict, suite_records: List[Dict], case_rec
                     html_parts.append('</div>')
             
             html_parts.append('</div></div>')
+
+    has_case_blocks = bool(suite_records)
+    if case_records and not suite_records:
+        html_parts.append('<div style="margin-top: 15px;"><div style="font-weight: bold; color: #666; margin-bottom: 8px; font-size: 13px;">用例执行详情</div>')
+        for case in case_records:
+            html_parts.append(generate_case_log_html(case, img_options))
+        html_parts.append('</div>')
+        has_case_blocks = True
     
     # 如果没有日志
-    if not task_logs and not suite_records:
+    if not task_logs and not has_case_blocks:
         html_parts.append('<div class="no-logs">暂无日志记录</div>')
     
     html_parts.append('</div>')
@@ -452,14 +544,21 @@ def generate_case_log_html(case: Dict, img_options: Optional[ImageExportOptions]
         video_url = run_info.get('video_url', '')
         if video_url:
             if video_url.startswith('data:'):
-                # Base64 嵌入的视频
-                html_parts.append(f'<div class="log-item info"><div class="message">🎬 执行录屏</div><video controls style="max-width:100%;max-height:400px;border-radius:4px;margin-top:8px;"><source src="{video_url}" type="video/webm"></video></div>')
+                video_type = 'video/mp4' if 'mp4' in video_url[:40] else 'video/webm'
+                html_parts.append(f'<div class="log-item info"><div class="message">🎬 执行录屏</div><video controls style="max-width:100%;max-height:400px;border-radius:4px;margin-top:8px;"><source src="{video_url}" type="{video_type}"></video></div>')
             elif video_url.startswith('http'):
                 # 外部链接视频
                 html_parts.append(f'<div class="log-item info"><div class="message">🎬 执行录屏: <a href="{video_url}" target="_blank">点击观看</a></div></div>')
     elif not img_options.include_video and isinstance(run_info, dict) and run_info.get('video_url'):
         # 未勾选视频，但有视频可用时显示提示
         html_parts.append(f'<div class="log-item info" style="background:#e6f7ff;border-left-color:#1890ff;"><div class="message">💡 提示：本次导出未包含执行录屏。如需查看录屏，请在导出时勾选"包含视频"选项。</div></div>')
+    
+    # 用例级别截图
+    if isinstance(run_info, dict) and img_options.include_images and _should_include_image(img_options, case_status):
+        case_img = run_info.get('img') or run_info.get('img_url')
+        if case_img and isinstance(case_img, str) and case_img.strip():
+            if case_img.startswith('data:') or case_img.startswith('http'):
+                html_parts.append(f'<div class="log-item info"><div class="message">📸 用例结束截图</div><div class="screenshot"><img src="{case_img}" alt="用例截图"></div></div>')
     
     # 变量快照
     if isinstance(run_info, dict) and run_info.get('variables_snapshot'):
@@ -471,9 +570,18 @@ def generate_case_log_html(case: Dict, img_options: Optional[ImageExportOptions]
         if steps:
             for step in steps:
                 html_parts.append(parse_step_to_log_html(step))
+        elif run_info.get('log_data'):
+            html_parts.append(parse_and_format_logs(run_info.get('log_data')))
+        elif run_info.get('error_msg') or run_info.get('error'):
+            err = run_info.get('error_msg') or run_info.get('error')
+            html_parts.append(f'<div class="log-item fail"><div class="message">{escape_html(str(err))}</div></div>')
         else:
-            info_str = json.dumps(run_info, ensure_ascii=False, indent=2)
-            html_parts.append(f'<div class="log-item info"><pre style="margin:0;font-size:12px;">{info_str}</pre></div>')
+            summary = {k: run_info.get(k) for k in ('id', 'name', 'status', 'duration') if run_info.get(k) is not None}
+            if summary:
+                info_str = escape_html(json.dumps(summary, ensure_ascii=False, indent=2))
+                html_parts.append(f'<div class="log-item info"><pre style="margin:0;font-size:12px;">{info_str}</pre></div>')
+            else:
+                html_parts.append('<div style="color: #999; padding: 10px;">无执行详情</div>')
     elif isinstance(run_info, list):
         for item in run_info:
             html_parts.append(parse_step_to_log_html(item))
@@ -494,7 +602,18 @@ def parse_step_to_log_html(step: Any) -> str:
         
         time_str = step.get('time') or step.get('timestamp') or datetime.now().strftime('%H:%M:%S')
         
-        message = step.get('message') or step.get('msg') or step.get('content') or step.get('keyword', '')
+        message = step.get('message') or step.get('msg') or step.get('content') or ''
+        keyword = step.get('keyword', '')
+        desc = step.get('desc', '')
+        if keyword and desc:
+            message = message or f'{keyword} · {desc}'
+        elif keyword:
+            message = message or keyword
+        elif desc:
+            message = message or desc
+        step_no = step.get('step_index')
+        if step_no is not None:
+            message = f'步骤 {int(step_no) + 1} · {message}' if message else f'步骤 {int(step_no) + 1}'
         frag = step.get('_from_fragment')
         if isinstance(frag, dict) and frag.get('name'):
             message = f'[片段·{frag["name"]}] {message}'
@@ -502,6 +621,21 @@ def parse_step_to_log_html(step: Any) -> str:
             message = step['name']
         if not message:
             message = json.dumps(step, ensure_ascii=False)
+
+        meta_bits = []
+        if step.get('locator_type'):
+            meta_bits.append(f"定位:{step.get('locator_type')}")
+        if step.get('execution_context'):
+            meta_bits.append(f"上下文:{step.get('execution_context')}")
+        if step.get('webview_page_url'):
+            meta_bits.append(f"H5:{step.get('webview_page_url')}")
+        if step.get('match_score') is not None:
+            try:
+                meta_bits.append(f"相似度:{float(step.get('match_score')) * 100:.1f}%")
+            except (TypeError, ValueError):
+                meta_bits.append(f"相似度:{step.get('match_score')}")
+        if meta_bits:
+            message = f"{message} [{' · '.join(meta_bits)}]"
         
         screenshot_html = ''
         screenshot = step.get('screenshot') or step.get('image')
@@ -657,13 +791,13 @@ def _collect_and_download_images(case_records: List[Dict], image_cache: Dict[str
         if isinstance(run_info, dict):
             # 用例级别截图
             img = run_info.get('img', '')
-            if img and (':9200/' in img or 'minio' in img or '192.168.' in img or 'aliyuncs.com' in img):
+            if img and _is_storage_media_url(img):
                 if _should_include_image(img_options, case_status):
                     image_urls[img] = case_status
             
             # 视频 URL
             video_url = run_info.get('video_url', '')
-            if video_url and (':9200/' in video_url or 'minio' in video_url or '192.168.' in video_url or 'aliyuncs.com' in video_url):
+            if video_url and _is_storage_media_url(video_url):
                 if img_options.include_video:
                     image_urls[video_url] = case_status
             
@@ -672,7 +806,7 @@ def _collect_and_download_images(case_records: List[Dict], image_cache: Dict[str
             for step in steps:
                 if isinstance(step, dict):
                     img = step.get('screenshot') or step.get('image')
-                    if img and (':9200/' in img or 'minio' in img or '192.168.' in img or 'aliyuncs.com' in img):
+                    if img and _is_storage_media_url(img):
                         if _should_include_image(img_options, case_status):
                             image_urls[img] = case_status
     
@@ -683,13 +817,10 @@ def _collect_and_download_images(case_records: List[Dict], image_cache: Dict[str
     download_tasks = {}
     for url in image_urls:
         try:
-            if ':9200/' in url or 'minio' in url or '192.168.' in url or 'aliyuncs.com' in url:
-                if '/' in url:
-                    filename = urllib.parse.unquote(url.split('/')[-1].split('?')[0])
-                    presigned = minio_client.get_presigned_url(filename, expires=7200)
-                    download_url = presigned.replace('https://', 'http://') if presigned else url
-                else:
-                    download_url = url
+            if _is_storage_media_url(url):
+                filename = _storage_object_key(url)
+                presigned = minio_client.get_presigned_url(filename, expires=7200) if filename else None
+                download_url = presigned.replace('https://', 'http://') if presigned else url
             else:
                 download_url = url
             download_tasks[url] = download_url
@@ -703,14 +834,9 @@ def _collect_and_download_images(case_records: List[Dict], image_cache: Dict[str
             max_raw_size = 200 * 1024 * 1024 if is_video else 20 * 1024 * 1024
             
             # 优先使用 MinIO 内部客户端下载（避免容器内通过公网 IP 回环访问自己导致超时）
-            is_minio_url = (
-                ':9200/' in original_url or 'minio' in original_url 
-                or '192.168.' in original_url
-            )
-            
-            if is_minio_url:
-                filename = urllib.parse.unquote(original_url.split('/')[-1].split('?')[0])
-                data = minio_client.download_object(filename)
+            if _is_storage_media_url(original_url):
+                filename = _storage_object_key(original_url)
+                data = minio_client.download_object(filename) if filename else None
                 if data is None:
                     return original_url, None
                 if len(data) > max_raw_size:
@@ -740,7 +866,7 @@ def _collect_and_download_images(case_records: List[Dict], image_cache: Dict[str
             
             if is_video:
                 b64 = base64.b64encode(data).decode('utf-8')
-                content_type = 'video/webm'
+                content_type = 'video/mp4' if original_url.endswith('.mp4') else 'video/webm'
                 return original_url, f"data:{content_type};base64,{b64}"
             else:
                 compressed = _compress_image(data, max_width=800, quality=60)

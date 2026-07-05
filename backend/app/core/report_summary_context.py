@@ -9,13 +9,15 @@ from typing import Any, Literal, Optional
 from fastapi import HTTPException
 
 from app.core.ui_result_extract import extract_ui_case_failure_summary
+from app.models.app import AppCaseExecution, AppPlanExecution, AppSuiteExecution
 from app.models.http import ApiPlanRunRecord, ApiRunRecord, ApiSuiteRunRecord
 from app.models.ui import UiCaseExecution, UiPlanExecution, UiSuiteExecution
 
-ReportType = Literal["api_suite", "api_plan", "ui_suite", "ui_task"]
+ReportType = Literal["api_suite", "api_plan", "ui_suite", "ui_task", "app_suite", "app_plan"]
 
 API_FAIL_STATUSES = frozenset({"failed", "error"})
 UI_FAIL_STATUSES = frozenset({"fail", "failed", "error"})
+APP_FAIL_STATUSES = UI_FAIL_STATUSES
 
 
 def _truncate_json(data: Any, max_len: int = 12000) -> str:
@@ -199,6 +201,96 @@ async def build_report_execution_data(
             "failed_suite_samples": failed_suites[:15],
         }
 
+    if report_type == "app_suite":
+        rec = await AppSuiteExecution.get_or_none(id=record_id, is_del=False).prefetch_related("suite")
+        if not rec:
+            raise HTTPException(status_code=404, detail="App 套件执行记录不存在")
+        if rec.suite and int(rec.suite.project_id) != project_id:
+            raise HTTPException(status_code=403, detail="无权访问该记录")
+        case_execs = await AppCaseExecution.filter(suite_execution_id=record_id, is_del=False).prefetch_related("case")
+        failed_cases = []
+        for ce in case_execs:
+            if ce.status not in APP_FAIL_STATUSES:
+                continue
+            summary = extract_ui_case_failure_summary(ce.result_data)
+            failed_cases.append(
+                {
+                    "case_name": summary.get("case_name") or (ce.case.name if ce.case else "未知"),
+                    "status": ce.status,
+                    "execution_id": ce.id,
+                    "error_hint": summary.get("error_hint") or "",
+                    "failed_step_index": summary.get("failed_step_index"),
+                    "failed_step_keyword": summary.get("failed_step_keyword") or "",
+                    "log_error_excerpt": summary.get("log_error_excerpt") or "",
+                    "has_screenshot": summary.get("has_screenshot"),
+                    "data_complete": summary.get("data_complete"),
+                }
+            )
+        total = rec.case_count or len(case_execs)
+        success = rec.success or 0
+        failed = (rec.fail or 0) + (rec.error or 0)
+        pass_rate = float(rec.pass_rate or (round(success / total * 100, 2) if total else 0))
+        return {
+            "report_type": "app_suite",
+            "name": rec.suite.name if rec.suite else "未知套件",
+            "status": rec.status,
+            "total_cases": total,
+            "success_cases": success,
+            "failed_cases": failed,
+            "pass_rate_percent": pass_rate,
+            "duration_sec": rec.duration,
+            "failed_case_samples": failed_cases[:15],
+        }
+
+    if report_type == "app_plan":
+        rec = await AppPlanExecution.get_or_none(id=record_id, project_id=project_id, is_del=False).prefetch_related("plan")
+        if not rec:
+            raise HTTPException(status_code=404, detail="App 计划执行记录不存在")
+        suite_execs = await AppSuiteExecution.filter(plan_execution_id=record_id, is_del=False).prefetch_related("suite")
+        failed_suites = []
+        for se in suite_execs:
+            if (se.fail or 0) + (se.error or 0) <= 0:
+                continue
+            suite_failed_cases = []
+            case_execs = await AppCaseExecution.filter(
+                suite_execution_id=se.id, is_del=False, status__in=list(APP_FAIL_STATUSES)
+            ).prefetch_related("case").order_by("id").limit(5)
+            for ce in case_execs:
+                summary = extract_ui_case_failure_summary(ce.result_data)
+                suite_failed_cases.append(
+                    {
+                        "case_name": summary.get("case_name") or (ce.case.name if ce.case else "未知"),
+                        "execution_id": ce.id,
+                        "status": ce.status,
+                        "error_hint": summary.get("error_hint") or "",
+                        "failed_step_keyword": summary.get("failed_step_keyword") or "",
+                    }
+                )
+            failed_suites.append(
+                {
+                    "suite_name": se.suite.name if se.suite else "未知",
+                    "fail": se.fail,
+                    "error": se.error,
+                    "pass_rate": se.pass_rate,
+                    "suite_execution_id": se.id,
+                    "failed_case_samples": suite_failed_cases,
+                }
+            )
+        total = rec.case_count or 0
+        success = rec.success or 0
+        failed = (rec.fail or 0) + (rec.error or 0)
+        return {
+            "report_type": "app_plan",
+            "name": rec.plan.name if rec.plan else "未知计划",
+            "status": rec.status,
+            "total_cases": total,
+            "success_cases": success,
+            "failed_cases": failed,
+            "pass_rate_percent": rec.pass_rate,
+            "duration_sec": rec.duration,
+            "failed_suite_samples": failed_suites[:15],
+        }
+
     raise HTTPException(status_code=400, detail="不支持的报告类型")
 
 
@@ -306,6 +398,56 @@ async def collect_failure_targets(
                 targets.append(
                     {
                         "target_type": "ui",
+                        "target_id": ce.id,
+                        "case_name": summary.get("case_name") or (ce.case.name if ce.case else "未知用例"),
+                        "error_msg": (summary.get("error_hint") or summary.get("log_error_excerpt") or "")[:200],
+                    }
+                )
+        return targets
+
+    if report_type == "app_suite":
+        rec = await AppSuiteExecution.get_or_none(id=record_id, is_del=False).prefetch_related("suite")
+        if not rec:
+            raise HTTPException(status_code=404, detail="App 套件执行记录不存在")
+        if rec.suite and int(rec.suite.project_id) != project_id:
+            raise HTTPException(status_code=403, detail="无权访问该记录")
+        case_execs = await AppCaseExecution.filter(
+            suite_execution_id=record_id,
+            is_del=False,
+            status__in=list(APP_FAIL_STATUSES),
+        ).order_by("id").limit(limit)
+        for ce in case_execs:
+            summary = extract_ui_case_failure_summary(ce.result_data)
+            targets.append(
+                {
+                    "target_type": "app",
+                    "target_id": ce.id,
+                    "case_name": summary.get("case_name") or (ce.case.name if ce.case else "未知用例"),
+                    "error_msg": (summary.get("error_hint") or summary.get("log_error_excerpt") or "")[:200],
+                }
+            )
+        return targets
+
+    if report_type == "app_plan":
+        rec = await AppPlanExecution.get_or_none(id=record_id, project_id=project_id, is_del=False)
+        if not rec:
+            raise HTTPException(status_code=404, detail="App 计划执行记录不存在")
+        suite_execs = await AppSuiteExecution.filter(plan_execution_id=record_id, is_del=False).order_by("id")
+        for se in suite_execs:
+            if len(targets) >= limit:
+                break
+            case_execs = await AppCaseExecution.filter(
+                suite_execution_id=se.id,
+                is_del=False,
+                status__in=list(APP_FAIL_STATUSES),
+            ).order_by("id")
+            for ce in case_execs:
+                if len(targets) >= limit:
+                    break
+                summary = extract_ui_case_failure_summary(ce.result_data)
+                targets.append(
+                    {
+                        "target_type": "app",
                         "target_id": ce.id,
                         "case_name": summary.get("case_name") or (ce.case.name if ce.case else "未知用例"),
                         "error_msg": (summary.get("error_hint") or summary.get("log_error_excerpt") or "")[:200],

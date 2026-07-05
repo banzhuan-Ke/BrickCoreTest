@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.core.auth import verify_runner_token
+from app.core.auth import verify_runner_or_internal
 from app.core.minio_client import is_minio_storage, minio_client
 from app.schemas.runner import RunnerUploadPresignRequest, RunnerUploadPresignResponse
 
@@ -20,7 +20,7 @@ PRESIGN_EXPIRES = 3600
 )
 async def runner_upload_presign(
     item: RunnerUploadPresignRequest,
-    _ctx: dict = Depends(verify_runner_token),
+    _ctx: dict = Depends(verify_runner_or_internal),
 ):
     if not is_minio_storage():
         raise HTTPException(status_code=400, detail="当前平台存储非 MinIO，请使用 RUNNER_LEGACY 模式")

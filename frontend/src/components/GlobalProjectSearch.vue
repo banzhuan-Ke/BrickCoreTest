@@ -13,7 +13,7 @@
     <el-input
       ref="inputRef"
       v-model="keyword"
-      placeholder="搜索用例、接口、套件、计划…"
+      placeholder="搜索 Web / 接口 / App 用例、套件、计划、元素…"
       clearable
       :prefix-icon="Search"
       @input="onSearch"
@@ -35,7 +35,7 @@
         </div>
       </template>
       <el-empty v-else-if="keyword && !loading" description="无匹配结果" :image-size="64" />
-      <p v-else class="search-hint">输入关键词搜索当前项目下的 Web/API 资产</p>
+      <p v-else class="search-hint">输入关键词搜索当前项目下的 Web / 接口 / App 资产</p>
     </div>
   </el-dialog>
 </template>
@@ -134,6 +134,23 @@ function buildRouteTarget(group, item) {
         return { name: 'apiPlanEdit', params: { planId: id } }
       }
       return { name: 'apiPlan', query: { keyword: name } }
+    case 'app_case':
+      if (uStore.hasPermission('app_case:edit')) {
+        return { name: 'appCaseEdit', params: { id } }
+      }
+      return { name: 'appCaseList', query: { name } }
+    case 'app_suite':
+      if (uStore.hasPermission('app_suite:edit')) {
+        return { name: 'appSuiteEdit', params: { id } }
+      }
+      return { name: 'appSuiteList', query: { name } }
+    case 'app_plan':
+      if (uStore.hasPermission('app_plan:edit')) {
+        return { name: 'appPlanEdit', params: { id } }
+      }
+      return { name: 'appPlanList', query: { name } }
+    case 'app_element':
+      return { name: 'appElements', query: name ? { name } : {} }
     default:
       return group.route ? { path: group.route } : null
   }

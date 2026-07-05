@@ -28,8 +28,34 @@ DRAG_METHODS = frozenset({"drag_and_drop", "frame_drag_and_drop"})
 
 GENERIC_CLASS_HINTS = (
     "show-name", "text-link", "btn", "button", "link", "item", "cell",
-    "anticon", "icon", "wrapper", "content",
+    "anticon", "icon", "wrapper", "content", "td-content", "base-name",
+    "ant-table", "el-table", "nz-table", "table-operate", "operate",
 )
+
+_DYNAMIC_ID_RE = re.compile(
+    r"^(ng-|_ngcontent-|ember\d+|jsx-|css-|radix-|:r\d+|\d+$)",
+    re.I,
+)
+
+INDEX_ELIGIBLE_METHODS = frozenset({
+    "click_ele", "double_click_ele", "hover", "fill_value", "select_option",
+    "upload_file", "assert_ele", "assert_text", "assert_visible", "assert_hidden",
+    "assert_value", "extract_text", "extract_attribute", "wait_for_element",
+    "press_key", "mouse_click",
+})
+
+
+def is_dynamic_element_id(elem_id: str) -> bool:
+    """Angular/React 等运行时生成的 id 不宜作为默认定位。"""
+    eid = (elem_id or "").strip()
+    if not eid or len(eid) < 2:
+        return True
+    if _DYNAMIC_ID_RE.search(eid):
+        return True
+    digits = sum(ch.isdigit() for ch in eid)
+    if len(eid) >= 6 and digits / len(eid) > 0.45:
+        return True
+    return False
 
 
 def _dedupe_candidates(candidates: list[str]) -> list[str]:
@@ -60,10 +86,12 @@ def _build_candidates_from_meta(meta: dict) -> list[str]:
     role = (meta.get("role") or "").strip()
     title = (meta.get("title") or "").strip()
     is_common = text in COMMON_SHORT_TEXTS
+    row_ctx = (meta.get("rowContext") or "").strip()
+    input_type = (meta.get("inputType") or "").strip().lower()
 
     if data_testid:
         opts.append(f'[data-testid="{data_testid}"]')
-    if elem_id:
+    if elem_id and not is_dynamic_element_id(elem_id):
         opts.append(f"#{elem_id}")
     if role and text and len(text) < 30 and not text.isdigit():
         opts.append(f"get_by_role={role}, {text}")
@@ -92,7 +120,7 @@ def _build_candidates_from_meta(meta: dict) -> list[str]:
             opts.append(f"{popup_root} >> get_by_role={role}, {text}")
     if tag and text:
         class_part = f"[@class='{cls.split()[0]}']" if cls else ""
-        opts.append(f"//{tag}{class_part}[contains(text(),'{text}')]")
+        opts.append(f'//{tag}{class_part}[contains(.,"{text}")]')
     if region and text:
         opts.append(f"{region} >> get_by_text={text}")
         if role:
@@ -105,6 +133,13 @@ def _build_candidates_from_meta(meta: dict) -> list[str]:
             opts.append(f"get_by_role={inferred}, {text}")
     if match_index > 1 and text:
         opts.append(f"get_by_text={text}")
+    if row_ctx and len(row_ctx) >= 2:
+        row_key = row_ctx[:48].replace("'", "")
+        if input_type == "checkbox" or role == "checkbox":
+            opts.insert(0, f'//tr[contains(.,"{row_key}")]//input[@type="checkbox"]')
+            opts.insert(0, f'//tr[contains(.,"{row_key}")]//span[contains(@class,"checkbox")]')
+        if text and len(text) < 40:
+            opts.insert(0, f'//tr[contains(.,"{row_key}")]//*[contains(.,"{text[:32]}")]')
     return _dedupe_candidates(opts)
 
 
@@ -130,7 +165,19 @@ def _score_locator(candidate: str, step: dict, ai_suggested: Optional[str] = Non
     if candidate.startswith("[data-testid="):
         score += 100
     elif candidate.startswith("#"):
-        score += 92
+        elem_id = candidate[1:].split()[0]
+        score += 25 if is_dynamic_element_id(elem_id) else 92
+
+    if candidate.startswith("get_by_placeholder="):
+        score += 78
+    if "[title=" in candidate or candidate.startswith("get_by_label="):
+        score += 70
+    if candidate.startswith("//tr[contains"):
+        score += 80
+    if candidate.startswith("//") and "contains(text()," in candidate:
+        score -= 55
+    if re.match(r"^[a-z]+\.[a-zA-Z0-9_-]+$", candidate):
+        score += 58
 
     if desc_targets:
         primary = desc_targets[0]
@@ -166,6 +213,13 @@ def _score_locator(candidate: str, step: dict, ai_suggested: Optional[str] = Non
     if candidate.startswith("get_by_text=") and " >> " not in candidate and not ambiguous:
         score += 50
 
+    match_index = int(meta.get("matchIndex") or 0)
+    if match_index > 1:
+        if " >> " in candidate or candidate.startswith("//tr[contains"):
+            score += 40
+        if candidate.startswith("get_by_text=") and " >> " not in candidate:
+            score -= 45
+
     if ai_suggested and candidate == ai_suggested:
         score += 12
 
@@ -193,7 +247,7 @@ def pick_best_locator(
         rule_best = max(allowed, key=lambda c: _score_locator(c, step))
         ai_score = _score_locator(ai_locator, step, ai_suggested=ai_locator)
         rule_score = _score_locator(rule_best, step)
-        if ai_score >= rule_score - 5:
+        if ai_score > rule_score:
             if ai_locator == current:
                 return ai_locator, "unchanged", {}
             updates: dict[str, Any] = {"locator_pick_source": "ai", "locator_ai_chosen": ai_locator}
@@ -211,6 +265,37 @@ def pick_best_locator(
     if original_locator and original_locator != best:
         updates["locator_original"] = original_locator
     return best, "rule", updates
+
+
+def should_repick_locator(step: dict) -> bool:
+    """录制器已给出稳定链式/语义定位时，转换阶段不再用候选池覆盖。"""
+    locator = ((step.get("params") or {}).get("locator") or "").strip()
+    if not locator:
+        return False
+    if " >> " in locator or "||" in locator:
+        return False
+    if locator.startswith("//tr[contains"):
+        return False
+    meta = step.get("meta") or {}
+    if meta.get("locatorRunnerFinal"):
+        return False
+    popup = (meta.get("popupRoot") or "").strip()
+    region = (meta.get("region") or "").strip()
+    text = (meta.get("accessibleName") or meta.get("text") or "").strip()
+    if popup and text and locator == f"{popup} >> get_by_text={text}":
+        return False
+    if region and locator.startswith(f"{region} >>"):
+        return False
+    if meta.get("dataTestid"):
+        dt = meta["dataTestid"]
+        if f'data-testid="{dt}"' in locator:
+            return False
+    elem_id = (meta.get("id") or "").strip()
+    if elem_id and not is_dynamic_element_id(elem_id) and locator == f"#{elem_id}":
+        return False
+    if locator.startswith("get_by_placeholder="):
+        return False
+    return True
 
 
 def _normalize_desc(desc: str) -> str:
@@ -306,7 +391,7 @@ def apply_index_from_meta(step: dict) -> dict:
     if match_index <= 1:
         return step
     params = step.setdefault("params", {})
-    if step.get("method") in ("click_ele", "double_click_ele") and int(params.get("index") or 1) == 1:
+    if step.get("method") in INDEX_ELIGIBLE_METHODS and int(params.get("index") or 1) == 1:
         params["index"] = match_index
     return step
 
@@ -323,6 +408,16 @@ def _step_locator_key(step: dict) -> tuple:
             params.get("end_selector") or "",
         )
     return method, params.get("locator") or ""
+
+
+def _meta_label(step: dict) -> str:
+    """步骤用于匹配 meta 的语义标签（捕获文案或描述目标）。"""
+    meta = step.get("meta") or {}
+    text = (meta.get("accessibleName") or meta.get("text") or "").strip()
+    if text:
+        return _normalize_desc(text)
+    targets = extract_desc_targets(step.get("desc") or "")
+    return _normalize_desc(targets[0]) if targets else ""
 
 
 def _find_original_for_optimized(
@@ -349,11 +444,36 @@ def _find_original_for_optimized(
         if _normalize_desc(orig.get("desc") or "") == opt_desc:
             return orig, i
 
-    for i, orig in enumerate(original_steps):
-        if i in used:
-            continue
-        if orig.get("method") == opt_method:
-            return orig, i
+    opt_targets = extract_desc_targets(opt.get("desc") or "")
+    if opt_targets:
+        for i, orig in enumerate(original_steps):
+            if i in used:
+                continue
+            if orig.get("method") != opt_method:
+                continue
+            orig_loc = ((orig.get("params") or {}).get("locator") or "").strip()
+            orig_acc = _meta_label(orig) or _normalize_desc(
+                (orig.get("meta") or {}).get("accessibleName") or (orig.get("meta") or {}).get("text") or ""
+            )
+            for target in opt_targets:
+                norm_target = _normalize_desc(target)
+                if target in orig_loc or _locator_mentions_text(orig_loc, target):
+                    return orig, i
+                if orig_acc and (norm_target == orig_acc or norm_target in orig_acc or orig_acc in norm_target):
+                    return orig, i
+
+    opt_label = _meta_label(opt) or opt_desc
+    if opt_label:
+        for i, orig in enumerate(original_steps):
+            if i in used:
+                continue
+            if orig.get("method") != opt_method:
+                continue
+            orig_label = _meta_label(orig) or _normalize_desc(orig.get("desc") or "")
+            if not orig_label:
+                continue
+            if opt_label == orig_label or opt_label in orig_label or orig_label in opt_label:
+                return orig, i
 
     return None, None
 
@@ -408,6 +528,16 @@ def resolve_locators_after_optimize(optimized_steps: list, original_steps: list)
 
         ai_loc = opt_params.get("locator")
         orig_loc = orig_params.get("locator", "")
+
+        lock_step = {"params": orig_params, "meta": opt.get("meta") or {}} if orig else None
+        if lock_step and not should_repick_locator(lock_step):
+            if orig_loc:
+                opt_params["locator"] = orig_loc
+                if ai_loc and ai_loc != orig_loc:
+                    opt.setdefault("meta", {})["locator_ai_rejected"] = ai_loc
+            stats["unchanged"] += 1
+            continue
+
         best, source, meta_updates = pick_best_locator(opt, ai_locator=ai_loc, original_locator=orig_loc)
         if best:
             opt_params["locator"] = best

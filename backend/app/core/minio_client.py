@@ -94,6 +94,26 @@ class MinioClient:
         protocol = "https" if self.secure else "http"
         return f"{protocol}://{self.public_endpoint}/{target_bucket}/{decoded}"
 
+    def object_exists(self, object_name: str, bucket_name: str | None = None) -> bool:
+        try:
+            target_bucket = bucket_name or self.bucket_name
+            decoded = urllib.parse.unquote(object_name)
+            self.client.stat_object(target_bucket, decoded)
+            return True
+        except Exception:
+            return False
+
+    def get_presigned_url_for_app_element(self, filename: str, expires: int = 7200) -> str | None:
+        """为 App 元素库模板生成预签名 URL（兼容历史 api_file_bucket 对象）。"""
+        decoded = urllib.parse.unquote(filename)
+        buckets = [self.bucket_name]
+        if self.api_file_bucket and self.api_file_bucket not in buckets:
+            buckets.append(self.api_file_bucket)
+        for bucket in buckets:
+            if self.object_exists(decoded, bucket):
+                return self.get_presigned_url(decoded, expires, bucket)
+        return self.get_presigned_url(decoded, expires, self.bucket_name)
+
     def get_presigned_url(self, filename: str, expires: int = 7200, bucket_name: str = None) -> str:
         """
         生成预签名 URL（使用外部可访问 endpoint，确保签名 host 与浏览器请求一致）
@@ -140,6 +160,15 @@ class MinioClient:
                     result[filename] = url
         return result
     
+    def download_app_element_template(self, object_name: str) -> bytes | None:
+        """下载 App 元素库图像模板；兼容历史上传至 api_file_bucket 的对象。"""
+        data = self.download_object(object_name, self.bucket_name)
+        if data:
+            return data
+        if self.api_file_bucket and self.api_file_bucket != self.bucket_name:
+            return self.download_object(object_name, self.api_file_bucket)
+        return None
+
     def download_object(self, object_name: str, bucket_name: str = None) -> bytes:
         """
         使用内部客户端下载对象（走 docker 内部网络，避免公网回环问题）

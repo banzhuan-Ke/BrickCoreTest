@@ -9,7 +9,7 @@
     <div v-loading="loading" class="failure-analyzer">
       <div class="toolbar">
         <el-select
-          v-if="targetType === 'ui'"
+          v-if="targetType === 'ui' || targetType === 'app'"
           v-model="visionConfigId"
           clearable
           placeholder="Vision 模型（自动）"
@@ -52,11 +52,13 @@
         style="margin-bottom: 12px;"
       />
       <el-alert
-        v-else-if="targetType === 'ui'"
+        v-else-if="targetType === 'ui' || targetType === 'app'"
         type="info"
         :closable="false"
         show-icon
-        title="未使用 Vision：无截图或未配置 Vision 模型，仅依据步骤与日志分析"
+        :title="targetType === 'app'
+          ? '未使用 Vision：无 App 失败截图或未配置 Vision 模型，将依据步骤、match_score 与日志分析'
+          : '未使用 Vision：无截图或未配置 Vision 模型，仅依据步骤与日志分析'"
         style="margin-bottom: 12px;"
       />
 

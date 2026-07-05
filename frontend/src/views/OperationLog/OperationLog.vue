@@ -15,7 +15,7 @@
         <el-select v-model="searchForm.module" placeholder="所属模块" clearable style="width: 140px;">
           <el-option label="系统管理" value="系统管理"/>
           <el-option label="项目配置" value="项目配置"/>
-          <el-option label="UI自动化" value="UI自动化"/>
+          <el-option label="Web自动化" value="Web自动化"/>
           <el-option label="接口自动化" value="接口自动化"/>
           <el-option label="AI测试" value="AI测试"/>
           <el-option label="性能测试" value="性能测试"/>

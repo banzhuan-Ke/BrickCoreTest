@@ -1,13 +1,13 @@
 # BrickCore Runner 客户端（GUI）
 
 Windows 桌面程序：登录 BrickCore 平台、选择环境、**上线**执行设备、检查更新。  
-**执行引擎**（Playwright、MQ 消费等）已包含在网盘分发的 `BrickCoreRunner.zip` 内；本仓库**不含** `runner/` 引擎源码。
+**执行引擎**（Playwright、MQ 消费等）已包含在网盘分发的 `BrickCoreRunner.zip` 内。
 
 ## 网盘获取
 
 | 方式 | 说明 |
 |------|------|
-| **百度网盘（推荐）** | [BrickCoreRunner.zip](https://pan.baidu.com/s/1Nx2fkPAUi7htJKZAxp1paw?pwd=ye6b) · 提取码 `ye6b` |
+| **百度网盘（推荐）** | [BrickCoreRunner.zip](https://pan.baidu.com/s/1pObFpG-Mt7-Pxo58hklOlg?pwd=9gbi) · 提取码 `9gbi` |
 | **演示平台** | http://43.142.83.156/ → **UI 自动化 → 设备管理** → **网盘下载** |
 | **自建平台** | **系统管理 → 执行器发布** 配置网盘/OSS 链接 → 设备管理页下载 |
 

@@ -28,7 +28,9 @@ BUILTIN_DOC_ENTRIES: dict[str, tuple[str, str]] = {
     "highlights": ("docs-site/guide/highlights.md", "亮点功能"),
     "project-setup": ("docs-site/guide/project-setup.md", "项目与环境"),
     "test-catalog": ("docs-site/guide/test-catalog.md", "测试目录"),
-    "ui-automation": ("docs-site/guide/ui-automation.md", "UI 自动化"),
+    "ui-automation": ("docs-site/guide/ui-automation.md", "Web 自动化"),
+    "app-automation": ("docs-site/guide/app-automation.md", "App 自动化"),
+    "runner-install-guide": ("docs-site/guide/runner-install-guide.md", "执行器安装指南"),
     "runner-client": ("docs-site/guide/runner-client.md", "执行器使用说明"),
     "runner-packaging": ("docs-site/guide/runner-packaging.md", "执行器打包说明"),
     "runner-troubleshooting": ("docs-site/guide/runner-troubleshooting.md", "Runner 排查指南"),
@@ -71,7 +73,8 @@ BUILTIN_DOC_TREE: list[dict[str, Any]] = [
         "title": "功能模块",
         "type": "group",
         "children": [
-            {"id": "ui-automation", "title": "UI 自动化", "type": "builtin"},
+            {"id": "ui-automation", "title": "Web 自动化", "type": "builtin"},
+            {"id": "app-automation", "title": "App 自动化", "type": "builtin"},
             {"id": "api-automation", "title": "接口自动化", "type": "builtin"},
             {"id": "data-factory", "title": "数据工厂", "type": "builtin"},
             {"id": "api-auth", "title": "Token 授权", "type": "builtin"},
@@ -88,6 +91,7 @@ BUILTIN_DOC_TREE: list[dict[str, Any]] = [
         "type": "group",
         "children": [
             {"id": "runner-client", "title": "执行器使用说明", "type": "builtin"},
+            {"id": "runner-install-guide", "title": "执行器安装指南", "type": "builtin"},
             {"id": "runner-packaging", "title": "执行器打包说明", "type": "builtin"},
             {"id": "runner-troubleshooting", "title": "Runner 排查指南", "type": "builtin"},
             {"id": "runner-linux-server", "title": "Linux 无头 Runner", "type": "builtin"},

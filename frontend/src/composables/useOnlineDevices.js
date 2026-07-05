@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { deviceApi } from '@/api/modules/sys'
+import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 
 function parseDeviceResponse(res) {
   if (!res || res.status !== 200) {
@@ -30,13 +31,15 @@ export function useOnlineDevices() {
         list = fallback.list.filter(d => d.status === '在线')
         if (!list.length && fallback.error) error = fallback.error
       }
-      onlineDevices.value = list
-      if (!list.length) {
+      onlineDevices.value = filterWebRunnerDevices(list)
+      if (!onlineDevices.value.length) {
         deviceLoadError.value =
           error ||
-          '暂无在线 Runner。请在本机 runner 目录切换配置（start-local.bat / start-online.bat）后运行 python main.py，并确保设备管理页显示「在线」'
+          (list.length
+            ? '暂无支持 Web 自动化的在线 Runner（请在客户端勾选「Web 自动化」后重新上线）'
+            : '暂无在线 Runner。请在本机 runner 目录切换配置（start-local.bat / start-online.bat）后运行 python main.py，并确保设备管理页显示「在线」')
       }
-      return list
+      return onlineDevices.value
     } catch (e) {
       onlineDevices.value = []
       deviceLoadError.value =

@@ -48,12 +48,14 @@ import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { uiFragmentApi } from '@/api/modules/ui'
+import { appFragmentApi } from '@/api/modules/app'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { buildFragmentRefStep } from '@/utils/stepHelper'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   excludeFragmentId: { type: [Number, String], default: null },
+  domain: { type: String, default: 'ui' },
 })
 const emit = defineEmits(['update:modelValue', 'insert'])
 
@@ -74,15 +76,19 @@ async function loadList() {
   if (!projectId) return
   loading.value = true
   try {
-    const res = await uiFragmentApi.getList({
+    const api = props.domain === 'app' ? appFragmentApi : uiFragmentApi
+    const res = await api.list({
       project_id: projectId,
       keyword: keyword.value || undefined,
       page: 1,
       size: 100,
     })
-    fragmentList.value = (res.data?.data?.items || []).filter(
+    fragmentList.value = (res.data?.data?.items || res.data?.items || []).filter(
       (row) => !props.excludeFragmentId || row.id !== Number(props.excludeFragmentId)
     )
+  } catch (e) {
+    fragmentList.value = []
+    console.error('加载步骤片段失败', e)
   } finally {
     loading.value = false
   }
@@ -105,7 +111,7 @@ function confirm() {
 
 function goManage() {
   visible.value = false
-  router.push('/ui-fragments')
+  router.push(props.domain === 'app' ? '/app-fragments' : '/ui-fragments')
 }
 </script>
 

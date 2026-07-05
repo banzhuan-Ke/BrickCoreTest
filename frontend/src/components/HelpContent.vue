@@ -10,9 +10,9 @@
           style="margin-bottom: 12px;"
         />
         <h3>🚀 快速开始</h3>
-        <p>欢迎使用 BrickCore！本平台支持 <strong>Web UI 自动化</strong>、<strong>接口自动化</strong>、<strong>性能测试</strong>和 <strong>AI 自动化测试</strong>四大测试能力，帮助您快速构建完整的自动化测试体系。</p>
+        <p>欢迎使用 BrickCore！本平台支持 <strong>Web UI 自动化</strong>、<strong>App 自动化</strong>、<strong>接口自动化</strong>、<strong>性能测试</strong>和 <strong>AI 自动化测试</strong>五大测试能力，帮助您快速构建完整的自动化测试体系。</p>
         
-        <h4>UI 自动化流程：</h4>
+        <h4>Web 自动化流程：</h4>
         <ol>
           <li><strong>创建项目</strong> → 管理测试项目</li>
           <li><strong>配置环境</strong> → 设置测试网址</li>
@@ -20,6 +20,23 @@
           <li><strong>编写用例</strong> → 录制测试步骤；编辑页每步可「调试到此步」（无需先保存）</li>
           <li><strong>执行测试</strong> → 选择在线设备，查看测试结果</li>
         </ol>
+
+        <h4>App 自动化流程：</h4>
+        <ol>
+          <li><strong>安装执行器</strong> → 与 Web UI 共用 BrickCoreRunner；Android 通过 <strong>USB / WiFi / 模拟器</strong> 连接（见执行器安装指南）</li>
+          <li><strong>元素探查 / 元素库</strong> → 探查控件或 H5 DOM，维护原生 / 图像模板元素</li>
+          <li><strong>编写用例</strong> → 选择驱动模式（混合 / WebView / Chrome / 图像），编排步骤</li>
+          <li><strong>套件与计划</strong> → 组合用例并执行；支持录屏与 HTML 报告导出</li>
+          <li><strong>执行记录</strong> → 查看步骤分布、图像匹配相似度、定位失败跳转编辑</li>
+        </ol>
+        <p style="color:#909399;font-size:13px;">
+          完整说明见
+          <router-link class="help-doc-link" :to="{ path: '/docs', query: { doc: 'app-automation' } }">App 自动化</router-link>、
+          <router-link
+            class="help-doc-link"
+            :to="{ path: '/docs', query: { doc: 'runner-install-guide' }, hash: '#二app-自动化仅-windows' }"
+          >执行器安装指南（WiFi / 模拟器）</router-link>。
+        </p>
 
         <h4>接口自动化流程：</h4>
         <ol>
@@ -59,7 +76,7 @@
         <h3>🤖 AI 自动化测试（平台特色）</h3>
         <p>
           BrickCore 集成大语言模型（LLM），覆盖<strong>需求文档 → 测试分析 → 禅道功能用例</strong>，以及<strong>接口 / UI 执行用例</strong>的 AI 辅助生成。
-          建议优先走「需求测试中心」全链路（文档 → 测试点 → 用例），再按需延伸到接口/UI 自动化。
+          建议优先走「需求测试中心」全链路（文档 → 测试点 → 用例），再按需延伸到接口/Web 自动化。
         </p>
 
         <h4>前置配置：</h4>
@@ -79,7 +96,7 @@
           <tbody>
             <tr><td>AI 工作台</td><td>/ai-test</td><td>统计、推荐流程、快捷入口、批量任务进度</td></tr>
             <tr><td>需求测试中心</td><td>/ai-testing</td><td>需求列表、测试点/方案/用例统一工作台、XMind 导入、全局测试点/方案</td></tr>
-            <tr><td>功能用例库</td><td>/ai-functional-cases</td><td>项目级功能用例资产；禅道导入；转 UI 自动化；来源可回链需求工作台</td></tr>
+            <tr><td>功能用例库</td><td>/ai-functional-cases</td><td>项目级功能用例资产；禅道导入；转 Web 自动化；来源可回链需求工作台</td></tr>
             <tr><td>平台配置（AI/邮件/MCP 等）</td><td>/platform-config</td><td>LLM、场景绑定、SMTP、项目通知、MCP、执行器发布、登录页</td></tr>
             <tr><td>模型使用情况</td><td>/ai-usage</td><td>Token 统计、场景占比与趋势图表；项目列自动补全</td></tr>
           </tbody>
@@ -173,8 +190,8 @@
         <p><strong>入口 B — 功能用例库 → UI 闭环（推荐）</strong></p>
         <ol>
           <li>在「功能用例库」勾选 1～10 条功能用例</li>
-          <li><strong>生成 UI 自动化</strong>：配置目标 URL、AI 模型；系统按「标题 + 前置 + 步骤」拼装描述，逐条 AI 生成步骤 → 预览 → 导入 <code>case</code> 表</li>
-          <li><strong>录制 UI 自动化</strong>：配置起始 URL；Runner 打开页面后手动登录并操作业务步骤 → 停止 → 可选 AI 优化 → 导入 UI 用例库</li>
+          <li><strong>生成 Web 自动化</strong>：配置目标 URL、AI 模型；系统按「标题 + 前置 + 步骤」拼装描述，逐条 AI 生成步骤 → 预览 → 导入 <code>case</code> 表</li>
+          <li><strong>录制 Web 自动化</strong>：配置起始 URL；Runner 打开页面后手动登录并操作业务步骤 → 停止 → 可选 AI 优化 → 导入 UI 用例库</li>
           <li>列表「UI 状态」列显示：未生成 / 已生成 / 已导入；可跳转编辑已导入的 UI 用例</li>
         </ol>
 
@@ -239,7 +256,7 @@
             <tr><td>2. 测试设计</td><td>工作台 Tab 测试点/方案</td><td>测试点、方案、导图/XMind 导入</td></tr>
             <tr><td>3. 生成用例</td><td>工作台 Tab 文档/测试点</td><td>写入工作区 <code>ai_requirement_case</code></td></tr>
             <tr><td>4. 入库治理</td><td>功能用例库</td><td>复制入库、禅道导入、重复检验</td></tr>
-            <tr><td>5. UI 自动化</td><td>功能用例库 / Web 用例</td><td>AI 生成或录制 → 导入 Playwright 步骤</td></tr>
+            <tr><td>5. Web 自动化</td><td>功能用例库 / Web 用例</td><td>AI 生成或录制 → 导入 Playwright 步骤</td></tr>
             <tr><td>6. 接口自动化</td><td>接口管理</td><td>AI 生成 API 用例（可选，与功能用例并行）</td></tr>
           </tbody>
         </table>
@@ -281,7 +298,7 @@
           <li>功能用例 → 接口用例批量生成</li>
           <li>SSE 流式展示 AI 思考过程（当前为整段返回）</li>
         </ul>
-        <p class="help-note">报告页已支持 <strong>AI 报告摘要</strong>（关注要点与下一步建议）；顶部栏 <strong>Ctrl+K</strong> 可项目内搜索资产。</p>
+        <p class="help-note">报告页已支持 <strong>AI 报告摘要</strong>（关注要点与下一步建议）；顶部栏 <strong>Ctrl+K</strong> 可项目内搜索 Web / 接口 / App 资产。</p>
       </div>
 
       <el-divider />
@@ -318,7 +335,7 @@
         </p>
         <h4>获取与安装（Windows）：</h4>
         <ol>
-          <li>进入 <strong>UI 自动化 → 设备管理</strong>，选择 <strong>网盘下载</strong> 或 <strong>平台下载 zip</strong>（网盘链接由管理员在 <strong>系统管理 → 执行器发布</strong> 配置）</li>
+          <li>进入 <strong>Web 自动化 → 设备管理</strong>，选择 <strong>网盘下载</strong> 或 <strong>平台下载 zip</strong>（网盘链接由管理员在 <strong>系统管理 → 执行器发布</strong> 配置）</li>
           <li>解压后运行 <code>BrickCoreRunner.exe</code>，默认连接线上平台地址</li>
           <li>使用平台账号登录 → 填写设备名称 → 点击 <strong>上线</strong></li>
           <li>设备列表出现 <strong>在线</strong> 后，即可运行用例、AI 录制、查看实时画面</li>
@@ -334,8 +351,57 @@
           <li>关闭客户端后解压新 zip 覆盖原目录（整包升级最稳妥）</li>
         </ul>
         <p style="color:#909399;font-size:13px;">
-          详细说明见帮助中心：<strong>执行器使用说明</strong>、<strong>执行器打包说明</strong>、<strong>Linux 无头 Runner</strong>。
+          详细说明见帮助中心：<strong>执行器使用说明</strong>、<strong>执行器打包说明</strong>、<strong>Linux 无头 Runner</strong>、<strong>App 自动化</strong>。
         </p>
+      </div>
+
+      <el-divider />
+
+      <div class="help-section">
+        <h3>📱 App 自动化（Android 真机 / 模拟器）</h3>
+        <p>
+          通过 Runner 连接 Android <strong>真机、WiFi 或模拟器</strong>，支持<strong>原生控件</strong>、<strong>App 内 H5（WebView）</strong>、<strong>手机 Chrome H5</strong>与<strong>图像模板识别</strong>。
+          日常桌面 H5 回归请用 Web UI；真机布局、原生控件、正式包无 WebView 调试场景用本模块。
+        </p>
+        <h4>设备连接（执行器侧）：</h4>
+        <ul>
+          <li><strong>USB</strong>：开启 USB 调试，数据线连接，`adb devices` 为 <code>device</code></li>
+          <li><strong>WiFi</strong>：Android 11+ 无线调试配对，或 USB 执行 <code>adb tcpip 5555</code> 后 <code>adb connect</code>；需 PC 与手机网络互通（公司 WiFi 不通可改手机热点）</li>
+          <li><strong>模拟器</strong>：MuMu 等开启 ADB 后 <code>adb connect 127.0.0.1:端口</code>，再 <code>uiautomator2 init</code></li>
+        </ul>
+        <h4>菜单：</h4>
+        <table class="help-table">
+          <thead>
+            <tr><th>菜单</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>用例管理</td><td>驱动模式、步骤编排、调试到此步、单用例运行</td></tr>
+            <tr><td>元素库</td><td>原生 / H5 / 图像模板；图像支持上传与 presign 预览</td></tr>
+            <tr><td>元素探查</td><td>控件树、截图选控件、App WebView / 手机 Chrome DOM 探测</td></tr>
+            <tr><td>套件 / 计划 / 执行记录</td><td>与 Web UI 类似；报告含环境摘要、步骤分布、match_score</td></tr>
+          </tbody>
+        </table>
+        <h4>驱动模式（用例编辑页必选）：</h4>
+        <table class="help-table">
+          <thead>
+            <tr><th>模式</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>混合（推荐）</td><td>原生 + 图像；不含 H5 DOM</td></tr>
+            <tr><td>混合 WebView</td><td>App 内 H5 + 原生/图像；需 WebView 调试</td></tr>
+            <tr><td>手机 Chrome H5</td><td>Chrome 打开的 H5 + 原生/图像</td></tr>
+            <tr><td>仅控件</td><td>纯 u2 原生，不支持图像步骤</td></tr>
+            <tr><td>偏图像</td><td>以图像模板为主</td></tr>
+          </tbody>
+        </table>
+        <h4>关键注意：</h4>
+        <ul>
+          <li>H5 步骤前加「切换 WebView」或「切换 Chrome」；<code>page_index</code> 与元素探查一致</li>
+          <li>图像步骤驱动模式不能为 native；失败时看报告<strong>最高相似度</strong>调整 threshold（默认 0.8）</li>
+          <li>正式包 WebView 调试 OFF：用 mobile_chrome 或图像模板，勿用 hybrid_web DOM</li>
+          <li>执行时可开录屏；报告支持导出 HTML、失败步骤「定位失败」跳转编辑</li>
+        </ul>
+        <p style="color:#909399;font-size:13px;">详见文档中心 → <strong>App 自动化</strong>。</p>
       </div>
 
       <el-divider />
@@ -432,7 +498,7 @@
 
       <div class="help-section">
         <h3>📅 6. UI 测试计划（任务计划）</h3>
-        <p>用于 UI 自动化场景：将多个测试套件组合为任务计划，并配合「定时任务」自动执行。</p>
+        <p>用于 Web 自动化场景：将多个测试套件组合为任务计划，并配合「定时任务」自动执行。</p>
         <ul>
           <li>在「Web 自动化」中创建计划并关联套件</li>
           <li>在「定时任务」中配置 Cron / 固定间隔触发</li>
@@ -1001,5 +1067,14 @@ const baseUrl = computed(() => {
   text-align: center;
   padding: 20px 0;
   color: #666;
+}
+
+.help-doc-link {
+  color: #409eff;
+  text-decoration: none;
+}
+
+.help-doc-link:hover {
+  text-decoration: underline;
 }
 </style>

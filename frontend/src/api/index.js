@@ -16,7 +16,9 @@ import {
     httpApi, httpCaseApi, httpSuiteApi, httpExecApi, httpRecordApi, httpCronApi, httpPlanApi,
     scheduleApi,
     perfSceneApi, perfExecApi, perfRecordApi, perfCronApi, perfWorkerApi,
-    aiConfigApi, aiPromptApi, aiGenerateApi, aiRecordApi
+    aiConfigApi, aiPromptApi, aiGenerateApi, aiRecordApi,
+    appCaseApi, appSuiteApi, appPlanApi, appExecApi, appRecordApi, appElementApi, appInspectorApi,
+    appFragmentApi, appCronApi
 } from './modules'
 
 // 统一导出
@@ -26,7 +28,9 @@ export {
     httpApi, httpCaseApi, httpSuiteApi, httpExecApi, httpRecordApi, httpCronApi, httpPlanApi,
     scheduleApi,
     perfSceneApi, perfExecApi, perfRecordApi, perfCronApi, perfWorkerApi,
-    aiConfigApi, aiPromptApi, aiGenerateApi, aiRecordApi
+    aiConfigApi, aiPromptApi, aiGenerateApi, aiRecordApi,
+    appCaseApi, appSuiteApi, appPlanApi, appExecApi, appRecordApi, appElementApi, appInspectorApi,
+    appFragmentApi, appCronApi
 }
 
 // 兼容旧版导出格式
@@ -169,5 +173,12 @@ export default {
     },
     
     // 定时任务 (Web自动化)
-    scheduleApi
+    scheduleApi,
+
+    // App 自动化
+    appCaseApi,
+    appSuiteApi,
+    appPlanApi,
+    appExecApi,
+    appRecordApi,
 }

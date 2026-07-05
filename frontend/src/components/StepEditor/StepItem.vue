@@ -33,14 +33,24 @@
         </div>
         <!--按钮-->
         <div class="btn">
-          <el-button
+          <el-tooltip
             v-if="depth === 0"
-            plain
-            size="small"
-            type="success"
-            :icon="VideoPlay"
-            @click="handleDebug"
-          >调试到此步</el-button>
+            content="请先保存用例后再使用调试"
+            :disabled="debugEnabled"
+            placement="top"
+          >
+            <span>
+              <el-button
+                v-if="depth === 0"
+                plain
+                size="small"
+                type="success"
+                :icon="VideoPlay"
+                :disabled="!debugEnabled"
+                @click="handleDebug"
+              >调试到此步</el-button>
+            </span>
+          </el-tooltip>
           <el-button plain size="small" type="primary" :icon="Edit" @click='handleEdit'>
             {{ step.method === 'fragment_ref' ? '配置' : '编辑' }}
           </el-button>
@@ -122,16 +132,36 @@
       <div class="line2" v-if="step.method !== 'condition_branch' && step.method !== 'fragment_ref' && hasParams">
         <p>{{ getParamsDisplay(step.params) }}</p>
       </div>
+
+      <!-- 最近一次执行失败信息（默认收起） -->
+      <div v-if="executionHint" class="execution-error-box">
+        <div class="execution-error-header" @click="errorExpanded = !errorExpanded">
+          <el-tag :type="executionHint.status === 'error' ? 'danger' : 'warning'" size="small">
+            {{ executionHintLabel }}
+          </el-tag>
+          <span class="execution-error-toggle">{{ errorExpanded ? '收起' : '展开' }}详情</span>
+          <el-icon class="execution-error-arrow">
+            <ArrowDown v-if="!errorExpanded" />
+            <ArrowUp v-else />
+          </el-icon>
+        </div>
+        <div v-show="errorExpanded" class="execution-error-body">
+          <p v-if="executionHint.message" class="execution-error-message">{{ executionHint.message }}</p>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, watch, inject } from 'vue'
-import { Operation, Share, ArrowDown, ArrowRight, Edit, Delete, Plus, VideoPlay, Collection, CopyDocument } from '@element-plus/icons-vue'
+import { Operation, Share, ArrowDown, ArrowRight, ArrowUp, Edit, Delete, Plus, VideoPlay, Collection, CopyDocument } from '@element-plus/icons-vue'
 import { uiFragmentApi } from '@/api/modules/ui'
+import { appFragmentApi } from '@/api/modules/app'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import BranchStepList from './BranchStepList.vue'
+import { formatStepParamValue } from '@/utils/stepHelper'
+import { formatExecutionHintStatus } from '@/utils/caseExecutionHints'
 
 const props = defineProps({
   step: {
@@ -157,16 +187,27 @@ const props = defineProps({
   selected: {
     type: Boolean,
     default: false
-  }
+  },
+  executionHint: {
+    type: Object,
+    default: null
+  },
+  debugEnabled: {
+    type: Boolean,
+    default: true,
+  },
 })
 
 const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug', 'copy', 'expand-fragment', 'toggle-select'])
 
 const fragmentRefEdit = inject('fragmentRefEdit', null)
 const expandFragmentStep = inject('expandFragmentStep', null)
+const editStepMethod = inject('editStepMethod', null)
 const proStore = ProjectStore()
+const stepModule = inject('stepEditorModule', computed(() => 'web'))
 const latestFragmentVersion = ref(null)
 const fragmentOutdated = ref(false)
+const errorExpanded = ref(false)
 
 const fragmentVarEntries = computed(() => {
   const vars = props.step.params?.variables
@@ -185,7 +226,10 @@ const stepClasses = computed(() => ({
   'is-condition': props.step.method === 'condition_branch',
   'is-fragment': props.step.method === 'fragment_ref',
   'is-selected': props.selectable && props.selected,
+  'is-failed': !!props.executionHint,
 }))
+
+const executionHintLabel = computed(() => formatExecutionHintStatus(props.executionHint?.status))
 
 async function checkFragmentVersion() {
   if (props.step.method !== 'fragment_ref') return
@@ -193,7 +237,8 @@ async function checkFragmentVersion() {
   const projectId = proStore.projectInfo?.id
   if (!fid || !projectId) return
   try {
-    const res = await uiFragmentApi.getDetail(fid, projectId)
+    const api = stepModule.value === 'app' ? appFragmentApi : uiFragmentApi
+    const res = await api.getDetail(fid, projectId)
     latestFragmentVersion.value = res.data?.data?.version
     const pinned = props.step.params?.fragment_version
     fragmentOutdated.value = pinned != null && latestFragmentVersion.value != null && pinned < latestFragmentVersion.value
@@ -265,6 +310,10 @@ function updateBranch(bIndex, newBranch) {
 function handleEdit() {
   if (props.step.method === 'fragment_ref' && fragmentRefEdit) {
     fragmentRefEdit(props.step, (updated) => emit('update:step', updated))
+    return
+  }
+  if (editStepMethod && props.depth > 0) {
+    editStepMethod(props.step, currentPath.value)
     return
   }
   emit('edit')
@@ -343,19 +392,15 @@ function getConditionDisplay(condition) {
 // 获取参数显示
 function getParamsDisplay(params) {
   if (!params) return ''
-  
+
   const display = []
   for (const [key, value] of Object.entries(params)) {
-    if (value !== '' && value !== null && value !== undefined) {
-      const strValue = String(value)
-      if (strValue.length > 30) {
-        display.push(`${key}: ${strValue.substring(0, 30)}...`)
-      } else {
-        display.push(`${key}: ${strValue}`)
-      }
+    const formatted = formatStepParamValue(value)
+    if (formatted !== null) {
+      display.push(`${key}: ${formatted}`)
     }
   }
-  
+
   return display.length > 0 ? display.join(', ') : '无参数'
 }
 </script>
@@ -389,6 +434,16 @@ function getParamsDisplay(params) {
   &.is-selected {
     border-color: var(--el-color-primary);
     box-shadow: 0 0 0 1px var(--el-color-primary-light-7);
+  }
+
+  &.is-failed {
+    border-color: var(--el-color-danger);
+    background: var(--el-color-danger-light-9);
+
+    .step-index {
+      color: var(--el-color-danger);
+      background: var(--el-color-danger-light-7);
+    }
   }
 }
 
@@ -468,6 +523,49 @@ function getParamsDisplay(params) {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+}
+
+.execution-error-box {
+  margin-top: 10px;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px solid var(--el-color-danger-light-5);
+  overflow: hidden;
+}
+
+.execution-error-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.execution-error-toggle {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.execution-error-arrow {
+  color: var(--el-text-color-secondary);
+}
+
+.execution-error-body {
+  padding: 0 12px 10px;
+  border-top: 1px dashed var(--el-color-danger-light-7);
+}
+
+.execution-error-message {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-color-danger);
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .branches-container {

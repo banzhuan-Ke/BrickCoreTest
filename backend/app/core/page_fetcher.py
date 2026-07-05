@@ -305,7 +305,10 @@ def format_elements_for_prompt(elements: list) -> str:
 
     lines = []
     for el in elements:
-        parts = [f"<{el['tag']}>"]
+        if not isinstance(el, dict):
+            continue
+        tag = el.get("tag") or "?"
+        parts = [f"<{tag}>"]
         for key in ["id", "class", "name", "type", "placeholder", "aria_label", "data_testid", "title", "role", "text", "selector"]:
             if el.get(key):
                 parts.append(f"{key}={el[key]}")

@@ -8,7 +8,7 @@ from tortoise.expressions import Q
 
 from app.core.mcp_confirm import consume_confirm_token, create_confirm_token
 from app.core.report_summary_context import fetch_recent_failures
-from app.mcp.auth import McpAuthContext, ensure_permission
+from app.mcp.auth import McpAuthContext, ensure_permission, ensure_any_permission
 from app.core.permissions import (
     AI_TEST_EXECUTE,
     AI_TEST_VIEW,
@@ -32,6 +32,13 @@ from app.core.permissions import (
     UI_SUITE_EXECUTE,
     UI_SUITE_VIEW,
     UI_TASK_EXECUTE,
+    APP_CASE_VIEW,
+    APP_CASE_EXECUTE,
+    APP_SUITE_VIEW,
+    APP_SUITE_EXECUTE,
+    APP_PLAN_VIEW,
+    APP_PLAN_EXECUTE,
+    APP_RECORD_VIEW,
 )
 from app.models.ai import (
     AiFunctionalCase,
@@ -61,6 +68,17 @@ from app.models.perf import PerfCronJob, PerfRecord, PerfScene, PerfWorker
 from app.models.schedule import Cronjob
 from app.models.sys import Device, Environment, TestCatalog, Project
 from app.models.ui import Case, Step, Suite, Task, UiCaseExecution, UiPlanExecution
+from app.models.app import (
+    AppCase,
+    AppCaseExecution,
+    AppCronJob,
+    AppPlan,
+    AppPlanExecution,
+    AppSuite,
+    AppSuiteExecution,
+    AppSuiteStep,
+)
+from app.schemas.app import AppRunForm
 from app.routers.ai.analyze import _execute_failure_analysis
 from app.core.functional_case_service import functional_case_to_dict
 from app.core.db_factory_service import datasource_to_dict, sql_template_to_dict
@@ -233,25 +251,31 @@ async def tool_list_online_devices(
     ctx: McpAuthContext,
     project_id: int | None = None,
 ) -> dict[str, Any]:
-    """列出当前在线 Runner 设备（全局，供 Web UI 执行选择 device_id）。"""
-    ensure_permission(ctx, UI_CASE_EXECUTE)
+    """列出当前在线 Runner 设备（含 Web / App 能力）。"""
+    ensure_any_permission(ctx, UI_CASE_EXECUTE, APP_CASE_EXECUTE, APP_PLAN_VIEW)
     rows = await Device.filter(status="在线", is_del=False).order_by("-update_time")
-    items = [
-        {
-            "id": d.id,
-            "name": d.name or d.hostname or d.id,
-            "ip": d.ip,
-            "system": d.system,
-            "status": d.status,
-            "version": d.version or "",
-        }
-        for d in rows
-    ]
+    items = []
+    for d in rows:
+        engine_types = d.runner_engine_types or ["web"]
+        items.append(
+            {
+                "id": d.id,
+                "name": d.name or d.hostname or d.id,
+                "ip": d.ip,
+                "system": d.system,
+                "status": d.status,
+                "version": d.version or "",
+                "runner_engine_types": engine_types,
+                "app_udid": (d.app_udid or "").strip(),
+                "app_connection": (d.app_connection or "").strip(),
+                "app_platform": (d.app_platform or "").strip(),
+            }
+        )
     return {
         "project_id": project_id,
         "items": items,
         "total": len(items),
-        "note": "Runner 设备为全局资源；执行 Web UI 用例/计划/套件时需指定 device_id",
+        "note": "Runner 为全局资源；Web UI 执行需 device_id；App 执行需勾选 App 的 Runner 且 adb 设备在线",
     }
 
 
@@ -1467,7 +1491,68 @@ async def tool_get_execution_record(
             "started_at": rec.started_at.isoformat() if rec.started_at else None,
             "duration": rec.duration,
         }
-    raise ValueError("record_type 支持 api_suite / api_plan / ui_plan / perf")
+    if record_type in ("app_plan", "app_task"):
+        ensure_permission(ctx, APP_RECORD_VIEW)
+        rec = await AppPlanExecution.get_or_none(id=record_id, is_del=False).prefetch_related("plan")
+        if not rec:
+            raise ValueError("App 计划执行记录不存在")
+        meta = _ui_trigger_meta(rec.env)
+        return {
+            "id": rec.id,
+            "type": "app_plan",
+            "plan_id": rec.plan_id,
+            "plan_name": rec.plan.name if rec.plan else "",
+            "status": rec.status,
+            "username": rec.username,
+            "case_count": rec.case_count,
+            "success": rec.success,
+            "fail": rec.fail,
+            "error": rec.error,
+            "pass_rate": rec.pass_rate,
+            "start_time": rec.start_time.isoformat() if rec.start_time else None,
+            "duration": rec.duration,
+            "device_id": rec.device_id or "",
+            **meta,
+        }
+    if record_type in ("app_suite",):
+        ensure_permission(ctx, APP_RECORD_VIEW)
+        rec = await AppSuiteExecution.get_or_none(id=record_id, is_del=False).prefetch_related("suite")
+        if not rec:
+            raise ValueError("App 套件执行记录不存在")
+        return {
+            "id": rec.id,
+            "type": "app_suite",
+            "suite_id": rec.suite_id,
+            "suite_name": rec.suite.name if rec.suite else "",
+            "status": rec.status,
+            "username": rec.username,
+            "case_count": rec.case_count,
+            "success": rec.success,
+            "fail": rec.fail,
+            "error": rec.error,
+            "pass_rate": rec.pass_rate,
+            "start_time": rec.start_time.isoformat() if rec.start_time else None,
+            "duration": rec.duration,
+            "device_id": rec.device_id or "",
+        }
+    if record_type in ("app_case", "app_case_execution"):
+        ensure_permission(ctx, APP_RECORD_VIEW)
+        rec = await AppCaseExecution.get_or_none(id=record_id, is_del=False).prefetch_related("case")
+        if not rec:
+            raise ValueError("App 用例执行记录不存在")
+        meta = _ui_trigger_meta(rec.env)
+        return {
+            "id": rec.id,
+            "type": "app_case",
+            "case_id": rec.case_id,
+            "case_name": rec.case.name if rec.case else "",
+            "status": rec.status,
+            "username": rec.username,
+            "start_time": rec.start_time.isoformat() if rec.start_time else None,
+            "env": rec.env if isinstance(rec.env, dict) else {},
+            **meta,
+        }
+    raise ValueError("record_type 支持 api_suite / api_plan / ui_plan / ui_case / app_plan / app_suite / app_case / perf")
 
 
 async def tool_analyze_failure(
@@ -1478,8 +1563,8 @@ async def tool_analyze_failure(
     force_refresh: bool = False,
 ) -> dict[str, Any]:
     ensure_permission(ctx, AI_TEST_EXECUTE)
-    if target_type not in ("api", "ui"):
-        raise ValueError("target_type 仅支持 api 或 ui")
+    if target_type not in ("api", "ui", "app"):
+        raise ValueError("target_type 支持 api、ui 或 app")
     try:
         return await _execute_failure_analysis(
             project_id=project_id,
@@ -2333,3 +2418,518 @@ async def tool_get_sql_template(
         ds_env = await Environment.get_or_none(id=ds.environment_id)
         data["datasource"] = datasource_to_dict(ds, ds_env.name if ds_env else "")
     return data
+
+
+async def _resolve_app_case(
+    project_id: int,
+    *,
+    case_id: int | None = None,
+    case_name: str | None = None,
+) -> AppCase:
+    if case_id:
+        case = await AppCase.get_or_none(id=case_id, is_del=False, project_id=project_id)
+        if not case:
+            raise ValueError(f"App 用例不存在: case_id={case_id}")
+        return case
+    name = (case_name or "").strip()
+    if not name:
+        raise ValueError("请指定 case_id 或 case_name")
+    exact = await AppCase.filter(project_id=project_id, is_del=False, name=name).first()
+    if exact:
+        return exact
+    partial_list = list(await AppCase.filter(project_id=project_id, is_del=False, name__icontains=name).limit(6))
+    if not partial_list:
+        raise ValueError(f"未找到名称包含「{name}」的 App 用例")
+    if len(partial_list) == 1:
+        return partial_list[0]
+    hints = ", ".join(f"#{c.id}:{c.name}" for c in partial_list[:5])
+    raise ValueError(f"名称「{name}」匹配到多条 App 用例，请指定 case_id：{hints}")
+
+
+async def tool_list_app_cases(
+    ctx: McpAuthContext,
+    project_id: int,
+    keyword: str = "",
+    page: int = 1,
+    size: int = 20,
+) -> dict[str, Any]:
+    """列出项目 App 用例（摘要，不含 steps 全文）。"""
+    ensure_permission(ctx, APP_CASE_VIEW)
+    page = max(page, 1)
+    size = min(max(size, 1), 50)
+    qs = AppCase.filter(project_id=project_id, is_del=False)
+    kw = (keyword or "").strip()
+    if kw:
+        qs = qs.filter(Q(name__icontains=kw) | Q(description__icontains=kw))
+    total = await qs.count()
+    rows = await qs.order_by("-id").offset((page - 1) * size).limit(size)
+    items = []
+    for case in rows:
+        step_count = len(case.steps) if isinstance(case.steps, list) else 0
+        items.append(
+            {
+                "id": case.id,
+                "name": case.name,
+                "level": case.level,
+                "driver_mode": case.driver_mode,
+                "step_count": step_count,
+                "username": case.username,
+                "update_time": case.update_time.strftime("%Y-%m-%d %H:%M:%S") if case.update_time else "",
+            }
+        )
+    return {"total": total, "page": page, "size": size, "items": items}
+
+
+async def tool_list_app_suites(
+    ctx: McpAuthContext,
+    project_id: int,
+    keyword: str = "",
+    page: int = 1,
+    size: int = 20,
+) -> dict[str, Any]:
+    """列出项目 App 测试套件（摘要）。"""
+    ensure_permission(ctx, APP_SUITE_VIEW)
+    page = max(page, 1)
+    size = min(max(size, 1), 50)
+    qs = AppSuite.filter(project_id=project_id, is_del=False)
+    kw = (keyword or "").strip()
+    if kw:
+        qs = qs.filter(Q(name__icontains=kw))
+    total = await qs.count()
+    rows = await qs.order_by("-id").offset((page - 1) * size).limit(size)
+    items = []
+    for suite in rows:
+        case_count = await AppSuiteStep.filter(suite_id=suite.id, is_del=False).count()
+        items.append(
+            {
+                "id": suite.id,
+                "name": suite.name,
+                "case_count": case_count,
+                "username": suite.username,
+                "update_time": suite.update_time.strftime("%Y-%m-%d %H:%M:%S") if suite.update_time else "",
+            }
+        )
+    return {"total": total, "page": page, "size": size, "items": items}
+
+
+async def tool_list_app_plans(
+    ctx: McpAuthContext,
+    project_id: int,
+    keyword: str = "",
+    page: int = 1,
+    size: int = 20,
+) -> dict[str, Any]:
+    """列出项目 App 测试计划。"""
+    ensure_permission(ctx, APP_PLAN_VIEW)
+    page = max(page, 1)
+    size = min(max(size, 1), 50)
+    qs = AppPlan.filter(project_id=project_id, is_del=False)
+    kw = (keyword or "").strip()
+    if kw:
+        qs = qs.filter(Q(name__icontains=kw))
+    total = await qs.count()
+    rows = await qs.order_by("-id").offset((page - 1) * size).limit(size).prefetch_related("suites")
+    items = []
+    for plan in rows:
+        suites = await plan.suites.all()
+        suite_count = len(suites)
+        items.append(
+            {
+                "id": plan.id,
+                "name": plan.name,
+                "suite_count": suite_count,
+                "parallel": plan.parallel,
+                "record_video": plan.record_video,
+                "username": plan.username,
+                "update_time": plan.update_time.strftime("%Y-%m-%d %H:%M:%S") if plan.update_time else "",
+            }
+        )
+    return {"total": total, "page": page, "size": size, "items": items}
+
+
+async def tool_list_app_run_records(
+    ctx: McpAuthContext,
+    project_id: int,
+    record_type: str = "",
+    keyword: str = "",
+    status: str = "",
+    page: int = 1,
+    size: int = 20,
+) -> dict[str, Any]:
+    """列出 App 执行记录（计划 + 套件合并，按时间倒序）。"""
+    ensure_permission(ctx, APP_RECORD_VIEW)
+    page = max(page, 1)
+    size = min(max(size, 1), 50)
+    kw = (keyword or "").strip().lower()
+    rt = (record_type or "").strip().lower()
+    st = (status or "").strip().lower()
+    unified: list[dict[str, Any]] = []
+
+    if rt in ("", "suite"):
+        suite_qs = AppSuiteExecution.filter(is_del=False, suite__project_id=project_id).prefetch_related("suite")
+        if st:
+            suite_qs = suite_qs.filter(status=st)
+        for rec in await suite_qs.order_by("-id").limit(100):
+            suite = rec.suite
+            name = suite.name if suite else "未知套件"
+            if kw and kw not in name.lower():
+                continue
+            unified.append(
+                {
+                    "id": rec.id,
+                    "record_type": "suite",
+                    "suite_id": rec.suite_id,
+                    "name": name,
+                    "status": rec.status,
+                    "pass_rate": rec.pass_rate,
+                    "username": rec.username,
+                    "start_time": rec.start_time.strftime("%Y-%m-%d %H:%M:%S") if rec.start_time else "",
+                }
+            )
+
+    if rt in ("", "plan"):
+        plan_qs = AppPlanExecution.filter(project_id=project_id, is_del=False).prefetch_related("plan")
+        if st:
+            plan_qs = plan_qs.filter(status=st)
+        for rec in await plan_qs.order_by("-id").limit(100):
+            plan = rec.plan
+            name = plan.name if plan else "未知计划"
+            if kw and kw not in name.lower():
+                continue
+            unified.append(
+                {
+                    "id": rec.id,
+                    "record_type": "plan",
+                    "plan_id": rec.plan_id,
+                    "name": name,
+                    "status": rec.status,
+                    "pass_rate": rec.pass_rate,
+                    "username": rec.username,
+                    "start_time": rec.start_time.strftime("%Y-%m-%d %H:%M:%S") if rec.start_time else "",
+                }
+            )
+
+    unified.sort(key=lambda x: x.get("start_time") or "", reverse=True)
+    total = len(unified)
+    start = (page - 1) * size
+    items = unified[start : start + size]
+    return {"total": total, "page": page, "size": size, "items": items}
+
+
+async def tool_list_app_cron_jobs(
+    ctx: McpAuthContext,
+    project_id: int,
+    keyword: str = "",
+    page: int = 1,
+    size: int = 20,
+) -> dict[str, Any]:
+    """列出项目 App 定时任务。"""
+    ensure_permission(ctx, APP_PLAN_VIEW)
+    page = max(page, 1)
+    size = min(max(size, 1), 50)
+    qs = AppCronJob.filter(project_id=project_id, is_del=False)
+    kw = (keyword or "").strip()
+    if kw:
+        qs = qs.filter(Q(name__icontains=kw))
+    total = await qs.count()
+    rows = await qs.order_by("-create_time").offset((page - 1) * size).limit(size)
+    items = []
+    for job in rows:
+        suite = await AppSuite.get_or_none(id=job.suite_id, is_del=False) if job.suite_id else None
+        plan = await AppPlan.get_or_none(id=job.plan_id, is_del=False) if job.plan_id else None
+        env = await Environment.get_or_none(id=job.env_id, is_del=False)
+        items.append(
+            {
+                "id": job.id,
+                "name": job.name,
+                "target_type": "plan" if job.plan_id else "suite",
+                "plan_name": plan.name if plan else "",
+                "suite_name": suite.name if suite else "",
+                "env_name": env.name if env else "",
+                "run_type": job.run_type,
+                "state": job.state,
+                "last_run_time": job.last_run_time.strftime("%Y-%m-%d %H:%M:%S") if job.last_run_time else "",
+                "last_run_status": job.last_run_status or "",
+            }
+        )
+    return {"total": total, "page": page, "size": size, "items": items}
+
+
+async def tool_preview_run_app_case(
+    ctx: McpAuthContext,
+    project_id: int,
+    env_id: int,
+    device_id: str,
+    case_id: int | None = None,
+    case_name: str | None = None,
+) -> dict[str, Any]:
+    ensure_permission(ctx, APP_CASE_EXECUTE)
+    case = await _resolve_app_case(project_id, case_id=case_id, case_name=case_name)
+    env = await Environment.get_or_none(id=env_id, is_del=False)
+    if not env:
+        raise ValueError("运行环境不存在")
+    if not (device_id or "").strip():
+        raise ValueError("请指定 device_id（在线 App Runner，可在设备管理查看 app_udid）")
+    step_count = len(case.steps) if isinstance(case.steps, list) else 0
+    if step_count == 0:
+        raise ValueError("用例没有步骤，无法执行")
+    impact = {
+        "project_id": project_id,
+        "case_id": case.id,
+        "case_name": case.name,
+        "driver_mode": case.driver_mode,
+        "step_count": step_count,
+        "env_id": env_id,
+        "env_name": env.name,
+        "device_id": device_id.strip(),
+        "warning": "将触发单条 App 用例执行，占用 Runner 与 Android 设备",
+    }
+    confirm_token = await create_confirm_token(
+        "run_app_case",
+        {
+            "case_id": case.id,
+            "env_id": env_id,
+            "device_id": device_id.strip(),
+            "project_id": project_id,
+        },
+        ctx.username,
+    )
+    return {
+        "impact": impact,
+        "confirm_token": confirm_token,
+        "expires_in_seconds": 300,
+        "next_step": "调用 confirm_run_app_case 并传入 confirm_token",
+    }
+
+
+async def tool_confirm_run_app_case(
+    ctx: McpAuthContext,
+    confirm_token: str,
+    case_id: int,
+    env_id: int | None = None,
+    device_id: str | None = None,
+    project_id: int | None = None,
+) -> dict[str, Any]:
+    ensure_permission(ctx, APP_CASE_EXECUTE)
+    payload = await consume_confirm_token(confirm_token, "run_app_case", ctx.username)
+    if int(payload.get("case_id", 0)) != case_id:
+        raise ValueError("case_id 与确认 Token 不匹配")
+    resolved_env_id = env_id or int(payload.get("env_id") or 0)
+    resolved_device = (device_id or payload.get("device_id") or "").strip()
+    resolved_project_id = int(project_id or payload.get("project_id") or 0)
+    case = await AppCase.get_or_none(id=case_id, is_del=False)
+    if not case:
+        raise ValueError("App 用例不存在")
+    if resolved_project_id and case.project_id != resolved_project_id:
+        raise ValueError("用例不属于当前项目")
+    from tortoise import transactions
+    from app.routers.app.exec import AppExecutionService, expand_app_steps
+    from app.core.app_execution_env import build_case_env
+
+    env_payload: dict[str, Any] = {}
+    suite_payload: dict[str, Any] = {}
+    case_execution_id: int | None = None
+    async with transactions.in_transaction():
+        env = await Environment.get_or_none(id=resolved_env_id, is_del=False)
+        if not env:
+            raise ValueError("运行环境不存在")
+        device = await Device.get_or_none(id=resolved_device, is_del=False)
+        if not device:
+            raise ValueError("设备不存在")
+        item = AppRunForm(
+            env_id=resolved_env_id,
+            device_id=resolved_device,
+            username=ctx.username,
+            trigger_source=ASSISTANT_TRIGGER,
+        )
+        env_payload = AppExecutionService.with_trigger_source(
+            await AppExecutionService.build_env_payload(env, case.project_id, device, item),
+            ASSISTANT_TRIGGER,
+        )
+        env_payload = build_case_env(env_payload, case, trigger_source=ASSISTANT_TRIGGER)
+        case_execution = await AppCaseExecution.create(
+            case=case, username=ctx.username, env=env_payload, is_del=False
+        )
+        case_execution_id = case_execution.id
+        expanded_steps = await expand_app_steps(case.steps or [], case.project_id)
+        suite_payload = {
+            "engine_type": "app",
+            "id": case.id,
+            "name": case.name,
+            "case_execution_id": case_execution.id,
+            "pre_actions": [],
+            "username": ctx.username,
+            "cases": [
+                {
+                    "execution_id": case_execution.id,
+                    "id": case.id,
+                    "name": case.name,
+                    "skip": False,
+                    "driver_mode": case.driver_mode,
+                    "steps": expanded_steps,
+                }
+            ],
+        }
+    dispatched = await AppExecutionService.dispatch_to_device(env_payload, suite_payload, resolved_device)
+    return {
+        "case_id": case_id,
+        "case_name": case.name,
+        "execution_id": case_execution_id,
+        "dispatched": dispatched,
+        "message": "App 用例已加入执行队列" if dispatched else "记录已创建，暂无支持 App 的在线 Runner 或未检测到 Android 设备",
+        "hint": (
+            f"可说「查询 App 用例执行记录 {case_execution_id}」查看结果"
+            if case_execution_id
+            else "请在 App 执行记录中查看"
+        ),
+    }
+
+
+async def tool_preview_run_app_suite(
+    ctx: McpAuthContext,
+    suite_id: int,
+    env_id: int,
+    device_id: str,
+) -> dict[str, Any]:
+    ensure_permission(ctx, APP_SUITE_EXECUTE)
+    suite = await AppSuite.get_or_none(id=suite_id, is_del=False)
+    if not suite:
+        raise ValueError("App 套件不存在")
+    env = await Environment.get_or_none(id=env_id, is_del=False)
+    if not env:
+        raise ValueError("运行环境不存在")
+    if not (device_id or "").strip():
+        raise ValueError("请指定 device_id（在线 App Runner）")
+    case_count = await AppSuiteStep.filter(suite_id=suite_id, is_del=False).count()
+    if case_count == 0:
+        raise ValueError("套件中没有用例")
+    impact = {
+        "suite_id": suite_id,
+        "suite_name": suite.name,
+        "project_id": suite.project_id,
+        "case_count": case_count,
+        "env_id": env_id,
+        "env_name": env.name,
+        "device_id": device_id.strip(),
+        "warning": "将触发 App 套件执行，占用 Runner 与 Android 设备",
+    }
+    confirm_token = await create_confirm_token(
+        "run_app_suite",
+        {"suite_id": suite_id, "env_id": env_id, "device_id": device_id.strip()},
+        ctx.username,
+    )
+    return {
+        "impact": impact,
+        "confirm_token": confirm_token,
+        "expires_in_seconds": 300,
+        "next_step": "调用 confirm_run_app_suite 并传入 confirm_token",
+    }
+
+
+async def tool_confirm_run_app_suite(
+    ctx: McpAuthContext,
+    confirm_token: str,
+    suite_id: int,
+    env_id: Optional[int] = None,
+    device_id: Optional[str] = None,
+) -> dict[str, Any]:
+    ensure_permission(ctx, APP_SUITE_EXECUTE)
+    payload = await consume_confirm_token(confirm_token, "run_app_suite", ctx.username)
+    if int(payload.get("suite_id", 0)) != suite_id:
+        raise ValueError("suite_id 与确认 Token 不匹配")
+    from app.routers.app.exec import execute_app_suite_internal
+
+    result = await execute_app_suite_internal(
+        suite_id,
+        AppRunForm(
+            env_id=env_id or int(payload.get("env_id") or 0),
+            device_id=(device_id or payload.get("device_id") or "").strip(),
+            username=ctx.username,
+            trigger_source=ASSISTANT_TRIGGER,
+        ),
+        ctx.username,
+    )
+    return {
+        "result": result,
+        "suite_execution_id": result.get("execution_id"),
+        "message": result.get("msg") if isinstance(result, dict) else str(result),
+    }
+
+
+async def tool_preview_run_app_plan(
+    ctx: McpAuthContext,
+    plan_id: int,
+    env_id: int,
+    device_id: str,
+) -> dict[str, Any]:
+    ensure_permission(ctx, APP_PLAN_EXECUTE)
+    plan = await AppPlan.get_or_none(id=plan_id, is_del=False)
+    if not plan:
+        raise ValueError("App 计划不存在")
+    env = await Environment.get_or_none(id=env_id, is_del=False)
+    if not env:
+        raise ValueError("运行环境不存在")
+    if not (device_id or "").strip():
+        raise ValueError("请指定 device_id（在线 App Runner）")
+    await plan.fetch_related("suites")
+    suite_count = len([s for s in plan.suites if not s.is_del])
+    if suite_count == 0:
+        raise ValueError("计划中没有套件")
+    impact = {
+        "plan_id": plan_id,
+        "plan_name": plan.name,
+        "project_id": plan.project_id,
+        "suite_count": suite_count,
+        "parallel": bool(plan.parallel),
+        "env_id": env_id,
+        "env_name": env.name,
+        "device_id": device_id.strip(),
+        "warning": "将触发 App 计划执行，可能占用多台 Runner/设备",
+    }
+    confirm_token = await create_confirm_token(
+        "run_app_plan",
+        {"plan_id": plan_id, "env_id": env_id, "device_id": device_id.strip()},
+        ctx.username,
+    )
+    return {
+        "impact": impact,
+        "confirm_token": confirm_token,
+        "expires_in_seconds": 300,
+        "next_step": "调用 confirm_run_app_plan 并传入 confirm_token",
+    }
+
+
+async def tool_confirm_run_app_plan(
+    ctx: McpAuthContext,
+    confirm_token: str,
+    plan_id: int,
+    env_id: Optional[int] = None,
+    device_id: Optional[str] = None,
+) -> dict[str, Any]:
+    ensure_permission(ctx, APP_PLAN_EXECUTE)
+    payload = await consume_confirm_token(confirm_token, "run_app_plan", ctx.username)
+    if int(payload.get("plan_id", 0)) != plan_id:
+        raise ValueError("plan_id 与确认 Token 不匹配")
+    from app.core.app_plan_runner import execute_app_plan
+
+    plan = await AppPlan.get_or_none(id=plan_id, is_del=False)
+    if not plan:
+        raise ValueError("App 计划不存在")
+    result = await execute_app_plan(
+        plan,
+        env_id=env_id or int(payload.get("env_id") or 0),
+        username=ctx.username,
+        run_form=AppRunForm(
+            env_id=env_id or int(payload.get("env_id") or 0),
+            device_id=(device_id or payload.get("device_id") or "").strip(),
+            username=ctx.username,
+            trigger_source=ASSISTANT_TRIGGER,
+        ),
+        device_id=(device_id or payload.get("device_id") or "").strip(),
+        trigger_source=ASSISTANT_TRIGGER,
+    )
+    return {
+        "result": result,
+        "plan_execution_id": result.get("execution_id"),
+        "message": result.get("msg") if isinstance(result, dict) else str(result),
+    }

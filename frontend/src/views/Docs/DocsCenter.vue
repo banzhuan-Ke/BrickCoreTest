@@ -348,6 +348,7 @@ const loadDocNode = async (data) => {
         currentTitle.value = d.title
         contentHtml.value = d.content_html || ''
         viewMode.value = 'markdown'
+        await scrollToRouteHash()
       }
     } else if (data.type === 'custom') {
       const res = await docsApi.getArticle(data.doc_id)
@@ -384,7 +385,19 @@ const openBuiltinById = async (docId) => {
   if (node) {
     treeRef.value?.setCurrentKey(node.nodeKey)
     await loadDocNode(node)
+    return
   }
+  ElMessage.warning(`文档「${docId}」暂未收录，请联系管理员同步内置文档`)
+}
+
+async function scrollToRouteHash() {
+  await nextTick()
+  const raw = (route.hash || '').replace(/^#/, '').trim()
+  if (!raw) return
+  requestAnimationFrame(() => {
+    const el = document.getElementById(raw)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
 }
 
 const fillEditorFromRow = async (row) => {
@@ -647,6 +660,10 @@ onMounted(async () => {
 
 watch(() => route.query.doc, async (docId) => {
   await openBuiltinById(typeof docId === 'string' && docId ? docId : DEFAULT_DOC_ID)
+})
+
+watch(() => route.hash, async () => {
+  if (currentTitle.value) await scrollToRouteHash()
 })
 </script>
 

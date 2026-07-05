@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, Field
 
 from app.core.auth import is_authenticated, require_permissions, verify_runner_or_internal
-from app.core.permissions import AI_TEST_EXECUTE, UI_CASE_EDIT
+from app.core.permissions import AI_TEST_EXECUTE, APP_CASE_EDIT, UI_CASE_EDIT
 from app.core.ai_prompts import PromptManager, append_extra_instructions
 from app.core.ai_usage_log import log_ai_usage
 from app.core.llm_client import LLMClientFactory
@@ -300,9 +300,11 @@ async def _get_ai_config(config_id: Optional[int], scene: Optional[str] = None) 
     return await resolve_config_for_scene(scene or "", config_id)
 
 
-def _build_extra_body(config: AiConfig) -> dict:
+def _build_extra_body(config: AiConfig, *, disable_thinking: bool = False) -> dict:
     """根据配置构造 extra_body（用于 thinking 等供应商特定参数）"""
     extra_body = {}
+    if disable_thinking:
+        return extra_body
     if config.thinking_enabled:
         extra_body["thinking"] = {"type": "enabled"}
     return extra_body
@@ -334,6 +336,7 @@ async def _call_llm(
     min_timeout: int = 0,
     max_retries: int = 0,
     param_overrides: dict | None = None,
+    disable_thinking: bool = False,
 ) -> dict:
     """调用 LLM，返回 {"content": str, "tokens": int}
     param_overrides: 场景绑定上的 max_tokens / temperature / timeout / min_timeout 覆盖
@@ -353,9 +356,9 @@ async def _call_llm(
         model=config.model,
         timeout=timeout,
     )
-    extra_body = _build_extra_body(config)
+    extra_body = _build_extra_body(config, disable_thinking=disable_thinking)
     kwargs = {}
-    if config.thinking_enabled and config.reasoning_effort:
+    if not disable_thinking and config.thinking_enabled and config.reasoning_effort:
         kwargs["reasoning_effort"] = config.reasoning_effort
     messages = [
         {"role": "system", "content": system_prompt},
@@ -987,6 +990,7 @@ class LocatorHealRequest(BaseModel):
     accessibility_snapshot: Optional[str] = Field(default=None, max_length=50000)
     page_elements: Optional[list] = Field(default=None, description="Runner 抓取的元素列表")
     ai_config_id: Optional[int] = None
+    project_id: Optional[int] = Field(default=None, description="Runner 执行所属项目 ID")
     replay_steps: Optional[list] = Field(default=None, description="用例步骤列表，用于回放")
     replay_through_index: Optional[int] = Field(
         default=None,
@@ -1000,7 +1004,10 @@ async def _locator_heal_handler(
     project_id: Optional[int],
     username: str,
 ) -> dict[str, Any]:
-    await _check_agent_daily_quota(project_id)
+    try:
+        await _check_agent_daily_quota(project_id)
+    except HTTPException as exc:
+        return {"success": False, "reason": str(exc.detail)}
 
     try:
         config = await _get_ai_config(body.ai_config_id, scene="locator_heal")
@@ -1030,19 +1037,34 @@ async def _locator_heal_handler(
         snapshot = replay_result.get("accessibility_snapshot")
         page_url = replay_result.get("page_url") or page_url
 
-    async def call_llm(system_prompt: str, user_prompt: str) -> dict:
-        return await _call_llm(system_prompt, user_prompt, config, min_timeout=30)
+    from app.core.ai_scene_config import get_scene_llm_overrides
 
-    result = await heal_locator(
-        method=body.method,
-        failed_locator=body.failed_locator,
-        step_desc=body.step_desc,
-        error_message=body.error_message,
-        page_url=page_url,
-        accessibility_snapshot=snapshot,
-        page_elements=page_elements,
-        call_llm=call_llm,
-    )
+    overrides = await get_scene_llm_overrides("locator_heal")
+
+    async def call_llm(system_prompt: str, user_prompt: str) -> dict:
+        return await _call_llm(
+            system_prompt,
+            user_prompt,
+            config,
+            min_timeout=30,
+            param_overrides=overrides,
+            disable_thinking=True,
+        )
+
+    try:
+        result = await heal_locator(
+            method=body.method,
+            failed_locator=body.failed_locator,
+            step_desc=body.step_desc,
+            error_message=body.error_message,
+            page_url=page_url,
+            accessibility_snapshot=snapshot,
+            page_elements=page_elements,
+            call_llm=call_llm,
+        )
+    except Exception as exc:
+        logger.exception("[locator_heal] heal_locator failed")
+        return {"success": False, "reason": f"自愈处理异常: {exc}"}
 
     duration_ms = int((time.time() - start_time) * 1000)
     tokens_used = result.get("tokens_used", 0)
@@ -1067,17 +1089,20 @@ async def _locator_heal_handler(
         except Exception as e:
             logger.warning(f"[locator_heal] 保存记录失败: {e}")
 
-    await log_ai_usage(
-        config,
-        "locator_heal",
-        username=username,
-        project_id=project_id,
-        tokens_used=tokens_used,
-        duration_ms=duration_ms,
-        input_summary=f"{body.method}: {body.failed_locator}"[:500],
-        output_summary=(result.get("new_locator") or result.get("reason") or "")[:500],
-        success=bool(result.get("success")),
-    )
+    try:
+        await log_ai_usage(
+            config,
+            "locator_heal",
+            username=username,
+            project_id=project_id,
+            tokens_used=tokens_used,
+            duration_ms=duration_ms,
+            input_summary=f"{body.method}: {body.failed_locator}"[:500],
+            output_summary=(result.get("locator") or result.get("reason") or "")[:500],
+            status="success" if result.get("success") else "failed",
+        )
+    except Exception as exc:
+        logger.warning("[locator_heal] log_ai_usage failed: %s", exc)
 
     return {
         **result,
@@ -1125,8 +1150,9 @@ async def locator_heal_internal(
     body: LocatorHealRequest,
     project_id: Optional[int] = None,
 ):
-    """Runner 步骤失败时调用，需 X-Internal-Token"""
-    result = await _locator_heal_handler(body, project_id, "runner")
+    """Runner 步骤失败时调用，需 X-Runner-Token 或 X-Internal-Token"""
+    effective_project_id = project_id or body.project_id
+    result = await _locator_heal_handler(body, effective_project_id, "runner")
     return StandardResponse(data=result)
 
 
@@ -1188,6 +1214,194 @@ async def apply_healed_locator_to_case(
         },
         message="已写回用例定位器",
     )
+
+
+# ========== App 用例生成 ==========
+
+class GenerateAppCaseRequest(BaseModel):
+    description: str = Field(..., min_length=1, max_length=2000)
+    app_id: Optional[str] = Field(default=None, max_length=200)
+    driver_mode: str = Field(default="hybrid")
+    ai_config_id: Optional[int] = None
+
+
+@router.post(
+    "/app-case",
+    summary="AI 生成 App 测试步骤",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def generate_app_case(
+    body: GenerateAppCaseRequest,
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.core.functional_case_to_app import (
+        AppGenerationContext,
+        _generate_app_steps,
+        validate_app_generation_context,
+    )
+
+    project_id = user_info.get("project_id") or user_info.get("current_project_id")
+    ctx = AppGenerationContext(
+        app_id=body.app_id,
+        driver_mode=body.driver_mode or "hybrid",
+        ai_config_id=body.ai_config_id,
+    )
+    validate_app_generation_context(ctx)
+    data = await _generate_app_steps(
+        description=body.description,
+        ctx=ctx,
+        project_id=project_id,
+        user_info=user_info,
+    )
+    return StandardResponse(data=data)
+
+
+class AppInspectorSuggestRequest(BaseModel):
+    session_id: Optional[str] = None
+    node_attributes: dict = Field(default_factory=dict)
+    suggested_locator: Optional[dict] = None
+    driver_mode: str = Field(default="hybrid")
+    intent: str = Field(default="both", description="name / steps / both")
+    app_id: Optional[str] = None
+    extra_hint: Optional[str] = Field(default=None, max_length=500)
+    ai_config_id: Optional[int] = None
+    vision_config_id: Optional[int] = None
+
+
+@router.post(
+    "/app-inspector-suggest",
+    summary="元素探查 AI：命名元素 / 生成步骤",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def app_inspector_suggest(
+    body: AppInspectorSuggestRequest,
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.core.app_inspector_ai import suggest_inspector_ai
+
+    project_id = user_info.get("project_id") or user_info.get("current_project_id")
+    data = await suggest_inspector_ai(
+        project_id=project_id,
+        user_info=user_info,
+        ai_config_id=body.ai_config_id,
+        vision_config_id=body.vision_config_id,
+        session_id=body.session_id,
+        node_attributes=body.node_attributes or {},
+        suggested_locator=body.suggested_locator,
+        driver_mode=body.driver_mode,
+        intent=body.intent,
+        app_id=body.app_id,
+        extra_hint=body.extra_hint,
+    )
+    return StandardResponse(data=data)
+
+
+class AppLocatorHealRequest(BaseModel):
+    method: str
+    failed_locator: dict
+    step_desc: Optional[str] = Field(default=None, max_length=500)
+    error_message: Optional[str] = Field(default=None, max_length=1000)
+    match_score: Optional[float] = None
+    control_tree_excerpt: Optional[str] = Field(default=None, max_length=30000)
+    screenshot_base64: Optional[str] = Field(default=None, max_length=500000)
+    ai_config_id: Optional[int] = None
+    vision_config_id: Optional[int] = None
+
+
+async def _app_locator_heal_handler(body: AppLocatorHealRequest, project_id: Optional[int], username: str) -> dict:
+    from app.core.app_locator_heal import heal_app_locator
+
+    try:
+        config = await _get_ai_config(body.ai_config_id, scene="locator_heal")
+    except HTTPException as e:
+        return {"success": False, "reason": e.detail}
+
+    start_time = time.time()
+
+    async def call_llm(system_prompt: str, user_prompt: str) -> dict:
+        return await _call_llm(system_prompt, user_prompt, config, min_timeout=30)
+
+    call_vision = None
+    if body.screenshot_base64 and body.vision_config_id:
+        try:
+            import base64 as b64mod
+            from app.routers.ai.analyze import _call_vision_analysis
+
+            vision_config = await _get_ai_config(body.vision_config_id, scene="failure_analysis_vision")
+            img_bytes = b64mod.b64decode(body.screenshot_base64)
+
+            async def _vcall(prompt: str, _b64: str) -> dict:
+                return await _call_vision_analysis(
+                    vision_config,
+                    "你是 Android UI 分析助手。",
+                    prompt,
+                    img_bytes,
+                    "image/png",
+                )
+
+            call_vision = _vcall
+        except Exception as exc:
+            logger.warning("[app_locator_heal] vision config: %s", exc)
+
+    result = await heal_app_locator(
+        method=body.method,
+        failed_locator=body.failed_locator,
+        step_desc=body.step_desc,
+        error_message=body.error_message,
+        match_score=body.match_score,
+        control_tree_excerpt=body.control_tree_excerpt,
+        screenshot_base64=body.screenshot_base64,
+        call_llm=call_llm,
+        call_vision=call_vision,
+    )
+    result["duration_ms"] = int((time.time() - start_time) * 1000)
+
+    if project_id and result.get("success"):
+        try:
+            await AiGenerateRecord.create(
+                project_id=project_id,
+                generate_type="locator_heal",
+                input_summary={"method": body.method, "failed_locator": body.failed_locator},
+                output_content=result,
+                status="imported",
+                ai_config_id=config.id,
+                tokens_used=result.get("tokens_used", 0),
+                duration_ms=result["duration_ms"],
+                create_by=username or "system",
+            )
+        except Exception as exc:
+            logger.warning("[app_locator_heal] save record: %s", exc)
+    return result
+
+
+@router.post(
+    "/app-locator-heal",
+    summary="App 步骤定位器自愈",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def app_locator_heal(
+    body: AppLocatorHealRequest,
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = user_info.get("project_id") or user_info.get("current_project_id")
+    result = await _app_locator_heal_handler(
+        body, project_id, user_info.get("username") or user_info.get("sub") or ""
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("reason") or "自愈失败")
+    return StandardResponse(data=result, message="已生成新定位器")
+
+
+@router.post(
+    "/app-locator-heal/internal",
+    summary="App 定位器自愈（Runner 内部）",
+    dependencies=[Depends(verify_runner_or_internal)],
+)
+async def app_locator_heal_internal(
+    body: AppLocatorHealRequest,
+    project_id: Optional[int] = None,
+):
+    return StandardResponse(data=await _app_locator_heal_handler(body, project_id, "runner"))
 
 
 async def _save_ui_generate_record(

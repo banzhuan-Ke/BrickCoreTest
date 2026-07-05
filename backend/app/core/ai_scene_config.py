@@ -14,6 +14,7 @@ AI_SCENE_DEFINITIONS: dict[str, tuple[str, str]] = {
     "requirement_case": ("需求 / 功能用例生成", "需求文档、测试点、方案、用例生成"),
     "ui_case_generate": ("UI 步骤生成", "单页 / 多轮探索模式"),
     "ui_case_agent": ("UI Agent 探索", "MCP 式逐步规划执行"),
+    "app_case_generate": ("App 步骤生成", "功能用例 / 自然语言生成 App 自动化步骤"),
     "locator_heal": ("定位器自愈", "步骤失败时 AI 修复选择器"),
     "api_case_generate": ("API 用例生成", "基于接口定义生成用例"),
     "mock_data_generate": ("Mock 响应生成", "AI 生成 Mock 接口响应 JSON"),
@@ -87,6 +88,13 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.3～0.5",
         "tip": "Agent 探索模式与 UI 生成可共用",
+    },
+    "app_case_generate": {
+        "group": "generate",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-chat",
+        "temperature_hint": "0.3～0.5",
+        "tip": "App 步骤 JSON 输出，建议低温度；可与 UI 生成共用模型",
     },
     "api_case_generate": {
         "group": "generate",

@@ -51,4 +51,5 @@ async def get_version_info(request_base_url: str = "") -> dict:
     info = build_client_release_info(request_base_url)
     info = await enrich_release_info(info, request_base_url)
     info["community_edition"] = is_community_edition()
+    info["platform_version"] = settings.PLATFORM_VERSION
     return info

@@ -11,6 +11,7 @@ from typing import Any, Optional
 import requests
 
 from runner_client import __version__ as CLIENT_VERSION
+from runner_client.app.engine_capabilities import detect_runner_capabilities
 
 DEFAULT_TIMEOUT = 30
 
@@ -55,6 +56,11 @@ class BrickCoreApi:
         self.user_token: str = ""
         self.runner_token: str = ""
         self.username: str = ""
+        self.engine_web_enabled: bool = True
+        self.engine_app_enabled: bool = False
+
+    def _engine_flags(self) -> tuple[bool, bool]:
+        return bool(self.engine_web_enabled), bool(self.engine_app_enabled)
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -89,6 +95,8 @@ class BrickCoreApi:
     def connect_runner(self, device_name: str) -> dict[str, Any]:
         if not self.user_token:
             raise ApiError("请先登录")
+        enable_web, enable_app = self._engine_flags()
+        caps = detect_runner_capabilities(enable_web=enable_web, enable_app=enable_app)
         payload = {
             "id": str(uuid.getnode()),
             "ip": socket.gethostbyname(socket.gethostname()),
@@ -98,6 +106,7 @@ class BrickCoreApi:
             "version": platform.version(),
             "hostname": socket.gethostname(),
             "client_version": CLIENT_VERSION,
+            **caps,
         }
         resp = requests.post(
             self._url("/runner/connect"),
@@ -129,9 +138,19 @@ class BrickCoreApi:
     def heartbeat(self, device_id: str) -> None:
         if not self.runner_token:
             return
+        enable_web, enable_app = self._engine_flags()
+        caps = detect_runner_capabilities(enable_web=enable_web, enable_app=enable_app)
         resp = requests.post(
             self._url("/runner/heartbeat"),
-            json={"device_id": device_id, "client_version": CLIENT_VERSION},
+            json={
+                "device_id": device_id,
+                "client_version": CLIENT_VERSION,
+                "runner_engine_types": caps.get("runner_engine_types"),
+                "app_platform": caps.get("app_platform", ""),
+                "app_udid": caps.get("app_udid", ""),
+                "app_connection": caps.get("app_connection", ""),
+                "toolchain_status": caps.get("toolchain_status", {}),
+            },
             headers={"X-Runner-Token": self.runner_token},
             timeout=10,
         )

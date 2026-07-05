@@ -91,6 +91,9 @@ request.interceptors.response.use(
             return Promise.reject(response)
         }
         if (response.status >= 400 && ![401, 403, 404].includes(response.status)) {
+            if (response.config?.skipErrorHandler) {
+                return Promise.reject(response)
+            }
             const detail = response.data?.detail
             const message =
                 typeof detail === 'string' && detail

@@ -14,8 +14,8 @@
 
 | 方式 | 说明 |
 |------|------|
-| **网盘下载（推荐）** | [百度网盘](https://pan.baidu.com/s/1Nx2fkPAUi7htJKZAxp1paw?pwd=ye6b)（提取码 `ye6b`）；或见 [README 执行器章节](https://gitee.com/BanZhuanKeOrz/BrickCore#执行器下载windows--约-800mb) |
-| **平台下载** | 登录平台 → **UI 自动化 → 设备管理** → **网盘下载**（需管理员已配置下载源） |
+| **网盘下载（推荐）** | [百度网盘](https://pan.baidu.com/s/1pObFpG-Mt7-Pxo58hklOlg?pwd=9gbi)（提取码 `9gbi`）；或见 [README 执行器章节](https://gitee.com/BanZhuanKeOrz/BrickCore#执行器下载windows--约-800mb) |
+| **平台下载** | 登录平台 → **Web 自动化 → 设备管理** → **网盘下载**（需管理员已配置下载源） |
 | **客户端检查更新** | 已登录客户端可对比版本；优先使用网盘/外链，支持下载 zip 到「下载」文件夹 |
 
 > 安装包约 **800MB**（含 Chromium），网盘分发可减轻服务器压力。
@@ -34,7 +34,7 @@
 3. 双击 **`BrickCoreRunner.exe`**
 4. **管理服务器环境** 添加线上地址：`http://<公网IP>` 或域名（**不要** `:8000`；生产 API 走 Nginx **80**）
 5. 使用 **平台账号** 登录 → 填写 **设备名称** → 点击 **上线**
-6. 在 **UI 自动化 → 设备管理** 确认状态为 **在线**
+6. 在 **Web 自动化 → 设备管理** 确认状态为 **在线**
 
 ## 界面说明
 
@@ -50,7 +50,7 @@
 
 ## 与平台配合使用
 
-### UI 自动化
+### Web 自动化
 
 1. **执行用例**：用例列表 → 运行 → 选择 **在线设备**
 2. **AI 录制**：用例编辑 → AI 录制 → 选择本机设备
@@ -69,9 +69,19 @@
 
 仍支持命令行脚本方式，见 [性能测试 · 执行机](./perf-testing.md#执行机worker)。
 
+### App 自动化（Windows，Pro）
+
+1. 上线时勾选 **App 自动化**；本机 `adb devices` 须为 `device`
+2. 设备连接三选一：**USB**、**WiFi 无线调试**（`adb pair` / `adb connect`）、**Android 模拟器**（`adb connect 127.0.0.1:端口`）
+3. 每台 serial 首次执行 `runner\venv\Scripts\python.exe -m uiautomator2 init`
+4. 平台 **设备管理** 查看 `app_udid`（WiFi 为 `IP:端口`，连接方式 **wifi**）
+5. **App 自动化** 中用例/计划/元素探查选择在线 App Runner
+
+详细步骤与故障排查：[执行器安装指南 → App 自动化](#runner-install-guide)、[App 自动化](#app-automation)。
+
 ## 设备管理（平台侧）
 
-**路径**：**UI 自动化 → 设备管理**
+**路径**：**Web 自动化 → 设备管理**
 
 | 能力 | 说明 |
 |------|------|
@@ -134,7 +144,9 @@
 
 ## 相关文档
 
+- [执行器安装指南](#runner-install-guide)（App：USB / WiFi / 模拟器）
+- [App 自动化](#app-automation)
 - [执行器获取与发布](#runner-packaging)
 - [排查指南](#runner-troubleshooting)
-- [UI 自动化](#ui-automation)
+- [Web 自动化](#ui-automation)
 - [系统管理 - 执行器发布](#system-admin)

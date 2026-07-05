@@ -1,4 +1,4 @@
-# Post-sync (or pre-sync dry-run) verification for Pro -> CE export.
+﻿# Post-sync (or pre-sync dry-run) verification for Pro -> CE export.
 # Does NOT copy files. Use publish-ce.ps1 -ExecuteSync to sync after audit passes.
 param(
     [Parameter(Mandatory = $false)]

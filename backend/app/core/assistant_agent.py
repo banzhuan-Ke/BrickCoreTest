@@ -41,6 +41,7 @@ _CASE_HINTS = ("用例", "case", "工作区")
 _LIBRARY_HINTS = ("功能用例库", "用例库", "functional")
 _API_HINTS = ("接口", "api", "API", "endpoint", "路径", "请求")
 _UI_HINTS = ("ui", "UI", "界面", "web", "计划")
+_APP_HINTS = ("app", "App", "APP", "移动端", "安卓", "Android", "真机", "模拟器", "元素探查", "元素库")
 _EXECUTE_HINTS = ("执行", "运行", "触发", "跑", "启动")
 _QA_EVAL_HINTS = ("问答评测", "问答准确性", "qa eval", "qa_eval", "评测集", "问答准确")
 _PERF_HINTS = ("压测", "性能", "perf", "Perf", "TPS", "QPS", "并发")
@@ -56,7 +57,7 @@ SYSTEM_PROMPT = """你是 BrickCore 测试平台助手。根据用户问题与�
 若某工具返回 permission_denied 或 user_hint，请原样转告用户权限不足原因及 user_hint，不要尝试绕过权限。
 若 JSON 含 _truncated 或 _truncated_note，说明列表被截断，回答时注明「仅展示部分数据」。
 回答使用 Markdown；段落之间最多空一行，列表项之间不要插入空行。
-提及平台实体时请使用可识别格式便于跳转，例如：suite_id=12、api_id=5、requirement_id=3、task_id=8、plan_id=4、case_id=6、perf_scene_id=2、perf_record_id=9、template_id=7、datasource_id=3、set_id=2、(id=12)。
+提及平台实体时请使用可识别格式便于跳转，例如：api_id=5、suite_id=12、plan_id=4、case_id=6（接口用例）、ui_case_id=8（Web UI 用例）、app_case_id=3、app_suite_id=2、app_plan_id=1、task_id=8、requirement_id=3、perf_scene_id=2、template_id=7、set_id=2；列表项可写 id=数字（须放在对应 App/Web/接口 小节下）。
 危险操作（执行测试、批量生成、失败分析）需用户在前端点击确认后才会真正执行；若返回了 pending_confirm，请简要说明影响并提示用户确认。"""
 
 TOOL_SELECT_PROMPT = """你是 BrickCore 平台工具规划器。根据用户问题，从可用工具中选择 1～4 个最相关的工具及参数。
@@ -66,6 +67,7 @@ TOOL_SELECT_PROMPT = """你是 BrickCore 平台工具规划器。根据用户问
 - **接口管理/接口用例详情**：用 list_api_categories + list_api_definitions + list_api_test_cases（可选 list_api_suites），**禁止**用 list_requirements
 - 查单个接口详情用 get_api_definition
 - 查 UI 计划/用例用 list_ui_tasks / list_ui_cases；UI 执行记录用 list_ui_run_records
+- App 移动端用 list_app_cases / list_app_suites / list_app_plans；App 执行记录用 list_app_run_records；App 定时用 list_app_cron_jobs
 - 接口测试计划用 list_api_plans；接口执行记录用 list_api_run_records
 - 压测场景/记录/定时/Worker 用 list_perf_scenes / list_perf_records / list_perf_cron_jobs / list_perf_workers
 - UI 套件/定时用 list_ui_suites / list_ui_cron_jobs
@@ -73,11 +75,13 @@ TOOL_SELECT_PROMPT = """你是 BrickCore 平台工具规划器。根据用户问
 - 执行接口套件/计划用 preview_run_api_suite / preview_run_api_plan（需用户 confirm，执行记录触发方式为「小测」）
 - 执行单条接口用例用 preview_run_api_case（case_id 或 case_name + env_id，确认后同步返回结果）
 - 执行单条 Web UI 用例用 preview_run_ui_case（case_id 或 case_name + env_id + device_id）
+- 执行单条 App 用例用 preview_run_app_case（需在线 App Runner + adb 设备）
+- 执行 App 套件用 preview_run_app_suite；App 测试计划用 preview_run_app_plan（均需 env_id、device_id）
 - 问答准确性评测：支持「跑评测集 2 第 1-10 题」自动解析 range；需 target_id
-- Web UI 执行前可先 list_online_devices 获取在线 Runner 的 device_id
+- Web UI 执行前可先 list_online_devices 获取在线 Runner 的 device_id；App 执行需 App Runner 及 app_udid
 - 执行 UI 测试计划用 preview_run_ui_task；Web UI 套件用 preview_run_ui_suite（均需 env_id、device_id）
 - 启动压测场景用 preview_run_perf_scene（需 env_id，可选 use_workers）
-- 查单条执行详情用 get_execution_record（record_type: api_suite/api_plan/ui_plan/ui_case/perf）
+- 查单条执行详情用 get_execution_record（record_type: api_suite/api_plan/ui_plan/ui_case/app_plan/app_suite/app_case/perf）
 - 用户明确要求执行/生成/分析时，调用对应的 preview_* 工具（不要直接 confirm）
 - 只选择与问题相关的工具；当前项目 ID 已给定，project_id 请使用该值
 - 若仅需闲聊或无法查询，可不调用任何工具"""
@@ -284,6 +288,10 @@ def _plan_tools_from_page_context(
     perf_record_id = _safe_int(page_context.get("perf_record_id"))
     ui_task_run_id = _safe_int(page_context.get("ui_task_run_id"))
     ui_suite_run_id = _safe_int(page_context.get("ui_suite_run_id"))
+    app_case_id = _safe_int(page_context.get("app_case_id"))
+    app_plan_id = _safe_int(page_context.get("app_plan_id"))
+    app_suite_run_id = _safe_int(page_context.get("app_suite_run_id"))
+    app_plan_run_id = _safe_int(page_context.get("app_plan_run_id"))
     template_id = _safe_int(page_context.get("template_id"))
     page_hint = (page_context.get("page_hint") or "").strip()
 
@@ -319,6 +327,17 @@ def _plan_tools_from_page_context(
     elif ui_suite_run_id:
         add("get_execution_record", {"record_type": "ui_suite", "record_id": ui_suite_run_id})
         add("list_ui_run_records", {"project_id": pid, "page": 1, "size": 10})
+    elif app_case_id:
+        add("list_app_cases", {"project_id": pid, "page": 1, "size": 30})
+    elif app_plan_id:
+        add("list_app_plans", {"project_id": pid, "page": 1, "size": 15})
+        add("list_app_run_records", {"project_id": pid, "record_type": "plan", "page": 1, "size": 10})
+    elif app_plan_run_id:
+        add("get_execution_record", {"record_type": "app_plan", "record_id": app_plan_run_id})
+        add("list_app_run_records", {"project_id": pid, "page": 1, "size": 10})
+    elif app_suite_run_id:
+        add("get_execution_record", {"record_type": "app_suite", "record_id": app_suite_run_id})
+        add("list_app_run_records", {"project_id": pid, "page": 1, "size": 10})
     elif template_id:
         add("get_sql_template", {"template_id": template_id})
         add("list_sql_templates", {"project_id": pid, "page": 1, "size": 15})
@@ -340,6 +359,7 @@ def _plan_tools_from_page_context(
     elif page_hint == "cron_jobs":
         add("list_api_cron_jobs", {"project_id": pid, "page": 1, "size": 10})
         add("list_ui_cron_jobs", {"project_id": pid, "page": 1, "size": 10})
+        add("list_app_cron_jobs", {"project_id": pid, "page": 1, "size": 10})
         add("list_perf_cron_jobs", {"project_id": pid, "page": 1, "size": 10})
     elif page_hint == "perf_scenes":
         add("list_perf_scenes", {"project_id": pid, "page": 1, "size": 15})
@@ -359,6 +379,20 @@ def _plan_tools_from_page_context(
     elif page_hint == "ui_cases":
         add("list_ui_cases", {"project_id": pid, "page": 1, "size": 20})
         add("list_ui_tasks", {"project_id": pid, "page": 1, "size": 15})
+    elif page_hint == "app_cases":
+        add("list_app_cases", {"project_id": pid, "page": 1, "size": 20})
+        add("list_app_plans", {"project_id": pid, "page": 1, "size": 15})
+    elif page_hint == "app_suites":
+        add("list_app_suites", {"project_id": pid, "page": 1, "size": 20})
+        add("list_app_cases", {"project_id": pid, "page": 1, "size": 15})
+    elif page_hint == "app_plans":
+        add("list_app_plans", {"project_id": pid, "page": 1, "size": 15})
+        add("list_app_run_records", {"project_id": pid, "record_type": "plan", "page": 1, "size": 10})
+    elif page_hint == "app_run_records":
+        add("list_app_run_records", {"project_id": pid, "page": 1, "size": 15})
+    elif page_hint == "app_inspector":
+        add("list_online_devices", {"project_id": pid})
+        add("list_app_cases", {"project_id": pid, "page": 1, "size": 15})
     elif page_hint in ("api_run_records", "ui_run_records"):
         add("list_api_run_records", {"project_id": pid, "page": 1, "size": 15})
         add("list_ui_run_records", {"project_id": pid, "page": 1, "size": 15})
@@ -467,14 +501,33 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
     is_ui_record = any(h in text for h in ("UI执行", "界面执行", "Web执行")) or (
         any(h in text for h in _RECORD_HINTS) and any(h in text for h in _UI_HINTS)
     )
+    is_app_ctx = any(h in text for h in _APP_HINTS)
+    is_app_record = any(h in text for h in ("App执行", "APP执行", "移动端执行")) or (
+        any(h in text for h in _RECORD_HINTS) and is_app_ctx
+    )
     is_api_record = any(h in text for h in ("接口执行", "套件执行", "API执行")) or (
         any(h in text for h in _RECORD_HINTS) and is_api_ctx
     )
-    if is_api_record or (any(h in text for h in _RECORD_HINTS) and not is_ui_record and not any(h in text for h in _PERF_HINTS)):
-        if "计划" in text and "UI" not in text.upper() and "界面" not in text:
+    if is_api_record or (
+        any(h in text for h in _RECORD_HINTS)
+        and not is_ui_record
+        and not is_app_record
+        and not any(h in text for h in _PERF_HINTS)
+    ):
+        if "计划" in text and "UI" not in text.upper() and "界面" not in text and not is_app_ctx:
             add("list_api_run_records", {"project_id": pid, "record_type": "plan", "page": 1, "size": 15})
         else:
             add("list_api_run_records", {"project_id": pid, "page": 1, "size": 15})
+    elif is_app_record:
+        rt = ""
+        if "计划" in text:
+            rt = "plan"
+        elif "套件" in text:
+            rt = "suite"
+        args: dict[str, Any] = {"project_id": pid, "page": 1, "size": 15}
+        if rt:
+            args["record_type"] = rt
+        add("list_app_run_records", args)
     elif is_ui_record:
         task_id = _extract_id(text, ("计划", "task", "任务"))
         args: dict[str, Any] = {"project_id": pid, "page": 1, "size": 15}
@@ -496,11 +549,19 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
             add("list_data_factory_datasources", {"project_id": pid, "page": 1, "size": 15})
             add("list_sql_templates", {"project_id": pid, "page": 1, "size": 15})
 
-    if any(h in text for h in _UI_HINTS) and not is_api_ctx:
+    if any(h in text for h in _UI_HINTS) and not is_api_ctx and not is_app_ctx:
         if "计划" in text or "task" in text.lower():
             add("list_ui_tasks", {"project_id": pid, "page": 1, "size": 20})
         else:
             add("list_ui_cases", {"project_id": pid, "page": 1, "size": 20})
+
+    if is_app_ctx and not is_api_ctx:
+        if "计划" in text or "plan" in text.lower():
+            add("list_app_plans", {"project_id": pid, "page": 1, "size": 20})
+        elif "套件" in text:
+            add("list_app_suites", {"project_id": pid, "page": 1, "size": 20})
+        elif "用例" in text or "case" in text.lower():
+            add("list_app_cases", {"project_id": pid, "page": 1, "size": 20})
 
     if any(h in text for h in _EXECUTE_HINTS):
         suite_id = _extract_id(text, ("套件", "suite"))
@@ -510,7 +571,8 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
         env_id = _extract_id(text, ("环境", "env"))
         case_id = _extract_id(text, ("用例", "case"))
         set_id = _extract_id(text, ("评测集", "set"))
-        is_ui_exec = any(h in text for h in _UI_HINTS) and not is_api_ctx
+        is_ui_exec = any(h in text for h in _UI_HINTS) and not is_api_ctx and not is_app_ctx
+        is_app_exec = is_app_ctx and not is_api_ctx
         is_perf_exec = any(h in text for h in _PERF_HINTS)
         is_qa_eval = any(h in text for h in _QA_EVAL_HINTS)
         if is_qa_eval and set_id and any(h in text for h in _EXECUTE_HINTS):
@@ -523,6 +585,16 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
                 qa_args["case_scope"] = "range"
                 qa_args["range_start"], qa_args["range_end"] = qa_range
             add("preview_run_qa_eval", qa_args)
+        elif case_id and is_app_exec and not is_qa_eval and "套件" not in text:
+            add(
+                "preview_run_app_case",
+                {
+                    "project_id": pid,
+                    "case_id": case_id,
+                    "env_id": env_id or 0,
+                    "device_id": "",
+                },
+            )
         elif case_id and is_ui_exec and not is_qa_eval and "套件" not in text:
             add(
                 "preview_run_ui_case",
@@ -545,10 +617,21 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
                 "preview_run_ui_suite",
                 {"suite_id": suite_id, "env_id": env_id or 0, "device_id": ""},
             )
+        elif suite_id and is_app_exec and "接口" not in text:
+            add(
+                "preview_run_app_suite",
+                {"suite_id": suite_id, "env_id": env_id or 0, "device_id": ""},
+            )
         elif suite_id and (is_api_ctx or ("接口" in text and not is_ui_exec)):
             add("preview_run_api_suite", {"suite_id": suite_id, "env_id": env_id})
         elif plan_id and not is_ui_exec and "UI" not in text.upper() and not is_perf_exec:
-            add("preview_run_api_plan", {"plan_id": plan_id, "env_id": env_id})
+            if is_app_exec:
+                add(
+                    "preview_run_app_plan",
+                    {"plan_id": plan_id, "env_id": env_id or 0, "device_id": ""},
+                )
+            else:
+                add("preview_run_api_plan", {"plan_id": plan_id, "env_id": env_id})
         elif task_id and is_ui_exec:
             add(
                 "preview_run_ui_task",
@@ -556,13 +639,21 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
             )
 
     if any(h in text for h in _CRON_HINTS):
-        cron_all = any(k in text for k in ("三类", "汇总", "全部", "所有"))
-        if cron_all or (not is_api_ctx and not any(h in text for h in _UI_HINTS) and not any(h in text for h in _PERF_HINTS)):
+        cron_all = any(k in text for k in ("四类", "三类", "汇总", "全部", "所有"))
+        if cron_all or (
+            not is_api_ctx
+            and not any(h in text for h in _UI_HINTS)
+            and not is_app_ctx
+            and not any(h in text for h in _PERF_HINTS)
+        ):
             add("list_api_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
             add("list_ui_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
+            add("list_app_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
             add("list_perf_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
         elif any(h in text for h in _PERF_HINTS):
             add("list_perf_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
+        elif is_app_ctx:
+            add("list_app_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
         elif any(h in text for h in _UI_HINTS):
             add("list_ui_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
         elif is_api_ctx:
@@ -573,10 +664,15 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
     if any(h in text for h in _QA_EVAL_HINTS) and not any(h in text for h in _EXECUTE_HINTS):
         add("list_qa_eval_sets", {"project_id": pid})
 
-    if any(k in text for k in ("runner", "device_id", "执行设备", "执行器", "在线设备")) and any(
-        h in text for h in _UI_HINTS
+    if any(k in text for k in ("runner", "device_id", "执行设备", "执行器", "在线设备")) and (
+        any(h in text for h in _UI_HINTS) or is_app_ctx
     ):
         add("list_online_devices", {"project_id": pid})
+
+    if any(h in text for h in ("App套件", "移动端套件")) or (
+        "套件" in text and is_app_ctx and not is_api_ctx
+    ):
+        add("list_app_suites", {"project_id": pid, "page": 1, "size": 15})
 
     if any(h in text for h in ("UI套件", "Web套件", "界面套件")) or (
         "套件" in text and any(h in text for h in _UI_HINTS) and not is_api_ctx

@@ -243,7 +243,7 @@ Test-NetConnection <公网IP> -Port 26379
 Test-NetConnection <公网IP> -Port 9200
 ```
 
-详见 [执行器使用说明](runner-client.md)、[执行器打包](runner-packaging.md)（Pro 仓 `docs/其他文档/CE同步与发布手册.md` 有 Pro→CE 发布流程）。
+详见 [执行器使用说明](runner-client.md)、[执行器打包](runner-packaging.md)。
 
 ---
 
@@ -280,7 +280,7 @@ docker compose up -d --build
 
 ## 执行器（UI / 分布式压测）
 
-Docker 只部署**平台**。UI 自动化、分布式 Worker 需在 **Windows** 安装 **BrickCoreRunner.zip**（约 800MB）：
+Docker 只部署**平台**。Web 自动化、分布式 Worker 需在 **Windows** 安装 **BrickCoreRunner.zip**（约 800MB）：
 
 1. **网盘下载**：见仓库 [README](../../README.md#执行器下载windows--约-800mb)；或登录演示环境 **设备管理 → 网盘下载**
 2. 解压运行 `BrickCoreRunner.exe`，服务器填 **`http://43.142.83.156`**（自建填你的地址），演示账号 `admin` 登录并 **上线**

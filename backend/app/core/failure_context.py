@@ -16,6 +16,7 @@ from app.core.ui_result_extract import (
 )
 from app.models.http import ApiRunRecord
 from app.models.ui import UiCaseExecution
+from app.models.app import AppCaseExecution
 
 FAIL_STEP_STATUSES = frozenset({"fail", "failed", "error"})
 SENSITIVE_HEADER_KEYS = frozenset(
@@ -214,5 +215,90 @@ async def build_ui_failure_context(
         "failed_step_index": str(failed_idx + 1 if failed_idx >= 0 else ""),
         "screenshot_desc": screenshot_desc,
         "record_status": execution.status or "",
+    }
+    return prompt_vars, image_payload, screenshot_url
+
+
+async def build_app_failure_context(
+    execution: "AppCaseExecution",
+) -> tuple[dict[str, Any], Optional[tuple[bytes, str]], Optional[str]]:
+    """采集 App 执行失败上下文"""
+    result_data = normalize_result_data(execution.result_data)
+    summary = extract_ui_case_failure_summary(result_data)
+    steps = result_data.get("steps") or []
+    failed_idx, failed_step = find_failed_step(steps)
+    screenshot_url = _pick_failure_screenshot(result_data, failed_step)
+
+    env = execution.env if isinstance(execution.env, dict) else {}
+    case = await execution.case
+    driver_mode = (
+        env.get("driver_mode")
+        or result_data.get("driver_mode")
+        or (case.driver_mode if case else "")
+        or ""
+    )
+
+    step_summaries = []
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        item = {
+            "index": i + 1,
+            "keyword": step.get("keyword") or step.get("name") or "",
+            "status": step.get("status") or "",
+            "message": step.get("message") or step.get("desc") or step.get("content") or "",
+        }
+        if step.get("locator_type"):
+            item["locator_type"] = step.get("locator_type")
+        if step.get("execution_context"):
+            item["execution_context"] = step.get("execution_context")
+        if step.get("webview_page_url"):
+            item["webview_page_url"] = step.get("webview_page_url")
+        if step.get("match_score") is not None:
+            item["match_score"] = step.get("match_score")
+        step_summaries.append(item)
+
+    error_msg = summary.get("error_hint") or ""
+    if not error_msg and summary.get("log_error_excerpt"):
+        error_msg = summary["log_error_excerpt"]
+
+    logs = summary.get("log_tail") or result_data.get("log") or result_data.get("logs") or result_data.get("execution_log") or []
+    if isinstance(logs, list):
+        log_text = "\n".join(str(x) for x in logs[-80:])
+    else:
+        log_text = str(logs)
+
+    screenshot_desc = ""
+    if screenshot_url:
+        extra = ""
+        if failed_step and failed_step.get("match_score") is not None:
+            extra = f" 图像最高相似度 {failed_step.get('match_score')}"
+        screenshot_desc = (
+            f"失败步骤截图已提供（步骤 {failed_idx + 1 if failed_idx >= 0 else '?'}）"
+            f"{extra}，请结合移动端 UI、H5 或图像匹配信息综合判断。"
+        )
+    else:
+        screenshot_desc = "（无可用截图，仅依据步骤与日志分析）"
+
+    image_payload = load_image_from_url(screenshot_url) if screenshot_url else None
+
+    prompt_vars = {
+        "target_type": "app",
+        "case_name": result_data.get("name") or result_data.get("case_name") or (case.name if case else "未知用例"),
+        "request_method": "",
+        "request_url": "",
+        "request_headers": "",
+        "request_body": "",
+        "response_status": "",
+        "response_body": "",
+        "error_msg": _truncate(error_msg, 2000),
+        "logs": _truncate(log_text, MAX_LOG_CHARS),
+        "steps": _truncate(json.dumps(step_summaries, ensure_ascii=False), MAX_STEPS_JSON_CHARS),
+        "failed_step_index": str(failed_idx + 1 if failed_idx >= 0 else ""),
+        "screenshot_desc": screenshot_desc,
+        "record_status": execution.status or "",
+        "driver_mode": driver_mode or "",
+        "device_udid": env.get("device_udid") or "",
+        "platform": env.get("platform") or "android",
     }
     return prompt_vars, image_payload, screenshot_url

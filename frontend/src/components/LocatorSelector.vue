@@ -169,11 +169,28 @@ function buildMetaFallbackOptions(m) {
       opts.push({ label: `弹窗内角色: ${popupRoot} >> get_by_role=${role}, ${text}`, value: `${popupRoot} >> get_by_role=${role}, ${text}` })
     }
   }
+  const rowContext = (m.rowContext || '').trim()
+  if (rowContext && rowContext.length >= 2) {
+    const rowKey = rowContext.slice(0, 48).replace(/'/g, '')
+    const inputType = (m.inputType || '').toLowerCase()
+    if (inputType === 'checkbox' || role === 'checkbox') {
+      opts.push({
+        label: `表格行复选框: //tr[contains(.,"${rowKey}")]//input[@type="checkbox"]`,
+        value: `//tr[contains(.,"${rowKey}")]//input[@type="checkbox"]`,
+      })
+    }
+    if (text && text.length < 40) {
+      opts.push({
+        label: `表格行文本: //tr[contains(.,"${rowKey}")]//*[contains(.,"${text.slice(0, 32)}")]`,
+        value: `//tr[contains(.,"${rowKey}")]//*[contains(.,"${text.slice(0, 32)}")]`,
+      })
+    }
+  }
   if (tag && text) {
     const classPart = cls ? `[@class='${cls.split(/\s+/)[0]}']` : ''
     opts.push({
-      label: `XPath: //${tag}${classPart}[contains(text(),'${text}')]`,
-      value: `//${tag}${classPart}[contains(text(),'${text}')]`
+      label: `XPath: //${tag}${classPart}[contains(.,"${text}")]`,
+      value: `//${tag}${classPart}[contains(.,"${text}")]`
     })
   }
   if (region && text) {

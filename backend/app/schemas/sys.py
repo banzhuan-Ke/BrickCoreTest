@@ -349,6 +349,11 @@ class DeviceSchemas(BaseModel):
     hostname: str = ""
     runner_client_version: str = ""
     runner_last_heartbeat: Optional[datetime] = None
+    runner_engine_types: List[str] = Field(default_factory=lambda: ["web"])
+    app_platform: str = ""
+    app_udid: str = ""
+    app_connection: str = ""
+    toolchain_status: Dict[str, Any] = Field(default_factory=dict)
     create_time: Optional[datetime] = None
     update_time: Optional[datetime] = None
     is_del: bool = False

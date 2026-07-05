@@ -1,75 +1,152 @@
 <template>
-  <!-- 顶部的logo图标 -->
   <div class="logo">
     <img src="@/assets/images/brickcore-mark.svg" alt="BrickCore" class="logo-mark">
     <div class="title" v-if="!uStore.isCollapse">BrickCore</div>
   </div>
-  <!-- 菜单 -->
-  <el-menu :default-active="route.path" :collapse="uStore.isCollapse" collapse-transition size="large"
-           class="menu-container">
-    <template v-for="(group, groupIndex) in filteredMenuGroups" :key="group.title">
-      <!-- 分组标题（展开时显示）-->
-      <div v-if="!uStore.isCollapse" class="menu-group-header" @click="toggleGroup(groupIndex)">
-        <div class="menu-group-title">
-          <el-icon :size="16" class="group-icon">
-            <component :is="group.icon"/>
+  <el-menu
+    :default-active="activeMenuPath"
+    :key="activeMenuPath"
+    :collapse="uStore.isCollapse"
+    collapse-transition
+    class="menu-container"
+  >
+    <div
+      v-for="group in filteredMenuGroups"
+      :key="group.title"
+      class="menu-group"
+      :class="{
+        'is-expanded': group.expanded && !uStore.isCollapse,
+        'is-current': isGroupCurrent(group),
+      }"
+    >
+      <button
+        v-if="!uStore.isCollapse"
+        type="button"
+        class="menu-group-header"
+        @click="toggleGroup(group.title)"
+      >
+        <span class="group-icon-wrap">
+          <el-icon>
+            <component :is="group.icon" />
           </el-icon>
-          <span>{{ group.title }}</span>
-        </div>
-        <el-icon :size="14" class="expand-icon" :class="{ 'is-expanded': group.expanded }">
-          <ArrowDown />
+        </span>
+        <span class="group-label">{{ group.title }}</span>
+        <el-icon class="group-chevron" :class="{ 'is-open': group.expanded }">
+          <ArrowRight />
         </el-icon>
-      </div>
-      <!-- 菜单项 -->
-      <div class="menu-items-wrapper" :class="{ 'is-collapsed': !group.expanded && !uStore.isCollapse }">
-        <el-menu-item 
-          :index="item.path" 
-          v-for='item in group.items' 
-          :key="item.path" 
+      </button>
+
+      <div
+        class="menu-group-panel"
+        :class="{ 'is-collapsed': !group.expanded && !uStore.isCollapse }"
+      >
+        <el-menu-item
+          v-for="item in group.items"
+          :key="item.path"
+          :index="item.path"
           :disabled="proStore.isDisabled && !isMenuItemEnabled(item, group)"
-          @click="MenuClick(item)">
-          <el-icon :size="18" style="margin-right: 15px;">
-            <component :is="item.icon"/>
-          </el-icon>
+          @click="MenuClick(item)"
+        >
+          <span class="item-icon-wrap">
+            <el-icon>
+              <component :is="item.icon" />
+            </el-icon>
+          </span>
           <span>{{ item.name }}</span>
         </el-menu-item>
       </div>
-      <!-- 分组分隔线 -->
-      <div v-if="!uStore.isCollapse && groupIndex < filteredMenuGroups.length - 1" class="menu-divider"></div>
-    </template>
+    </div>
   </el-menu>
 </template>
 
 <script setup>
-import {ProjectStore} from '@/stores/module/ProjectStore'
-import {UserStore} from '@/stores/module/UserStore'
-import {MenuGroups} from '@/datas/Menu'
-import {useRoute, useRouter} from 'vue-router'
-import {reactive, computed, onMounted} from 'vue'
-import {useCommunityEdition} from '@/composables/useCommunityEdition'
+import { ArrowRight } from '@element-plus/icons-vue'
+import { ProjectStore } from '@/stores/module/ProjectStore'
+import { UserStore } from '@/stores/module/UserStore'
+import { MenuGroups } from '@/datas/Menu'
+import { useRoute, useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useCommunityEdition } from '@/composables/useCommunityEdition'
 
-// 定义路由
+const MENU_EXPANDED_STORAGE_KEY = 'brickcore_menu_expanded_groups'
+
 const router = useRouter()
-// 获取当前路由信息
 const route = useRoute()
 const proStore = ProjectStore()
 const uStore = UserStore()
 const { isCommunityEdition, loadCommunityEdition } = useCommunityEdition()
 
+const expandedGroups = ref([])
+
+function resolveMenuItemPath(path) {
+  if (!path) return ''
+  for (const group of MenuGroups) {
+    for (const item of group.items) {
+      if (item.external || !item.path) continue
+      if (path === item.path || path.startsWith(`${item.path}/`)) {
+        return item.path
+      }
+    }
+  }
+  return path
+}
+
+function resolveGroupTitleByPath(path) {
+  if (!path) return ''
+  for (const group of MenuGroups) {
+    for (const item of group.items) {
+      if (item.external || !item.path) continue
+      if (path === item.path || path.startsWith(`${item.path}/`)) {
+        return group.title
+      }
+    }
+  }
+  return MenuGroups[0]?.title || ''
+}
+
+function syncExpandedToRoute(path = route.path) {
+  const title = resolveGroupTitleByPath(path)
+  if (title) {
+    expandedGroups.value = [title]
+  }
+}
+
+function loadExpandedGroups() {
+  syncExpandedToRoute(route.path)
+}
+
+function isGroupCurrent(group) {
+  return group.items.some((item) => {
+    if (item.external || !item.path) return false
+    return route.path === item.path || route.path.startsWith(`${item.path}/`)
+  })
+}
+
 onMounted(() => {
   loadCommunityEdition()
+  loadExpandedGroups()
 })
 
-// 使用响应式数据管理菜单展开状态
-const menuGroups = reactive(MenuGroups.map(g => ({
-  ...g,
-  expanded: g.expanded !== false
-})))
+watch(
+  () => route.path,
+  (path) => {
+    syncExpandedToRoute(path)
+  }
+)
 
-// 根据权限过滤菜单分组和菜单项
+const activeMenuPath = computed(() => resolveMenuItemPath(route.path))
+
+watch(
+  expandedGroups,
+  (titles) => {
+    localStorage.setItem(MENU_EXPANDED_STORAGE_KEY, JSON.stringify(titles))
+  },
+  { deep: true }
+)
+
 const filteredMenuGroups = computed(() => {
-  return menuGroups.map(group => {
-    const items = group.items.filter(item => {
+  return MenuGroups.map((group) => {
+    const items = group.items.filter((item) => {
       if (isCommunityEdition.value && item.path === '/ai-qa-eval') {
         return false
       }
@@ -79,16 +156,22 @@ const filteredMenuGroups = computed(() => {
       if (!item.permission) return true
       return uStore.hasPermission(item.permission)
     })
-    return { ...group, items }
-  }).filter(group => group.items.length > 0)
+    return {
+      ...group,
+      items,
+      expanded: expandedGroups.value.includes(group.title),
+    }
+  }).filter((group) => group.items.length > 0)
 })
 
-// 切换分组展开/收起
-const toggleGroup = (index) => {
-  menuGroups[index].expanded = !menuGroups[index].expanded
+function toggleGroup(title) {
+  if (expandedGroups.value.includes(title)) {
+    expandedGroups.value = []
+    return
+  }
+  expandedGroups.value = [title]
 }
 
-// 未选项目时仍可访问的菜单（如文档中心、项目管理、系统管理）
 const isMenuItemEnabled = (item, group) => {
   if (item.noProjectRequired) return true
   if (item.path?.startsWith('/project')) return true
@@ -96,13 +179,10 @@ const isMenuItemEnabled = (item, group) => {
   return false
 }
 
-// 点击菜单项
 const MenuClick = (item) => {
   if (item.external) {
-    // 处理外部链接
     window.open(item.path)
   } else {
-    // 内部路由正常跳转
     router.push(item.path)
   }
 }

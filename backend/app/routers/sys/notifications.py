@@ -29,6 +29,7 @@ class NotificationConfigItem(BaseModel):
     api_auto_push_report: bool = False
     ui_auto_push_report: bool = False
     perf_auto_push_report: bool = False
+    app_auto_push_report: bool = False
 
 
 class NotificationConfigOut(BaseModel):
@@ -40,6 +41,7 @@ class NotificationConfigOut(BaseModel):
     api_auto_push_report: bool
     ui_auto_push_report: bool
     perf_auto_push_report: bool = False
+    app_auto_push_report: bool = False
 
     class Config:
         from_attributes = True
@@ -88,6 +90,7 @@ async def get_notification_configs(project_id: int):
             api_auto_push_report=cfg.api_auto_push_report,
             ui_auto_push_report=cfg.ui_auto_push_report,
             perf_auto_push_report=getattr(cfg, "perf_auto_push_report", False),
+            app_auto_push_report=getattr(cfg, "app_auto_push_report", False),
         ))
     return result
 
@@ -107,6 +110,7 @@ async def create_notification_config(item: NotificationConfigItem, project_id: i
         api_auto_push_report=item.api_auto_push_report,
         ui_auto_push_report=item.ui_auto_push_report,
         perf_auto_push_report=item.perf_auto_push_report,
+        app_auto_push_report=item.app_auto_push_report,
     )
     return NotificationConfigOut(
         id=cfg.id,
@@ -117,6 +121,7 @@ async def create_notification_config(item: NotificationConfigItem, project_id: i
         api_auto_push_report=cfg.api_auto_push_report,
         ui_auto_push_report=cfg.ui_auto_push_report,
         perf_auto_push_report=cfg.perf_auto_push_report,
+        app_auto_push_report=cfg.app_auto_push_report,
     )
 
 
@@ -133,6 +138,7 @@ async def update_notification_config(config_id: int, item: NotificationConfigIte
     cfg.api_auto_push_report = item.api_auto_push_report
     cfg.ui_auto_push_report = item.ui_auto_push_report
     cfg.perf_auto_push_report = item.perf_auto_push_report
+    cfg.app_auto_push_report = item.app_auto_push_report
     await cfg.save()
 
     return NotificationConfigOut(
@@ -144,6 +150,7 @@ async def update_notification_config(config_id: int, item: NotificationConfigIte
         api_auto_push_report=cfg.api_auto_push_report,
         ui_auto_push_report=cfg.ui_auto_push_report,
         perf_auto_push_report=cfg.perf_auto_push_report,
+        app_auto_push_report=cfg.app_auto_push_report,
     )
 
 

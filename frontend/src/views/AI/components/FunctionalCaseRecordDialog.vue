@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    title="🎬 功能用例 → 录制 UI 自动化"
+    title="🎬 功能用例 → 录制 Web 自动化"
     width="760px"
     destroy-on-close
     :close-on-click-modal="false"

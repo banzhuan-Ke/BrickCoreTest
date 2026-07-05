@@ -189,6 +189,7 @@ def parse_stream(
 
     if answer_parts:
         text = "".join(answer_parts)
+        extras["answer"] = text[:16000]
         extras["answer_preview"] = text[: (rules.get("answer_max_len") or 500)]
         extras["answer_length"] = len(text)
 

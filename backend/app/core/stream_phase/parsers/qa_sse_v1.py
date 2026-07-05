@@ -95,7 +95,7 @@ def parse_qa_sse_content(lines: list[str]) -> dict[str, Any]:
     """仅提取答案/思考/引用（供问答准确性评测复用，无阶段计时）。"""
     result = parse_stream(lines, start_time=time.time(), status_code=200)
     extras = result.get("extras") or {}
-    answer = extras.get("answer_preview") or ""
+    answer = extras.get("answer") or extras.get("answer_preview") or ""
     if answer == "无答案返回":
         answer = ""
     status = "success" if answer and not str(answer).startswith("请求") else "fail"
@@ -245,6 +245,7 @@ def parse_stream(
     extras["references_high"] = _format_references(unique_refs, min_score=80)
 
     if full_answer:
+        extras["answer"] = full_answer[:16000]
         extras["answer_preview"] = full_answer[:500]
         extras["answer_length"] = _answer_length(full_answer)
     else:

@@ -22,6 +22,13 @@ _ASSERTION_METHODS = frozenset({
     "kw_assert_enabled",
 })
 
+_APP_ASSERTION_METHODS = frozenset({
+    "assert_exists",
+    "assert_not_exists",
+    "assert_text",
+    "assert_text_contains",
+})
+
 # 否定类预期关键词 → 建议断言类型
 _NOT_EXIST_HINTS = (
     "不存在", "不应出现", "不应显示", "不应有", "没有该", "无该", "不包含",
@@ -536,12 +543,17 @@ async def generate_assertion_steps(
     page_context: str,
     raw_actions: list,
     config,
-) -> list[dict]:
+    step_module: str = "ui",
+) -> tuple[list, int]:
     """第二阶段：基于描述 + 页面快照生成断言步骤（仅追加，不改已有操作）"""
     from app.core.ai_prompts import PromptManager
     from app.core.llm_client import LLMClientFactory
     from app.core.encryption import decrypt_value
     from app.routers.ai.generate import _normalize_ui_steps
+
+    module = (step_module or "ui").strip().lower()
+    assertion_methods = _APP_ASSERTION_METHODS if module == "app" else _ASSERTION_METHODS
+    prompt_code = "app_record_append_assertions" if module == "app" else "ui_record_append_assertions"
 
     expectations = extract_expectations(description)
     if not expectations and not description:
@@ -553,14 +565,14 @@ async def generate_assertion_steps(
     steps_text = _build_steps_text_for_assert(trimmed_steps)
     try:
         system_prompt, user_prompt = await PromptManager.render(
-            code="ui_record_append_assertions",
+            code=prompt_code,
             context={
-                "description": description or "录制页面操作",
+                "description": description or ("App 自动化测试" if module == "app" else "录制页面操作"),
                 "expectations_text": expectations_text,
                 "steps_text": steps_text,
                 "steps_count": len(trimmed_steps),
                 "page_context": page_context or "（未启用页面文本快照）",
-                "has_page_context": bool(page_context),
+                "has_page_context": bool(page_context) and module == "ui",
                 "max_assertions": max_assertions,
             },
         )
@@ -616,7 +628,7 @@ async def generate_assertion_steps(
             if not isinstance(s, dict):
                 continue
             method = s.get("method", "")
-            if method not in _ASSERTION_METHODS:
+            if method not in assertion_methods:
                 logger.warning("[recorder.assert] 跳过不支持的断言 method: %s", method)
                 continue
             if not s.get("desc"):
@@ -627,11 +639,15 @@ async def generate_assertion_steps(
             return [], tokens_used
 
         before_cap = len(candidates)
-        candidates = refine_assertion_candidates(
-            candidates,
-            action_steps=trimmed_steps,
-            max_count=max_assertions,
-        )
+        if module == "app":
+            refined = candidates[:max_assertions]
+        else:
+            refined = refine_assertion_candidates(
+                candidates,
+                action_steps=trimmed_steps,
+                max_count=max_assertions,
+            )
+        candidates = refined
         if before_cap != len(candidates):
             logger.info(
                 "[recorder.assert] 断言精炼 %s → %s（上限 %s）",
@@ -650,7 +666,12 @@ async def generate_assertion_steps(
                 "anchor_step": s.get("anchor_step"),
             })
 
-        valid, errors = _normalize_ui_steps(candidates)
+        if module == "app":
+            from app.core.functional_case_to_app import normalize_app_steps
+
+            valid, errors = normalize_app_steps(candidates)
+        else:
+            valid, errors = _normalize_ui_steps(candidates)
         if errors:
             logger.warning("[recorder.assert] 断言校验提示: %s", errors[:5])
         _patch_assertion_meta(valid, raw_actions)

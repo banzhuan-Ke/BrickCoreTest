@@ -45,6 +45,7 @@ MCP_DANGEROUS_OPS: tuple[str, ...] = (
     "preview_run_api_case → confirm_run_api_case",
     "preview_run_qa_eval → confirm_run_qa_eval",
     "preview_run_ui_case → confirm_run_ui_case",
+    "preview_run_app_case → confirm_run_app_case",
     "preview_run_ui_task → confirm_run_ui_task",
     "preview_run_ui_suite → confirm_run_ui_suite",
     "preview_run_perf_scene → confirm_run_perf_scene",
@@ -95,7 +96,7 @@ _register(
     "获取项目全貌摘要（环境/模块/需求/用例库/最近失败，推荐用于项目总结）",
 )
 _register("list_environments", mcp_tools.tool_list_environments, "列出项目环境")
-_register("list_online_devices", mcp_tools.tool_list_online_devices, "列出在线 Web UI Runner 设备")
+_register("list_online_devices", mcp_tools.tool_list_online_devices, "列出在线 Runner 设备（含 Web/App 能力）")
 _register("list_modules", mcp_tools.tool_list_modules, "列出项目测试目录（统一 TestCatalog）")
 _register(
     "list_api_definitions",
@@ -118,6 +119,11 @@ _register("list_ui_cases", mcp_tools.tool_list_ui_cases, "列出项目 Web UI �
 _register("list_ui_run_records", mcp_tools.tool_list_ui_run_records, "列出 UI 测试计划执行记录")
 _register("list_ui_suites", mcp_tools.tool_list_ui_suites, "列出 Web UI 测试套件")
 _register("list_ui_cron_jobs", mcp_tools.tool_list_ui_cron_jobs, "列出 UI 定时任务")
+_register("list_app_cases", mcp_tools.tool_list_app_cases, "列出 App 用例")
+_register("list_app_suites", mcp_tools.tool_list_app_suites, "列出 App 套件")
+_register("list_app_plans", mcp_tools.tool_list_app_plans, "列出 App 测试计划")
+_register("list_app_run_records", mcp_tools.tool_list_app_run_records, "列出 App 执行记录")
+_register("list_app_cron_jobs", mcp_tools.tool_list_app_cron_jobs, "列出 App 定时任务")
 _register("list_perf_scenes", mcp_tools.tool_list_perf_scenes, "列出性能测试场景")
 _register("list_perf_records", mcp_tools.tool_list_perf_records, "列出性能测试执行记录")
 _register("list_perf_cron_jobs", mcp_tools.tool_list_perf_cron_jobs, "列出性能测试定时任务")
@@ -154,6 +160,12 @@ if qa_eval_feature_enabled():
     _register("confirm_run_qa_eval", mcp_tools.tool_confirm_run_qa_eval, "确认提交问答准确性评测")
 _register("preview_run_ui_case", mcp_tools.tool_preview_run_ui_case, "预览单条 Web UI 用例执行")
 _register("confirm_run_ui_case", mcp_tools.tool_confirm_run_ui_case, "确认执行单条 Web UI 用例")
+_register("preview_run_app_case", mcp_tools.tool_preview_run_app_case, "预览单条 App 用例执行")
+_register("confirm_run_app_case", mcp_tools.tool_confirm_run_app_case, "确认执行单条 App 用例")
+_register("preview_run_app_suite", mcp_tools.tool_preview_run_app_suite, "预览 App 套件执行影响")
+_register("confirm_run_app_suite", mcp_tools.tool_confirm_run_app_suite, "确认执行 App 套件")
+_register("preview_run_app_plan", mcp_tools.tool_preview_run_app_plan, "预览 App 测试计划执行影响")
+_register("confirm_run_app_plan", mcp_tools.tool_confirm_run_app_plan, "确认执行 App 测试计划")
 _register("preview_run_ui_task", mcp_tools.tool_preview_run_ui_task, "预览 UI 测试计划执行影响")
 _register("preview_run_ui_suite", mcp_tools.tool_preview_run_ui_suite, "预览 Web UI 套件执行影响")
 _register("preview_run_perf_scene", mcp_tools.tool_preview_run_perf_scene, "预览压测场景执行影响")

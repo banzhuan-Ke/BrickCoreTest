@@ -6,8 +6,8 @@ import re
 from typing import Any, Optional
 
 from app.core.ai_prompts import PromptManager
-from app.core.locator_utils import normalize_locator
-from app.core.page_fetcher import fetch_page_structure, format_elements_for_prompt
+from app.core.locator_utils import normalize_locator, _strip_role_name_part
+from app.core.page_fetcher import fetch_page_structure, format_elements_for_prompt, MAX_ARIA_SNAPSHOT_CHARS
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def _extract_text_from_locator(locator: str) -> Optional[str]:
     if locator.startswith("get_by_role="):
         parts = locator[len("get_by_role="):].split(",", 1)
         if len(parts) > 1:
-            return parts[1].strip()
+            return _strip_role_name_part(parts[1])
     m = re.search(r':has-text\("([^"]+)"\)', locator)
     if m:
         return m.group(1)
@@ -145,7 +145,11 @@ async def heal_locator(
         snap_type = "dom"
 
     if not snapshot_text and page_url:
-        page_data = await fetch_page_structure(page_url, timeout=15)
+        try:
+            page_data = await fetch_page_structure(page_url, timeout=15)
+        except Exception as exc:
+            logger.warning("[ui_locator_heal] fetch_page_structure failed: %s", exc)
+            page_data = None
         if page_data:
             snapshot_text = format_elements_for_prompt(page_data.get("elements") or [])
             snap_type = "dom_fetched"
@@ -156,17 +160,27 @@ async def heal_locator(
             "reason": "无法获取页面 snapshot，请提供 page_url 或在 Runner 运行时重试",
         }
 
-    system_prompt, user_prompt = await PromptManager.render("ui_locator_heal", {
-        "method": method,
-        "failed_locator": failed_locator,
-        "step_desc": step_desc or "",
-        "error_message": error_message or "",
-        "page_url": page_url or "",
-        "accessibility_snapshot": snapshot_text,
-        "snapshot_type": snap_type,
-    })
+    if len(snapshot_text) > MAX_ARIA_SNAPSHOT_CHARS:
+        snapshot_text = snapshot_text[:MAX_ARIA_SNAPSHOT_CHARS] + "\n... (truncated)"
 
-    resp = await call_llm(system_prompt, user_prompt)
+    try:
+        system_prompt, user_prompt = await PromptManager.render("ui_locator_heal", {
+            "method": method,
+            "failed_locator": failed_locator,
+            "step_desc": step_desc or "",
+            "error_message": error_message or "",
+            "page_url": page_url or "",
+            "accessibility_snapshot": snapshot_text,
+            "snapshot_type": snap_type,
+        })
+    except ValueError as exc:
+        return {"success": False, "reason": str(exc)}
+
+    try:
+        resp = await call_llm(system_prompt, user_prompt)
+    except Exception as exc:
+        logger.warning("[ui_locator_heal] LLM 调用失败: %s", exc)
+        return {"success": False, "reason": f"LLM 调用失败: {exc}"}
     raw = resp.get("content", "")
     tokens = resp.get("tokens", 0)
     parsed = _extract_json_object(raw)

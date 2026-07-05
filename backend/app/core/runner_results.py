@@ -5,6 +5,7 @@ import logging
 from typing import Any, Optional
 
 from app.core.notification import NotificationService
+from app.core.ui_case_status import normalize_ui_case_status
 from app.core.ui_suite_hooks import trigger_ui_suite_hooks_for_execution
 from app.models.sys import NotificationConfig
 from app.models.ui import Suite, Task, UiCaseExecution, UiPlanExecution, UiSuiteExecution
@@ -13,7 +14,14 @@ logger = logging.getLogger(__name__)
 
 
 async def save_runner_results(run_suite: dict[str, Any], result: dict[str, Any]) -> None:
-    """保存 UI 自动化执行结果（计划 / 套件 / 单用例）"""
+    """保存自动化执行结果（Web UI / App）"""
+    engine_type = (run_suite.get("engine_type") or "").strip().lower()
+    if not engine_type and isinstance(result, dict):
+        engine_type = (result.get("engine_type") or "").strip().lower()
+    if engine_type == "app":
+        from app.core.app_runner_results import save_app_runner_results
+        await save_app_runner_results(run_suite, result)
+        return
     if run_suite.get("plan_execution_id"):
         await _save_task_result(
             int(run_suite["plan_execution_id"]),
@@ -39,7 +47,7 @@ async def _save_case_result(case_result: dict[str, Any], case_execution_id: Opti
     if not record:
         logger.error("用例执行记录不存在: %s", case_execution_id)
         return
-    record.status = case_result.get("status") or record.status
+    record.status = normalize_ui_case_status(case_result.get("status")) or record.status
     record.result_data = case_result
     await record.save()
 
@@ -60,9 +68,17 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
     if run_all == 0 and case_count > 0 and not result.get("fail") and not result.get("error"):
         no_run = max(no_run, case_count)
 
-    status = "执行完成" if case_count <= run_all + no_run + result.get("fail", 0) + result.get("error", 0) else "执行中"
+    is_final = result.get("final", True)
     if result.get("cancelled"):
         status = "已停止"
+    elif not is_final:
+        status = "执行中"
+    else:
+        status = (
+            "执行完成"
+            if case_count <= run_all + no_run + result.get("fail", 0) + result.get("error", 0)
+            else "执行中"
+        )
 
     suite_data.status = status
     suite_data.run_all = run_all
@@ -71,12 +87,13 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
     suite_data.fail = result.get("fail", 0)
     suite_data.error = result.get("error", 0)
     suite_data.skip = result.get("skip", 0)
-    suite_data.duration = result.get("duration", 0)
-    suite_data.execution_log = result.get("execution_log", [])
+    if is_final:
+        suite_data.duration = result.get("duration", 0)
+        suite_data.execution_log = result.get("execution_log", [])
     suite_data.pass_rate = pass_rate
     await suite_data.save()
 
-    if status == "执行完成":
+    if status == "执行完成" and is_final:
         total_fail = result.get("fail", 0) + result.get("error", 0)
         if total_fail > 0:
             project_id = None
@@ -113,9 +130,11 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
     for case in result.get("executed_cases", []):
         await _save_case_result(case, case.get("execution_id"))
     for case in result.get("pending_cases", []):
-        await _save_case_result(case, case.get("execution_id"))
+        payload = dict(case)
+        payload.setdefault("status", "no_run")
+        await _save_case_result(payload, case.get("execution_id"))
 
-    if status == "执行完成":
+    if status == "执行完成" and is_final:
         await trigger_ui_suite_hooks_for_execution(suite_record_id)
 
 
@@ -136,7 +155,6 @@ async def _reaggregate_plan_execution(task_record_id: int) -> None:
     error = sum(s.error or 0 for s in suites)
     skip = sum(s.skip or 0 for s in suites)
     run_all = sum(s.run_all or 0 for s in suites)
-    no_run = sum(s.no_run or 0 for s in suites)
     duration = max((s.duration or 0) for s in suites)
     pass_rate = round((success + skip) / case_count * 100, 2) if case_count > 0 else 0
 
@@ -148,6 +166,12 @@ async def _reaggregate_plan_execution(task_record_id: int) -> None:
         status = "执行完成"
     else:
         status = "执行中"
+
+    accounted = success + fail + error + skip
+    if status == "执行中":
+        no_run = max(0, case_count - accounted)
+    else:
+        no_run = sum(s.no_run or 0 for s in suites)
 
     task_data.status = status
     task_data.run_all = run_all
