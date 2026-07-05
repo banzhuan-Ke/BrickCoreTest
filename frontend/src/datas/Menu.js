@@ -6,7 +6,7 @@ export const MenuGroups = [
     {
         title: '数据看板',
         icon: 'DataLine',
-        expanded: true,
+        expanded: false,
         items: [
             {
                 name: '首页看板',
@@ -19,7 +19,7 @@ export const MenuGroups = [
     {
         title: '项目配置',
         icon: 'SetUp',
-        expanded: true,
+        expanded: false,
         items: [
             {
                 name: '项目管理',
@@ -42,9 +42,9 @@ export const MenuGroups = [
         ]
     },
     {
-        title: 'UI 自动化',
+        title: 'Web 自动化',
         icon: 'Mouse',
-        expanded: true,
+        expanded: false,
         items: [
             {
                 name: '用例管理',
@@ -97,9 +97,64 @@ export const MenuGroups = [
         ]
     },
     {
+        title: 'App 自动化',
+        icon: 'Iphone',
+        expanded: false,
+        items: [
+            {
+                name: '用例管理',
+                path: '/app-case',
+                icon: 'Cellphone',
+                permission: 'app_case:view'
+            },
+            {
+                name: '元素库',
+                path: '/app-elements',
+                icon: 'CollectionTag',
+                anyPermissions: ['app_element:view', 'app_case:view']
+            },
+            {
+                name: '元素探查',
+                path: '/app-inspector',
+                icon: 'Aim',
+                anyPermissions: ['app_element:view', 'app_case:view']
+            },
+            {
+                name: '套件管理',
+                path: '/app-suite',
+                icon: 'Collection',
+                permission: 'app_suite:view'
+            },
+            {
+                name: '执行计划',
+                path: '/app-plan',
+                icon: 'Calendar',
+                permission: 'app_plan:view'
+            },
+            {
+                name: '定时任务',
+                path: '/app-cron',
+                icon: 'Clock',
+                permission: 'app_plan:view'
+            },
+            {
+                name: '步骤片段',
+                path: '/app-fragments',
+                icon: 'CollectionTag',
+                permission: 'app_case:view'
+            },
+            {
+                name: '执行记录',
+                path: '/app-record',
+                icon: 'List',
+                permission: 'app_record:view'
+            },
+        ]
+    },
+    {
         title: '接口自动化',
         icon: 'Connection',
-        expanded: true,
+        expanded: false,
         items: [
             {
                 name: '接口管理',
@@ -172,7 +227,7 @@ export const MenuGroups = [
     {
         title: 'AI 测试',
         icon: 'Cpu',
-        expanded: true,
+        expanded: false,
         items: [
             {
                 name: 'AI 工作台',
@@ -209,7 +264,7 @@ export const MenuGroups = [
     {
         title: '智能浏览器',
         icon: 'Monitor',
-        expanded: true,
+        expanded: false,
         items: [
             {
                 name: '用例库',
@@ -234,7 +289,7 @@ export const MenuGroups = [
     {
         title: '性能测试',
         icon: 'TrendCharts',
-        expanded: true,
+        expanded: false,
         items: [
             {
                 name: '场景管理',
@@ -265,7 +320,7 @@ export const MenuGroups = [
     {
         title: '帮助中心',
         icon: 'Reading',
-        expanded: true,
+        expanded: false,
         items: [
             {
                 name: '文档中心',
@@ -279,7 +334,7 @@ export const MenuGroups = [
     {
         title: '系统管理',
         icon: 'Tools',
-        expanded: true,
+        expanded: false,
         items: [
             {
                 name: '用户管理',

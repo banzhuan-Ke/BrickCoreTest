@@ -115,6 +115,43 @@ export function buildAssistantPageContext(route) {
     case 'perfWorkerList':
       ctx.page_hint = 'perf_workers'
       break
+    case 'appCaseList':
+    case 'appCaseAdd':
+      ctx.page_hint = 'app_cases'
+      break
+    case 'appCaseEdit':
+      ctx.app_case_id = parseId(p.id)
+      ctx.page_hint = 'app_cases'
+      break
+    case 'appSuiteList':
+    case 'appSuiteAdd':
+      ctx.page_hint = 'app_suites'
+      break
+    case 'appSuiteEdit':
+      ctx.page_hint = 'app_suites'
+      break
+    case 'appPlanList':
+      ctx.page_hint = 'app_plans'
+      break
+    case 'appPlanEdit':
+      ctx.app_plan_id = parseId(p.id)
+      ctx.page_hint = 'app_plans'
+      break
+    case 'appCronList':
+      ctx.page_hint = 'cron_jobs'
+      break
+    case 'appRecordList':
+      ctx.page_hint = 'app_run_records'
+      break
+    case 'appSuiteReport':
+      ctx.app_suite_run_id = parseId(p.id)
+      break
+    case 'appPlanReport':
+      ctx.app_plan_run_id = parseId(p.id)
+      break
+    case 'appInspector':
+      ctx.page_hint = 'app_inspector'
+      break
     default:
       break
   }
@@ -141,6 +178,10 @@ export function formatPageContextLabel(ctx) {
   if (ctx.task_id) parts.push(`UI计划#${ctx.task_id}`)
   if (ctx.ui_case_id) parts.push(`用例#${ctx.ui_case_id}`)
   if (ctx.ui_suite_id) parts.push(`UI套件#${ctx.ui_suite_id}`)
+  if (ctx.app_case_id) parts.push(`App用例#${ctx.app_case_id}`)
+  if (ctx.app_plan_id) parts.push(`App计划#${ctx.app_plan_id}`)
+  if (ctx.app_suite_run_id) parts.push(`App套件执行#${ctx.app_suite_run_id}`)
+  if (ctx.app_plan_run_id) parts.push(`App计划执行#${ctx.app_plan_run_id}`)
   if (ctx.api_run_record_id) parts.push(`执行记录#${ctx.api_run_record_id}`)
   if (ctx.perf_scene_id) parts.push(`压测场景#${ctx.perf_scene_id}`)
   if (ctx.template_id) parts.push(`SQL模板#${ctx.template_id}`)

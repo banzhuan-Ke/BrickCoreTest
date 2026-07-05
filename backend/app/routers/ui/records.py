@@ -19,6 +19,7 @@ from app.core.platform_settings_service import (
     restore_ui_case_execution,
 )
 from app.core.report_export import generate_html_report, ImageExportOptions
+from app.core.ui_case_status import apply_ui_case_status_filter
 from app.core.minio_client import minio_client, is_minio_storage
 from app.schemas.ui import SuiteResultSchemas, TaskResultSchemas
 
@@ -288,22 +289,29 @@ class CaseRecordIdsForm(BaseModel):
 async def get_case_record(
     case_id: int = None,
     suite_execution_id: int = None,
+    task_records_id: int = None,
+    status: str | None = None,
     page: int = 1,
     size: int = 10,
     recycle_bin: bool = False,
 ):
     """获取测试用例运行记录列表"""
-    query = UiCaseExecution.filter(is_del=recycle_bin).prefetch_related('case')
+    query = UiCaseExecution.filter(is_del=recycle_bin)
     if case_id:
         query = query.filter(case=case_id)
     elif suite_execution_id:
         query = query.filter(suite_execution=suite_execution_id)
+    elif task_records_id:
+        query = query.filter(suite_execution__plan_execution_id=task_records_id)
     else:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                            detail="case_id和suite_execution_id至少传递一个！")
+                            detail="case_id、suite_execution_id、task_records_id 至少传递一个！")
+    query = apply_ui_case_status_filter(query, status)
     query = query.order_by("-id")
     total = await query.count()
-    data = await query.offset((page - 1) * size).limit(size).prefetch_related('case')
+    data = await query.offset((page - 1) * size).limit(size).prefetch_related(
+        'case', 'suite_execution__suite'
+    )
     delete_mode = await get_ui_case_record_delete_mode()
     result = []
     loop = asyncio.get_running_loop()
@@ -311,10 +319,14 @@ async def get_case_record(
         presigned_data = await loop.run_in_executor(
             None, _presign_media_urls, i.result_data
         )
+        suite_exec = i.suite_execution
+        suite_name = suite_exec.suite.name if suite_exec and suite_exec.suite else None
         result.append({
             "id": i.id,
             "case_id": i.case.id,
             "case_name": i.case.name,
+            "suite_execution_id": suite_exec.id if suite_exec else None,
+            "suite_name": suite_name,
             "username": i.username,
             "start_time": i.start_time,
             "status": i.status,

@@ -79,11 +79,34 @@
       text-align: center;
     }
     .support-block p { margin: 0 0 16px; color: var(--muted); }
+    .support-cards {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 32px 48px;
+      margin-top: 8px;
+    }
+    .support-card {
+      flex: 0 1 220px;
+      max-width: 260px;
+    }
+    .support-card .hint {
+      margin: 0 0 12px;
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
     .support-block img {
       width: 200px;
       height: auto;
       border-radius: 8px;
       border: 1px solid var(--border);
+    }
+    .support-card sub {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
     }
     .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .tag {
@@ -127,6 +150,7 @@
         <li><a href="#ui-agent">UI Agent（MCP）生成步骤</a></li>
         <li><a href="#ui-heal">UI 定位器自愈</a></li>
         <li><a href="#api-ai">接口用例 AI 生成</a></li>
+        <li><a href="#browser-lab">AI 智能浏览器</a></li>
       </ul>
     </nav>
 
@@ -204,11 +228,43 @@
       </video>
     </section>
 
+    <section class="demo-block" id="browser-lab">
+      <h2>AI 智能浏览器</h2>
+      <p class="desc">
+        基于自然语言任务描述的浏览器 Agent：输入起始 URL 与任务描述，AI 自动规划并逐步操作网页。
+        适合演示、探索型验证与一次性冒烟；可保存用例、查看执行报告与 GIF 回放。
+      </p>
+      <div class="tag-row">
+        <span class="tag">AI 测试</span>
+        <span class="tag">智能浏览器</span>
+        <span class="tag">browser-use</span>
+      </div>
+      <p class="desc">
+        <strong>平台入口：</strong>
+        <a href="http://43.142.83.156/#/browser-lab" target="_blank" rel="noopener">AI 测试 → 智能浏览器</a>
+        · 需先在「平台配置 → AI」绑定 <code>browser_lab</code> 场景模型
+      </p>
+      <video controls playsinline preload="metadata" aria-label="AI 智能浏览器演示">
+        <source src="demo/browser-lab-demo.mp4" type="video/mp4" />
+        您的浏览器不支持视频播放，请使用 Chrome / Edge 打开。
+      </video>
+    </section>
+
     <section class="support-block" id="support">
-      <h2 style="margin:0 0 8px;font-size:1.1rem;color:var(--accent);">支持作者</h2>
-      <p>觉得演示有帮助，欢迎给开源仓库 Star，或通过下方微信赞赏支持后续更新（自愿、无强制）。</p>
-      <img src="assets/wechat-donate.png" width="200" alt="微信赞赏" /><br />
-      <sub>微信赞赏</sub>
+      <h2 style="margin:0 0 8px;font-size:1.1rem;color:var(--accent);">支持与交流</h2>
+      <p>觉得演示有帮助，欢迎给开源仓库 Star、微信赞赏支持后续更新，或扫码加入交流群（自愿、无强制）。</p>
+      <div class="support-cards">
+        <div class="support-card">
+          <p class="hint">扫码加入 <strong>BrickCoreAI 测试平台交流群</strong>，交流使用问题、部署与版本动态。</p>
+          <img src="assets/wechat-group.png" width="200" alt="BrickCoreAI 测试平台交流群" />
+          <sub>微信加群</sub>
+        </div>
+        <div class="support-card">
+          <p class="hint">欢迎通过微信赞赏支持作者持续维护与更新。</p>
+          <img src="assets/wechat-donate.png" width="200" alt="微信赞赏" />
+          <sub>微信赞赏</sub>
+        </div>
+      </div>
     </section>
   </main>
 

@@ -160,6 +160,13 @@ class Device(models.Model):
     runner_mq_password = fields.CharField(max_length=256, default="", description="Runner 隔离 MQ 密码（服务端）")
     runner_redis_username = fields.CharField(max_length=128, default="", description="Runner 隔离 Redis 用户名")
     runner_redis_password = fields.CharField(max_length=256, default="", description="Runner 隔离 Redis 密码（服务端）")
+    runner_engine_types = fields.JSONField(
+        default=list, description="Runner 引擎能力 web|app|perf"
+    )
+    app_platform = fields.CharField(max_length=20, default="", description="App 平台 android|ios|harmony")
+    app_udid = fields.CharField(max_length=128, default="", description="adb/hdc 设备序列号")
+    app_connection = fields.CharField(max_length=20, default="", description="usb|wifi")
+    toolchain_status = fields.JSONField(default=dict, description="工具链状态 adb/hdc/xcode 等")
 
     class Meta:
         table = "device"
@@ -220,6 +227,7 @@ class NotificationConfig(models.Model):
     api_auto_push_report = fields.BooleanField(default=False, description="API套件执行成功后自动推送报告")
     ui_auto_push_report = fields.BooleanField(default=False, description="UI计划执行成功后自动推送报告")
     perf_auto_push_report = fields.BooleanField(default=False, description="性能测试执行完成后自动推送报告")
+    app_auto_push_report = fields.BooleanField(default=False, description="App计划/套件执行完成后自动推送报告")
     create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
     update_time = fields.DatetimeField(auto_now=True, description="更新时间")
 
@@ -320,6 +328,28 @@ class SystemPlatformSettings(models.Model):
     class Meta:
         table = "system_platform_settings"
         table_description = "平台全局设置"
+
+
+class SystemStreamParserConfig(models.Model):
+    """SSE 流式解析配置（问答评测 / 压测流式场景复用）"""
+    id = fields.IntField(pk=True, auto_increment=True, description="配置ID")
+    name = fields.CharField(max_length=200, description="配置名称")
+    description = fields.TextField(null=True, description="说明文档（Markdown）")
+    parser_id = fields.CharField(max_length=64, description="内置解析器 ID")
+    parser_options = fields.JSONField(default=dict, description="解析器选项（如 rule_based 规则）")
+    success_rule = fields.JSONField(default=dict, description="成功判定规则")
+    is_builtin = fields.BooleanField(default=False, description="内置预置，不可删除")
+    is_enabled = fields.BooleanField(default=True, description="是否启用")
+    sort_order = fields.IntField(default=0, description="排序")
+    create_by = fields.CharField(max_length=50, default="", description="创建人")
+    update_by = fields.CharField(max_length=50, default="", description="最后修改人")
+    is_del = fields.BooleanField(default=False)
+    create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    update_time = fields.DatetimeField(auto_now=True, description="更新时间")
+
+    class Meta:
+        table = "system_stream_parser_config"
+        table_description = "SSE流式解析配置"
 
 
 class SystemRunnerReleaseConfig(models.Model):

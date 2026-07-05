@@ -116,6 +116,15 @@
                 <el-icon><VideoPause /></el-icon>
               </el-button>
               <el-button
+                v-if="isUiFailed(scope.row.status)"
+                type="primary"
+                size="small"
+                title="在编辑页高亮失败步骤"
+                @click="goEditWithFailureHints(scope.row.id)"
+              >
+                定位失败
+              </el-button>
+              <el-button
                 v-if="isUiFailed(scope.row.status) && canAiAnalyze"
                 type="warning"
                 size="small"
@@ -163,7 +172,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, watch, computed } from 'vue'
+import { ref, reactive, watch, computed, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import { List, VideoPause, MagicStick, Delete } from '@element-plus/icons-vue'
 import http from '@/api/index'
 import CaseReportTimeline from '@/components/Report/CaseReportTimeline.vue'
@@ -181,6 +191,14 @@ const aiAnalyzeTargetId = ref(null)
 
 const isUiFailed = (status) => ['fail', 'failed', 'error'].includes(status)
 
+const goEditWithFailureHints = (executionId) => {
+  if (!props.case_id) return
+  router.push({
+    path: `/case/edit/${props.case_id}`,
+    query: { execution_id: executionId },
+  })
+}
+
 const openAiAnalyze = (recordId) => {
   aiAnalyzeTargetId.value = recordId
   aiAnalyzeVisible.value = true
@@ -192,6 +210,8 @@ const props = defineProps({
     default: 0
   }
 })
+
+const router = useRouter()
 
 const RunRecordList = ref([])
 const selectedRecords = ref([])
@@ -206,6 +226,29 @@ const pageConfig = reactive({
   size: 10,
   total: 0,
   recycle_bin: false,
+})
+
+let pollTimer = null
+
+const stopPolling = () => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+const startPollingIfNeeded = () => {
+  stopPolling()
+  const hasRunning = RunRecordList.value.some((row) => row.status === 'running')
+  if (hasRunning && viewMode.value === 'active') {
+    pollTimer = setInterval(() => {
+      getRunRecordList()
+    }, 3000)
+  }
+}
+
+onBeforeUnmount(() => {
+  stopPolling()
 })
 
 const tableRowIndex = makeTableRowIndex(pageConfig)
@@ -258,6 +301,7 @@ const getRunRecordList = async () => {
   RunRecordList.value = records
   pageConfig.total = payload.total || 0
   selectedRecords.value = []
+  startPollingIfNeeded()
 }
 
 getRunRecordList()

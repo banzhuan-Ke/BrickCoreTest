@@ -73,6 +73,14 @@ export const UserStore = defineStore('uStore', {
         clearAllTabs() {
             this.tabs = []
         },
+        // 拖拽调整标签顺序
+        reorderTabs(oldIndex, newIndex) {
+            if (oldIndex === newIndex) return
+            const tabs = [...this.tabs]
+            const [moved] = tabs.splice(oldIndex, 1)
+            tabs.splice(newIndex, 0, moved)
+            this.tabs = tabs
+        },
         // 判断是否有指定权限
         hasPermission(perm) {
             const userInfo = this.userInfo

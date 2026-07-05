@@ -14,7 +14,7 @@
 
 | 方式 | 说明 |
 |------|------|
-| **网盘下载（推荐）** | [百度网盘 BrickCoreRunner.zip](https://pan.baidu.com/s/1Nx2fkPAUi7htJKZAxp1paw?pwd=ye6b)（提取码 `ye6b`）；Mac 包由管理员另行提供 |
+| **网盘下载（推荐）** | [百度网盘 BrickCoreRunner.zip](https://pan.baidu.com/s/1pObFpG-Mt7-Pxo58hklOlg?pwd=9gbi)（提取码 `9gbi`）；Mac 包由管理员另行提供 |
 | **平台下载** | 登录平台 → **UI 自动化 → 设备管理** → **网盘下载** |
 | **自建平台** | 管理员在 **系统管理 → 执行器发布** 配置下载链接 |
 

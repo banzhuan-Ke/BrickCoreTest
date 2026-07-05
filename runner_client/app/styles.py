@@ -50,8 +50,8 @@ QGroupBox {
     background-color: #ffffff;
     border: 1px solid #e5e7eb;
     border-radius: 10px;
-    margin-top: 14px;
-    padding: 16px 12px 12px 12px;
+    margin-top: 18px;
+    padding: 22px 14px 14px 14px;
     font-weight: 600;
     color: #374151;
 }

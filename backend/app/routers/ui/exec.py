@@ -143,6 +143,9 @@ class ExecutionService:
         device = await Device.get_or_none(id=device_id)
         if not device or device.status != "在线":
             return False
+        types = device.runner_engine_types or ["web"]
+        if "web" not in types:
+            return False
         
         mq = MQProducer()
         try:

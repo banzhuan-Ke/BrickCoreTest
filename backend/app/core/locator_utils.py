@@ -20,6 +20,18 @@ def _strip_wrapping_quotes(value: str) -> str:
     return s
 
 
+_NAME_PREFIX_RE = re.compile(r"^name\s*=\s*(.+)$", re.I | re.DOTALL)
+
+
+def _strip_role_name_part(value: str) -> str:
+    """去掉 get_by_role 名称段的 name= 前缀，如 name=\"登入\" → 登入。"""
+    s = _strip_wrapping_quotes(value)
+    m = _NAME_PREFIX_RE.match(s)
+    if m:
+        return _strip_wrapping_quotes(m.group(1).strip())
+    return s
+
+
 def _normalize_get_by_role_segment(segment: str) -> str:
     """规范化 get_by_role=role, name 片段（含链式子段）。"""
     if not segment.startswith("get_by_role="):
@@ -28,7 +40,7 @@ def _normalize_get_by_role_segment(segment: str) -> str:
     parts = role_part.split(",", 1)
     role = _strip_wrapping_quotes(parts[0])
     if len(parts) > 1:
-        name = _strip_wrapping_quotes(parts[1])
+        name = _strip_role_name_part(parts[1])
         return f"get_by_role={role}, {name}"
     return f"get_by_role={role}"
 

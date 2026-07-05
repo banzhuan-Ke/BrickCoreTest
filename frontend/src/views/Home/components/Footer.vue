@@ -2,7 +2,7 @@
   <div class="footer_box">
     <div class="footer-content">
       <div class="left-section">
-        <span class="version">BrickCore v1.0</span>
+        <span class="version">BrickCore v{{ platformVersion }}</span>
         <span class="divider">|</span>
         <span class="tech">Powered by FastAPI + Vue3</span>
       </div>
@@ -22,6 +22,21 @@
 </template>
 
 <script setup>
+import { ref, onMounted } from 'vue'
+import http from '@/api/request'
+
+const platformVersion = ref('1.2')
+
+onMounted(async () => {
+  try {
+    const res = await http.get('/runner/version')
+    if (res.data?.platform_version) {
+      platformVersion.value = res.data.platform_version
+    }
+  } catch {
+    // 保持默认展示
+  }
+})
 </script>
 
 <style scoped lang="scss">

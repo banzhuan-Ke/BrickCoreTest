@@ -86,6 +86,26 @@ QUICK_PROMPTS = [
         "message": "列出当前项目最近的 UI 测试计划执行记录，说明通过率与失败数。",
     },
     {
+        "key": "app",
+        "label": "App 用例",
+        "message": "当前项目有哪些 App 用例、套件和测试计划？各有多少步骤或用例？",
+    },
+    {
+        "key": "app_suites",
+        "label": "App 套件",
+        "message": "列出当前项目的 App 测试套件及各套件包含的用例数。",
+    },
+    {
+        "key": "app_plans",
+        "label": "App 计划",
+        "message": "列出当前项目的 App 测试计划及最近执行状态。",
+    },
+    {
+        "key": "app_runs",
+        "label": "App 执行",
+        "message": "列出当前项目最近的 App 套件与计划执行记录，并简要说明成功/失败情况。",
+    },
+    {
         "key": "perf",
         "label": "压测概览",
         "message": "当前项目有哪些压测场景？最近一次压测的 QPS 和响应时间如何？",
@@ -104,7 +124,7 @@ QUICK_PROMPTS = [
     {
         "key": "cron_all",
         "label": "定时任务",
-        "message": "汇总当前项目接口、UI、压测三类定时任务及启用状态。",
+        "message": "汇总当前项目接口、UI、App、压测四类定时任务及启用状态。",
     },
     {
         "key": "workers",
@@ -120,6 +140,11 @@ QUICK_PROMPTS = [
         "key": "run_ui_case",
         "label": "Web 单条",
         "message": "列出当前项目的 Web UI 用例和在线 Runner 设备，并说明如何执行单条 Web UI 用例。",
+    },
+    {
+        "key": "run_app_case",
+        "label": "App 单条",
+        "message": "列出当前项目的 App 用例和在线 App Runner 设备（含 adb 设备），并说明如何执行单条 App 用例。",
     },
     {
         "key": "qa_eval",
@@ -139,7 +164,7 @@ QUICK_PROMPTS = [
     {
         "key": "devices",
         "label": "在线设备",
-        "message": "列出当前项目在线的 Web UI Runner 设备，说明 device_id 与状态。",
+        "message": "列出当前项目在线的 Web / App Runner 设备，说明 device_id、app_udid 与状态。",
     },
 ]
 

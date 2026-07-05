@@ -1,4 +1,4 @@
-# Sync Pro repo -> Community Edition (Plan 1.5)
+﻿# Sync Pro repo -> Community Edition (Plan 1.5)
 # Excludes runner engine source; adds CE stubs from scripts/ce-stubs/
 param(
     [Parameter(Mandatory = $false)]
@@ -38,11 +38,14 @@ $ExcludeDirs = @(
     "__pycache__",
     "scripts\.cache",
     "runner_client\dist",
+    "runner_client\dist_staging",
     "runner_client\build",
     "runner_client\venv",
     "frontend\node_modules",
     "frontend\dist",
     "backend\venv",
+    "backend\tests",
+    "backend\.pytest_cache",
     "runner\browsers",
     "runner\venv",
     "runner\logs",
@@ -65,6 +68,7 @@ $ExcludeFiles = @(
     "backend\app\core\qa_eval_report.py",
     "backend\app\core\qa_eval_compare.py",
     "backend\app\routers\ai\qa_eval.py",
+    "scripts\pack-demo-runner.ps1",
     "frontend\src\views\AI\AiQaEval.vue",
     "import_ui_case.py",
     "restart-all.bat",
@@ -151,10 +155,7 @@ function Write-CeStubs {
         Write-Warning "README-CE.template.md not found under docs/"
     }
 
-    $licensePath = Join-Path $CeRoot "LICENSE"
-    if (-not (Test-Path -LiteralPath $licensePath)) {
-        Copy-Item (Join-Path $StubsDir "LICENSE-APACHE.txt") $licensePath -Force
-    }
+    Copy-Item (Join-Path $StubsDir "LICENSE-APACHE.txt") (Join-Path $CeRoot "LICENSE") -Force
 
     # CE demo stubs (paths via Join-Path — avoid \v etc. in quoted strings)
     $demoMaps = @(
@@ -170,11 +171,13 @@ function Write-CeStubs {
         @("docs-highlights-ce.md", (Join-Path "docs-site" (Join-Path "guide" "highlights.md"))),
         @("docs-runner-packaging-ce.md", (Join-Path "docs-site" (Join-Path "guide" "runner-packaging.md"))),
         @("docs-ui-automation-ce.md", (Join-Path "docs-site" (Join-Path "guide" "ui-automation.md"))),
+        @("docs-app-automation-ce.md", (Join-Path "docs-site" (Join-Path "guide" "app-automation.md"))),
         @("docs-system-admin-ce.md", (Join-Path "docs-site" (Join-Path "guide" "system-admin.md"))),
         @("docs-data-factory-ce.md", (Join-Path "docs-site" (Join-Path "guide" "data-factory.md"))),
         @("docs-ai-testing-ce.md", (Join-Path "docs-site" (Join-Path "guide" "ai-testing.md"))),
         @("docs-platform-assistant-ce.md", (Join-Path "docs-site" (Join-Path "guide" "platform-assistant.md"))),
         @("docs-runner-linux-server-ce.md", (Join-Path "docs-site" (Join-Path "guide" "runner-linux-server.md"))),
+        @("docs-release-notes-ce.md", (Join-Path "docs-site" (Join-Path "guide" "release-notes.md"))),
         @("docs-runner-install-guide-ce.md", (Join-Path "docs-site" (Join-Path "guide" "runner-install-guide.md"))),
         @("runner-client-README.md", (Join-Path "runner_client" "README.md"))
     )
@@ -250,6 +253,20 @@ if (-not $DryRun) {
         $target = Join-Path $CeRoot $rel
         if (Test-Path -LiteralPath $target) {
             Remove-Item -LiteralPath $target -Force
+            Write-Host "  CE prune: removed $rel"
+        }
+    }
+    $qaEvalStub = Join-Path $StubsDir "AiQaEval-stub.vue"
+    $qaEvalDest = Join-Path $CeRoot "frontend\src\views\AI\AiQaEval.vue"
+    if (Test-Path -LiteralPath $qaEvalStub) {
+        Ensure-Dir ([System.IO.Path]::GetDirectoryName($qaEvalDest))
+        Copy-Item $qaEvalStub $qaEvalDest -Force
+        Write-Host "  CE stub: frontend\src\views\AI\AiQaEval.vue <- AiQaEval-stub.vue"
+    }
+    foreach ($rel in @("backend\tests", "backend\.pytest_cache")) {
+        $target = Join-Path $CeRoot $rel
+        if (Test-Path -LiteralPath $target) {
+            Remove-Item -LiteralPath $target -Recurse -Force
             Write-Host "  CE prune: removed $rel"
         }
     }

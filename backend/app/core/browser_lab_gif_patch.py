@@ -5,6 +5,7 @@ import logging
 import os
 import platform
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -97,3 +98,27 @@ def apply_browser_use_gif_cjk_patch() -> None:
         cjk_path or "none",
         platform.system(),
     )
+
+
+def ensure_replay_gif(task_text: str, history: Any, output_path: str | Path) -> bool:
+    """从 Agent history 生成 replay.gif；已存在则跳过。"""
+    path = Path(output_path)
+    if path.exists():
+        return True
+    if history is None:
+        return False
+    try:
+        apply_browser_use_gif_cjk_patch()
+        from browser_use.agent.gif import create_history_gif
+
+        create_history_gif(
+            task=task_text or "browser lab task",
+            history=history,
+            output_path=str(path),
+        )
+        if path.exists():
+            logger.info("[browser_lab] replay GIF generated at %s", path)
+            return True
+    except Exception as ex:
+        logger.warning("[browser_lab] replay GIF generation failed: %s", ex)
+    return False

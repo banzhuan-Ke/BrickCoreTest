@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 
 from app.core.auth import verify_runner_token
 from app.core.config import UI_TEST_FILE_BUCKET
@@ -11,6 +12,7 @@ from app.core.minio_client import is_minio_storage, minio_client
 from app.models.ui import UiTestFolder
 from app.routers.ui.folders import validate_folder_key
 from app.schemas.runner import (
+    RunnerAppTemplateDownloadRequest,
     RunnerDownloadPresignRequest,
     RunnerDownloadPresignResponse,
     RunnerFolderManifestFile,
@@ -34,6 +36,34 @@ def _validate_file_object_key(value: str) -> str:
     if not _FILE_OBJECT_KEY_RE.match(name):
         raise ValueError("object key 格式不正确")
     return name
+
+
+@router.post(
+    "/download/app-template",
+    summary="下载 App 元素库图像模板（Runner 直取字节，不依赖本机 MinIO 配置）",
+    status_code=status.HTTP_200_OK,
+)
+async def runner_download_app_template(
+    item: RunnerAppTemplateDownloadRequest,
+    _ctx: dict = Depends(verify_runner_token),
+):
+    if not is_minio_storage():
+        raise HTTPException(status_code=400, detail="当前平台存储非 MinIO")
+
+    data = minio_client.download_app_element_template(item.object_key)
+    if not data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"图像模板不存在: {item.object_key}，请在元素库重新上传识别图",
+        )
+
+    lower = item.object_key.lower()
+    media_type = "image/png"
+    if lower.endswith((".jpg", ".jpeg")):
+        media_type = "image/jpeg"
+    elif lower.endswith(".webp"):
+        media_type = "image/webp"
+    return Response(content=data, media_type=media_type)
 
 
 @router.post(

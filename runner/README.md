@@ -10,4 +10,4 @@
 
 ## 说明
 
-Playwright 执行与 Worker 运行时代码随网盘 zip 提供，不在本 Git 仓库中。如有问题可通过 Gitee Issues 反馈。
+请从网盘下载 **BrickCoreRunner** 安装包获取 Playwright 执行与 Worker 运行时。如有问题可通过 Gitee Issues 反馈。

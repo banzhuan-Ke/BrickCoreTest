@@ -78,9 +78,19 @@ async def get_batch_presigned_urls(request: Request):
         
         # 生成预签名 URL（放到线程池执行，避免阻塞事件循环）
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None, minio_client.get_batch_presigned_urls, valid_filenames, 7200
-        )
+
+        def _batch_urls(names: List[str]) -> Dict[str, str]:
+            out: Dict[str, str] = {}
+            for name in names:
+                if str(name).startswith("app-elements/"):
+                    url = minio_client.get_presigned_url_for_app_element(name, 7200)
+                else:
+                    url = minio_client.get_presigned_url(name, 7200)
+                if url:
+                    out[name] = url
+            return out
+
+        result = await loop.run_in_executor(None, _batch_urls, valid_filenames)
         
         # 合并直接 URL
         result.update(direct_urls)

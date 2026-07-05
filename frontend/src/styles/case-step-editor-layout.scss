@@ -4,8 +4,8 @@
 }
 
 .keyword-sidebar {
-  background: white;
-  border-right: 1px solid var(--el-border-color);
+  background: var(--el-bg-color-page, var(--el-bg-color));
+  border-right: 1px solid var(--el-border-color-lighter);
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -99,7 +99,7 @@
 
 .case-main {
   padding: 20px 20px 60px 20px;
-  background: var(--el-fill-color-light);
+  background: var(--el-bg-color-page, var(--el-fill-color-light));
   overflow-y: auto;
   height: 100%;
 }

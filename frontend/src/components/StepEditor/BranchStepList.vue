@@ -20,6 +20,7 @@
           :depth="parentPath.length"
           :parent-path="parentPath"
           @update:step="(newStep) => updateSubStep(sIndex, newStep)"
+          @edit="() => openSubStepEdit(sIndex)"
           @copy="copySubStep(sIndex)"
           @delete="deleteSubStep(sIndex)"
           @add-branch="() => handleAddBranch(sIndex)"
@@ -40,12 +41,12 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, provide, nextTick } from 'vue'
+import { ref, computed, watch, inject, nextTick } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
 import { Plus } from '@element-plus/icons-vue'
 import StepItem from './StepItem.vue'
 import { ElMessage } from 'element-plus'
-import { generateStepId, duplicateStepWithNewIds } from '@/utils/stepHelper'
+import { duplicateStepWithNewIds, ensureStepsHaveIds, applyKeywordDragStep } from '@/utils/stepHelper'
 
 const props = defineProps({
   branch: { type: Object, required: true },
@@ -56,12 +57,13 @@ const props = defineProps({
 
 const emit = defineEmits(['update:branch'])
 
+const editStepMethod = inject('editStepMethod', null)
 const localSteps = ref([])
 const isUpdating = ref(false)
 
 watch(() => props.branch.steps, (newSteps) => {
   if (!isUpdating.value) {
-    localSteps.value = newSteps ? JSON.parse(JSON.stringify(newSteps)) : []
+    localSteps.value = newSteps ? ensureStepsHaveIds(JSON.parse(JSON.stringify(newSteps))) : []
   }
 }, { immediate: true, deep: true })
 
@@ -83,55 +85,10 @@ function onExpandFragment(stepIndex, { expanded }) {
 // 处理拖拽添加步骤
 function onStepAdd(evt) {
   const { item, newIndex } = evt
-  
-  // 获取拖拽的原始数据
   const rawData = JSON.parse(item.dataset.step || '{}')
-  
-  // 创建新步骤
-  const newStep = {
-    id: generateStepId(),
-    keyword: rawData.keyword || rawData.name || '未知操作',
-    desc: rawData.name || rawData.keyword || '未知操作',
-    method: rawData.method || '',
-    params: rawData.params ? JSON.parse(JSON.stringify(rawData.params)) : {},
-    children: [],
-    config: { timeout: 30000, retry: false }
-  }
-  
-  // 如果是条件分支，添加branches
-  if (rawData.method === 'condition_branch' || rawData.is_container) {
-    newStep.branches = rawData.branches ? JSON.parse(JSON.stringify(rawData.branches)) : [
-      {
-        id: `branch_${Date.now()}`,
-        name: '分支1',
-        condition: { type: 'element_visible', locator: '', operator: 'is_true' },
-        steps: []
-      },
-      {
-        id: `else_branch_${Date.now()}`,
-        name: '默认分支',
-        condition: { type: 'else' },
-        steps: []
-      }
-    ]
-  }
-  
-  // 使用 nextTick 确保 VueDraggable 完成内部状态更新
-  nextTick(() => {
-    // 创建新的步骤数组，替换占位元素
-    const currentSteps = localSteps.value
-    const steps = [...currentSteps]
-    
-    // 检查并移除占位元素（如果存在）
-    if (newIndex < steps.length && steps[newIndex] && !steps[newIndex].id) {
-      steps.splice(newIndex, 1)
-    }
-    
-    // 在正确的位置插入新步骤
-    steps.splice(newIndex, 0, newStep)
-    updateParent(steps)
-    ElMessage.success('步骤已添加')
-  })
+  const { steps } = applyKeywordDragStep(localSteps.value, rawData, newIndex)
+  updateParent(steps)
+  ElMessage.success('步骤已添加')
 }
 
 function updateSubStep(index, newStep) {
@@ -150,6 +107,20 @@ function copySubStep(index) {
   steps.splice(index + 1, 0, duplicated)
   updateParent(steps)
   ElMessage.success('步骤已复制')
+}
+
+function openSubStepEdit(index) {
+  const step = localSteps.value[index]
+  if (!step) return
+  const path = [...props.parentPath, index]
+  if (editStepMethod) {
+    editStepMethod(step, path)
+    return
+  }
+  const editEvent = new CustomEvent('edit-step-request', {
+    detail: { step, path },
+  })
+  window.dispatchEvent(editEvent)
 }
 
 function handleAddBranch(stepIndex) {
@@ -199,14 +170,6 @@ function handleDeleteBranch(stepIndex, branchIndex) {
   ElMessage.success('分支已删除')
 }
 
-// 提供编辑方法给子组件
-provide('editStepMethod', (step, path, onSave, onCancel) => {
-  // 向上冒泡编辑事件
-  const editEvent = new CustomEvent('edit-step-request', {
-    detail: { step, path, onSave, onCancel }
-  })
-  window.dispatchEvent(editEvent)
-})
 </script>
 
 <style scoped lang="scss">

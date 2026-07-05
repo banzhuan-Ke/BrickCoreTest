@@ -23,8 +23,12 @@
       <div class="task-overview">
         <div class="task-title">{{ taskRunDetail.task_name }}</div>
         <el-row :gutter="16">
-          <el-col :span="4" v-for="stat in taskStats" :key="stat.key">
-            <div class="stat-card" :class="stat.class">
+          <el-col :span="3" v-for="stat in taskStats" :key="stat.key">
+            <div
+              class="stat-card"
+              :class="[stat.class, { 'stat-card--active': isStatFilterActive(stat), 'stat-card--clickable': stat.filterable }]"
+              @click="onStatCardClick(stat)"
+            >
               <div class="stat-value" :style="{ color: stat.color }">{{ stat.value }}</div>
               <div class="stat-label">{{ stat.label }}</div>
             </div>
@@ -72,6 +76,73 @@
           </el-card>
         </el-col>
       </el-row>
+
+      <!-- 用例筛选列表（点击统计卡片后展示） -->
+      <div v-if="caseStatusFilter" ref="caseFilterSectionRef" class="case-filter-section">
+        <div class="section-title-with-action">
+          <div class="section-title">
+            <el-icon><Filter /></el-icon>
+            用例筛选：{{ caseStatusFilterLabel }}
+            <el-tag size="small" type="info" style="margin-left: 8px;">共 {{ casePageConfig.total }} 条</el-tag>
+          </div>
+          <el-button size="small" @click="clearCaseStatusFilter">清除筛选</el-button>
+        </div>
+        <el-table
+          :data="caseRunList"
+          style="width: 100%"
+          :header-cell-style="{'text-align':'center'}"
+          :cell-style="{'text-align':'center'}"
+          stripe
+          v-loading="caseLoading"
+        >
+          <el-table-column type="expand">
+            <template #default="props">
+              <CaseReportTimeline :runInfo="props.row.result_data" />
+            </template>
+          </el-table-column>
+          <el-table-column type="index" label="序号" :index="caseTableRowIndex" width="70"/>
+          <el-table-column prop="result_data.name" label="用例名称" min-width="160" show-overflow-tooltip>
+            <template #default="scope">
+              {{ scope.row.result_data?.name || scope.row.case_name || '未知用例' }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="suite_name" label="所属套件" min-width="140" show-overflow-tooltip/>
+          <el-table-column label="执行状态" width="110">
+            <template #default="scope">
+              <el-tag :type="getCaseStatusType(scope.row.status)">
+                {{ getCaseStatusText(scope.row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="执行时间" width="170">
+            <template #default="scope">
+              {{ dateTools.rTime(scope.row.start_time) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="220" fixed="right">
+            <template #default="scope">
+              <el-button type="primary" link @click="goToSuiteReportByCase(scope.row)">套件报告</el-button>
+              <el-button
+                v-if="canEditCase && resolveCaseId(scope.row)"
+                type="primary"
+                link
+                :icon="Edit"
+                @click="goEditCase(scope.row)"
+              >编辑用例</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-pagination
+          class="pagination"
+          :hide-on-single-page="true"
+          v-model:current-page="casePageConfig.page"
+          v-model:page-size="casePageConfig.size"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next, jumper"
+          :total="casePageConfig.total"
+          @change="getCaseRunList"
+        />
+      </div>
 
       <!-- 时间轴视图 - 套件执行流程 -->
       <div v-if="showTimeline" class="timeline-view">
@@ -149,7 +220,14 @@
                   </div>
                 </div>
                 <div class="suite-footer">
-                  <el-button type="primary" link :icon="View">查看详细报告</el-button>
+                  <el-button type="primary" link :icon="View" @click.stop="goToSuiteReport(suite)">查看详细报告</el-button>
+                  <el-button
+                    v-if="canEditSuite && suite.suite_id"
+                    type="primary"
+                    link
+                    :icon="Edit"
+                    @click.stop="goEditSuite(suite.suite_id)"
+                  >编辑套件</el-button>
                 </div>
               </el-card>
             </el-timeline-item>
@@ -232,7 +310,7 @@
             </template>
           </el-table-column>
           <el-table-column prop="username" label="执行人" width="100"/>
-          <el-table-column label="操作" width="120" fixed="right">
+          <el-table-column label="操作" width="180" fixed="right">
             <template #default="scope">
               <el-button 
                 @click="goToSuiteReport(scope.row)" 
@@ -241,6 +319,15 @@
                 icon="View"
               >
                 报告
+              </el-button>
+              <el-button
+                v-if="canEditSuite && scope.row.suite_id"
+                type="primary"
+                link
+                :icon="Edit"
+                @click="goEditSuite(scope.row.suite_id)"
+              >
+                编辑
               </el-button>
             </template>
           </el-table-column>
@@ -333,13 +420,16 @@ import {
   InfoFilled,
   Loading,
   Grid,
-  Document
+  Document,
+  Filter,
+  Edit
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { useDark } from '@vueuse/core'
 
 import http from '@/api/index'
 import PageCard from "@/components/PageCard.vue"
+import CaseReportTimeline from '@/components/Report/CaseReportTimeline.vue'
 import ExecutionLogScroller from '@/components/Report/ExecutionLogScroller.vue'
 import dateTools from '@/tools/dateTools'
 import chart from '@/tools/chart'
@@ -348,6 +438,7 @@ import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
 import { aiAnalyzeApi } from '@/api/modules/ai.js'
+import { fileApi } from '@/api/modules/sys'
 
 const router = useRouter()
 const route = useRoute()
@@ -355,6 +446,8 @@ const isDark = useDark()
 const uStore = UserStore()
 const proStore = ProjectStore()
 const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
+const canEditCase = computed(() => uStore.hasPermission('ui_case:edit'))
+const canEditSuite = computed(() => uStore.hasPermission('ui_suite:edit'))
 const batchAnalyzing = ref(false)
 
 const runBatchAnalyze = async () => {
@@ -394,6 +487,16 @@ const taskEnvDisplayName = computed(() => {
   return env.env_name || env.target_host || '-'
 })
 const SuiteRunList = ref([])
+const caseRunList = ref([])
+const caseStatusFilter = ref(route.query.caseStatus || '')
+const caseLoading = ref(false)
+const caseFilterSectionRef = ref(null)
+const casePageConfig = reactive({
+  page: 1,
+  size: 10,
+  total: 0
+})
+const caseTableRowIndex = makeTableRowIndex(casePageConfig)
 const pageConfig = reactive({
   page: 1,
   size: 10,
@@ -410,14 +513,100 @@ const statusMap = {
 }
 
 // 计算统计数据
+const CASE_STATUS_LABELS = {
+  success: '通过',
+  fail: '失败',
+  error: '错误',
+  skip: '跳过',
+  no_run: '未运行',
+  all: '全部用例'
+}
+
+const caseStatusFilterLabel = computed(() => CASE_STATUS_LABELS[caseStatusFilter.value] || caseStatusFilter.value)
+
 const taskStats = computed(() => [
-  { key: 'pass_rate', label: '通过率', value: `${(taskRunDetail.value?.pass_rate || 0).toFixed(2)}%`, color: getPassRateColor(taskRunDetail.value?.pass_rate), class: 'highlight' },
-  { key: 'case_count', label: '用例总数', value: taskRunDetail.value?.case_count || 0, color: '#409eff', class: 'total' },
-  { key: 'success', label: '通过', value: taskRunDetail.value?.success || 0, color: '#67c23a', class: 'success' },
-  { key: 'fail', label: '失败', value: taskRunDetail.value?.fail || 0, color: '#f56c6c', class: 'danger' },
-  { key: 'error', label: '错误', value: taskRunDetail.value?.error || 0, color: '#e6a23c', class: 'warning' },
-  { key: 'skip', label: '跳过', value: taskRunDetail.value?.skip || 0, color: '#909399', class: 'info' }
+  { key: 'pass_rate', label: '通过率', value: `${(taskRunDetail.value?.pass_rate || 0).toFixed(2)}%`, color: getPassRateColor(taskRunDetail.value?.pass_rate), class: 'highlight', filterable: false },
+  { key: 'case_count', label: '用例总数', value: taskRunDetail.value?.case_count || 0, color: '#409eff', class: 'total', filterable: true, filterStatus: 'all' },
+  { key: 'success', label: '通过', value: taskRunDetail.value?.success || 0, color: '#67c23a', class: 'success', filterable: true, filterStatus: 'success' },
+  { key: 'fail', label: '失败', value: taskRunDetail.value?.fail || 0, color: '#f56c6c', class: 'danger', filterable: true, filterStatus: 'fail' },
+  { key: 'error', label: '错误', value: taskRunDetail.value?.error || 0, color: '#e6a23c', class: 'warning', filterable: true, filterStatus: 'error' },
+  { key: 'skip', label: '跳过', value: taskRunDetail.value?.skip || 0, color: '#909399', class: 'info', filterable: true, filterStatus: 'skip' },
+  { key: 'no_run', label: '未运行', value: taskRunDetail.value?.no_run || 0, color: '#909399', class: 'no-run', filterable: true, filterStatus: 'no_run' }
 ])
+
+const isStatFilterActive = (stat) => {
+  if (!stat.filterable) return false
+  if (stat.filterStatus === 'all') return caseStatusFilter.value === 'all'
+  return caseStatusFilter.value === stat.filterStatus
+}
+
+const caseStatusMap = {
+  success: { text: '成功', type: 'success' },
+  fail: { text: '失败', type: 'danger' },
+  failed: { text: '失败', type: 'danger' },
+  error: { text: '错误', type: 'warning' },
+  skip: { text: '跳过', type: 'info' },
+  skipped: { text: '跳过', type: 'info' },
+  no_run: { text: '未运行', type: 'info' },
+  pending: { text: '未运行', type: 'info' },
+  running: { text: '运行中', type: 'primary' },
+  waiting: { text: '等待中', type: 'info' }
+}
+
+const getCaseStatusType = (status) => caseStatusMap[status]?.type || 'info'
+const getCaseStatusText = (status) => caseStatusMap[status]?.text || status
+
+const onStatCardClick = async (stat) => {
+  if (!stat.filterable) return
+  const next = stat.filterStatus
+  if (caseStatusFilter.value === next) {
+    clearCaseStatusFilter()
+    return
+  }
+  caseStatusFilter.value = next
+  casePageConfig.page = 1
+  router.replace({ query: { ...route.query, caseStatus: next === 'all' ? undefined : next } })
+  await getCaseRunList()
+  await nextTick()
+  caseFilterSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+const clearCaseStatusFilter = () => {
+  caseStatusFilter.value = ''
+  caseRunList.value = []
+  casePageConfig.total = 0
+  const query = { ...route.query }
+  delete query.caseStatus
+  router.replace({ query })
+}
+
+const getCaseRunList = async () => {
+  if (!caseStatusFilter.value) return
+  caseLoading.value = true
+  try {
+    const params = {
+      task_records_id: task_id,
+      page: casePageConfig.page,
+      size: casePageConfig.size
+    }
+    if (caseStatusFilter.value !== 'all') {
+      params.status = caseStatusFilter.value
+    }
+    const response = await http.resultApi.getCaseRecord(params)
+    if (response.status === 200) {
+      const records = response.data.data || []
+      for (const record of records) {
+        if (record.result_data) {
+          record.result_data = await fileApi.processReportUrls(record.result_data)
+        }
+      }
+      caseRunList.value = records
+      casePageConfig.total = response.data.total
+    }
+  } finally {
+    caseLoading.value = false
+  }
+}
 
 // 获取任务报告
 const getTaskReport = async () => {
@@ -481,8 +670,40 @@ const initCharts = () => {
 }
 
 // 跳转套件报告
+const resolveCaseId = (row) => row?.case_id || row?.result_data?.id || null
+
+const isUiFailed = (status) => ['fail', 'failed', 'error'].includes(String(status || '').toLowerCase())
+
+const goEditCase = (row) => {
+  const caseId = resolveCaseId(row)
+  if (!caseId) return
+  const query = {}
+  if (row?.id && isUiFailed(row.status)) {
+    query.execution_id = row.id
+  }
+  router.push({ name: 'editCase', params: { id: caseId }, query })
+}
+
+const goEditSuite = (suiteId) => {
+  if (!suiteId) return
+  router.push({ name: 'editSuite', params: { id: suiteId } })
+}
+
 const goToSuiteReport = (suite) => {
-  router.push({ name: 'suiteReport', params: { id: suite.id } })
+  router.push({
+    name: 'suiteReport',
+    params: { id: suite.id },
+    query: {
+      fromTask: task_id,
+      taskMode: showTimeline.value ? 'chart' : 'normal',
+      caseStatus: caseStatusFilter.value && caseStatusFilter.value !== 'all' ? caseStatusFilter.value : undefined
+    }
+  })
+}
+
+const goToSuiteReportByCase = (caseRow) => {
+  if (!caseRow.suite_execution_id) return
+  goToSuiteReport({ id: caseRow.suite_execution_id })
 }
 
 // 导出选项弹窗
@@ -587,11 +808,14 @@ watch(isDark, () => {
 // 初始化
 getTaskReport()
 getSuiteList()
+if (caseStatusFilter.value) {
+  getCaseRunList()
+}
 </script>
 
 <style scoped lang="scss">
 .task-report-new {
-  .report-header {
+    .report-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -601,6 +825,8 @@ getSuiteList()
     .header-actions {
       display: flex;
       gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
   }
   
@@ -636,6 +862,16 @@ getSuiteList()
         border-top: 3px solid var(--el-color-primary);
         background: linear-gradient(135deg, var(--el-color-primary-light-9) 0%, var(--el-fill-color-light) 100%);
       }
+
+      &.stat-card--clickable {
+        cursor: pointer;
+        user-select: none;
+      }
+
+      &.stat-card--active {
+        box-shadow: 0 0 0 2px var(--el-color-primary);
+        transform: translateY(-2px);
+      }
       
       .stat-value {
         font-size: 24px;
@@ -664,6 +900,14 @@ getSuiteList()
     .chart-container {
       height: 300px;
     }
+  }
+
+  .case-filter-section {
+    margin-bottom: 24px;
+    padding: 16px;
+    background: var(--el-fill-color-lighter);
+    border-radius: 8px;
+    border: 1px solid var(--el-border-color-light);
   }
   
   .section-title {
@@ -767,7 +1011,9 @@ getSuiteList()
         }
         
         .suite-footer {
-          text-align: right;
+          display: flex;
+          justify-content: flex-end;
+          gap: 12px;
           padding-top: 8px;
           border-top: 1px solid var(--el-border-color-light);
         }

@@ -114,6 +114,10 @@ const routes = [
                 redirect: { path: '/platform-config', query: { tab: 'runner' } }
             },
             {
+                path: '/stream-parser-config',
+                redirect: { path: '/platform-config', query: { tab: 'stream-parser' } }
+            },
+            {
                 path: '/platform-config',
                 name: 'platformConfig',
                 component: () => import('../views/System/PlatformConfig.vue'),
@@ -441,6 +445,116 @@ const routes = [
                 }
             },
             {
+                path: '/app-case',
+                name: 'appCaseList',
+                component: () => import('../views/App/AppCase.vue'),
+                meta: { title: 'App 用例', icon: 'Cellphone', permission: 'app_case:view' }
+            },
+            {
+                path: '/app-case/add',
+                name: 'appCaseAdd',
+                component: () => import('../views/App/AppCaseEdit.vue'),
+                meta: { title: '新建 App 用例', icon: 'Plus', permission: 'app_case:edit' }
+            },
+            {
+                path: '/app-case/edit/:id',
+                name: 'appCaseEdit',
+                component: () => import('../views/App/AppCaseEdit.vue'),
+                meta: { title: '编辑 App 用例', icon: 'Edit', permission: 'app_case:edit' }
+            },
+            {
+                path: '/app-elements',
+                name: 'appElements',
+                component: () => import('../views/App/AppElement.vue'),
+                meta: {
+                    title: 'App 元素库',
+                    icon: 'CollectionTag',
+                    anyPermissions: ['app_element:view', 'app_case:view']
+                }
+            },
+            {
+                path: '/app-inspector',
+                name: 'appInspector',
+                component: () => import('../views/App/AppInspector.vue'),
+                meta: {
+                    title: '元素探查',
+                    icon: 'Aim',
+                    anyPermissions: ['app_element:view', 'app_case:view']
+                }
+            },
+            {
+                path: '/app-suite',
+                name: 'appSuiteList',
+                component: () => import('../views/App/AppSuite.vue'),
+                meta: { title: 'App 套件', icon: 'Collection', permission: 'app_suite:view' }
+            },
+            {
+                path: '/app-suite/add',
+                name: 'appSuiteAdd',
+                component: () => import('../views/App/AppSuiteEdit.vue'),
+                meta: { title: '新建 App 套件', icon: 'Plus', permission: 'app_suite:edit' }
+            },
+            {
+                path: '/app-suite/edit/:id',
+                name: 'appSuiteEdit',
+                component: () => import('../views/App/AppSuiteEdit.vue'),
+                meta: { title: '编辑 App 套件', icon: 'Edit', permission: 'app_suite:edit' }
+            },
+            {
+                path: '/app-plan',
+                name: 'appPlanList',
+                component: () => import('../views/App/AppPlan.vue'),
+                meta: { title: 'App 计划', icon: 'Calendar', permission: 'app_plan:view' }
+            },
+            {
+                path: '/app-plan/edit/:id',
+                name: 'appPlanEdit',
+                component: () => import('../views/App/AppPlanEdit.vue'),
+                meta: { title: '编辑 App 计划', icon: 'Edit', permission: 'app_plan:edit' }
+            },
+            {
+                path: '/app-cron',
+                name: 'appCronList',
+                component: () => import('../views/App/AppCron.vue'),
+                meta: { title: 'App 定时任务', icon: 'Clock', permission: 'app_plan:view' }
+            },
+            {
+                path: '/app-fragments',
+                name: 'appFragmentList',
+                component: () => import('../views/App/AppFragmentList.vue'),
+                meta: { title: 'App 步骤片段', icon: 'CollectionTag', permission: 'app_case:view' }
+            },
+            {
+                path: '/app-fragments/new',
+                name: 'appFragmentNew',
+                component: () => import('../views/App/AppFragmentEdit.vue'),
+                meta: { title: '新建 App 片段', icon: 'Plus', permission: 'app_case:edit' }
+            },
+            {
+                path: '/app-fragments/edit/:id',
+                name: 'appFragmentEdit',
+                component: () => import('../views/App/AppFragmentEdit.vue'),
+                meta: { title: '编辑 App 片段', icon: 'Edit', permission: 'app_case:edit' }
+            },
+            {
+                path: '/app-record',
+                name: 'appRecordList',
+                component: () => import('../views/App/AppRecord.vue'),
+                meta: { title: 'App 执行记录', icon: 'List', permission: 'app_record:view' }
+            },
+            {
+                path: '/app-record/report/suite/:id',
+                name: 'appSuiteReport',
+                component: () => import('../views/App/AppSuiteReport.vue'),
+                meta: { title: 'App 套件报告', icon: 'DocumentCopy', permission: 'app_record:view' }
+            },
+            {
+                path: '/app-record/report/plan/:id',
+                name: 'appPlanReport',
+                component: () => import('../views/App/AppPlanReport.vue'),
+                meta: { title: 'App 计划报告', icon: 'DocumentCopy', permission: 'app_record:view' }
+            },
+            {
                 path: '/device',
                 name: 'device',
                 component: () => import('../views/Device/Device.vue'),
@@ -582,6 +696,23 @@ const routes = [
                     title: '模型使用情况',
                     icon: 'DataLine',
                     permission: 'ai_test:view'
+                }
+            },
+            {
+                path: '/ai-qa-eval',
+                name: 'aiQaEval',
+                component: () => import('../views/AI/AiQaEval.vue'),
+                meta: {
+                    title: '问答准确性评测',
+                    icon: 'ChatLineRound',
+                    permission: 'ai_test:view'
+                },
+                beforeEnter: async (_to, _from, next) => {
+                    const { useCommunityEdition } = await import('@/composables/useCommunityEdition.js')
+                    const { loadCommunityEdition, isCommunityEdition } = useCommunityEdition()
+                    await loadCommunityEdition()
+                    if (isCommunityEdition.value) next('/ai-testing')
+                    else next()
                 }
             },
             {

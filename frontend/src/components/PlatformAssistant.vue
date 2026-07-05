@@ -514,14 +514,22 @@ const formatImpact = (pending) => {
   const lines = []
   if (impact.warning) lines.push(impact.warning)
   if (impact.plan_name || impact.plan_id != null) {
-    lines.push(`测试计划：${impact.plan_name || '未命名'} (plan_id=${impact.plan_id})`)
+    const isApp = impact.driver_mode != null && !impact.scene_id
+    const prefix = isApp ? 'App 计划' : '接口测试计划'
+    const idKey = isApp ? 'app_plan_id' : 'plan_id'
+    lines.push(`${prefix}：${impact.plan_name || '未命名'} (${idKey}=${impact.plan_id})`)
   }
   if (impact.scene_name || impact.scene_id != null) {
     lines.push(`压测场景：${impact.scene_name || '未命名'} (scene_id=${impact.scene_id})`)
   }
   if (impact.suite_name || impact.suite_id != null) {
-    const prefix = impact.device_id != null ? 'Web UI 套件' : '套件'
-    lines.push(`${prefix}：${impact.suite_name || '未命名'} (suite_id=${impact.suite_id})`)
+    const prefix = impact.driver_mode != null
+      ? 'App 套件'
+      : impact.device_id != null
+        ? 'Web UI 套件'
+        : '接口套件'
+    const idKey = impact.driver_mode != null ? 'app_suite_id' : 'suite_id'
+    lines.push(`${prefix}：${impact.suite_name || '未命名'} (${idKey}=${impact.suite_id})`)
   }
   if (impact.task_name || impact.task_id != null) {
     lines.push(`UI 计划：${impact.task_name || '未命名'} (task_id=${impact.task_id})`)
@@ -533,8 +541,16 @@ const formatImpact = (pending) => {
   if (impact.device_id) lines.push(`Runner 设备：${impact.device_id}`)
   if (impact.case_count != null) lines.push(`用例数：${impact.case_count}`)
   if (impact.case_name || impact.case_id != null) {
-    const prefix = impact.device_id != null && impact.step_count != null ? 'Web UI 用例' : '接口用例'
-    lines.push(`${prefix}：${impact.case_name || '未命名'} (case_id=${impact.case_id})`)
+    let prefix = '接口用例'
+    let idKey = 'case_id'
+    if (impact.driver_mode != null) {
+      prefix = 'App 用例'
+      idKey = 'app_case_id'
+    } else if (impact.device_id != null && impact.step_count != null) {
+      prefix = 'Web UI 用例'
+      idKey = 'ui_case_id'
+    }
+    lines.push(`${prefix}：${impact.case_name || '未命名'} (${idKey}=${impact.case_id})`)
   }
   if (impact.step_count != null) lines.push(`步骤数：${impact.step_count}`)
   if (impact.data_driven != null) lines.push(`数据驱动：${impact.data_driven ? '是' : '否'}`)

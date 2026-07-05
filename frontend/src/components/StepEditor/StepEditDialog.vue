@@ -43,6 +43,16 @@
         </div>
         <p class="step-insert-hint">请先点击要填入的参数输入框，再选择插入项；执行时以运行环境为准。</p>
       </el-form-item>
+
+      <AppH5UsageGuide
+        v-if="showAppH5StepGuide"
+        scope="step"
+        :driver-mode="driverMode"
+        :step-method="form.method"
+        :has-h5-locator="appFormHasH5Locator"
+        :has-image-locator="appFormHasImageLocator"
+        :title="appStepGuideTitle"
+      />
       
       <!-- 数据库断言（专用表单） -->
       <el-form-item label="库断言" v-if="isDbAssertStep">
@@ -113,23 +123,115 @@
             :key="key"
           >
             <div class="param-label">
-              <span>{{ getParamLabel(form.method, key, paramLabelMap[key]) }}</span>
+              <span>{{ resolveParamLabel(key) }}</span>
               <span v-if="isRequiredParam(key)" class="required-mark">*</span>
               <el-tooltip
-                v-if="getParamTooltip(form.method, key)"
+                v-if="resolveParamTooltip(key)"
                 placement="top"
                 :show-after="200"
                 popper-class="param-tip-popper"
               >
                 <template #content>
-                  <div class="param-tip-content">{{ getParamTooltip(form.method, key) }}</div>
+                  <div class="param-tip-content">{{ resolveParamTooltip(key) }}</div>
                 </template>
                 <el-icon class="param-tip-icon"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
             
             <!-- 根据参数类型渲染不同输入框 -->
-            <template v-if="isLocatorKey(key)">
+            <template v-if="isAppObjectLocator(key)">
+              <div v-if="form.params[key].by === 'image'" class="app-image-locator">
+                <div class="app-locator-row">
+                  <el-select v-model="form.params[key].by" placeholder="定位方式" style="width: 140px" @change="onAppLocatorByChange(key)">
+                    <el-option v-for="opt in appLocatorByOptions(key)" :key="opt.value" :label="opt.label" :value="opt.value" />
+                  </el-select>
+                  <el-upload
+                    :show-file-list="false"
+                    accept="image/png,image/jpeg,image/webp"
+                    :http-request="(req) => handleStepTemplateUpload(req, key)"
+                    :disabled="stepTemplateUploading"
+                  >
+                    <el-button type="primary" plain size="small" :loading="stepTemplateUploading">上传识别图</el-button>
+                  </el-upload>
+                </div>
+                <div v-if="form.params[key].value" class="step-template-path">{{ form.params[key].value }}</div>
+                <el-text type="info" size="small">图像识别定位暂不支持 AI 自愈</el-text>
+                <el-image
+                  v-if="stepTemplatePreviewSrc(key)"
+                  :src="stepTemplatePreviewSrc(key)"
+                  fit="contain"
+                  class="step-template-preview"
+                  :preview-src-list="[stepTemplatePreviewSrc(key)]"
+                />
+                <div class="app-image-fields">
+                  <span class="field-label">相似度阈值</span>
+                  <el-slider
+                    v-model="form.params[key].threshold"
+                    :min="0.5"
+                    :max="1"
+                    :step="0.05"
+                    :disabled="false"
+                    style="flex: 1"
+                  />
+                  <span class="field-label">RGB</span>
+                  <el-switch v-model="form.params[key].rgb" />
+                </div>
+                <div class="app-image-fields">
+                  <span class="field-label">中心偏移</span>
+                  <el-input
+                    :model-value="formatLocatorPair(form.params[key].record_pos)"
+                    placeholder="相对屏幕中心，如 0.12,-0.05"
+                    :disabled="false"
+                    style="flex: 1"
+                    @update:model-value="(v) => setLocatorPair(form.params[key], 'record_pos', v)"
+                  />
+                  <span class="field-label">录制分辨率</span>
+                  <el-input
+                    :model-value="formatLocatorPair(form.params[key].resolution)"
+                    placeholder="宽,高，如 1080,2400"
+                    :disabled="false"
+                    style="flex: 1"
+                    @update:model-value="(v) => setLocatorPair(form.params[key], 'resolution', v)"
+                  />
+                </div>
+              </div>
+              <div v-else class="app-locator-row">
+                <el-select
+                  v-model="form.params[key].context"
+                  placeholder="定位环境"
+                  style="width: 130px"
+                  @change="onAppLocatorContextChange(key)"
+                >
+                  <el-option label="原生 App" :value="APP_LOCATOR_CONTEXT_NATIVE" />
+                  <el-option label="WebView / H5" value="webview" />
+                </el-select>
+                <el-select v-model="form.params[key].by" placeholder="定位方式" style="width: 140px" @change="onAppLocatorByChange(key)">
+                  <el-option v-for="opt in appLocatorByOptions(key)" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
+                <el-input v-model="form.params[key].value" placeholder="定位值" style="flex: 1" @input="onAppLocatorFieldEdited" />
+                <el-input-number v-model="form.params[key].index" :min="1" :max="99" controls-position="right" style="width: 100px" @change="onAppLocatorFieldEdited" />
+                <el-button type="primary" link :loading="healingLocator" @click="handleHealLocator">AI 自愈</el-button>
+              </div>
+            </template>
+            <template v-else-if="isAppLocatorRefKey(key)">
+              <div class="locator-ref-row">
+                <el-select
+                  v-model="form.params[key]"
+                  filterable
+                  clearable
+                  placeholder="选择元素库引用（同步到上方定位，可再编辑）"
+                  style="flex: 1"
+                  @change="onLocatorRefChange"
+                >
+                  <el-option v-for="opt in appElementOptions" :key="opt.name" :label="opt.name" :value="opt.name">
+                    <span>{{ opt.name }}</span>
+                    <span style="color: #909399; margin-left: 8px">{{ formatElementLocator(opt.locator) }}</span>
+                  </el-option>
+                </el-select>
+                <el-button type="primary" link @click="openAppInspector">元素探查</el-button>
+              </div>
+            </template>
+            <template v-else-if="isLocatorKey(key)">
               <div class="locator-heal-row">
                 <LocatorSelector
                   v-model="form.params[key]"
@@ -189,11 +291,11 @@
       
       <!-- 条件分支配置 -->
       <el-form-item label="分支配置" v-if="isConditionBranch">
-        <ConditionEdit v-model:branches="form.branches" />
+        <ConditionEdit v-model:branches="form.branches" :module="module" />
       </el-form-item>
       
-      <!-- 高级配置 -->
-      <el-form-item label="高级配置" v-if="!isConditionBranch">
+      <!-- 高级配置（App 步骤使用 params 内超时，不展示此项） -->
+      <el-form-item label="高级配置" v-if="!isConditionBranch && !isAppStep">
         <div class="advanced-box">
           <div class="advanced-header" @click="showAdvanced = !showAdvanced">
             <span class="advanced-title">超时与重试</span>
@@ -260,6 +362,7 @@
 
 <script setup>
 import { ref, computed, watch, inject } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import ConditionEdit from './ConditionEdit.vue'
@@ -274,13 +377,23 @@ import UiTestFolderPicker from './UiTestFolderPicker.vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { insertVarRef } from '@/utils/varInsert.js'
 import { getOrderedVisibleParams, getParamLabel, getParamTooltip, isDragDropMethod, isElementOrderMethod, isAssertionMethod } from '@/utils/uiStepMeta.js'
+import { getAppOrderedVisibleParams, getAppParamLabel, getAppParamTooltip, isAppMethod, isAppRequiredParam, getAppSelectOptions, validateAppStepParams, validateAppBranchConditions, getAppLocatorByOptions, isWebviewLocator, isImageLocator, isAppLocatorFilled, APP_LOCATOR_CONTEXT_NATIVE, applyDefaultAppIdToStepParams, getProjectDefaultAppId, prepareAppLocatorForEdit, serializeAppLocatorForSave, normalizeAppLocator } from '@/utils/appStepMeta.js'
+import { presignTemplateKeys, resolveTemplatePreviewUrl } from '@/utils/appTemplatePresign.js'
+import AppH5UsageGuide from '@/components/App/AppH5UsageGuide.vue'
+import { appElementApi } from '@/api/modules/app.js'
 import { aiGenerateApi } from '@/api/modules/ai.js'
 
+const router = useRouter()
+const route = useRoute()
 const proStore = ProjectStore()
 const varInsertEnvId = inject('varInsertEnvId', ref(null))
+const saveAppInspectorDraft = inject('saveAppInspectorDraft', null)
 const envList = computed(() => proStore.envList || [])
 const projectId = computed(() => proStore.projectInfo?.id)
 const tagPickerVisible = ref(false)
+const appElementOptions = ref([])
+const stepTemplateUploading = ref(false)
+const stepTemplatePreviewMap = ref({})
 
 async function onDfTagInsert(refStr) {
   const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
@@ -313,7 +426,19 @@ const props = defineProps({
   stepIndex: {
     type: Number,
     default: -1
-  }
+  },
+  stepPath: {
+    type: Array,
+    default: () => [],
+  },
+  module: {
+    type: String,
+    default: 'web'
+  },
+  driverMode: {
+    type: String,
+    default: '',
+  },
 })
 
 const emit = defineEmits(['update:visible', 'save', 'cancel'])
@@ -336,10 +461,41 @@ const healReplayThrough = ref(1)
 
 const canReplay = computed(() => props.stepIndex > 0 && (props.allSteps?.length || 0) > 0)
 
+const effectiveStepPath = computed(() => {
+  if (Array.isArray(props.stepPath) && props.stepPath.length) return props.stepPath
+  if (props.stepIndex >= 0) return [props.stepIndex]
+  return []
+})
+
 // 是否是编辑模式
 const isEdit = computed(() => !!props.step?.id)
 
-// 是否是条件分支步骤
+// 是否是 App 步骤（仅按编辑器 module 区分；Web/App 存在同名 method 如 extract_text、open_url）
+const isAppStep = computed(() => props.module === 'app')
+
+const H5_CONTEXT_METHODS = new Set(['switch_webview', 'switch_chrome', 'switch_native', 'open_url'])
+
+const appFormHasH5Locator = computed(() => isWebviewLocator(form.value.params?.locator))
+const appFormHasImageLocator = computed(() => isImageLocator(form.value.params?.locator))
+
+const appStepGuideTitle = computed(() => {
+  if (appFormHasImageLocator.value) return '本步骤图像识别说明'
+  if (appFormHasH5Locator.value || H5_CONTEXT_METHODS.has(form.value.method)) return '本步骤 H5 / WebView 说明'
+  return 'App 步骤说明'
+})
+
+const showAppH5StepGuide = computed(() => {
+  if (!isAppStep.value) return false
+  const method = form.value.method
+  if (H5_CONTEXT_METHODS.has(method)) return true
+  if (appFormHasH5Locator.value) return true
+  if (appFormHasImageLocator.value) return true
+  if (['hybrid_web', 'mobile_chrome'].includes(props.driverMode) && form.value.params?.locator) {
+    return true
+  }
+  return false
+})
+
 const isConditionBranch = computed(() => {
   return form.value.method === 'condition_branch'
 })
@@ -383,8 +539,11 @@ const filteredParams = computed(() => {
   if (form.value.method === 'upload_file') {
     uploadFileHiddenKeys.forEach((key) => delete raw[key])
   }
-  if (!keepTimeoutMethods.includes(form.value.method)) {
+  if (!keepTimeoutMethods.includes(form.value.method) && !isAppStep.value) {
     delete raw.timeout
+  }
+  if (isAppStep.value) {
+    return getAppOrderedVisibleParams(form.value.method, raw)
   }
   return getOrderedVisibleParams(form.value.method, raw)
 })
@@ -394,9 +553,26 @@ const hasParams = computed(() => {
   return Object.keys(filteredParams.value).length > 0
 })
 
+function resolveParamLabel(key) {
+  if (isAppStep.value) {
+    return getAppParamLabel(form.value.method, key, paramLabelMap[key])
+  }
+  return getParamLabel(form.value.method, key, paramLabelMap[key])
+}
+
+function resolveParamTooltip(key) {
+  if (isAppStep.value) {
+    return getAppParamTooltip(form.value.method, key)
+  }
+  return getParamTooltip(form.value.method, key)
+}
+
 // 判断参数是否必填
 function isRequiredParam(key) {
   const method = form.value.method
+  if (isAppStep.value) {
+    return isAppRequiredParam(method, key)
+  }
   const assertionRequired = {
     kw_assert_page_title: ['title'],
     kw_assert_page_url: ['url'],
@@ -488,35 +664,92 @@ const paramLabelMap = {
 // 长文本类型的key
 const longTextKeys = ['url', 'selector', 'script', 'condition', 'text', 'value', 'path', 'download_path']
 
+function repairWebStepParams(params) {
+  if (!params || typeof params !== 'object') return params || {}
+  const next = { ...params }
+  for (const key of ['locator', 'selector', 'first_locator', 'second_locator']) {
+    const v = next[key]
+    if (v && typeof v === 'object' && v.by !== undefined) {
+      next[key] = v.value != null ? String(v.value) : ''
+    }
+  }
+  if (next.locator_ref != null) {
+    delete next.locator_ref
+  }
+  return next
+}
+
 // 监听 step 变化
 watch(() => props.step, (newStep) => {
   if (newStep) {
     // 确保条件分支有branches字段
     const stepData = { ...newStep }
     if (stepData.method === 'condition_branch' && !stepData.branches) {
+      const defaultCond = props.module === 'app'
+        ? { type: 'element_exist', locator: { by: 'resource_id', value: '', index: 1 }, operator: 'is_true' }
+        : { type: 'element_visible', locator: '', operator: 'is_true' }
       stepData.branches = [
         {
           id: `branch_${Date.now()}`,
           name: '分支1',
-          condition: { type: 'element_visible', locator: '', operator: 'is_true' },
-          steps: []
+          condition: defaultCond,
+          steps: [],
         },
         {
           id: `else_branch_${Date.now()}`,
           name: '默认分支',
           condition: { type: 'else' },
-          steps: []
-        }
+          steps: [],
+        },
       ]
     }
+    const baseParams = props.module === 'app'
+      ? { ...newStep.params }
+      : repairWebStepParams(newStep.params)
     form.value = {
       ...stepData,
-      params: { ...newStep.params },
+      params: baseParams,
       config: { timeout: 30000, retry: false, ...newStep.config },
       branches: newStep.branches ? JSON.parse(JSON.stringify(newStep.branches)) : undefined
     }
+    if (isAppStep.value && isAppMethod(form.value.method)) {
+      form.value.params = applyDefaultAppIdToStepParams(
+        form.value.method,
+        form.value.params || {},
+        proStore.projectInfo,
+        props.allSteps || []
+      )
+      if (form.value.params?.locator) {
+        form.value.params.locator = prepareAppLocatorForEdit(form.value.params.locator)
+      }
+    }
   }
 }, { immediate: true, deep: true })
+
+watch(() => props.visible, (open) => {
+  if (open && !varInsertEnvId.value && proStore.envList.length) {
+    varInsertEnvId.value = proStore.envList[0].id
+  }
+  if (open && isAppStep.value) {
+    loadAppElementOptions().then(() => {
+      if (form.value.params?.locator_ref) {
+        syncLocatorFromElementRef(form.value.params.locator_ref)
+      }
+    })
+    const loc = form.value.params?.locator
+    if (isImageLocator(loc) && loc?.value) {
+      hydrateStepTemplatePreview(loc.value)
+    }
+    if (isAppMethod(form.value.method)) {
+      form.value.params = applyDefaultAppIdToStepParams(
+        form.value.method,
+        form.value.params || {},
+        proStore.projectInfo,
+        props.allSteps || []
+      )
+    }
+  }
+})
 
 // 监听 visible 变化
 const visible = computed({
@@ -542,12 +775,194 @@ function isNumber(value) {
 
 // 判断是否为下拉选择
 function isSelect(key) {
+  if (isAppStep.value) {
+    return ['direction', 'key'].includes(key)
+  }
   const selectKeys = ['wait_until', 'browser_type', 'operator', 'key', 'button', 'match_mode', 'order']
   return selectKeys.includes(key)
 }
 
 // 是否为定位表达式参数（使用 LocatorSelector 组件）
+function isAppLocatorRefKey(key) {
+  return isAppStep.value && key === 'locator_ref'
+}
+
+function formatElementLocator(locator) {
+  if (!locator || typeof locator !== 'object') return ''
+  return `${locator.by || ''}=${locator.value || ''}`
+}
+
+async function loadAppElementOptions() {
+  if (!isAppStep.value || !proStore.projectInfo?.id) {
+    appElementOptions.value = []
+    return
+  }
+  try {
+    const res = await appElementApi.options({ project_id: proStore.projectInfo.id })
+    appElementOptions.value = res.data?.data || res.data || []
+  } catch {
+    appElementOptions.value = []
+  }
+}
+
+function appLocatorByOptions(key) {
+  return getAppLocatorByOptions(form.value.params?.[key])
+}
+
+function onAppLocatorContextChange(key) {
+  const loc = form.value.params?.[key]
+  if (!loc) return
+  if (loc.context === 'webview' && !['css', 'xpath', 'text', 'id'].includes(loc.by)) {
+    loc.by = 'css'
+  }
+  if (loc.context === APP_LOCATOR_CONTEXT_NATIVE && ['css', 'id'].includes(loc.by)) {
+    loc.by = 'resource_id'
+  }
+  onAppLocatorFieldEdited()
+}
+
+function onAppLocatorByChange(key) {
+  const loc = form.value.params?.[key]
+  if (!loc) return
+  if (loc.by === 'image') {
+    loc.value = loc.value || ''
+    loc.threshold = loc.threshold ?? 0.8
+    loc.rgb = loc.rgb ?? false
+    delete loc.index
+    delete loc.context
+    hydrateStepTemplatePreview(loc.value)
+  } else {
+    delete loc.threshold
+    delete loc.rgb
+    delete loc.record_pos
+    delete loc.resolution
+    if (String(loc.value || '').startsWith('app-elements/')) {
+      loc.value = ''
+    }
+    if (!loc.context) {
+      loc.context = APP_LOCATOR_CONTEXT_NATIVE
+    }
+    if (loc.by === 'resource_id' && !loc.index) {
+      loc.index = 1
+    }
+  }
+  onAppLocatorFieldEdited()
+}
+
+function onAppLocatorFieldEdited() {
+  if (form.value.params?.locator_ref) {
+    form.value.params.locator_ref = ''
+  }
+}
+
+function syncLocatorFromElementRef(refName) {
+  const loc = form.value.params?.locator
+  if (!loc || !refName) return
+  const found = appElementOptions.value.find((opt) => opt.name === refName)
+  if (!found?.locator) return
+  const synced = prepareAppLocatorForEdit(JSON.parse(JSON.stringify(found.locator)))
+  Object.assign(loc, synced)
+  if (isImageLocator(synced) && synced.value) {
+    hydrateStepTemplatePreview(synced.value)
+  }
+}
+
+function onLocatorRefChange(val) {
+  if (!val) return
+  syncLocatorFromElementRef(val)
+}
+
+function formatLocatorPair(value) {
+  if (value == null || value === '') return ''
+  if (Array.isArray(value) && value.length >= 2) return `${value[0]},${value[1]}`
+  if (typeof value === 'object' && value.x != null && value.y != null) return `${value.x},${value.y}`
+  return String(value)
+}
+
+function setLocatorPair(loc, field, text) {
+  if (!loc) return
+  const parts = String(text || '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (parts.length >= 2) {
+    const a = Number(parts[0])
+    const b = Number(parts[1])
+    if (!Number.isNaN(a) && !Number.isNaN(b)) loc[field] = [a, b]
+  } else {
+    delete loc[field]
+  }
+}
+
+async function hydrateStepTemplatePreview(objectKey) {
+  if (!objectKey || String(objectKey).startsWith('http')) return
+  const urlMap = await presignTemplateKeys([objectKey], projectId.value)
+  stepTemplatePreviewMap.value = { ...stepTemplatePreviewMap.value, ...urlMap }
+}
+
+function stepTemplatePreviewSrc(key) {
+  const value = form.value.params?.[key]?.value
+  return resolveTemplatePreviewUrl(value, stepTemplatePreviewMap.value)
+}
+
+async function handleStepTemplateUpload(options, key) {
+  const file = options.file
+  if (!file || !projectId.value) return
+  stepTemplateUploading.value = true
+  try {
+    const res = await appElementApi.uploadTemplate(projectId.value, file)
+    const data = res.data?.data || res.data
+    const objectKey = data?.object_key || ''
+    const accessUrl = data?.access_url || ''
+    if (!objectKey) {
+      ElMessage.error('上传失败')
+      return
+    }
+    const loc = form.value.params?.[key]
+    if (loc) {
+      loc.by = 'image'
+      loc.value = objectKey
+      loc.threshold = loc.threshold ?? 0.8
+      loc.rgb = loc.rgb ?? false
+    }
+    if (accessUrl) {
+      stepTemplatePreviewMap.value = { ...stepTemplatePreviewMap.value, [objectKey]: accessUrl }
+    }
+    ElMessage.success('识别图已上传')
+  } catch (e) {
+    ElMessage.error('识别图上传失败')
+  } finally {
+    stepTemplateUploading.value = false
+  }
+}
+
+import { setAppInspectorContext, setAppInspectorCaseDraft } from '@/utils/appInspectorContext.js'
+
+function openAppInspector() {
+  if (!isAppStep.value) {
+    router.push({ name: 'appInspector' })
+    return
+  }
+  if (typeof saveAppInspectorDraft === 'function') {
+    saveAppInspectorDraft()
+  }
+  setAppInspectorContext({
+    returnPath: route.fullPath,
+    returnName: route.name,
+    stepPath: effectiveStepPath.value,
+    stepIndex: effectiveStepPath.value[effectiveStepPath.value.length - 1],
+    driverMode: props.driverMode || 'hybrid',
+    caseId: route.params.id || null,
+    projectId: proStore.projectInfo?.id || null,
+  })
+  router.push({ name: 'appInspector', query: { from: 'step_edit' } })
+}
+
+function isAppObjectLocator(key) {
+  if (!isAppStep.value) return false
+  const val = form.value.params?.[key]
+  return key === 'locator' && val && typeof val === 'object' && val.by !== undefined
+}
+
 function isLocatorKey(key) {
+  if (isAppObjectLocator(key)) return false
   return ['locator', 'selector', 'first_locator', 'second_locator'].includes(key)
 }
 
@@ -556,6 +971,9 @@ function canInsertVar(key) {
 }
 
 async function handleHealLocator() {
+  if (isAppStep.value) {
+    return handleAppHealLocator()
+  }
   const locatorKey = Object.keys(form.value.params || {}).find(k => isLocatorKey(k))
   if (!locatorKey) {
     ElMessage.warning('当前步骤无定位器参数')
@@ -569,6 +987,36 @@ async function handleHealLocator() {
   healReplayThrough.value = Math.max(1, props.stepIndex)
   healMode.value = canReplay.value ? 'replay' : 'url'
   healDialogVisible.value = true
+}
+
+async function handleAppHealLocator() {
+  const locator = form.value.params?.locator
+  if (!locator || !isAppLocatorFilled(locator)) {
+    ElMessage.warning('请先填写定位器')
+    return
+  }
+  if (isImageLocator(locator)) {
+    ElMessage.warning('图像识别定位暂不支持 AI 自愈')
+    return
+  }
+  healingLocator.value = true
+  try {
+    const res = await aiGenerateApi.healAppLocator({
+      method: form.value.method,
+      failed_locator: serializeAppLocatorForSave(locator),
+      step_desc: form.value.desc,
+    })
+    if (res.data?.code === 200 && res.data.data?.locator) {
+      form.value.params.locator = prepareAppLocatorForEdit(res.data.data.locator)
+      ElMessage.success(`已应用新定位器（${res.data.data.confidence || 'medium'}）`)
+    } else {
+      ElMessage.error(res.data?.data?.reason || res.data?.message || '自愈失败')
+    }
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '自愈请求失败')
+  } finally {
+    healingLocator.value = false
+  }
 }
 
 async function confirmHeal() {
@@ -619,6 +1067,9 @@ function isBoolean(key) {
 
 // 获取选项
 function getOptions(key) {
+  if (isAppStep.value) {
+    return getAppSelectOptions(key)
+  }
   const options = {
     wait_until: [
       { label: '页面加载完成', value: 'load' },
@@ -704,15 +1155,31 @@ async function handleSave() {
         }
       }
     }
-    // 额外校验必填参数
-    for (const key of Object.keys(filteredParams.value)) {
-      if (isRequiredParam(key)) {
-        const value = form.value.params[key]
-        if (!value || (typeof value === 'string' && value.trim() === '')) {
-          ElMessage.warning(`请填写${paramLabelMap[key] || key}`)
-          return
+    // App / Web 步骤参数校验
+    if (isAppStep.value) {
+      const appErr = validateAppStepParams(form.value.method, form.value.params)
+      if (appErr) {
+        ElMessage.warning(appErr)
+        return
+      }
+    } else {
+      for (const key of Object.keys(filteredParams.value)) {
+        if (isRequiredParam(key)) {
+          const value = form.value.params[key]
+          if (!value || (typeof value === 'string' && value.trim() === '')) {
+            ElMessage.warning(`请填写${resolveParamLabel(key)}`)
+            return
+          }
         }
       }
+    }
+  }
+
+  if (isConditionBranch.value && isAppStep.value) {
+    const branchErr = validateAppBranchConditions(form.value.branches)
+    if (branchErr) {
+      ElMessage.warning(branchErr)
+      return
     }
   }
   
@@ -720,7 +1187,16 @@ async function handleSave() {
   const savedStep = { 
     ...form.value,
     keyword: form.value.keyword,
-    method: form.value.method || form.value.keyword
+    method: form.value.method || form.value.keyword,
+    params: { ...(form.value.params || {}) },
+  }
+  if (isAppStep.value) {
+    if (savedStep.params?.locator) {
+      savedStep.params.locator = serializeAppLocatorForSave(savedStep.params.locator)
+    }
+    if (!savedStep.params?.locator_ref) {
+      delete savedStep.params.locator_ref
+    }
   }
   
   // 条件分支特殊处理
@@ -728,19 +1204,22 @@ async function handleSave() {
     savedStep.is_container = true
     // 确保branches字段存在
     if (!savedStep.branches || savedStep.branches.length === 0) {
+      const defaultCond = isAppStep.value
+        ? { type: 'element_exist', locator: { by: 'resource_id', value: '', index: 1 }, operator: 'is_true' }
+        : { type: 'element_visible', locator: '', operator: 'is_true' }
       savedStep.branches = [
         {
           id: `branch_${Date.now()}`,
           name: '分支1',
-          condition: { type: 'element_visible', locator: '', operator: 'is_true' },
-          steps: []
+          condition: defaultCond,
+          steps: [],
         },
         {
           id: `else_branch_${Date.now()}`,
           name: '默认分支',
           condition: { type: 'else' },
-          steps: []
-        }
+          steps: [],
+        },
       ]
     }
   }
@@ -889,6 +1368,52 @@ function handleClose() {
 .advanced-unit {
   font-size: 14px;
   color: var(--el-text-color-secondary);
+}
+
+.app-locator-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
+.app-image-locator {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app-image-fields {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-image-fields .field-label {
+  font-size: 12px;
+  color: #909399;
+  white-space: nowrap;
+}
+
+.step-template-path {
+  font-size: 12px;
+  color: #909399;
+  word-break: break-all;
+}
+
+.step-template-preview {
+  width: 72px;
+  height: 72px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+}
+
+.locator-ref-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
 }
 
 .locator-heal-row {

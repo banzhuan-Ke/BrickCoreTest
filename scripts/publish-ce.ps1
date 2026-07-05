@@ -1,4 +1,4 @@
-# CE publish workflow: audit -> (optional) sync -> verify -> print deploy checklist.
+﻿# CE publish workflow: audit -> (optional) sync -> verify -> print deploy checklist.
 # Default: audit + dry-run only — does NOT write CE files or push git.
 param(
     [Parameter(Mandatory = $false)]

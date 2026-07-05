@@ -37,6 +37,20 @@ UI_CRON_EDIT = "ui_cron:edit"
 UI_RECORD_VIEW = "ui_record:view"
 UI_RECORD_EDIT = "ui_record:edit"
 
+# App 自动化
+APP_CASE_VIEW = "app_case:view"
+APP_CASE_EDIT = "app_case:edit"
+APP_CASE_EXECUTE = "app_case:execute"
+APP_SUITE_VIEW = "app_suite:view"
+APP_SUITE_EDIT = "app_suite:edit"
+APP_SUITE_EXECUTE = "app_suite:execute"
+APP_PLAN_VIEW = "app_plan:view"
+APP_PLAN_EDIT = "app_plan:edit"
+APP_PLAN_EXECUTE = "app_plan:execute"
+APP_RECORD_VIEW = "app_record:view"
+APP_ELEMENT_VIEW = "app_element:view"
+APP_ELEMENT_EDIT = "app_element:edit"
+
 # 设备管理
 DEVICE_VIEW = "device:view"
 DEVICE_EDIT = "device:edit"
@@ -148,7 +162,7 @@ PERMISSIONS = [
         ]
     },
     {
-        "label": "UI 自动化",
+        "label": "Web 自动化",
         "children": [
             {"label": "用例管理-查看", "value": UI_CASE_VIEW},
             {"label": "用例管理-编辑", "value": UI_CASE_EDIT},
@@ -166,6 +180,23 @@ PERMISSIONS = [
             {"label": "设备管理-查看", "value": DEVICE_VIEW},
             {"label": "设备管理-编辑", "value": DEVICE_EDIT},
         ]
+    },
+    {
+        "label": "App 自动化",
+        "children": [
+            {"label": "App用例-查看", "value": APP_CASE_VIEW},
+            {"label": "App用例-编辑", "value": APP_CASE_EDIT},
+            {"label": "App用例-执行", "value": APP_CASE_EXECUTE},
+            {"label": "App套件-查看", "value": APP_SUITE_VIEW},
+            {"label": "App套件-编辑", "value": APP_SUITE_EDIT},
+            {"label": "App套件-执行", "value": APP_SUITE_EXECUTE},
+            {"label": "App计划-查看", "value": APP_PLAN_VIEW},
+            {"label": "App计划-编辑", "value": APP_PLAN_EDIT},
+            {"label": "App计划-执行", "value": APP_PLAN_EXECUTE},
+            {"label": "App记录-查看", "value": APP_RECORD_VIEW},
+            {"label": "App元素库-查看", "value": APP_ELEMENT_VIEW},
+            {"label": "App元素库-编辑", "value": APP_ELEMENT_EDIT},
+        ],
     },
     {
         "label": "接口自动化",
@@ -249,6 +280,11 @@ ALL_PERMISSIONS = [
     UI_TASK_VIEW, UI_TASK_EDIT, UI_TASK_EXECUTE,
     UI_CRON_VIEW, UI_CRON_EDIT,
     UI_RECORD_VIEW, UI_RECORD_EDIT,
+    APP_CASE_VIEW, APP_CASE_EDIT, APP_CASE_EXECUTE,
+    APP_SUITE_VIEW, APP_SUITE_EDIT, APP_SUITE_EXECUTE,
+    APP_PLAN_VIEW, APP_PLAN_EDIT, APP_PLAN_EXECUTE,
+    APP_RECORD_VIEW,
+    APP_ELEMENT_VIEW, APP_ELEMENT_EDIT,
     DEVICE_VIEW, DEVICE_EDIT,
     API_MANAGE_VIEW, API_MANAGE_EDIT,
     API_CASE_VIEW, API_CASE_EDIT, API_CASE_EXECUTE,

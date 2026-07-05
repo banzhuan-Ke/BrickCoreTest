@@ -16,7 +16,7 @@ def _repo_root() -> Path:
 
 @lru_cache(maxsize=1)
 def is_community_edition() -> bool:
-    """公开部署：显式环境变量，或仓库内无 runner/WebEngine 源码目录。"""
+    """识别部署版本（Docker 环境变量 BRICKCORE_EDITION 或本地目录结构）。"""
     raw = os.getenv("BRICKCORE_EDITION", "").strip().lower()
     if raw in ("ce", "community", "oss"):
         return True
@@ -36,5 +36,5 @@ QA_EVAL_TOOL_NAMES: frozenset[str] = frozenset(
 
 
 def qa_eval_feature_enabled() -> bool:
-    """问答准确性评测含专有评判能力，公开部署默认不开放。"""
+    """问答准确性评测能力开关。"""
     return not is_community_edition()

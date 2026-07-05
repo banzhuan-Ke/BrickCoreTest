@@ -1,5 +1,5 @@
 <template>
-  <div class="case-timeline-report" v-if="hasData">
+  <div class="case-timeline-report" v-if="hasData" :class="{ 'is-app-profile': isAppProfile }">
     <!-- 用例基本信息 -->
     <div class="case-header">
       <el-descriptions :column="4" border>
@@ -9,6 +9,17 @@
         </el-descriptions-item>
         <el-descriptions-item label="执行耗时">{{ formatDuration(processedRunInfo.duration) }}</el-descriptions-item>
       </el-descriptions>
+    </div>
+
+    <!-- App 步骤分布摘要 -->
+    <div v-if="isAppProfile && steps.length" class="app-step-summary">
+      <span class="app-step-summary-label">步骤分布</span>
+      <el-tag size="small" type="info" effect="plain">共 {{ steps.length }} 步</el-tag>
+      <el-tag v-if="appStepStats.native" size="small" type="info" effect="plain">原生 {{ appStepStats.native }}</el-tag>
+      <el-tag v-if="appStepStats.webview" size="small" type="warning" effect="plain">H5 {{ appStepStats.webview }}</el-tag>
+      <el-tag v-if="appStepStats.vision" size="small" type="success" effect="plain">图像 {{ appStepStats.vision }}</el-tag>
+      <el-tag v-if="appStepStats.context" size="small" type="primary" effect="plain">上下文 {{ appStepStats.context }}</el-tag>
+      <el-tag v-if="appStepStats.failed" size="small" type="danger" effect="plain">失败 {{ appStepStats.failed }}</el-tag>
     </div>
 
     <!-- 变量快照 -->
@@ -137,10 +148,54 @@
                   <el-tag size="small" :type="getStepStatusType(step.status)">
                     {{ getStepStatusText(step.status) }}
                   </el-tag>
+                  <el-tag v-if="isAppProfile && step.locator_type" size="small" :type="locatorTypeTag(step.locator_type)" effect="plain">
+                    {{ locatorTypeLabel(step.locator_type) }}
+                  </el-tag>
+                  <el-tag v-if="isAppProfile && step.execution_context === 'webview'" size="small" type="warning" effect="plain">
+                    H5 WebView
+                  </el-tag>
+                  <el-tag v-if="isAppProfile && step.execution_context === 'chrome'" size="small" type="success" effect="plain">
+                    Chrome H5
+                  </el-tag>
                 </div>
               </template>
               <div class="step-content">
                 <div class="step-desc">{{ step.message || step.desc || step.content || '无描述' }}</div>
+                <div v-if="isAppProfile && step.webview_page_url" class="step-webview-meta">
+                  H5 页面：{{ step.webview_page_url }}
+                </div>
+                <div v-if="isAppProfile && step.match_score != null" class="step-webview-meta">
+                  图像匹配相似度：{{ (step.match_score * 100).toFixed(1) }}%
+                  <span v-if="step.status === 'fail' || step.status === 'error'" class="match-score-hint">（未达阈值时可适当降低 threshold）</span>
+                </div>
+                <div
+                  v-if="isAppProfile && (step.template_image || step.template_image_key || hasClickMarker(step))"
+                  class="step-vision-compare"
+                >
+                  <div v-if="step.template_image || step.template_image_key" class="vision-compare-item">
+                    <div class="vision-compare-label">识别模板</div>
+                    <el-image
+                      :src="resolveTemplateImage(step)"
+                      :preview-src-list="[resolveTemplateImage(step)]"
+                      fit="contain"
+                      class="vision-compare-img"
+                      :preview-teleported="true"
+                    />
+                  </div>
+                  <div v-if="step.screenshot || step.image" class="vision-compare-item">
+                    <div class="vision-compare-label">
+                      实际截图
+                      <span v-if="hasClickMarker(step)" class="click-marker-hint">（红圈为点击位置）</span>
+                    </div>
+                    <el-image
+                      :src="step.screenshot || step.image"
+                      :preview-src-list="[step.screenshot || step.image]"
+                      fit="contain"
+                      class="vision-compare-img"
+                      :preview-teleported="true"
+                    />
+                  </div>
+                </div>
                 <div v-if="step.locator_healed" class="step-heal-info">
                   <el-tag size="small" type="warning">AI 自愈</el-tag>
                   <code class="heal-locator">{{ step.locator_healed.original || '—' }}</code>
@@ -155,13 +210,18 @@
                     @click="applyHealedToCase(step, index)"
                   >写回用例</el-button>
                 </div>
-                <!-- 步骤截图缩略图 -->
-                <div class="step-screenshot-preview" v-if="step.screenshot || step.image" @click.stop>
+                <!-- 步骤截图缩略图（无模板对比时显示） -->
+                <div
+                  class="step-screenshot-preview"
+                  v-if="(step.screenshot || step.image) && !(isAppProfile && (step.template_image || step.template_image_key))"
+                  @click.stop
+                >
                   <el-image 
                     :src="step.screenshot || step.image" 
                     :preview-src-list="[step.screenshot || step.image]"
-                    fit="cover"
+                    :fit="isAppProfile ? 'contain' : 'cover'"
                     class="screenshot-thumb"
+                    :class="{ 'is-app-thumb': isAppProfile }"
                     :preview-teleported="true"
                   >
                     <template #error>
@@ -188,8 +248,8 @@
         <el-carousel 
           :interval="5000" 
           arrow="always" 
-          type="card"
-          height="400px"
+          :type="isAppProfile ? '' : 'card'"
+          :height="isAppProfile ? '520px' : '400px'"
           @change="handleScreenshotChange"
         >
           <el-carousel-item v-for="(screenshot, index) in screenshots" :key="index">
@@ -219,12 +279,45 @@
       </div>
     </div>
 
-    <!-- 结果截图（如果有） -->
-    <div class="result-screenshot-section" v-if="processedRunInfo.img_url">
-      <div class="section-title">
-        最终截图
+    <!-- 视频回放（App 优先展示录屏） -->
+    <div class="video-section" v-if="processedRunInfo.video_url">
+      <div class="section-title">{{ isAppProfile ? '执行录屏' : '执行视频回放' }}</div>
+      <div class="video-wrapper" :class="{ 'mobile-media-box': isAppProfile }">
+        <video
+          v-if="videoLoaded"
+          ref="videoPlayer"
+          :key="processedRunInfo.video_url"
+          controls
+          class="video-player"
+          preload="metadata"
+          playsinline
+          @error="handleVideoError"
+        >
+          <source :src="processedRunInfo.video_url" type="video/mp4" />
+        </video>
+        <div v-else class="video-placeholder" :class="{ 'mobile-media-box': isAppProfile }" @click.stop="loadAndPlayVideo">
+          <el-icon class="play-icon"><VideoPlay /></el-icon>
+          <div class="play-text">点击加载视频</div>
+        </div>
       </div>
-      <div class="result-screenshot">
+    </div>
+
+    <el-alert
+      v-else-if="showVideoMissingHint"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="video-missing-hint"
+      title="未生成录屏"
+      description="本次执行已开启录屏，但 Runner 未上传视频。请确认 Runner 本机 adb 可用、设备允许 screenrecord，且用例时长未过短。"
+    />
+
+    <!-- 结果截图：有录屏时 App 报告不再重复展示 -->
+    <div class="result-screenshot-section" v-if="showFinalScreenshot">
+      <div class="section-title">
+        {{ isAppProfile ? '用例结束截图' : '最终截图' }}
+      </div>
+      <div class="result-screenshot" :class="{ 'mobile-media-box': isAppProfile }">
         <el-image 
           :src="processedRunInfo.img_url" 
           :preview-src-list="[processedRunInfo.img_url]"
@@ -232,27 +325,6 @@
           class="final-screenshot"
           :preview-teleported="true"
         />
-      </div>
-    </div>
-
-    <!-- 视频回放 -->
-    <div class="video-section" v-if="processedRunInfo.video_url">
-      <div class="section-title">执行视频回放</div>
-      <div class="video-wrapper">
-        <video
-          v-if="videoLoaded"
-          ref="videoPlayer"
-          :src="processedRunInfo.video_url"
-          :key="processedRunInfo.video_url"
-          controls
-          class="video-player"
-          preload="metadata"
-          @error="handleVideoError"
-        />
-        <div v-else class="video-placeholder" @click.stop="loadAndPlayVideo">
-          <el-icon class="play-icon"><VideoPlay /></el-icon>
-          <div class="play-text">点击加载视频</div>
-        </div>
       </div>
     </div>
 
@@ -302,7 +374,12 @@ const props = defineProps({
   runInfo: {
     type: Object,
     required: true
-  }
+  },
+  profile: {
+    type: String,
+    default: 'web',
+    validator: (v) => ['web', 'app'].includes(v),
+  },
 })
 
 // 预签名 URL 映射表
@@ -324,7 +401,7 @@ const normalizeRunInfo = (info) => {
 const isStorageObjectUrl = (url) => {
   if (!url || typeof url !== 'string' || isPresignedUrl(url)) return false
   const cleanUrl = url.split('?')[0]
-  if (/\.(png|jpe?g|gif|webm)$/i.test(cleanUrl)) return true
+  if (/\.(png|jpe?g|gif|webm|mp4)$/i.test(cleanUrl)) return true
   return cleanUrl.includes('aliyuncs.com') || cleanUrl.includes('/minio/')
 }
 
@@ -334,12 +411,16 @@ const processedRunInfo = computed(() => {
   if (!rawInfo) return {}
   
   const info = { ...rawInfo }
+  if (!info.img_url && info.img) {
+    info.img_url = info.img
+  }
   
   // 替换主截图 URL（仅当尚未预签名时）
   if (info.img && !isPresignedUrl(info.img)) {
     const filename = extractFilename(info.img)
     if (filename && presignedUrlMap.value[filename]) {
       info.img = presignedUrlMap.value[filename]
+      info.img_url = info.img
     }
   }
   
@@ -350,23 +431,44 @@ const processedRunInfo = computed(() => {
       info.video_url = presignedUrlMap.value[filename]
     }
   }
-  
-  // 替换步骤截图 URL（仅当尚未预签名时）
+
   if (info.steps && info.steps.length > 0) {
     info.steps = info.steps.map(step => {
+      const next = { ...step }
+      const tplKey = step.template_image_key
+      if (tplKey && presignedUrlMap.value[tplKey]) {
+        next.template_image = presignedUrlMap.value[tplKey]
+      }
       const shot = step.screenshot || step.image
       if (shot && !isPresignedUrl(shot)) {
         const filename = extractFilename(shot)
         if (filename && presignedUrlMap.value[filename]) {
           const signed = presignedUrlMap.value[filename]
-          return { ...step, screenshot: signed, image: signed }
+          next.screenshot = signed
+          next.image = signed
         }
       }
-      return step
+      return next
     })
   }
   
   return info
+})
+
+const isAppProfile = computed(() => props.profile === 'app')
+
+const showFinalScreenshot = computed(() => {
+  const info = processedRunInfo.value
+  if (!info?.img_url) return false
+  if (isAppProfile.value && info.video_url) return false
+  return true
+})
+
+const showVideoMissingHint = computed(() => {
+  if (!isAppProfile.value) return false
+  const info = processedRunInfo.value
+  if (info?.video_url) return false
+  return info.record_video !== false
 })
 
 // 从 URL 中提取文件名
@@ -376,12 +478,12 @@ const extractFilename = (url) => {
   const cleanUrl = url.split('?')[0]
   // 处理 http://192.168.x.x:9200/bucket/filename 格式
   // 或者 http://localhost:9200/test-results/filename
-  const match = cleanUrl.match(/\/([^\/]+\.(?:png|jpg|jpeg|gif|webm))$/)
+  const match = cleanUrl.match(/\/([^\/]+\.(?:png|jpg|jpeg|gif|webm|mp4))$/)
   if (match) return match[1]
   // 如果上面没匹配到，尝试从URL解码后的路径提取
   try {
     const decoded = decodeURIComponent(cleanUrl)
-    const match2 = decoded.match(/\/([^\/]+\.(?:png|jpg|jpeg|gif|webm))$/)
+    const match2 = decoded.match(/\/([^\/]+\.(?:png|jpg|jpeg|gif|webm|mp4))$/)
     if (match2) return match2[1]
   } catch (e) {}
   return ''
@@ -409,12 +511,16 @@ const collectUrlsToProcess = (info) => {
     urls.add(extractFilename(normalized.video_url))
   }
   
-  // 步骤截图
+  // 步骤截图 / 图像模板
   if (normalized.steps && normalized.steps.length > 0) {
     normalized.steps.forEach(step => {
       const shot = step.screenshot || step.image
       if (shot && isStorageObjectUrl(shot)) {
         urls.add(extractFilename(shot))
+      }
+      const tplKey = step.template_image_key
+      if (tplKey && typeof tplKey === 'string') {
+        urls.add(tplKey)
       }
     })
   }
@@ -601,6 +707,23 @@ const steps = computed(() => {
   return processedRunInfo.value.steps || []
 })
 
+const appStepStats = computed(() => {
+  if (!isAppProfile.value || !steps.value.length) {
+    return { native: 0, webview: 0, vision: 0, context: 0, failed: 0 }
+  }
+  const stats = { native: 0, webview: 0, vision: 0, context: 0, failed: 0 }
+  steps.value.forEach((step) => {
+    const type = step.locator_type || (step.by === 'image' ? 'vision' : '')
+    if (type && Object.prototype.hasOwnProperty.call(stats, type)) {
+      stats[type] += 1
+    }
+    if (['fail', 'failed', 'error'].includes(String(step.status || '').toLowerCase())) {
+      stats.failed += 1
+    }
+  })
+  return stats
+})
+
 // 变量快照
 const variablesSnapshot = computed(() => {
   return processedRunInfo.value.variables_snapshot || {}
@@ -672,6 +795,16 @@ const getStatusType = (status) => statusMap[status]?.type || 'info'
 const getStatusText = (status) => statusMap[status]?.text || status
 const getStepStatusType = (status) => stepStatusMap[status]?.type || 'info'
 const getStepStatusText = (status) => stepStatusMap[status]?.text || status
+
+const locatorTypeLabel = (type) => {
+  const map = { native: '原生', webview: 'H5', vision: '图像', context: '上下文' }
+  return map[type] || type
+}
+
+const locatorTypeTag = (type) => {
+  const map = { native: 'info', webview: 'warning', vision: 'success', context: 'primary' }
+  return map[type] || 'info'
+}
 const getStepIcon = (status) => stepStatusMap[status]?.icon || InfoFilled
 
 // 格式化时间
@@ -699,6 +832,16 @@ const formatDuration = (duration) => {
 }
 
 // 截图列表（从步骤中提取）
+const hasClickMarker = (step) =>
+  step?.screenshot_has_marker === true
+
+const resolveTemplateImage = (step) => {
+  if (step?.template_image) return step.template_image
+  const key = step?.template_image_key
+  if (key && presignedUrlMap.value[key]) return presignedUrlMap.value[key]
+  return key || ''
+}
+
 const screenshots = computed(() => {
   const list = []
   steps.value.forEach((step, index) => {
@@ -796,6 +939,13 @@ const handleScreenshotChange = (index) => {
           line-height: 1.5;
         }
 
+        .step-webview-meta {
+          margin-bottom: 8px;
+          font-size: 12px;
+          color: var(--el-text-color-secondary);
+          word-break: break-all;
+        }
+
         .step-heal-info {
           display: flex;
           flex-wrap: wrap;
@@ -815,6 +965,48 @@ const handleScreenshotChange = (index) => {
           .heal-arrow { color: var(--el-text-color-secondary); }
         }
         
+        .step-webview-meta {
+          margin-top: 6px;
+          font-size: 12px;
+          color: var(--el-text-color-secondary);
+        }
+
+        .step-vision-compare {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          margin-top: 10px;
+
+          .vision-compare-item {
+            flex: 1;
+            min-width: 140px;
+            max-width: 220px;
+          }
+
+          .vision-compare-label {
+            font-size: 12px;
+            color: var(--el-text-color-secondary);
+            margin-bottom: 6px;
+
+            .click-marker-hint {
+              color: var(--el-color-danger);
+            }
+          }
+
+          .vision-compare-img {
+            width: 100%;
+            max-height: 280px;
+            border-radius: 6px;
+            border: 1px solid var(--el-border-color-lighter);
+            background: #111;
+
+            :deep(.el-image__inner) {
+              max-height: 280px;
+              object-fit: contain;
+            }
+          }
+        }
+
         .step-screenshot-preview {
           margin-top: 8px;
           
@@ -906,6 +1098,106 @@ const handleScreenshotChange = (index) => {
       color: var(--el-text-color-secondary);
       gap: 8px;
       font-size: 14px;
+    }
+  }
+  
+  .video-missing-hint {
+    margin-bottom: 16px;
+  }
+
+  &.is-app-profile {
+    .app-step-summary {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: var(--el-fill-color-light);
+      border: 1px solid var(--el-border-color-lighter);
+
+      .app-step-summary-label {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--el-text-color-regular);
+        margin-right: 4px;
+      }
+    }
+
+    .screenshot-carousel {
+      background: var(--el-fill-color-light);
+
+      .screenshot-item {
+        align-items: center;
+        padding: 12px;
+
+        .screenshot-image {
+          width: min(320px, 100%);
+          max-height: 460px;
+          flex: none;
+          border-radius: 12px;
+          box-shadow: 0 6px 24px rgba(15, 23, 42, 0.12);
+
+          :deep(.el-image__inner) {
+            object-fit: contain;
+          }
+        }
+
+        .screenshot-info {
+          width: min(320px, 100%);
+        }
+      }
+    }
+
+    .step-screenshot-preview .screenshot-thumb.is-app-thumb {
+      width: 72px;
+      height: 128px;
+
+      :deep(.el-image__inner) {
+        object-fit: contain;
+      }
+    }
+
+    .mobile-media-box {
+      display: flex;
+      justify-content: center;
+      padding: 16px;
+      background: var(--el-fill-color-light);
+      border-radius: 8px;
+    }
+
+    .result-screenshot.mobile-media-box .final-screenshot {
+      width: min(320px, 100%);
+      max-height: 640px;
+      border-radius: 12px;
+      box-shadow: 0 6px 24px rgba(15, 23, 42, 0.12);
+      overflow: hidden;
+
+      :deep(.el-image__inner) {
+        width: 100%;
+        height: auto;
+        max-height: 640px;
+        object-fit: contain;
+      }
+    }
+
+    .video-wrapper.mobile-media-box,
+    .video-placeholder.mobile-media-box {
+      width: min(320px, 100%);
+      margin: 0 auto;
+    }
+
+    .video-player {
+      width: 100%;
+      max-height: none;
+      aspect-ratio: 9 / 19.5;
+      object-fit: contain;
+      background: #000;
+    }
+
+    .video-placeholder.mobile-media-box {
+      aspect-ratio: 9 / 19.5;
     }
   }
   

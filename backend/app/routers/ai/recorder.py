@@ -18,7 +18,12 @@ from pydantic import BaseModel, Field
 from app.core.auth import is_authenticated, verify_runner_or_internal
 from app.core.mq_producer import MQProducer
 from app.core.recorder_converter import convert_actions_to_steps
-from app.core.recorder_quality import assess_steps, resolve_locators_after_optimize
+from app.core.recorder_quality import (
+    assess_steps,
+    extract_desc_targets,
+    resolve_locators_after_optimize,
+    _normalize_desc,
+)
 from app.models.ai import AiRecordSession
 from app.models.sys import Device
 from app.schemas.ai import StandardResponse
@@ -28,22 +33,18 @@ logger = logging.getLogger(__name__)
 
 def _normalize_step_desc(desc: str) -> str:
     """用于优化前后步骤描述模糊匹配。"""
-    import re
-    text = (desc or "").strip()
-    text = re.sub(r"['\"「」]", "", text)
-    text = re.sub(r"\s+", "", text)
-    return text
+    return _normalize_desc(desc)
 
 
 def _patch_meta_from_original_steps(optimized_steps: list, original_steps: list):
     """从原始步骤中补回 meta 到优化后的步骤
     
     LLM 优化时不会返回 meta 字段，但前端 LocatorSelector 需要 meta 来生成候选定位器。
-    匹配顺序：method+locator/url → method+desc → 同 method 顺序消费。
+    匹配顺序：method+locator/url → method+desc → method+捕获文案/描述目标（禁止按 method 盲绑）。
     """
     locator_meta_map: dict[tuple, dict] = {}
     desc_meta_map: dict[tuple, dict] = {}
-    method_meta_queues: dict[str, list] = {}
+    label_meta_map: dict[tuple, dict] = {}
 
     for orig in original_steps:
         if not isinstance(orig, dict):
@@ -58,9 +59,11 @@ def _patch_meta_from_original_steps(optimized_steps: list, original_steps: list)
         else:
             locator_meta_map[(method, params.get("locator", ""))] = meta
         desc_meta_map[(method, _normalize_step_desc(orig.get("desc", "")))] = meta
-        method_meta_queues.setdefault(method, []).append(meta)
-
-    used_method_meta: dict[str, int] = {}
+        acc = (meta.get("accessibleName") or meta.get("text") or "").strip()
+        if acc:
+            label_meta_map[(method, _normalize_step_desc(acc))] = meta
+        for target in extract_desc_targets(orig.get("desc", "")):
+            label_meta_map[(method, _normalize_step_desc(target))] = meta
 
     for opt in optimized_steps:
         if not isinstance(opt, dict) or opt.get("meta"):
@@ -76,11 +79,10 @@ def _patch_meta_from_original_steps(optimized_steps: list, original_steps: list)
         if not meta:
             meta = desc_meta_map.get((method, _normalize_step_desc(opt.get("desc", ""))))
         if not meta:
-            idx = used_method_meta.get(method, 0)
-            queue = method_meta_queues.get(method, [])
-            if idx < len(queue):
-                meta = queue[idx]
-                used_method_meta[method] = idx + 1
+            for target in extract_desc_targets(opt.get("desc", "")):
+                meta = label_meta_map.get((method, _normalize_step_desc(target)))
+                if meta:
+                    break
         if meta:
             opt["meta"] = meta
 
@@ -167,7 +169,7 @@ class OptimizeRequest(BaseModel):
 
 
 class OptimizeStepsRequest(BaseModel):
-    steps: list = Field(..., description="待优化的 UI 步骤")
+    steps: list = Field(..., description="待优化的步骤")
     description: Optional[str] = Field(None, max_length=2000, description="测试描述/预期结果，供 AI 优化与断言")
     ai_config_id: Optional[int] = Field(default=None, description="指定 LLM 配置ID")
     append_assertions: bool = Field(default=True, description="是否补充断言步骤")
@@ -176,6 +178,7 @@ class OptimizeStepsRequest(BaseModel):
         description="使用页面上下文辅助断言（仅录制 raw_actions 可用，用例编辑请保持 false）",
     )
     project_id: Optional[int] = Field(default=None, description="项目 ID，用于 AI 用量统计")
+    step_module: str = Field(default="ui", description="步骤域：ui 或 app")
 
 
 # ========== 全局 MQ 生产者（懒加载） ==========
@@ -512,6 +515,7 @@ async def _execute_step_optimize(
     record_id: Optional[int] = None,
     usage_scene: str = "recorder_optimize",
     input_summary: str = "",
+    step_module: str = "ui",
 ) -> dict:
     """执行步骤优化流水线，供录制会话与用例编辑共用。"""
     from app.core.ai_usage_log import log_ai_usage
@@ -525,14 +529,14 @@ async def _execute_step_optimize(
     total_tokens = 0
     config = await _resolve_ai_config(ai_config_id)
 
-    trimmed, opt_tokens = await _optimize_steps(original_steps, description, config)
+    trimmed, opt_tokens = await _optimize_steps(original_steps, description, config, step_module=step_module)
     total_tokens += opt_tokens
     assertion_steps: list = []
     page_context = ""
     actions = raw_actions or []
 
     if append_assertions:
-        if use_page_context:
+        if use_page_context and step_module == "ui":
             page_context = extract_page_context(actions)
         if config:
             assertion_steps, assert_tokens = await generate_assertion_steps(
@@ -541,14 +545,18 @@ async def _execute_step_optimize(
                 page_context=page_context,
                 raw_actions=actions,
                 config=config,
+                step_module=step_module,
             )
             total_tokens += assert_tokens
         else:
             logger.warning("[recorder.optimize] 无 AI 配置，跳过断言生成")
 
     optimized = insert_assertions_into_steps(trimmed, assertion_steps)
-    locator_stats = resolve_locators_after_optimize(optimized, original_steps or [])
-    optimized = assess_steps(optimized)
+    if step_module == "app":
+        locator_stats = {"ai_picked": 0, "rule_picked": 0}
+    else:
+        locator_stats = resolve_locators_after_optimize(optimized, original_steps or [])
+        optimized = assess_steps(optimized)
     duration_ms = int((time.time() - start_time) * 1000)
 
     if config:
@@ -613,6 +621,7 @@ async def optimize_case_steps(
             project_id=body.project_id,
             usage_scene="case_steps_optimize",
             input_summary=body.description or f"{len(steps)} steps",
+            step_module=(body.step_module or "ui").strip().lower(),
         )
     except Exception as e:
         logger.error(f"用例步骤 AI 优化失败: error={e}")
@@ -686,7 +695,7 @@ async def optimize_record(
     return StandardResponse(data=data)
 
 
-async def _optimize_steps(steps: list, description: str, config=None) -> tuple[list, int]:
+async def _optimize_steps(steps: list, description: str, config=None, step_module: str = "ui") -> tuple[list, int]:
     """
     使用 LLM 优化录制步骤（删除多余步骤 + 优化描述）
     
@@ -709,18 +718,25 @@ async def _optimize_steps(steps: list, description: str, config=None) -> tuple[l
         meta = s.get("meta") or {}
         cands = meta.get("candidates") or []
         cand_part = f" | 候选定位: {json.dumps(cands, ensure_ascii=False)}" if cands else ""
+        quality = meta.get("quality") or {}
+        quality_part = ""
+        if quality.get("reasons"):
+            quality_part = f" | 质量提示: {'; '.join(quality['reasons'][:3])}"
+        if meta.get("locatorRunnerFinal"):
+            quality_part += " | 定位已锁定(禁止修改 params.locator)"
         steps_lines.append(
             f"{i + 1}. [{s['method']}] {s.get('desc', '')} - 参数: "
-            f"{json.dumps(s.get('params', {}), ensure_ascii=False)}{cand_part}"
+            f"{json.dumps(s.get('params', {}), ensure_ascii=False)}{cand_part}{quality_part}"
         )
     steps_text = "\n".join(steps_lines)
     
     # 使用 PromptManager 渲染模板
+    prompt_code = "app_record_optimize" if step_module == "app" else "ui_record_optimize"
     try:
         system_prompt, user_prompt = await PromptManager.render(
-            code="ui_record_optimize",
+            code=prompt_code,
             context={
-                "description": description or "录制页面操作",
+                "description": description or ("App 自动化测试" if step_module == "app" else "录制页面操作"),
                 "steps_text": steps_text,
                 "steps_count": len(steps),
             },

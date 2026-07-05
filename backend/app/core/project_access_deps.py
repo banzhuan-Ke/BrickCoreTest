@@ -23,10 +23,27 @@ async def optional_project_access_check(
 
     project_id = request.path_params.get("project_id") or request.query_params.get("project_id")
 
-    # Runner / 内部回调（如 /ai/record/{id}/callback）无用户 JWT，由路由内 verify_runner_or_internal 校验
-    if not project_id and (
+    has_runner_auth = bool(
         x_runner_token
         or (x_internal_token and x_internal_token == INTERNAL_API_KEY)
+    )
+
+    # App Inspector Runner 回调/状态（无 project_id、无用户 JWT，由路由内 verify_runner_or_internal 校验）
+    if "/inspector/sessions/" in path and (
+        path.endswith("/callback")
+        or path.endswith("/webview-callback")
+        or path.endswith("/runner-status")
+    ):
+        return
+
+    # Runner / 内部回调（如 /ai/record/{id}/callback）无用户 JWT，由路由内 verify_runner_or_internal 校验
+    if has_runner_auth and not project_id:
+        return
+
+    # Runner 定位器自愈等 internal 接口可在 body/query 带 project_id（记用量），仍用 Runner Token 鉴权
+    if has_runner_auth and (
+        path.endswith("/locator-heal/internal")
+        or path.endswith("/app-locator-heal/internal")
     ):
         return
 

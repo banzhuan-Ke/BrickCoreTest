@@ -19,9 +19,8 @@
       transition: all 0.3s ease;
       
       &:hover {
-        background: var(--el-color-primary-light-9);
+        background: rgba(255, 255, 255, 0.65);
         color: var(--el-color-primary);
-        transform: scale(1.1);
       }
     }
   }
@@ -31,14 +30,14 @@
     font-size: 15px;
     font-weight: 600;
     color: var(--el-text-color-primary);
-    background: linear-gradient(135deg, var(--el-color-primary-light-9), var(--el-color-primary-light-8));
+    background: rgba(255, 255, 255, 0.72);
     padding: 8px 24px;
     border-radius: 20px;
-    border: 1px solid var(--el-color-primary-light-7);
+    border: 1px solid var(--el-border-color-light);
     display: flex;
     align-items: center;
     gap: 8px;
-    transition: all 0.3s ease;
+    transition: all 0.25s ease;
     
     &::before {
       content: '📁';
@@ -46,8 +45,7 @@
     }
     
     &:hover {
-      box-shadow: 0 2px 12px rgba(16, 125, 236, 0.15);
-      transform: translateY(-1px);
+      box-shadow: 0 4px 14px rgba(75, 111, 255, 0.1);
     }
   }
 
@@ -69,9 +67,8 @@
       justify-content: center;
       
       &:hover {
-        background: var(--el-color-primary-light-9);
+        background: rgba(255, 255, 255, 0.65);
         color: var(--el-color-primary);
-        transform: scale(1.1);
       }
     }
 
@@ -83,7 +80,7 @@
       transition: all 0.3s ease;
       
       &:hover {
-        background: var(--el-color-primary-light-9);
+        background: rgba(255, 255, 255, 0.65);
       }
     }
 
@@ -113,9 +110,8 @@
       transition: all 0.3s ease;
       
       &:hover {
-        background: var(--el-color-primary-light-9);
+        background: rgba(255, 255, 255, 0.65);
         color: var(--el-color-primary);
-        transform: scale(1.1);
       }
     }
 
@@ -131,8 +127,8 @@
       cursor: pointer;
       
       &:hover {
-        background: var(--el-color-primary-light-9);
-        box-shadow: 0 2px 8px rgba(16, 125, 236, 0.1);
+        background: rgba(255, 255, 255, 0.78);
+        box-shadow: 0 4px 12px rgba(75, 111, 255, 0.08);
       }
 
       .avatar {

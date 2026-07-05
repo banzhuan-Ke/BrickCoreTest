@@ -38,6 +38,9 @@
         <el-tab-pane v-if="canTab('data')" label="数据保留" name="data" lazy>
           <DataRetentionConfig embedded />
         </el-tab-pane>
+        <el-tab-pane v-if="canTab('streamParser')" label="SSE 解析配置" name="stream-parser" lazy>
+          <StreamParserConfig embedded />
+        </el-tab-pane>
       </el-tabs>
       <el-empty v-if="!hasAnyTab" description="当前账号无平台配置相关权限" />
     </template>
@@ -55,6 +58,7 @@ import McpConfig from '@/views/System/McpConfig.vue'
 import RunnerReleaseConfig from '@/views/System/RunnerReleaseConfig.vue'
 import LoginPageConfig from '@/views/System/LoginPageConfig.vue'
 import DataRetentionConfig from '@/views/System/DataRetentionConfig.vue'
+import StreamParserConfig from '@/views/System/StreamParserConfig.vue'
 import NotificationConfig from '@/views/Project/NotificationConfig.vue'
 
 const TAB_PERMISSIONS = {
@@ -65,6 +69,7 @@ const TAB_PERMISSIONS = {
   runner: 'device:edit',
   login: 'login_page_config:view',
   data: 'platform_settings:view',
+  streamParser: 'ai_config:view',
 }
 
 const TOP_TAB_ALIASES = {
@@ -82,6 +87,8 @@ const TOP_TAB_ALIASES = {
   data: 'data',
   'data-retention': 'data',
   'platform-settings': 'data',
+  'stream-parser': 'stream-parser',
+  'stream-parser-config': 'stream-parser',
 }
 
 const route = useRoute()
@@ -103,7 +110,8 @@ const hasAnyTab = computed(() =>
   canTab('mcp') ||
   canTab('runner') ||
   canTab('login') ||
-  canTab('data')
+  canTab('data') ||
+  canTab('streamParser')
 )
 
 const resolveTopTab = (raw) => {
@@ -115,12 +123,14 @@ const resolveTopTab = (raw) => {
   if (mapped === 'runner' && canTab('runner')) return 'runner'
   if (mapped === 'login' && canTab('login')) return 'login'
   if (mapped === 'data' && canTab('data')) return 'data'
+  if (mapped === 'stream-parser' && canTab('streamParser')) return 'stream-parser'
   if (canTab('ai')) return 'ai'
   if (canTab('smtp') || canTab('notification')) return 'notify'
   if (canTab('mcp')) return 'mcp'
   if (canTab('runner')) return 'runner'
   if (canTab('login')) return 'login'
   if (canTab('data')) return 'data'
+  if (canTab('streamParser')) return 'stream-parser'
   return 'ai'
 }
 

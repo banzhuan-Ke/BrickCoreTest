@@ -389,7 +389,7 @@ Snapshot 类型：{{snapshot_type}}
 
 定位器规则（与平台一致，必须是字符串，禁止 Playwright 函数写法）：
 - 正确：get_by_placeholder=密码、get_by_role=row, 0302、#loginBtn
-- 错误：get_by_placeholder("密码")、page.get_by_role(...)、get_by_role='row'（role/name 禁止加引号）、row=0302（必须用 get_by_role=row, 0302）
+- 错误：get_by_placeholder("密码")、page.get_by_role(...)、get_by_role='row'（role/name 禁止加引号）、get_by_role=button, name="登入"（禁止写 name= 前缀，应写 get_by_role=button, 登入）、row=0302（必须用 get_by_role=row, 0302）
 - 优先 data-testid、#id、name、get_by_role=、get_by_placeholder=、get_by_label=
 - get_by_text= 对 input placeholder 无效；失败定位器为「请输入…」或短 placeholder 文案时改用 get_by_placeholder=
 - 严禁返回与失败定位器完全相同的字符串
@@ -827,6 +827,14 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
 失败步骤索引：{{failed_step_index}}
 错误截图描述：{{screenshot_desc}}
 {% endif %}
+{% if target_type == "app" %}
+驱动模式：{{driver_mode}}
+设备 UDID：{{device_udid}}
+平台：{{platform}}
+执行步骤：{{steps}}
+失败步骤索引：{{failed_step_index}}
+错误截图描述：{{screenshot_desc}}
+{% endif %}
 
 错误信息：{{error_msg}}
 执行日志：{{logs}}
@@ -934,8 +942,10 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
 【任务4：定位表达式（params.locator）智能选择】
 - value、index、timeout、url 等其他 params 字段必须与对应原始步骤一致，禁止修改
 - drag_and_drop 步骤必须保留 params.start_selector 与 params.end_selector，禁止修改或删除
+- 若步骤标注「定位已锁定」，必须保持原 params.locator 完全不变
 - params.locator 允许从该步骤「候选定位」列表中重新选择更稳的一项；**禁止**自造不在列表中的表达式
-- 选择原则：优先 data-testid / #id；页面上有多个相似按钮（如同时存在「设置」与「基础设置」）时，locator 必须与 desc 中的目标名称一致
+- 选择原则：优先 data-testid / 稳定 #id（非 ng- 等动态 id）；页面上有多个相似按钮时，locator 必须与 desc 中的目标名称一致
+- 表格行内操作（如知识库列表勾选、行内编辑）：候选含 `//tr[contains(.,"行文本")]` 时优先选行级 XPath，勿用裸 get_by_text
 - 常见短词（设置、登录、提交等）且存在区域链式候选（如 header >> get_by_text=设置）时，优先选区域链式而非裸 get_by_text
 - 若不确定，保持原 locator 不变
 
@@ -1072,6 +1082,175 @@ kw_assert_page_title → 断言页面标题
 
 若无合适断言可生成，返回 {"assertions": []}
 不要输出解释文字。""",
+            "examples": [],
+        },
+        "app_case_generation": {
+            "name": "App 测试用例生成",
+            "scene_type": "app_case",
+            "description": "基于自然语言描述生成 Android App 自动化测试步骤",
+            "system_prompt": (
+                "你是一位精通 Android App 自动化的测试工程师。"
+                "你的任务是将自然语言需求转换为平台标准的 App 自动化测试步骤（uiautomator2 + 可选图像识别）。"
+                "你必须严格输出 JSON 数组，不要包含 Markdown 代码块。"
+                "定位器 locator 必须是对象：{\"by\": \"text|resource_id|description|xpath|image|css|id\", \"value\": \"...\"}。"
+            ),
+            "user_prompt_template": """请将以下测试需求转换为 App 自动化测试步骤。
+
+需求描述：{{description}}
+目标应用：{{app_id}}
+驱动模式：{{driver_mode}}（native=仅原生控件；hybrid=原生+图像；vision=图像为主；hybrid_web=含 WebView；mobile_chrome=手机 Chrome）
+
+步骤格式（JSON 数组，每项含 keyword、method、desc、params、children）：
+【应用管理】
+- launch_app: {app_id, stop:false}
+- terminate_app: {app_id}
+- clear_app: {app_id}
+- press_back: {}
+- open_url: {url}（手机 Chrome / H5）
+
+【元素操作】locator 格式 {"by":"text|resource_id|description|xpath|coordinates|image|css|id","value":"..."}
+- click_element: {locator, timeout:10}
+- input_text: {locator, text, timeout:10}
+- clear_text: {locator, timeout:10}
+- long_press_element: {locator, duration:1.0, timeout:10}
+- swipe: {direction:"up|down|left|right"}
+- scroll_to: {locator}
+- wait_element: {locator, timeout:10}
+- wait_gone: {locator, timeout:10}
+- wait_for_time: {seconds:2}
+
+【断言】
+- assert_exists: {locator, timeout:10}
+- assert_not_exists: {locator, timeout:10}
+- assert_text: {locator, text, timeout:10}
+- assert_text_contains: {locator, text, timeout:10}
+
+【WebView / Chrome】
+- switch_webview: {page_index:0, package:"", url:""}
+- switch_chrome: {page_index:0, url:""}
+- switch_native: {}
+
+规则：
+1. 若提供了 app_id，第一步应为 launch_app
+2. 登录类用例：launch_app → 输入账号密码 → 点击登录 → 业务步骤 → 断言
+3. desc 用中文自然语言，禁止只写 keyword 名称
+4. 无具体 resource_id 时可用 text/description 定位，value 须与描述一致
+5. 仅生成功能测试所需步骤，不要重复操作
+6. keyword 必须使用中文名：启动应用、点击元素、输入文本、断言元素存在 等
+
+直接输出 JSON 数组，不要解释文字。""",
+            "examples": [],
+        },
+        "app_record_optimize": {
+            "name": "App 步骤 AI 优化",
+            "scene_type": "app_case",
+            "description": "精简 App 用例步骤、优化描述，保持 locator 结构",
+            "system_prompt": (
+                "你是 App 自动化测试用例优化专家。"
+                "对已有 Android 自动化步骤进行精简与描述优化。"
+                "params.locator 为对象 {\"by\",\"value\"}，禁止改为字符串或自造字段。"
+                "直接输出纯 JSON，不要 Markdown 代码块。"
+            ),
+            "user_prompt_template": """测试目的：{{description}}
+
+原始步骤（共 {{steps_count}} 步）：
+{{steps_text}}
+
+优化任务：
+1. 删除冗余 wait_for_time（用户停顿），保留页面加载、动画后的必要等待
+2. 合并连续「点击输入框→输入」为单步 input_text
+3. 删除重复 launch_app / press_back
+4. desc 改为中文自然语言（含元素名/输入值），禁止只写「点击元素」
+5. method、params.locator、params.app_id 等必须与原始一致，禁止修改 locator.by/value（除非步骤标注可重选）
+6. keyword 使用：启动应用、点击元素、输入文本、断言元素存在 等
+
+返回：{"steps": [{"method","desc","params","keyword"}, ...]}
+优化后步骤数应少于原始步骤。""",
+            "examples": [],
+        },
+        "app_record_append_assertions": {
+            "name": "App 步骤-补充断言",
+            "scene_type": "app_case",
+            "description": "基于功能用例预期为 App 操作步骤补充断言",
+            "system_prompt": (
+                "你是 App 自动化断言设计专家。"
+                "根据测试描述中的预期结果，为已有操作步骤补充少量断言。"
+                "仅使用 assert_exists、assert_not_exists、assert_text、assert_text_contains。"
+                "每条断言需 placement（before/after）和 anchor_step（对应操作步骤序号，从 1 开始）。"
+                "locator 优先从已有操作步骤复制。输出纯 JSON。"
+            ),
+            "user_prompt_template": """测试描述：
+{{description}}
+
+预期结果：
+{{expectations_text}}
+
+已有操作步骤（共 {{steps_count}} 步）：
+{{steps_text}}
+
+最多生成 {{max_assertions}} 条断言。
+返回：{"assertions": [{"method":"assert_exists","desc":"...","placement":"after","anchor_step":3,"params":{"locator":{"by":"text","value":"..."},"timeout":10},"keyword":"断言元素存在"}]}
+无合适断言时返回 {"assertions": []}""",
+            "examples": [],
+        },
+        "app_locator_heal": {
+            "name": "App 定位器自愈",
+            "scene_type": "app_case",
+            "description": "App 步骤失败时基于控件树与截图推荐新 locator",
+            "system_prompt": (
+                "你是 Android App 自动化定位专家。"
+                "根据失败信息、控件树与可选截图描述，推荐更可能成功的 locator 对象。"
+                "输出 JSON，不要 Markdown。"
+            ),
+            "user_prompt_template": """步骤方法：{{method}}
+失败定位器：{{failed_locator}}
+步骤描述：{{step_desc}}
+错误信息：{{error_message}}
+图像 match_score（若有）：{{match_score}}
+
+控件树摘要：
+{{control_tree_excerpt}}
+
+Vision 读图摘要：
+{{vision_hint}}
+
+输出 JSON：
+{"locator": {"by": "text|resource_id|description|xpath|image", "value": "..."}, "confidence": "high|medium|low", "reason": "说明"}
+规则：locator 必须是对象；优先 resource_id、text；图像失败可建议 image 并略调 threshold；禁止与原定位器完全相同。""",
+            "examples": [],
+        },
+        "app_inspector_suggest": {
+            "name": "元素探查 AI 建议",
+            "scene_type": "app_case",
+            "description": "根据探查控件属性生成元素名与 App 步骤",
+            "system_prompt": (
+                "你是 App 自动化测试工程师。"
+                "根据控件属性与推荐定位器，生成元素库名称和/或标准 App 步骤 JSON。"
+                "只输出 JSON 对象，不要 Markdown。"
+            ),
+            "user_prompt_template": """意图：{{intent}}（name=仅元素名；steps=仅步骤；both=两者）
+驱动模式：{{driver_mode}}
+目标应用：{{app_id}}
+
+控件属性：
+{{attributes}}
+
+{{locator_text}}
+
+Vision 屏幕描述：
+{{vision_hint}}
+
+补充：{{extra_hint}}
+
+输出 JSON：
+{
+  "element_name": "登录按钮",
+  "locator": {"by":"text","value":"登录"},
+  "steps": [
+    {"keyword":"点击元素","method":"click_element","desc":"点击登录按钮","params":{"locator":{"by":"text","value":"登录"},"timeout":10},"children":[]}
+  ]
+}
+intent=name 时可省略 steps；intent=steps 时可省略 element_name。""",
             "examples": [],
         },
         "qa_judge": {

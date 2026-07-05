@@ -196,9 +196,18 @@ export const aiGenerateApi = {
     async generateUiCaseAgent(data) {
         return await http.post('/ai/generate/ui-case/agent', data, { timeout: 600000 })
     },
+    async generateAppCase(data) {
+        return await http.post('/ai/generate/app-case', data, { timeout: 300000 })
+    },
+    async suggestAppInspector(data) {
+        return await http.post('/ai/generate/app-inspector-suggest', data, { timeout: 180000 })
+    },
     // UI 定位器自愈
     async healLocator(data) {
         return await http.post('/ai/generate/locator-heal', data, { timeout: 120000 })
+    },
+    async healAppLocator(data) {
+        return await http.post('/ai/generate/app-locator-heal', data, { timeout: 120000 })
     },
     async applyHealedLocatorToCase(data) {
         return await http.post('/ai/generate/locator-heal/apply-to-case', data, { timeout: 30000 })
@@ -601,6 +610,18 @@ export const aiFunctionalCaseApi = {
     },
     async importUi(data, projectId) {
         return await http.post('/ai/functional-cases/import-ui', data, {
+            params: { project_id: projectId },
+            timeout: 120000
+        })
+    },
+    async previewToApp(data, projectId) {
+        return await http.post('/ai/functional-cases/to-app/preview', data, {
+            params: { project_id: projectId },
+            timeout: 600000
+        })
+    },
+    async importApp(data, projectId) {
+        return await http.post('/ai/functional-cases/import-app', data, {
             params: { project_id: projectId },
             timeout: 120000
         })

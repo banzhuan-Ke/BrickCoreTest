@@ -28,6 +28,7 @@ def format_zentao_case_id_display(case: AiFunctionalCase) -> str:
 def functional_case_to_dict(case: AiFunctionalCase) -> dict[str, Any]:
     extra = case.extra if isinstance(case.extra, dict) else {}
     ui = extra.get("ui_import") if isinstance(extra.get("ui_import"), dict) else {}
+    app_imp = extra.get("app_import") if isinstance(extra.get("app_import"), dict) else {}
     return {
         "id": case.id,
         "project_id": case.project_id,
@@ -52,6 +53,8 @@ def functional_case_to_dict(case: AiFunctionalCase) -> dict[str, Any]:
         "extra": extra,
         "ui_import_status": ui.get("status") or "none",
         "ui_case_id": ui.get("ui_case_id"),
+        "app_import_status": app_imp.get("status") or "none",
+        "app_case_id": app_imp.get("app_case_id"),
         "naming_template_id": case.naming_template_id,
         "naming_template_version": case.naming_template_version,
         "naming_slots": case.naming_slots or {},

@@ -1,2 +1,2 @@
 """BrickCore Runner 桌面客户端"""
-__version__ = "1.3.15"
+__version__ = "1.4.0"

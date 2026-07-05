@@ -191,6 +191,9 @@ function handleStreamEvent(data) {
     liveTokens.value = Number(data.tokens_used || 0)
     hasGif.value = Boolean(data.gif_url || data.gif_path)
     running.value = false
+    if (!hasGif.value && activeTaskId.value && form.value.generate_gif !== false) {
+      syncGifFromTask(activeTaskId.value)
+    }
   } else if (data.type === 'error') {
     liveStatus.value = 'failed'
     liveSummary.value = data.message || '执行失败'
@@ -204,6 +207,18 @@ function subscribeTask(taskId) {
     onDone: (data) => handleStreamEvent({ ...data, type: 'done' }),
     onError: (msg) => handleStreamEvent({ type: 'error', message: msg })
   })
+}
+
+async function syncGifFromTask(taskId) {
+  if (!projectId.value) return
+  try {
+    const res = await browserLabApi.getTask(taskId, projectId.value)
+    if (res.data?.code === 200) {
+      hasGif.value = Boolean(res.data.data?.gif_url || res.data.data?.gif_path)
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 async function startTask() {

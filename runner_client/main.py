@@ -5,12 +5,14 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlencode
 
 from PySide6.QtCore import QThread, QTimer, Qt, Signal, QUrl
-from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QFont, QIcon
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QFont, QIcon, QColor, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -30,12 +32,14 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStyle,
     QSystemTrayIcon,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from runner_client import __version__
 from runner_client.app.api_client import ApiError, BrickCoreApi, compare_version
+from runner_client.app.app_local_status import build_app_local_panel_text
 from runner_client.app.brick_animation import StartupSplash
 from runner_client.app.engine_manager import EngineManager
 from runner_client.app.health import probe_connect_bundle
@@ -43,6 +47,7 @@ from runner_client.app.perf_worker_manager import PerfWorkerManager
 from runner_client.app.preferences import load_preferences
 from runner_client.app.runtime_check import (
     RepairKind,
+    diagnose_app_runtime,
     diagnose_perf_runtime,
     diagnose_runner_runtime,
     is_packaged_app,
@@ -113,6 +118,24 @@ class _VersionInfoWorker(QThread):
         self.result_ready.emit(BrickCoreApi(self._base_url).fetch_version_info())
 
 
+class _AppStatusWorker(QThread):
+    """后台探测 adb/u2，避免阻塞 GUI 线程。"""
+
+    result_ready = Signal(dict)
+
+    def __init__(self, *, enable_app: bool, force_probe: bool = False, parent=None) -> None:
+        super().__init__(parent)
+        self._enable_app = enable_app
+        self._force_probe = force_probe
+
+    def run(self) -> None:
+        panel = build_app_local_panel_text(
+            enable_app=self._enable_app,
+            force_probe=self._force_probe,
+        )
+        self.result_ready.emit(panel)
+
+
 class _ConnectWorker(QThread):
     """上线前检查 Runner 依赖并调用 connect API（避免阻塞 UI）。"""
 
@@ -126,6 +149,8 @@ class _ConnectWorker(QThread):
         runner_dir: Path,
         *,
         execution_role: str,
+        enable_web: bool = True,
+        enable_app: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -133,13 +158,29 @@ class _ConnectWorker(QThread):
         self._device_name = device_name
         self._runner_dir = runner_dir
         self._execution_role = execution_role
+        self._enable_web = enable_web
+        self._enable_app = enable_app
 
     def run(self) -> None:
         need_ui = self._execution_role in (EXEC_ROLE_UI, EXEC_ROLE_BOTH)
         need_perf = self._execution_role in (EXEC_ROLE_PERF, EXEC_ROLE_BOTH)
 
         if need_ui:
-            ok, message, repair = diagnose_runner_runtime(self._runner_dir)
+            if not self._enable_web and not self._enable_app:
+                self.prepared.emit(
+                    {
+                        "runtime_ok": False,
+                        "message": "请至少勾选「Web 自动化」或「App 自动化」之一。",
+                        "repair": None,
+                        "runtime_kind": "ui",
+                    }
+                )
+                return
+
+            ok, message, repair = diagnose_runner_runtime(
+                self._runner_dir,
+                require_playwright_browser=self._enable_web,
+            )
             if not ok:
                 self.prepared.emit(
                     {
@@ -150,6 +191,19 @@ class _ConnectWorker(QThread):
                     }
                 )
                 return
+
+            if self._enable_app:
+                ok, message, repair = diagnose_app_runtime(self._runner_dir)
+                if not ok:
+                    self.prepared.emit(
+                        {
+                            "runtime_ok": False,
+                            "message": message,
+                            "repair": repair,
+                            "runtime_kind": "app",
+                        }
+                    )
+                    return
 
         if need_perf:
             ok, message, repair = diagnose_perf_runtime(self._runner_dir)
@@ -208,7 +262,16 @@ class MainWindow(QMainWindow):
         self._api_health_worker: _ApiHealthWorker | None = None
         self._version_worker: _VersionInfoWorker | None = None
         self._connect_worker: _ConnectWorker | None = None
+        self._app_status_worker: _AppStatusWorker | None = None
         self._pending_perf_project_id: int | None = None
+        self._last_app_udid: str = ""
+
+        self._app_status_debounce = QTimer(self)
+        self._app_status_debounce.setSingleShot(True)
+        self._app_status_debounce.setInterval(450)
+        self._app_status_debounce.timeout.connect(
+            lambda: self._refresh_app_local_status(force_probe=False)
+        )
 
         self._build_ui()
         self._setup_tray()
@@ -333,6 +396,98 @@ class MainWindow(QMainWindow):
         device_form.addRow("设备名称", self.device_name_edit)
         scroll_layout.addWidget(device_box)
 
+        self.engine_box = QGroupBox("UI 引擎能力")
+        engine_layout = QVBoxLayout(self.engine_box)
+        engine_row = QHBoxLayout()
+        self.engine_web_cb = QCheckBox("Web 自动化")
+        self.engine_web_cb.setChecked(bool(self.prefs.get("engine_web_enabled", True)))
+        self.engine_app_cb = QCheckBox("App 自动化")
+        self.engine_app_cb.setChecked(bool(self.prefs.get("engine_app_enabled", False)))
+        self.engine_web_cb.setToolTip("启用 Playwright Web UI 自动化任务")
+        self.engine_app_cb.setToolTip("启用 Android App 自动化任务（需 adb + uiautomator2 + 真机）")
+        for cb in (self.engine_web_cb, self.engine_app_cb):
+            engine_row.addWidget(cb)
+            cb.toggled.connect(self._on_engine_flags_changed)
+        engine_row.addStretch()
+        engine_layout.addLayout(engine_row)
+        engine_hint = QLabel(
+            "与「执行角色 / 压测」独立：勾选后上线才向平台上报对应能力。"
+            "可仅 Web、仅 App，或两者同时启用。"
+        )
+        engine_hint.setWordWrap(True)
+        engine_hint.setStyleSheet("color: #909399; font-size: 11px;")
+        engine_layout.addWidget(engine_hint)
+        scroll_layout.addWidget(self.engine_box)
+
+        self.app_box = QGroupBox("App 自动化（本机）")
+        app_layout = QVBoxLayout(self.app_box)
+        app_layout.setContentsMargins(4, 6, 4, 4)
+        app_layout.setSpacing(10)
+
+        app_pill_row = QHBoxLayout()
+        self.app_adb_pill = QLabel("adb ○")
+        self.app_u2_pill = QLabel("u2 ○")
+        self.app_ready_pill = QLabel("App ○")
+        for lbl in (self.app_adb_pill, self.app_u2_pill, self.app_ready_pill):
+            lbl.setObjectName("healthPill")
+            lbl.setProperty("health", "idle")
+            lbl.style().unpolish(lbl)
+            lbl.style().polish(lbl)
+            app_pill_row.addWidget(lbl)
+        app_pill_row.addStretch()
+        self.app_refresh_btn = QPushButton("刷新检测")
+        self.app_refresh_btn.clicked.connect(lambda: self._refresh_app_local_status(force_probe=True))
+        app_pill_row.addWidget(self.app_refresh_btn)
+        app_layout.addLayout(app_pill_row)
+
+        app_action_row = QHBoxLayout()
+        self.app_inspector_btn = QPushButton("打开元素探查")
+        self.app_inspector_btn.setToolTip("在浏览器中打开平台「元素探查」（需已登录并上线）")
+        self.app_inspector_btn.clicked.connect(self._open_app_inspector)
+        app_action_row.addWidget(self.app_inspector_btn)
+        app_action_row.addStretch()
+        app_layout.addLayout(app_action_row)
+
+        self.app_summary_label = QLabel("")
+        self.app_summary_label.setWordWrap(True)
+        self.app_summary_label.setStyleSheet(
+            "color: #374151; font-size: 12px; margin-top: 4px; padding-top: 2px;"
+        )
+        app_layout.addWidget(self.app_summary_label)
+
+        self.app_connect_hint_label = QLabel("")
+        self.app_connect_hint_label.setWordWrap(True)
+        self.app_connect_hint_label.setStyleSheet(
+            "color: #4b5563; font-size: 11px; line-height: 1.45; "
+            "margin-top: 2px; padding: 8px 10px; background: #f9fafb; "
+            "border: 1px solid #e5e7eb; border-radius: 8px;"
+        )
+        self.app_connect_hint_label.setVisible(False)
+        app_layout.addWidget(self.app_connect_hint_label)
+
+        self.app_devices_label = QLabel("")
+        self.app_devices_label.setWordWrap(True)
+        self.app_devices_label.setStyleSheet(
+            "color: #4b5563; font-size: 11px; font-family: Consolas, 'Courier New', monospace;"
+        )
+        app_layout.addWidget(self.app_devices_label)
+
+        self.app_report_label = QLabel("")
+        self.app_report_label.setWordWrap(True)
+        self.app_report_label.setStyleSheet("color: #6b7280; font-size: 11px;")
+        app_layout.addWidget(self.app_report_label)
+
+        app_hint = QLabel(
+            "说明：勾选上方「App 自动化」后上线才会接收 App 任务。"
+            "首次使用请在 runner\\venv 下执行 python -m uiautomator2 init（需 adb 已连通设备）。"
+            "详细步骤见解压目录内《执行器安装指南》→ App 自动化。"
+        )
+        app_hint.setWordWrap(True)
+        app_hint.setStyleSheet("color: #909399; font-size: 11px; margin-top: 4px;")
+        app_layout.addWidget(app_hint)
+        scroll_layout.addWidget(self.app_box)
+        self._reset_app_local_status_idle()
+
         role_box = QGroupBox("执行角色")
         role_layout = QVBoxLayout(role_box)
         role_row = QHBoxLayout()
@@ -443,6 +598,86 @@ class MainWindow(QMainWindow):
         splitter.setSizes([420, 260])
         layout.addWidget(splitter, stretch=1)
 
+    def _reset_app_local_status_idle(self) -> None:
+        """App 面板初始态：不探测 adb/u2，等用户点击「刷新检测」。"""
+        for pill, name in (
+            (self.app_adb_pill, "adb"),
+            (self.app_u2_pill, "u2"),
+            (self.app_ready_pill, "App"),
+        ):
+            self._set_health_label(pill, name, None)
+        self.app_summary_label.setText("点击「刷新检测」查看本机 adb / u2 / Android 设备状态。")
+        self.app_connect_hint_label.setText("")
+        self.app_connect_hint_label.setVisible(False)
+        self.app_devices_label.setText("")
+        self.app_report_label.setText("")
+
+    def _refresh_app_local_status(self, *, force_probe: bool = False) -> None:
+        if self._app_status_worker and self._app_status_worker.isRunning():
+            if not force_probe:
+                return
+            self._app_status_worker.requestInterruption()
+            self._app_status_worker.wait(200)
+
+        if force_probe:
+            from runner_client.app.engine_capabilities import invalidate_app_toolchain_cache
+
+            invalidate_app_toolchain_cache()
+
+        _, enable_app = self._get_engine_flags()
+        self.app_refresh_btn.setEnabled(False)
+        worker = _AppStatusWorker(enable_app=enable_app, force_probe=force_probe, parent=self)
+        self._app_status_worker = worker
+        worker.result_ready.connect(self._apply_app_local_panel)
+        worker.finished.connect(lambda: self.app_refresh_btn.setEnabled(True))
+        worker.start()
+
+    def _apply_app_local_panel(self, panel: dict) -> None:
+        self._set_health_label(self.app_adb_pill, "adb", panel.get("adb_ok"))
+        self._set_health_label(self.app_u2_pill, "u2", panel.get("u2_ok"))
+        self._set_health_label(self.app_ready_pill, "App", panel.get("app_ready"))
+        adb_path = panel.get("adb_path") or ""
+        summary = panel.get("summary") or ""
+        if adb_path:
+            summary = f"{summary}\nadb 路径：{adb_path}"
+        self.app_summary_label.setText(summary.strip())
+        connect_hint = (panel.get("connect_hint") or "").strip()
+        self.app_connect_hint_label.setText(connect_hint)
+        self.app_connect_hint_label.setVisible(bool(connect_hint))
+        self.app_devices_label.setText(panel.get("devices_text") or "")
+        self.app_report_label.setText(panel.get("report_text") or "")
+        caps = panel.get("caps") or {}
+        udid = (caps.get("app_udid") or "").strip()
+        if udid:
+            self._last_app_udid = udid
+
+    def _schedule_app_local_status_refresh(self) -> None:
+        if self._online:
+            return
+        self._app_status_debounce.start()
+
+    def _open_app_inspector(self) -> None:
+        base_url = self._current_server_url()
+        if not base_url:
+            QMessageBox.warning(self, "提示", "请先配置并登录平台服务器。")
+            return
+        if not self.api or not self.api.user_token:
+            QMessageBox.warning(self, "提示", "请先登录平台。")
+            return
+        if not self._online:
+            QMessageBox.warning(self, "提示", "请先上线 Runner，再在平台中使用 Inspector。")
+            return
+        device_id = (self.connect_data or {}).get("device_id", "")
+        if not device_id:
+            QMessageBox.warning(self, "提示", "未获取到设备 ID，请重新上线。")
+            return
+        query_params = {"device_id": device_id}
+        udid = (self._last_app_udid or "").strip()
+        if udid:
+            query_params["app_udid"] = udid
+        url = f"{base_url.rstrip('/')}/#/app-inspector?{urlencode(query_params)}"
+        QDesktopServices.openUrl(QUrl(url))
+
     def _set_health_label(self, label: QLabel, name: str, ok: bool | None) -> None:
         state = _health_state(ok)
         label.setText(f"{name} {_status_dot(ok)}")
@@ -501,23 +736,66 @@ class MainWindow(QMainWindow):
         role = role or self._get_execution_role()
         return role in (EXEC_ROLE_PERF, EXEC_ROLE_BOTH)
 
+    def _get_engine_flags(self) -> tuple[bool, bool]:
+        return self.engine_web_cb.isChecked(), self.engine_app_cb.isChecked()
+
+    def _apply_engine_flags(self, enable_web: bool, enable_app: bool) -> None:
+        self.engine_web_cb.blockSignals(True)
+        self.engine_app_cb.blockSignals(True)
+        self.engine_web_cb.setChecked(enable_web)
+        self.engine_app_cb.setChecked(enable_app)
+        self.engine_web_cb.blockSignals(False)
+        self.engine_app_cb.blockSignals(False)
+
+    def _sync_api_engine_flags(self) -> None:
+        enable_web, enable_app = self._get_engine_flags()
+        if self.api:
+            self.api.engine_web_enabled = enable_web
+            self.api.engine_app_enabled = enable_app
+
+    def _on_engine_flags_changed(self, _checked: bool = False) -> None:
+        enable_web, enable_app = self._get_engine_flags()
+        self.prefs["engine_web_enabled"] = enable_web
+        self.prefs["engine_app_enabled"] = enable_app
+        from runner_client.app.preferences import save_preferences
+
+        save_preferences(self.prefs)
+        self._sync_api_engine_flags()
+        if not self._online:
+            self._schedule_app_local_status_refresh()
+
     def _on_role_changed(self, _checked: bool = False) -> None:
+        need_ui = self._needs_ui_role()
         need_perf = self._needs_perf_role()
         self.perf_box.setVisible(need_perf)
+        self.engine_box.setVisible(need_ui)
+        self.app_box.setVisible(need_ui)
         disabled = self._online
         for btn in (self.role_ui, self.role_perf, self.role_both):
             btn.setEnabled(not disabled)
+        for cb in (self.engine_web_cb, self.engine_app_cb):
+            cb.setEnabled(not disabled)
         self.perf_project_combo.setEnabled(not disabled)
         self.perf_max_concurrent_spin.setEnabled(not disabled)
 
     def _apply_session_execution_prefs(self, session: dict) -> None:
-        """恢复会话中的设备名、压测参数；执行角色每次打开默认 UI（不记忆压测选项）。"""
+        """恢复会话中的设备名、压测参数与引擎勾选；执行角色每次打开默认 UI。"""
         self.role_ui.setChecked(True)
         max_conc = session.get("perf_max_concurrent")
         if isinstance(max_conc, int) and max_conc > 0:
             self.perf_max_concurrent_spin.setValue(max_conc)
         self._pending_perf_project_id = session.get("perf_project_id")
+        enable_web = session.get("engine_web_enabled")
+        if enable_web is None:
+            enable_web = self.prefs.get("engine_web_enabled", True)
+        enable_app = session.get("engine_app_enabled")
+        if enable_app is None:
+            enable_app = self.prefs.get("engine_app_enabled", False)
+        self._apply_engine_flags(bool(enable_web), bool(enable_app))
+        self._sync_api_engine_flags()
         self._on_role_changed()
+        if not self._online:
+            self._schedule_app_local_status_refresh()
 
     def _select_perf_project(self, project_id: int | None) -> None:
         if project_id is None:
@@ -583,7 +861,7 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def _open_settings(self) -> None:
-        dialog = SettingsDialog(self)
+        dialog = SettingsDialog(self, runner_online=self._online)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.prefs = dialog.preferences()
             if not self.prefs.get("remember_password"):
@@ -657,6 +935,9 @@ class MainWindow(QMainWindow):
         if not text:
             return
         self.log_view.appendPlainText(_clean_log_text(text))
+        scrollbar = self.log_view.verticalScrollBar()
+        if scrollbar:
+            scrollbar.setValue(scrollbar.maximum())
 
     def _open_log_history(self) -> None:
         dialog = _LogHistoryDialog(self.engine, parent=self)
@@ -827,6 +1108,8 @@ class MainWindow(QMainWindow):
             "username": username,
             "device_name": device_name,
             "perf_max_concurrent": self.perf_max_concurrent_spin.value(),
+            "engine_web_enabled": self.engine_web_cb.isChecked(),
+            "engine_app_enabled": self.engine_app_cb.isChecked(),
         }
         project_id = self.perf_project_combo.currentData()
         if project_id is not None:
@@ -846,6 +1129,7 @@ class MainWindow(QMainWindow):
             return
 
         self.api = BrickCoreApi(base_url)
+        self._sync_api_engine_flags()
         if not self.api.health_check():
             QMessageBox.warning(self, "连接失败", f"无法访问服务器：{base_url}\n请确认 Backend 已启动。")
             self._refresh_health(force_api_probe=True)
@@ -873,6 +1157,12 @@ class MainWindow(QMainWindow):
             return
 
         execution_role = self._get_execution_role()
+        if self._needs_ui_role(execution_role):
+            enable_web, enable_app = self._get_engine_flags()
+            if not enable_web and not enable_app:
+                QMessageBox.warning(self, "提示", "请至少勾选「Web 自动化」或「App 自动化」之一")
+                return
+            self._sync_api_engine_flags()
         if self._needs_perf_role(execution_role):
             project_id = self.perf_project_combo.currentData()
             if not project_id:
@@ -897,11 +1187,14 @@ class MainWindow(QMainWindow):
         self.login_btn.setEnabled(False)
         self._set_status("正在检查运行环境并上线…")
 
+        enable_web, enable_app = self._get_engine_flags()
         worker = _ConnectWorker(
             self.api,
             device_name,
             self.engine.runner_dir,
             execution_role=execution_role,
+            enable_web=enable_web,
+            enable_app=enable_app,
             parent=self,
         )
         self._connect_worker = worker
@@ -997,12 +1290,31 @@ class MainWindow(QMainWindow):
         status_bits.append(base_url)
         self._set_status(" · ".join(status_bits))
 
+        from runner_client.app.engine_capabilities import detect_runner_capabilities
         from runner_client.app.engine_manager import runner_python_executable
 
+        enable_web, enable_app = self._get_engine_flags()
         if self._needs_ui_role(execution_role):
             self._append_log(
                 f"[客户端] UI 引擎已启动，device_id={device_id}，python={runner_python_executable()}"
             )
+            caps = detect_runner_capabilities(enable_web=enable_web, enable_app=enable_app)
+            engine_types = caps.get("runner_engine_types") or []
+            labels: list[str] = []
+            if "web" in engine_types:
+                labels.append("Web")
+            if "app" in engine_types:
+                labels.append("App")
+            self._append_log(f"[客户端] 已上报引擎能力：{' + '.join(labels) if labels else '无'}")
+            if enable_app and "app" in engine_types:
+                udid = caps.get("app_udid") or "（未识别序列号）"
+                if caps.get("app_udid"):
+                    self._last_app_udid = str(caps.get("app_udid")).strip()
+                self._append_log(f"[App] 已启用：adb + u2 正常，当前 Android 设备 {udid}")
+            elif enable_app:
+                self._append_log("[App] 已勾选但未就绪，请查看 App 面板并点击「刷新检测」")
+            elif not enable_web and not enable_app:
+                self._append_log("[客户端] 未启用 Web / App 引擎能力")
         if self._needs_perf_role(execution_role):
             self._append_log(
                 f"[客户端] 压测 Worker 已启动，project_id={self.perf_project_combo.currentData()}，"
@@ -1060,10 +1372,9 @@ class MainWindow(QMainWindow):
             chunk = self.engine.read_new_log_lines()
             if chunk:
                 self._append_log(chunk)
-            else:
-                chunk = self.engine.read_new_output()
-                if chunk:
-                    self._append_log(chunk)
+            chunk = self.engine.read_new_output()
+            if chunk:
+                self._append_log(chunk)
 
         if self._needs_perf_role(self._active_role):
             perf_chunk = self.perf_engine.read_new_log_lines()
@@ -1094,6 +1405,7 @@ class MainWindow(QMainWindow):
     def _send_heartbeat(self) -> None:
         if not self.api or not self.connect_data or not self._needs_ui_role(self._active_role):
             return
+        self._sync_api_engine_flags()
         device_id = self.connect_data.get("device_id", "")
         try:
             self.api.heartbeat(device_id)
@@ -1137,6 +1449,8 @@ class _LogHistoryDialog(QDialog):
     def __init__(self, engine: EngineManager, parent=None) -> None:
         super().__init__(parent)
         self._engine = engine
+        self._match_cursors: list[QTextCursor] = []
+        self._active_match_index = -1
         self.setWindowTitle("Runner 历史日志")
         self.resize(720, 520)
 
@@ -1145,6 +1459,24 @@ class _LogHistoryDialog(QDialog):
         self._info_label.setWordWrap(True)
         self._info_label.setStyleSheet("color: #606266;")
         layout.addWidget(self._info_label)
+
+        search_row = QHBoxLayout()
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("搜索日志内容…")
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.textChanged.connect(self._on_search_changed)
+        self._search_edit.returnPressed.connect(self._find_next)
+        search_row.addWidget(self._search_edit, stretch=1)
+        self._prev_btn = QPushButton("上一个")
+        self._prev_btn.clicked.connect(self._find_prev)
+        self._next_btn = QPushButton("下一个")
+        self._next_btn.clicked.connect(self._find_next)
+        search_row.addWidget(self._prev_btn)
+        search_row.addWidget(self._next_btn)
+        self._match_label = QLabel("")
+        self._match_label.setStyleSheet("color: #909399; min-width: 72px;")
+        search_row.addWidget(self._match_label)
+        layout.addLayout(search_row)
 
         self._content_view = QPlainTextEdit()
         self._content_view.setReadOnly(True)
@@ -1166,6 +1498,83 @@ class _LogHistoryDialog(QDialog):
 
         self._reload()
 
+    def _on_search_changed(self) -> None:
+        self._active_match_index = -1
+        self._apply_search_highlight()
+        if self._match_cursors:
+            self._active_match_index = 0
+            self._apply_search_highlight()
+            self._scroll_to_match(0)
+
+    def _find_next(self) -> None:
+        if not self._match_cursors:
+            self._apply_search_highlight()
+        if not self._match_cursors:
+            return
+        self._active_match_index = (self._active_match_index + 1) % len(self._match_cursors)
+        self._apply_search_highlight()
+        self._scroll_to_match(self._active_match_index)
+
+    def _find_prev(self) -> None:
+        if not self._match_cursors:
+            self._apply_search_highlight()
+        if not self._match_cursors:
+            return
+        self._active_match_index = (self._active_match_index - 1) % len(self._match_cursors)
+        self._apply_search_highlight()
+        self._scroll_to_match(self._active_match_index)
+
+    def _scroll_to_match(self, index: int) -> None:
+        if index < 0 or index >= len(self._match_cursors):
+            return
+        cursor = QTextCursor(self._match_cursors[index])
+        self._content_view.setTextCursor(cursor)
+        self._content_view.centerCursor()
+
+    def _apply_search_highlight(self) -> None:
+        needle = self._search_edit.text().strip()
+        self._match_cursors = []
+        if not needle:
+            self._content_view.setExtraSelections([])
+            self._match_label.setText("")
+            return
+
+        doc = self._content_view.document()
+        cursor = QTextCursor(doc)
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        flags = QTextDocument.FindFlag(0)
+
+        normal_fmt = QTextCharFormat()
+        normal_fmt.setBackground(QColor("#fff566"))
+        active_fmt = QTextCharFormat()
+        active_fmt.setBackground(QColor("#ff9632"))
+        active_fmt.setForeground(QColor("#1f1f1f"))
+
+        extra: list[QTextEdit.ExtraSelection] = []
+        while True:
+            cursor = doc.find(needle, cursor, flags)
+            if cursor.isNull():
+                break
+            self._match_cursors.append(QTextCursor(cursor))
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = QTextCursor(cursor)
+            sel.format = normal_fmt
+            extra.append(sel)
+
+        if not self._match_cursors:
+            self._content_view.setExtraSelections([])
+            self._match_label.setText("0/0")
+            return
+
+        if self._active_match_index < 0:
+            self._active_match_index = 0
+        elif self._active_match_index >= len(self._match_cursors):
+            self._active_match_index = len(self._match_cursors) - 1
+
+        extra[self._active_match_index].format = active_fmt
+        self._content_view.setExtraSelections(extra)
+        self._match_label.setText(f"{self._active_match_index + 1}/{len(self._match_cursors)}")
+
     def _reload(self) -> None:
         path = self._engine.log_path
         size = self._engine.log_file_size()
@@ -1174,12 +1583,18 @@ class _LogHistoryDialog(QDialog):
         self._delete_btn.setEnabled(not self._engine.is_running and size > 0)
         if size == 0:
             self._content_view.setPlainText("")
+            self._match_cursors = []
+            self._active_match_index = -1
+            self._match_label.setText("")
             return
         content, _ = self._engine.read_log_file_content()
         self._content_view.setPlainText(content)
-        cursor = self._content_view.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        self._content_view.setTextCursor(cursor)
+        if self._search_edit.text().strip():
+            self._on_search_changed()
+        else:
+            cursor = self._content_view.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self._content_view.setTextCursor(cursor)
 
     def _delete_log(self) -> None:
         if self._engine.is_running:

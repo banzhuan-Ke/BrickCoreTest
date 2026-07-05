@@ -24,6 +24,7 @@ from app.routers.sys.mcp_info import router as mcp_info_router
 from app.routers.sys.runner_release_config import router as runner_release_config_router
 from app.routers.sys.login_page_config import router as login_page_config_router
 from app.routers.sys.platform_settings import router as platform_settings_router
+from app.routers.sys.stream_parser_config import router as stream_parser_config_router
 from app.routers.sys.invite_codes import router as invite_code_router
 from app.routers.sys.project_members import router as project_member_router
 from app.core.project_access_deps import optional_project_access_check
@@ -35,6 +36,17 @@ from app.routers.ui.records import router as runner_router
 from app.routers.ui.exec import router as ui_exec_router
 from app.routers.ui.files import router as ui_files_router
 from app.routers.ui.folders import router as ui_folders_router
+from app.routers.app import (
+    app_case_router,
+    app_suite_router,
+    app_plan_router,
+    app_exec_router,
+    app_record_router,
+    app_element_router,
+    app_inspector_router,
+    app_fragment_router,
+    app_cron_router,
+)
 from app.routers.sys.devices import router as device_router
 from app.routers.runner import router as runner_client_router
 from app.routers.schedule.jobs import router as cronjob_router
@@ -44,6 +56,7 @@ from app.routers.http.cases import router as api_case_router
 from app.routers.http.suites import router as api_suite_router
 from app.routers.http.records import router as api_records_router
 from app.routers.http.cron import router as api_cron_router, scheduler as api_cron_scheduler
+from app.routers.app.cron import scheduler as app_cron_scheduler
 from app.routers.http.exec import router as api_exec_router
 from app.routers.http.mocks import router as api_mock_router
 from app.routers.http.plan import router as api_plan_router
@@ -143,7 +156,10 @@ async def _core_lifespan(app: FastAPI):
     scheduler.start()
     from app.core.ui_execution_stale import register_stale_cleanup_job
     register_stale_cleanup_job(scheduler)
+    from app.core.app_execution_stale import register_stale_cleanup_job as register_app_stale_cleanup_job
+    register_app_stale_cleanup_job(scheduler)
     api_cron_scheduler.start()
+    app_cron_scheduler.start()
     perf_scheduler.start()
     _install_access_log_quiet_filter()
     logger = logging.getLogger("uvicorn.access")
@@ -170,10 +186,17 @@ async def _core_lifespan(app: FastAPI):
             await backfill_project_members()
         except Exception as exc:
             logging.getLogger(__name__).warning("项目成员回填失败: %s", exc)
+        try:
+            from app.core.stream_parser_config_service import ensure_builtin_stream_parser_configs
+
+            await ensure_builtin_stream_parser_configs()
+        except Exception as exc:
+            logging.getLogger(__name__).warning("SSE 解析配置种子初始化失败: %s", exc)
         yield
     finally:
         scheduler.shutdown()
         api_cron_scheduler.shutdown()
+        app_cron_scheduler.shutdown()
         perf_scheduler.shutdown()
         for log_handler in logger.handlers:
             logger.removeHandler(log_handler)
@@ -307,6 +330,7 @@ app.include_router(mcp_info_router, prefix="/sys")
 app.include_router(runner_release_config_router, prefix="/sys")
 app.include_router(login_page_config_router, prefix="/sys")
 app.include_router(platform_settings_router, prefix="/sys")
+app.include_router(stream_parser_config_router, prefix="/sys")
 app.include_router(invite_code_router, prefix="/sys")
 
 if MCP_ENABLED:
@@ -323,6 +347,16 @@ app.include_router(runner_router, prefix="/ui", dependencies=_project_access_dep
 app.include_router(ui_exec_router, prefix="/ui", dependencies=_project_access_dep)
 app.include_router(ui_files_router, prefix="/ui", dependencies=_project_access_dep)
 app.include_router(ui_folders_router, prefix="/ui", dependencies=_project_access_dep)
+
+app.include_router(app_case_router, prefix="/app-module", dependencies=_project_access_dep)
+app.include_router(app_suite_router, prefix="/app-module", dependencies=_project_access_dep)
+app.include_router(app_plan_router, prefix="/app-module", dependencies=_project_access_dep)
+app.include_router(app_exec_router, prefix="/app-module", dependencies=_project_access_dep)
+app.include_router(app_record_router, prefix="/app-module", dependencies=_project_access_dep)
+app.include_router(app_element_router, prefix="/app-module", dependencies=_project_access_dep)
+app.include_router(app_inspector_router, prefix="/app-module", dependencies=_project_access_dep)
+app.include_router(app_fragment_router, prefix="/app-module", dependencies=_project_access_dep)
+app.include_router(app_cron_router, prefix="/app-module", dependencies=_project_access_dep)
 
 app.include_router(cronjob_router, prefix="/schedule", dependencies=_project_access_dep)
 

@@ -68,6 +68,10 @@ async def runner_connect(
     payload["runner_bound_user_id"] = user_id
     payload["runner_client_version"] = item.client_version
     payload["runner_last_heartbeat"] = datetime.now()
+    if not item.runner_engine_types:
+        payload["runner_engine_types"] = ["web"]
+    if item.toolchain_status:
+        payload["toolchain_status"] = item.toolchain_status
 
     if device:
         await device.update_from_dict(payload)
@@ -112,6 +116,7 @@ async def runner_connect(
         client_version_latest=bundle["client_version_latest"],
         storage_type=bundle["storage_type"],
         upload_mode=bundle["upload_mode"],
+        internal_api_key=app_config.INTERNAL_API_KEY,
         mq=RunnerMqConfig(**bundle["mq"]),
         redis=RunnerRedisConfig(**bundle["redis"]),
         database=None,
@@ -152,7 +157,36 @@ async def runner_disconnect(
     except Exception:
         pass
 
+    from app.core.app_execution_stale import close_inflight_executions_for_udid
+
+    udid = (device.app_udid or "").strip()
+    if udid:
+        try:
+            await close_inflight_executions_for_udid(udid)
+        except Exception:
+            pass
+
     return {"ok": True, "device_id": device_id}
+
+
+def _merge_runner_capabilities(device: Device, item: RunnerHeartbeatRequest) -> None:
+    if item.runner_engine_types is not None:
+        device.runner_engine_types = item.runner_engine_types
+        device.app_udid = item.app_udid or ""
+        device.app_connection = item.app_connection or ""
+        if item.app_platform is not None:
+            device.app_platform = item.app_platform or ""
+    elif item.app_udid is not None or item.app_connection is not None:
+        device.app_udid = item.app_udid or ""
+        device.app_connection = item.app_connection or ""
+    if item.app_platform and item.runner_engine_types is None:
+        device.app_platform = item.app_platform
+    if item.toolchain_status is not None:
+        device.toolchain_status = item.toolchain_status
+    if isinstance(item.app_capabilities, dict) and item.app_capabilities:
+        status = dict(device.toolchain_status or {})
+        status["app_capabilities"] = item.app_capabilities
+        device.toolchain_status = status
 
 
 @router.post(
@@ -173,6 +207,7 @@ async def runner_heartbeat(
     device.status = "在线"
     if item.client_version:
         device.runner_client_version = item.client_version
+    _merge_runner_capabilities(device, item)
     await device.save()
     return {"ok": True, "device_id": device_id}
 

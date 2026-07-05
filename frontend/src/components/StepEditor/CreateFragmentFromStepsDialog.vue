@@ -60,6 +60,7 @@
 import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElNotification } from 'element-plus'
 import { uiFragmentApi } from '@/api/modules/ui'
+import { appFragmentApi } from '@/api/modules/app'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { extractFragmentVarNames } from '@/utils/fragmentVars'
 
@@ -67,6 +68,7 @@ const props = defineProps({
   modelValue: { type: Boolean, default: false },
   selectedCount: { type: Number, default: 0 },
   steps: { type: Array, default: () => [] },
+  domain: { type: String, default: 'ui' },
 })
 
 const emit = defineEmits(['update:modelValue', 'created'])
@@ -128,7 +130,8 @@ async function submit() {
 
   submitting.value = true
   try {
-    const res = await uiFragmentApi.create({
+    const api = props.domain === 'app' ? appFragmentApi : uiFragmentApi
+    const res = await api.create({
       project_id: projectId,
       name: form.name.trim(),
       description: form.description,

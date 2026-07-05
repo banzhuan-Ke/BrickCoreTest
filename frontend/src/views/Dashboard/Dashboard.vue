@@ -20,6 +20,7 @@
         <el-radio-group v-model="activeTab" size="default" class="tab-group">
           <el-radio-button label="all">全部</el-radio-button>
           <el-radio-button label="ui">Web</el-radio-button>
+          <el-radio-button label="app">App</el-radio-button>
           <el-radio-button label="api">接口</el-radio-button>
           <el-radio-button label="perf">性能</el-radio-button>
         </el-radio-group>
@@ -50,7 +51,7 @@
             <div class="stat-label">用例总数</div>
           </div>
           <div class="stat-sub" v-if="activeTab === 'all'">
-            Web {{ stats.ui_case_total }} / 接口 {{ stats.api_case_total }}
+            Web {{ stats.ui_case_total }} / App {{ stats.app_case_total }} / 接口 {{ stats.api_case_total }}
           </div>
         </div>
         <div class="stat-card gradient-purple">
@@ -60,7 +61,7 @@
             <div class="stat-label">套件总数</div>
           </div>
           <div class="stat-sub" v-if="activeTab === 'all'">
-            Web {{ stats.ui_suite_total }} / 接口 {{ stats.api_suite_total }}
+            Web {{ stats.ui_suite_total }} / App {{ stats.app_suite_total }} / 接口 {{ stats.api_suite_total }}
           </div>
         </div>
         <div class="stat-card gradient-green">
@@ -211,7 +212,13 @@
           <h3>🏆 用户活跃度 Top 5</h3>
           <span class="panel-sub">时间范围内</span>
         </div>
-        <el-table :data="userActivityTop" size="small" :show-header="true" class="fancy-table">
+        <el-table
+          v-if="userActivityTop.length"
+          :data="userActivityTop"
+          size="small"
+          :show-header="true"
+          class="fancy-table"
+        >
           <el-table-column type="index" width="45" />
           <el-table-column prop="username" label="用户" min-width="100" show-overflow-tooltip />
           <el-table-column prop="activity_score" label="活跃分" width="90" align="center">
@@ -220,7 +227,7 @@
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!userActivityTop.length" description="暂无活跃数据" :image-size="60" />
+        <el-empty v-else description="暂无活跃数据" :image-size="60" />
       </div>
     </div>
 
@@ -330,12 +337,18 @@
         </div>
         <!-- Web/API 失败用例 -->
         <template v-if="activeTab !== 'perf'">
-          <el-table :data="topFailedCases" size="default" :show-header="true" class="fancy-table">
+          <el-table
+            v-if="filteredTopFailedCases.length"
+            :data="filteredTopFailedCases"
+            size="default"
+            :show-header="true"
+            class="fancy-table"
+          >
             <el-table-column type="index" width="45" />
             <el-table-column prop="case_name" label="用例名称" min-width="140" show-overflow-tooltip />
             <el-table-column prop="type" label="类型" width="80">
               <template #default="{ row }">
-                <el-tag size="small" :type="row.type === 'Web' ? 'primary' : 'success'">{{ row.type }}</el-tag>
+                <el-tag size="small" :type="getExecTagType(row.type)">{{ row.type }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column prop="count" label="失败次数" width="90" align="center" sortable>
@@ -344,11 +357,17 @@
               </template>
             </el-table-column>
           </el-table>
-          <el-empty v-if="!topFailedCases.length" description="暂无失败用例" :image-size="80" />
+          <el-empty v-else description="暂无失败用例" :image-size="80" />
         </template>
         <!-- 性能测试错误场景 -->
         <template v-else>
-          <el-table :data="perfTopFailedScenes" size="default" :show-header="true" class="fancy-table">
+          <el-table
+            v-if="perfTopFailedScenes.length"
+            :data="perfTopFailedScenes"
+            size="default"
+            :show-header="true"
+            class="fancy-table"
+          >
             <el-table-column type="index" width="45" />
             <el-table-column prop="scene_name" label="场景名称" min-width="140" show-overflow-tooltip />
             <el-table-column prop="error_rate" label="错误率" width="90" align="center">
@@ -358,7 +377,7 @@
             </el-table-column>
             <el-table-column prop="fail_count" label="失败请求" width="90" align="center" />
           </el-table>
-          <el-empty v-if="!perfTopFailedScenes.length" description="暂无错误场景" :image-size="80" />
+          <el-empty v-else description="暂无错误场景" :image-size="80" />
         </template>
       </div>
 
@@ -369,7 +388,8 @@
           <span class="panel-sub">平台最近执行动态</span>
         </div>
         <el-table
-          :data="filteredRecentExecutions"
+          v-if="recentExecutions.length"
+          :data="recentExecutions"
           size="default"
           :show-header="true"
           class="fancy-table clickable-table"
@@ -406,7 +426,7 @@
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!filteredRecentExecutions.length" description="暂无执行记录" :image-size="80" />
+        <el-empty v-else description="暂无执行记录" :image-size="80" />
       </div>
     </div>
   </div>
@@ -550,6 +570,8 @@ const initDateRange = () => {
 const stats = reactive({
   ui_case_total: 0,
   ui_suite_total: 0,
+  app_case_total: 0,
+  app_suite_total: 0,
   api_case_total: 0,
   api_suite_total: 0,
   perf_scene_total: 0,
@@ -558,6 +580,7 @@ const stats = reactive({
 })
 
 const uiTrend = ref([])
+const appTrend = ref([])
 const apiTrend = ref([])
 const perfTrend = ref([])
 const topFailedCases = ref([])
@@ -612,32 +635,44 @@ const displayStats = computed(() => {
     const fail = uiTrend.value.reduce((s, i) => s + i.fail, 0)
     return { caseTotal: stats.ui_case_total, suiteTotal: stats.ui_suite_total, successTotal: success, failTotal: fail }
   }
+  if (activeTab.value === 'app') {
+    const success = appTrend.value.reduce((s, i) => s + i.success, 0)
+    const fail = appTrend.value.reduce((s, i) => s + i.fail, 0)
+    return { caseTotal: stats.app_case_total, suiteTotal: stats.app_suite_total, successTotal: success, failTotal: fail }
+  }
   if (activeTab.value === 'api') {
     const success = apiTrend.value.reduce((s, i) => s + i.success, 0)
     const fail = apiTrend.value.reduce((s, i) => s + i.fail, 0)
     return { caseTotal: stats.api_case_total, suiteTotal: stats.api_suite_total, successTotal: success, failTotal: fail }
   }
   // all
-  const success = uiTrend.value.reduce((s, i) => s + i.success, 0) + apiTrend.value.reduce((s, i) => s + i.success, 0)
-  const fail = uiTrend.value.reduce((s, i) => s + i.fail, 0) + apiTrend.value.reduce((s, i) => s + i.fail, 0)
+  const success = uiTrend.value.reduce((s, i) => s + i.success, 0)
+    + appTrend.value.reduce((s, i) => s + i.success, 0)
+    + apiTrend.value.reduce((s, i) => s + i.success, 0)
+  const fail = uiTrend.value.reduce((s, i) => s + i.fail, 0)
+    + appTrend.value.reduce((s, i) => s + i.fail, 0)
+    + apiTrend.value.reduce((s, i) => s + i.fail, 0)
   return { caseTotal: stats.total_case, suiteTotal: stats.total_suite, successTotal: success, failTotal: fail }
 })
 
-const filteredRecentExecutions = computed(() => {
+const filteredTopFailedCases = computed(() => {
   if (activeTab.value === 'perf') {
-    return recentExecutions.value.filter(r => r.type === '性能')
+    return []
   }
   if (activeTab.value === 'ui') {
-    return recentExecutions.value.filter(r => r.type === 'Web')
+    return topFailedCases.value.filter(r => r.type === 'Web')
+  }
+  if (activeTab.value === 'app') {
+    return topFailedCases.value.filter(r => r.type === 'App')
   }
   if (activeTab.value === 'api') {
-    return recentExecutions.value.filter(r => r.type === '接口')
+    return topFailedCases.value.filter(r => r.type === '接口')
   }
-  return recentExecutions.value
+  return topFailedCases.value
 })
 
 const getExecTagType = (type) => {
-  const map = { 'Web': 'primary', '接口': 'success', '性能': 'warning' }
+  const map = { 'Web': 'primary', 'App': '', '接口': 'success', '性能': 'warning' }
   return map[type] || 'info'
 }
 
@@ -667,6 +702,16 @@ const openExecutionReport = (row) => {
   }
   if (row?.type === '接口' && row?.id) {
     router.push(`/api-module/report/${row.id}?type=suite`)
+    return
+  }
+  if (row?.type === 'App' && row?.id) {
+    if (row.record_type === 'app_suite') {
+      router.push({ name: 'appSuiteReport', params: { id: row.id } })
+    } else if (row.record_type === 'app_plan') {
+      router.push({ name: 'appPlanReport', params: { id: row.id } })
+    } else {
+      router.push({ name: 'appRecordList', query: { record_type: 'case' } })
+    }
   }
 }
 
@@ -699,6 +744,7 @@ const fetchData = async () => {
     const data = res.data || res
     Object.assign(stats, data.stats || {})
     uiTrend.value = data.ui_execution_trend || []
+    appTrend.value = data.app_execution_trend || []
     apiTrend.value = data.api_execution_trend || []
     perfTrend.value = data.perf_execution_trend || []
     topFailedCases.value = data.top_failed_cases || []
@@ -735,7 +781,10 @@ const initChart = () => {
   }
   trendChart = echarts.init(trendChartRef.value)
 
-  const dates = (uiTrend.value.length ? uiTrend.value.map(i => i.date) : apiTrend.value.length ? apiTrend.value.map(i => i.date) : perfTrend.value.map(i => i.date)) || []
+  const dates = (uiTrend.value.length ? uiTrend.value.map(i => i.date)
+    : appTrend.value.length ? appTrend.value.map(i => i.date)
+    : apiTrend.value.length ? apiTrend.value.map(i => i.date)
+    : perfTrend.value.map(i => i.date)) || []
 
   let series = []
   if (activeTab.value === 'all' || activeTab.value === 'ui') {
@@ -759,6 +808,31 @@ const initChart = () => {
         smooth: true,
         data: uiTrend.value.map(i => i.fail),
         itemStyle: { color: '#ee6666' },
+        lineStyle: { type: 'dashed' }
+      }
+    )
+  }
+  if (activeTab.value === 'all' || activeTab.value === 'app') {
+    series.push(
+      {
+        name: 'App 成功',
+        type: 'line',
+        smooth: true,
+        data: appTrend.value.map(i => i.success),
+        itemStyle: { color: '#9a60b4' },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(154,96,180,0.4)' },
+            { offset: 1, color: 'rgba(154,96,180,0.05)' }
+          ])
+        }
+      },
+      {
+        name: 'App 失败',
+        type: 'line',
+        smooth: true,
+        data: appTrend.value.map(i => i.fail),
+        itemStyle: { color: '#ea7ccc' },
         lineStyle: { type: 'dashed' }
       }
     )

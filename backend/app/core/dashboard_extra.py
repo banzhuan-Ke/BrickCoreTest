@@ -49,9 +49,11 @@ def build_case_proportion(
     ui_cases: int,
     api_cases: int,
     perf_scenes: int,
+    app_cases: int = 0,
 ) -> list[dict[str, Any]]:
     items = [
         {"name": "Web", "value": ui_cases, "color": "#5470c6"},
+        {"name": "App", "value": app_cases, "color": "#9a60b4"},
         {"name": "接口", "value": api_cases, "color": "#91cc75"},
         {"name": "性能", "value": perf_scenes, "color": "#73c0de"},
     ]
@@ -65,10 +67,14 @@ def build_execution_proportion(
     api_fail: int,
     perf_success: int,
     perf_fail: int,
+    app_success: int = 0,
+    app_fail: int = 0,
 ) -> list[dict[str, Any]]:
     items = [
         {"name": "Web 成功", "value": ui_success, "color": "#5470c6"},
         {"name": "Web 失败", "value": ui_fail, "color": "#ee6666"},
+        {"name": "App 成功", "value": app_success, "color": "#9a60b4"},
+        {"name": "App 失败", "value": app_fail, "color": "#ea7ccc"},
         {"name": "接口 成功", "value": api_success, "color": "#91cc75"},
         {"name": "接口 失败", "value": api_fail, "color": "#fac858"},
         {"name": "性能 成功", "value": perf_success, "color": "#73c0de"},

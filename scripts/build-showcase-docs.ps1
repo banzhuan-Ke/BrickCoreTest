@@ -1,4 +1,4 @@
-# Wrapper: generate showcase/docs from doc-center sources
+﻿# Wrapper: generate showcase/docs from doc-center sources
 $ErrorActionPreference = "Stop"
 $ProRoot = if ($args -and $args[0]) { $args[0] } else { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path }
 $py = Join-Path $PSScriptRoot "build_showcase_docs.py"

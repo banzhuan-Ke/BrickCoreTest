@@ -78,6 +78,11 @@
               border: 1px solid var(--el-border-color-light);
               transition: all 0.2s ease;
               box-sizing: border-box;
+              cursor: grab;
+
+              &:active {
+                cursor: grabbing;
+              }
               
               &:hover {
                 color: var(--el-color-primary);
@@ -117,24 +122,38 @@
           }
         }
       }
+
+      :deep(.tab-drag-ghost) {
+        opacity: 0.6;
+        background: var(--el-color-primary-light-9);
+        border-color: var(--el-color-primary-light-5);
+      }
     }
   }
 }
 
 html.theme-pro .box .tabs {
-  background: rgba(255, 255, 255, .72);
-  border: 1px solid var(--pro-line, #e5e9f5);
+  background: var(--pro-card-bg, rgba(255, 255, 255, 0.82));
+  border: 1px solid var(--pro-sidebar-border, rgba(226, 232, 244, 0.42));
   border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(68, 87, 150, .05);
+  box-shadow: var(--pro-card-shadow, 0 4px 18px rgba(68, 87, 150, 0.045));
 
   .tabs-area :deep(.el-tabs .el-tabs__item) {
     border-radius: 8px;
+    background: transparent;
+    border-color: transparent;
+    color: var(--el-text-color-regular);
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--el-text-color-primary);
+    }
 
     &.is-active {
       color: #fff;
       background: var(--el-color-primary);
       border-color: var(--el-color-primary);
-      box-shadow: 0 8px 18px rgba(75, 111, 255, .22);
+      box-shadow: 0 6px 16px rgba(75, 111, 255, 0.2);
     }
   }
 }

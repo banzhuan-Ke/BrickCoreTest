@@ -5,6 +5,7 @@
 <script setup>
 import { computed, ref, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
+import { BUILTIN_DOC_IDS } from '@/constants/docsBuiltin'
 
 const props = defineProps({
   html: { type: String, default: '' }
@@ -15,22 +16,28 @@ const rootRef = ref(null)
 
 const html = computed(() => props.html || '<p class="empty">暂无内容</p>')
 
-const BUILTIN_DOC_IDS = new Set([
-  'home', 'quick-start', 'highlights', 'project-setup', 'test-catalog',
-  'ui-automation', 'runner-client', 'runner-packaging', 'runner-troubleshooting', 'runner-linux-server',
-  'api-automation', 'data-factory', 'api-auth', 'perf-testing', 'ai-testing',
-  'browser-lab', 'platform-assistant', 'mcp-server', 'system-admin'
-])
+function parseDocNavigation(href) {
+  if (!href) return null
 
-function hrefToDocId(href) {
-  const mdMatch = href.match(/(?:^|[/\\])([a-z0-9-]+)\.md(?:#.*)?$/i)
+  const docQuery = href.match(/\/docs\?doc=([a-z0-9-]+)(#.*)?$/i)
+  if (docQuery) {
+    return { docId: docQuery[1], hash: docQuery[2] || '' }
+  }
+
+  const mdMatch = href.match(/(?:^|[./\\])([a-z0-9-]+)\.md(#.*)?$/i)
   if (mdMatch) {
     const stem = mdMatch[1].toLowerCase()
-    if (stem === 'index') return 'home'
-    if (BUILTIN_DOC_IDS.has(stem)) return stem
+    const docId = stem === 'index' ? 'home' : stem
+    if (BUILTIN_DOC_IDS.has(docId)) {
+      return { docId, hash: mdMatch[2] || '' }
+    }
   }
+
   const hashMatch = href.match(/^#([a-z0-9-]+)$/i)
-  if (hashMatch && BUILTIN_DOC_IDS.has(hashMatch[1])) return hashMatch[1]
+  if (hashMatch && BUILTIN_DOC_IDS.has(hashMatch[1])) {
+    return { docId: hashMatch[1], hash: '' }
+  }
+
   return null
 }
 
@@ -39,7 +46,7 @@ function resolvePlatformPath(href) {
   if (href.startsWith('#/')) return href.slice(1)
   if (href.startsWith('/') && !href.startsWith('//') && !/\.[a-z]{2,4}(?:#|$)/i.test(href)) {
     const prefixes = [
-      '/browser-lab', '/ai-', '/ui-', '/api-', '/perf-', '/project',
+      '/browser-lab', '/ai-', '/ui-', '/api-', '/perf-', '/project', '/app-',
       '/environment', '/docs', '/notification', '/dashboard', '/system'
     ]
     if (prefixes.some((p) => href.startsWith(p))) return href
@@ -62,10 +69,10 @@ function onDocLinkClick(e) {
     return
   }
 
-  const docId = hrefToDocId(href)
-  if (docId) {
+  const docNav = parseDocNavigation(href)
+  if (docNav) {
     e.preventDefault()
-    router.push({ path: '/docs', query: { doc: docId } })
+    router.push({ path: '/docs', query: { doc: docNav.docId }, hash: docNav.hash })
     return
   }
 

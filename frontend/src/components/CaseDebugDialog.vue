@@ -80,6 +80,7 @@ import { UserStore } from '@/stores/module/UserStore.js'
 import http from '@/api/index'
 import { uiExecApi, uiRecordApi } from '@/api/modules/ui.js'
 import CaseReportTimeline from '@/components/Report/CaseReportTimeline.vue'
+import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -151,7 +152,7 @@ const onOpen = async () => {
 const loadDevices = async () => {
   try {
     const res = await http.deviceApi.getList({ status: '在线' })
-    deviceList.value = res.status === 200 ? (res.data || []) : []
+    deviceList.value = res.status === 200 ? filterWebRunnerDevices(res.data || []) : []
     if (!params.device_id && deviceList.value.length) {
       params.device_id = deviceList.value[0].id
     }

@@ -11,7 +11,7 @@ function col(key, label, opts = {}) {
 export const TABLE_COLUMN_REGISTRY = {
   'ai.functional_cases': {
     pageId: 'ai.functional_cases',
-    version: 2,
+    version: 3,
     columns: [
       col('id', 'ID', { width: 70, required: true }),
       col('zentao_case_id_display', '禅道ID', { width: 88 }),
@@ -26,7 +26,8 @@ export const TABLE_COLUMN_REGISTRY = {
       col('type', '用例类型', { width: 96, prop: 'type' }),
       col('stage', '适用阶段', { width: 120, prop: 'stage' }),
       col('source_type', '来源', { width: 100 }),
-      col('ui_import_status', 'UI自动化', { width: 96, align: 'center' }),
+      col('ui_import_status', 'Web自动化', { width: 96, align: 'center' }),
+      col('app_import_status', 'App自动化', { width: 96, align: 'center' }),
       col('create_by', '创建人', { width: 88, prop: 'create_by' }),
       col('update_by', '修改人', { width: 88 }),
       col('create_time', '创建时间', { width: 168, prop: 'create_time' }),
@@ -34,7 +35,7 @@ export const TABLE_COLUMN_REGISTRY = {
     ],
     defaultVisible: [
       'id', 'zentao_case_id_display', 'product', 'module', 'related_story', 'title',
-      'priority', 'source_type', 'ui_import_status', 'create_by', 'update_by', 'create_time'
+      'priority', 'source_type', 'ui_import_status', 'app_import_status', 'create_by', 'update_by', 'create_time'
     ]
   },
 
@@ -215,7 +216,7 @@ export const TABLE_COLUMN_REGISTRY = {
       col('run_time', '执行时间', { minWidth: 150 }),
       col('duration', '执行耗时')
     ],
-    defaultVisible: ['index', 'name', 'browser_type', 'base_url', 'status', 'case_count', 'success', 'fail', 'pass_rate', 'username', 'run_time', 'duration']
+    defaultVisible: ['index', 'name', 'browser_type', 'base_url', 'status', 'case_count', 'success', 'fail', 'error', 'skip', 'no_run', 'pass_rate', 'username', 'run_time', 'duration']
   },
 
   'perf.scenes': {

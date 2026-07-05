@@ -51,9 +51,25 @@ _CDP_SCREENSHOT_MARKERS = (
     "screenshot failed",
     "screenshotwatchdog",
     "domwatchdog",
-    "consecutive failures",
     "timeout error",
     "browser state",
+)
+
+# LLM/API 不可用时不应重启浏览器续跑（否则会反复拉起 Chrome，徒增 CPU/内存）
+_LLM_INFRA_MARKERS = (
+    "connection error",
+    "connect error",
+    "connection refused",
+    "connection reset",
+    "name or service not known",
+    "failed to establish a new connection",
+    "modelprovidererror",
+    "api key",
+    "unauthorized",
+    "401",
+    "403",
+    "429",
+    "rate limit",
 )
 
 
@@ -62,10 +78,19 @@ def _text_indicates_cdp_screenshot_failure(text: str) -> bool:
     return any(m in t for m in _CDP_SCREENSHOT_MARKERS)
 
 
+def _text_indicates_llm_infra_failure(text: str) -> bool:
+    t = (text or "").lower()
+    return any(m in t for m in _LLM_INFRA_MARKERS)
+
+
 def _should_restart_browser_after_run(history: Any, exc: BaseException | None = None) -> bool:
     """判断是否为 CDP/截图类失败，适合重启 browser session 后续跑。"""
-    if exc is not None and _text_indicates_cdp_screenshot_failure(str(exc)):
-        return True
+    if exc is not None:
+        msg = str(exc)
+        if _text_indicates_llm_infra_failure(msg):
+            return False
+        if _text_indicates_cdp_screenshot_failure(msg):
+            return True
     if history is None:
         return False
     if history.is_successful() is True:
@@ -76,19 +101,27 @@ def _should_restart_browser_after_run(history: Any, exc: BaseException | None = 
     for h in getattr(history, "history", []) or []:
         for result in getattr(h, "result", []) or []:
             err = getattr(result, "error", None)
-            if err and _text_indicates_cdp_screenshot_failure(str(err)):
+            if not err:
+                continue
+            msg = str(err)
+            if _text_indicates_llm_infra_failure(msg):
+                return False
+            if _text_indicates_cdp_screenshot_failure(msg):
                 return True
 
     # 连续失败停止且无 done：日志里常见 captureScreenshot Internal error 但 error 字段为空
     if not history.is_done() and history.number_of_steps() >= 2:
         tail = (history.history or [])[-4:]
-        blank_failures = sum(1 for h in tail if h.model_output is None)
-        error_failures = sum(
-            1
+        tail_errors = [
+            str(getattr(r, "error", "") or "")
             for h in tail
             for r in (h.result or [])
             if getattr(r, "error", None)
-        )
+        ]
+        if tail_errors and all(_text_indicates_llm_infra_failure(e) for e in tail_errors):
+            return False
+        blank_failures = sum(1 for h in tail if h.model_output is None)
+        error_failures = len(tail_errors)
         if blank_failures >= 2 or error_failures >= 2:
             return True
     return False
@@ -536,6 +569,8 @@ async def run_browser_lab_task(task_id: int, username: str = "") -> None:
                 break
 
             is_final_attempt = restart_count >= max_restarts
+            # CDP 续跑开启时首轮不会走到 is_final_attempt，内联 GIF 仅在无续跑或已达续跑上限时启用；
+            # 其余情况在任务结束后由 ensure_replay_gif 补生成。
             enable_gif = bool(generate_gif and (max_restarts == 0 or is_final_attempt))
             resume_url_for_run: str | None = None
             if restart_count > 0:
@@ -640,6 +675,11 @@ async def run_browser_lab_task(task_id: int, username: str = "") -> None:
 
         history = _merge_histories(histories)
 
+        if generate_gif and history is not None and not gif_path.exists():
+            from app.core.browser_lab_gif_patch import ensure_replay_gif
+
+            ensure_replay_gif(base_task_text or task.task_text or "", history, gif_path)
+
         if fatal_exc is not None and history is None:
             task = await BrowserLabTask.get(id=task_id)
             if _should_stop(task_id):
@@ -724,6 +764,7 @@ async def run_browser_lab_task(task_id: int, username: str = "") -> None:
                 "error_message": task.error_message or "",
                 "tokens_used": tokens,
                 "gif_path": task.gif_path,
+                "gif_url": f"/static/{task.gif_path}" if task.gif_path else None,
             },
         )
 

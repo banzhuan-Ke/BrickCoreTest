@@ -57,12 +57,14 @@
 import { ref, computed, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { uiFragmentApi } from '@/api/modules/ui'
+import { appFragmentApi } from '@/api/modules/app'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { extractFragmentVarNames, normalizeFragmentVariables } from '@/utils/fragmentVars'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   step: { type: Object, default: null },
+  domain: { type: String, default: 'ui' },
 })
 const emit = defineEmits(['update:modelValue', 'save'])
 
@@ -98,7 +100,8 @@ async function onOpen() {
   if (!fid || !projectId) return
 
   try {
-    const res = await uiFragmentApi.getDetail(fid, projectId)
+    const api = props.domain === 'app' ? appFragmentApi : uiFragmentApi
+    const res = await api.getDetail(fid, projectId)
     const frag = res.data?.data || {}
     placeholderNames.value = extractFragmentVarNames(frag.steps || [])
     const normalized = normalizeFragmentVariables(

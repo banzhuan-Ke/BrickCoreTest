@@ -5,37 +5,78 @@
     </template>
     <template #main>
       <div class="catalog-stats">
-        <div class="stat-card">
-          <div class="stat-value">{{ summaryStats.catalogCount }}</div>
-          <div class="stat-label">目录数</div>
+        <div class="stat-group">
+          <div class="stat-group-title">目录</div>
+          <div class="stat-group-cards">
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.catalogCount }}</div>
+              <div class="stat-label">目录数</div>
+            </div>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="stat-value">{{ summaryStats.apiCount }}</div>
-          <div class="stat-label">接口数</div>
+        <div class="stat-group">
+          <div class="stat-group-title">接口</div>
+          <div class="stat-group-cards">
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.apiCount }}</div>
+              <div class="stat-label">接口数</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.caseCount }}</div>
+              <div class="stat-label">接口用例</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.apiPlanCount }}</div>
+              <div class="stat-label">接口计划</div>
+            </div>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="stat-value">{{ summaryStats.caseCount }}</div>
-          <div class="stat-label">接口用例</div>
+        <div class="stat-group">
+          <div class="stat-group-title">Web</div>
+          <div class="stat-group-cards">
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.webCaseCount }}</div>
+              <div class="stat-label">Web 用例</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.webSuiteCount }}</div>
+              <div class="stat-label">Web 套件</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.webTaskCount }}</div>
+              <div class="stat-label">Web 计划</div>
+            </div>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="stat-value">{{ summaryStats.uiCaseCount }}</div>
-          <div class="stat-label">UI 用例</div>
+        <div class="stat-group">
+          <div class="stat-group-title">App</div>
+          <div class="stat-group-cards">
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.appCaseCount }}</div>
+              <div class="stat-label">App 用例</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.appSuiteCount }}</div>
+              <div class="stat-label">App 套件</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.appPlanCount }}</div>
+              <div class="stat-label">App 计划</div>
+            </div>
+          </div>
         </div>
-        <div class="stat-card">
-          <div class="stat-value">{{ summaryStats.suiteCount }}</div>
-          <div class="stat-label">套件数</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">{{ summaryStats.uiTaskCount }}</div>
-          <div class="stat-label">UI 计划</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">{{ summaryStats.apiPlanCount }}</div>
-          <div class="stat-label">接口计划</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">{{ summaryStats.perfSceneCount }}</div>
-          <div class="stat-label">性能场景</div>
+        <div class="stat-group">
+          <div class="stat-group-title">其他</div>
+          <div class="stat-group-cards">
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.suiteCount }}</div>
+              <div class="stat-label">套件总数</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">{{ summaryStats.perfSceneCount }}</div>
+              <div class="stat-label">性能场景</div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="catalog-page">
@@ -80,11 +121,23 @@
             <el-table-column label="套件数" width="80">
               <template #default="{ row }">{{ row.suite_count ?? row.suites ?? 0 }}</template>
             </el-table-column>
-            <el-table-column label="UI用例" width="80">
-              <template #default="{ row }">{{ row.ui_case_count ?? 0 }}</template>
+            <el-table-column label="Web用例" width="80">
+              <template #default="{ row }">{{ row.web_case_count ?? row.ui_case_count ?? 0 }}</template>
             </el-table-column>
-            <el-table-column label="UI计划" width="80">
-              <template #default="{ row }">{{ row.ui_task_count ?? 0 }}</template>
+            <el-table-column label="Web套件" width="80">
+              <template #default="{ row }">{{ row.web_suite_count ?? row.ui_suites ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column label="Web计划" width="80">
+              <template #default="{ row }">{{ row.web_task_count ?? row.ui_task_count ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column label="App用例" width="80">
+              <template #default="{ row }">{{ row.app_case_count ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column label="App套件" width="80">
+              <template #default="{ row }">{{ row.app_suite_count ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column label="App计划" width="80">
+              <template #default="{ row }">{{ row.app_plan_count ?? 0 }}</template>
             </el-table-column>
             <el-table-column label="接口计划" width="90">
               <template #default="{ row }">{{ row.api_plan_count ?? 0 }}</template>
@@ -119,6 +172,7 @@
       <el-radio-group v-model="assetGroupFilter" size="small" @change="filterAssets">
         <el-radio-button label="all">全部 ({{ assetList.length }})</el-radio-button>
         <el-radio-button label="web">Web ({{ assetCountByGroup.web }})</el-radio-button>
+        <el-radio-button label="app">App ({{ assetCountByGroup.app }})</el-radio-button>
         <el-radio-button label="api">接口 ({{ assetCountByGroup.api }})</el-radio-button>
         <el-radio-button label="perf">性能 ({{ assetCountByGroup.perf }})</el-radio-button>
       </el-radio-group>
@@ -168,9 +222,12 @@ import CatalogTree from '@/components/CatalogTree.vue'
 import { collectCatalogSubtreeIds } from '@/api/modules/catalog'
 
 const ASSET_TYPE_META = {
-  ui_case: { label: 'UI 用例', tag: 'success', group: 'web' },
-  ui_suite: { label: 'UI 套件', tag: 'success', group: 'web' },
-  ui_task: { label: 'UI 计划', tag: 'success', group: 'web' },
+  ui_case: { label: 'Web 用例', tag: 'success', group: 'web' },
+  ui_suite: { label: 'Web 套件', tag: 'success', group: 'web' },
+  ui_task: { label: 'Web 计划', tag: 'success', group: 'web' },
+  app_case: { label: 'App 用例', tag: '', group: 'app' },
+  app_suite: { label: 'App 套件', tag: '', group: 'app' },
+  app_plan: { label: 'App 计划', tag: '', group: 'app' },
   api_def: { label: '接口', tag: 'primary', group: 'api' },
   api_case: { label: '接口用例', tag: 'primary', group: 'api' },
   api_suite: { label: '接口套件', tag: 'primary', group: 'api' },
@@ -183,6 +240,7 @@ const proStore = ProjectStore()
 const catalogTreeRef = ref()
 const selectedCatalogId = ref(null)
 const catalogRows = ref([])
+const projectTotals = ref(null)
 const tableLoading = ref(false)
 
 const loadCatalogTable = async () => {
@@ -192,9 +250,17 @@ const loadCatalogTable = async () => {
     const response = await http.catalogApi.getList({
       project_id: proStore.projectInfo.id,
       include_counts: true,
+      include_project_totals: true,
     })
     if (response.status === 200) {
-      catalogRows.value = Array.isArray(response.data) ? response.data : []
+      const payload = response.data
+      if (payload?.items) {
+        catalogRows.value = payload.items
+        projectTotals.value = payload.project_totals || null
+      } else {
+        catalogRows.value = Array.isArray(payload) ? payload : []
+        projectTotals.value = null
+      }
       await proStore.getCatalogList()
     }
   } finally {
@@ -216,15 +282,26 @@ const filteredCatalogRows = computed(() => {
 
 const summaryStats = computed(() => {
   const rows = filteredCatalogRows.value
+  const useProjectTotals = !selectedCatalogId.value && projectTotals.value
+  const totals = useProjectTotals ? projectTotals.value : null
+  const sum = (key, altKey) => {
+    if (totals && totals[key] != null) return totals[key]
+    if (altKey && totals && totals[altKey] != null) return totals[altKey]
+    return rows.reduce((sum, row) => sum + (row[key] ?? (altKey ? row[altKey] : 0) ?? 0), 0)
+  }
   return {
-    catalogCount: rows.length,
-    apiCount: rows.reduce((sum, row) => sum + (row.api_count ?? 0), 0),
-    caseCount: rows.reduce((sum, row) => sum + (row.case_count ?? 0), 0),
-    uiCaseCount: rows.reduce((sum, row) => sum + (row.ui_case_count ?? 0), 0),
-    suiteCount: rows.reduce((sum, row) => sum + (row.suite_count ?? row.suites ?? 0), 0),
-    uiTaskCount: rows.reduce((sum, row) => sum + (row.ui_task_count ?? 0), 0),
-    apiPlanCount: rows.reduce((sum, row) => sum + (row.api_plan_count ?? 0), 0),
-    perfSceneCount: rows.reduce((sum, row) => sum + (row.perf_scene_count ?? 0), 0),
+    catalogCount: totals?.catalog_count ?? rows.length,
+    apiCount: sum('api_count'),
+    caseCount: sum('case_count'),
+    webCaseCount: sum('web_case_count', 'ui_case_count'),
+    appCaseCount: sum('app_case_count'),
+    webSuiteCount: sum('web_suite_count', 'ui_suites'),
+    appSuiteCount: sum('app_suite_count'),
+    suiteCount: sum('suite_count'),
+    webTaskCount: sum('web_task_count', 'ui_task_count'),
+    appPlanCount: sum('app_plan_count'),
+    apiPlanCount: sum('api_plan_count'),
+    perfSceneCount: sum('perf_scene_count'),
   }
 })
 
@@ -241,6 +318,7 @@ const assetsLoading = ref(false)
 
 const assetCountByGroup = computed(() => ({
   web: assetList.value.filter(a => a.group === 'web').length,
+  app: assetList.value.filter(a => a.group === 'app').length,
   api: assetList.value.filter(a => a.group === 'api').length,
   perf: assetList.value.filter(a => a.group === 'perf').length,
 }))
@@ -303,6 +381,15 @@ const handleEditAsset = (asset) => {
     case 'ui_task':
       router.push({ name: 'editTask', params: { id } })
       break
+    case 'app_case':
+      router.push({ name: 'appCaseEdit', params: { id } })
+      break
+    case 'app_suite':
+      router.push({ name: 'appSuiteEdit', params: { id } })
+      break
+    case 'app_plan':
+      router.push({ name: 'appPlanEdit', params: { id } })
+      break
     case 'api_def':
       router.push({ name: 'apiModule', query: { api_id: id } })
       break
@@ -333,15 +420,37 @@ const handleEditAsset = (asset) => {
 
 .catalog-stats {
   display: flex;
-  gap: 12px;
+  gap: 16px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.stat-group {
+  flex: 1;
+  min-width: 180px;
+  padding: 10px 12px 12px;
+  border-radius: 10px;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.stat-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+
+.stat-group-cards {
+  display: flex;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .stat-card {
   flex: 1;
-  min-width: 100px;
-  padding: 12px 16px;
+  min-width: 72px;
+  padding: 10px 12px;
   border-radius: 8px;
   background: var(--el-fill-color-light);
   text-align: center;

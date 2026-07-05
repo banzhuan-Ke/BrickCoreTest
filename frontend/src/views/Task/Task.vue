@@ -303,6 +303,7 @@ import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
 import {useRouter, useRoute} from "vue-router"
 import {UserStore} from "@/stores/module/UserStore.js"
 import { makeTableRowIndex } from '@/utils/tableIndex'
+import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 
 const router = useRouter()
 const route = useRoute()
@@ -497,7 +498,7 @@ const getDeviceList = async () => {
   try {
     const res = await http.deviceApi.getList({ status: '在线' })
     if (res.status === 200) {
-      deviceList.value = res.data || []
+      deviceList.value = filterWebRunnerDevices(res.data || [])
       syncRunDeviceRows()
     }
   } catch (error) {

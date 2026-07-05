@@ -1,0 +1,122 @@
+/* App 执行报告共用样式（计划/套件/用例记录） */
+
+.app-report-overview {
+  margin-bottom: 20px;
+
+  .report-title {
+    margin: 0 0 14px;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .stat-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: var(--border-radius-large, 12px);
+    border: 1px solid var(--el-border-color-lighter);
+    background: var(--el-bg-color);
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+    transition: box-shadow 0.2s ease;
+
+    &:hover {
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+    }
+
+    .stat-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      flex-shrink: 0;
+      background: var(--el-fill-color-light);
+      color: var(--el-text-color-secondary);
+    }
+
+    .stat-body {
+      min-width: 0;
+    }
+
+    .stat-num {
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.2;
+      color: var(--el-text-color-primary);
+    }
+
+    .stat-label {
+      margin-top: 2px;
+      font-size: 12px;
+      color: var(--el-text-color-secondary);
+    }
+
+    &.success .stat-icon { background: var(--el-color-success-light-9); color: var(--el-color-success); }
+    &.success .stat-num { color: var(--el-color-success); }
+
+    &.fail .stat-icon { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
+    &.fail .stat-num { color: var(--el-color-danger); }
+
+    &.warn .stat-icon { background: var(--el-color-warning-light-9); color: var(--el-color-warning); }
+    &.warn .stat-num { color: var(--el-color-warning); }
+
+    &.info .stat-icon { background: var(--el-fill-color); color: var(--el-text-color-secondary); }
+
+    &.primary .stat-icon { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
+    &.primary .stat-num { color: var(--el-color-primary); }
+
+    &.pass-rate .stat-num {
+      font-size: 18px;
+    }
+  }
+
+  .meta-descriptions {
+    margin-top: 4px;
+  }
+}
+
+.app-env-summary {
+  margin-bottom: 16px;
+
+  :deep(.el-descriptions__title) {
+    font-size: 14px;
+    font-weight: 600;
+  }
+}
+
+.app-report-table {
+  margin-top: 12px;
+
+  :deep(.el-table__expanded-cell) {
+    padding: 12px 16px 16px;
+    background: var(--el-fill-color-blank, var(--el-bg-color));
+  }
+}
+
+.app-report-expand {
+  padding: 4px 0;
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+}
+
+html.theme-pro {
+  .app-report-overview .stat-card {
+    background: var(--pro-card-bg);
+    border-color: var(--pro-sidebar-border);
+    box-shadow: var(--pro-card-shadow);
+  }
+
+  .app-report-expand {
+    background: rgba(255, 255, 255, 0.38);
+  }
+}

@@ -23,18 +23,20 @@ html.theme-pro {
     --border-radius-base: 10px;
     --border-radius-large: 14px;
 
-    --pro-bg-gradient: radial-gradient(circle at 16% 0%, rgba(96, 120, 255, .18), transparent 34%),
+    --pro-bg-gradient: radial-gradient(circle at 16% 0%, rgba(96, 120, 255, .14), transparent 34%),
         linear-gradient(135deg, #eef3ff 0%, #f8faff 36%, #f7f9ff 100%);
-    --pro-sidebar-bg: linear-gradient(180deg, #edf3ff 0%, #e7efff 100%);
-    --pro-sidebar-border: rgba(207, 217, 241, .78);
-    --pro-topbar-bg: rgba(255, 255, 255, .62);
+    --pro-surface: #f7f9ff;
+    --pro-sidebar-bg: #f7f9ff;
+    --pro-sidebar-border: rgba(226, 232, 244, 0.42);
+    --pro-topbar-bg: rgba(247, 249, 255, 0.92);
+    --pro-card-bg: rgba(255, 255, 255, 0.82);
+    --pro-card-shadow: 0 4px 18px rgba(68, 87, 150, 0.045);
     --pro-panel-shadow: 0 22px 60px rgba(46, 64, 117, .13);
-    --pro-card-shadow: 0 12px 36px rgba(68, 87, 150, .06);
     --pro-line: #e5e9f5;
     --pro-muted: #7b8498;
 
-    --el-bg-color: #ffffff;
-    --el-bg-color-page: #f5f7ff;
+    --el-bg-color: rgba(255, 255, 255, 0.88);
+    --el-bg-color-page: #f7f9ff;
     --el-fill-color-light: #f7f9fe;
     --el-fill-color: #f0f3fa;
     --el-border-color: #e5e9f5;
@@ -73,11 +75,20 @@ html.theme-pro .el-container > .el-container > .el-main {
     background: transparent;
 }
 
-html.theme-pro .el-container > .el-container > .el-footer {
-    background: rgba(255, 255, 255, .55);
+html.theme-pro .el-container > .el-footer {
+    background: rgba(247, 249, 255, 0.88);
     backdrop-filter: blur(12px);
-    border-top: 1px solid var(--pro-line);
+    border-top: 1px solid var(--pro-sidebar-border);
     box-shadow: none;
+}
+
+/* 方案 C：同色调 — 侧栏 / 顶栏 / 主区共用 surface，卡片轻阴影浮层 */
+html.theme-pro .menu-container {
+    background: transparent;
+}
+
+html.theme-pro .logo {
+    background: transparent;
 }
 
 /* 全局卡片 / 表格 / 面板 */
@@ -85,15 +96,37 @@ html.theme-pro .el-card {
     border: 1px solid var(--pro-line);
     border-radius: var(--border-radius-large);
     box-shadow: var(--pro-card-shadow);
-    background: rgba(255, 255, 255, .92);
+    background: var(--pro-card-bg);
+}
+
+html.theme-pro .page-card-host > .page-card-panel.el-card,
+html.theme-pro .page-card-host .page-card-panel.el-card {
+    border: 1px solid var(--pro-line) !important;
+    border-radius: var(--border-radius-large) !important;
+    box-shadow: var(--pro-card-shadow);
+    background: var(--pro-card-bg);
+}
+
+html.theme-pro .page-card-host .main_box {
+    background: transparent;
+}
+
+html.theme-pro .page-card-host .title {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.55), transparent);
+    border-bottom-color: var(--pro-sidebar-border);
+}
+
+html.theme-pro .page-card-host .bottom_box {
+    background: rgba(255, 255, 255, 0.42);
+    border-top-color: var(--pro-sidebar-border);
 }
 
 html.theme-pro .el-table {
     --el-table-border-color: var(--pro-line);
-    --el-table-header-bg-color: #f7f9fe;
-    --el-table-bg-color: #ffffff;
-    --el-table-tr-bg-color: #ffffff;
-    --el-fill-color-lighter: #fafbfd;
+    --el-table-header-bg-color: rgba(255, 255, 255, 0.55);
+    --el-table-bg-color: rgba(255, 255, 255, 0.72);
+    --el-table-tr-bg-color: rgba(255, 255, 255, 0.72);
+    --el-fill-color-lighter: rgba(255, 255, 255, 0.45);
     border-radius: var(--border-radius-large);
     overflow: hidden;
 }
@@ -101,20 +134,20 @@ html.theme-pro .el-table {
 html.theme-pro .el-table th.el-table__cell {
     font-weight: 700;
     color: #3d4454;
-    background: #f7f9fe !important;
+    background: rgba(255, 255, 255, 0.55) !important;
 }
 
 html.theme-pro .el-table td.el-table__cell {
-    background-color: #fff;
+    background-color: rgba(255, 255, 255, 0.72);
     color: #3d4454;
 }
 
 html.theme-pro .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-    background: #fafbfd !important;
+    background: rgba(255, 255, 255, 0.45) !important;
 }
 
 html.theme-pro .el-table tr:hover > td.el-table__cell {
-    background-color: #f8faff !important;
+    background-color: rgba(255, 255, 255, 0.92) !important;
 }
 
 html.theme-pro .el-button--primary {
@@ -163,4 +196,18 @@ html.theme-pro .main_box {
 html.theme-pro .page-card,
 html.theme-pro .catalog-list-layout {
     border-radius: var(--border-radius-large);
+}
+
+/* 用例编辑页 — 左侧关键字栏与主内容区 */
+html.theme-pro .case-edit-container {
+    background: transparent;
+}
+
+html.theme-pro .keyword-sidebar {
+    background: var(--pro-surface);
+    border-right-color: var(--pro-sidebar-border);
+}
+
+html.theme-pro .case-main {
+    background: transparent;
 }

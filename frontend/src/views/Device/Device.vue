@@ -33,6 +33,46 @@
             <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
+        <el-table-column label="引擎能力" width="120">
+          <template #default="scope">
+            <el-tag
+              v-for="t in normalizeEngineTypes(scope.row)"
+              :key="t"
+              size="small"
+              :type="t === 'app' ? 'success' : 'info'"
+              style="margin: 2px"
+            >
+              {{ engineTypeLabel(t) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="App UDID" min-width="160" show-overflow-tooltip>
+          <template #default="scope">
+            <template v-if="scope.row.app_udid">
+              <span>{{ scope.row.app_udid }}</span>
+              <el-tag v-if="scope.row.app_connection" size="small" type="info" style="margin-left: 4px">
+                {{ scope.row.app_connection }}
+              </el-tag>
+            </template>
+            <span v-else class="text-muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="工具链" width="140">
+          <template #default="scope">
+            <template v-if="toolchainTags(scope.row).length">
+              <el-tag
+                v-for="item in toolchainTags(scope.row)"
+                :key="item.key"
+                size="small"
+                :type="item.ok ? 'success' : 'danger'"
+                style="margin: 2px"
+              >
+                {{ item.key }}
+              </el-tag>
+            </template>
+            <span v-else class="text-muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="最后心跳" prop="runner_last_heartbeat" width="160">
           <template #default="scope">
             <span v-if="scope.row.runner_last_heartbeat">
@@ -131,6 +171,35 @@ function compareClientVersion(left, right) {
 const isOutdatedClient = (version) => {
   if (!version || !recommendedClientVersion.value) return false
   return compareClientVersion(version, recommendedClientVersion.value) < 0
+}
+
+function normalizeEngineTypes(row) {
+  const types = row?.runner_engine_types
+  if (Array.isArray(types) && types.length) return types
+  return ['web']
+}
+
+function engineTypeLabel(type) {
+  const map = { web: 'Web', app: 'App', perf: '压测' }
+  return map[type] || type
+}
+
+function toolchainTags(row) {
+  const ts = row?.toolchain_status || {}
+  const tags = []
+  if (ts.adb === 'ok') tags.push({ key: 'adb', ok: true })
+  else if (ts.adb === 'missing') tags.push({ key: 'adb', ok: false })
+  if (ts.uiautomator2 === 'ok') tags.push({ key: 'u2', ok: true })
+  else if (ts.uiautomator2 === 'missing') tags.push({ key: 'u2', ok: false })
+  return tags
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(String(text)).then(() => {
+    ElMessage.success('已复制')
+  }).catch(() => {
+    ElMessage.error('复制失败')
+  })
 }
 
 // -----------------------------设备列表------------------------

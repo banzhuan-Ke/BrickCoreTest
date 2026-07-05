@@ -34,6 +34,11 @@ READONLY_TOOL_NAMES: tuple[str, ...] = (
     "list_ui_run_records",
     "list_ui_suites",
     "list_ui_cron_jobs",
+    "list_app_cases",
+    "list_app_suites",
+    "list_app_plans",
+    "list_app_run_records",
+    "list_app_cron_jobs",
     "list_perf_scenes",
     "list_perf_records",
     "list_perf_cron_jobs",
@@ -60,6 +65,9 @@ PREVIEW_TOOL_NAMES: tuple[str, ...] = (
     "preview_run_ui_case",
     "preview_run_ui_task",
     "preview_run_ui_suite",
+    "preview_run_app_case",
+    "preview_run_app_suite",
+    "preview_run_app_plan",
     "preview_run_perf_scene",
     "preview_analyze_failure",
 )
@@ -73,6 +81,9 @@ CONFIRM_ACTION_MAP: dict[str, str] = {
     "run_ui_case": "confirm_run_ui_case",
     "run_ui_task": "confirm_run_ui_task",
     "run_ui_suite": "confirm_run_ui_suite",
+    "run_app_case": "confirm_run_app_case",
+    "run_app_suite": "confirm_run_app_suite",
+    "run_app_plan": "confirm_run_app_plan",
     "run_perf_scene": "confirm_run_perf_scene",
     "analyze_failure": "confirm_analyze_failure",
 }
@@ -374,13 +385,22 @@ READONLY_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_execution_record",
-            "description": "查询执行记录摘要（api_suite / api_plan / ui_plan / ui_case / perf）",
+            "description": "查询执行记录摘要（api_suite / api_plan / ui_plan / ui_case / app_plan / app_suite / app_case / perf）",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "record_type": {
                         "type": "string",
-                        "enum": ["api_suite", "api_plan", "ui_plan", "ui_case", "perf"],
+                        "enum": [
+                            "api_suite",
+                            "api_plan",
+                            "ui_plan",
+                            "ui_case",
+                            "app_plan",
+                            "app_suite",
+                            "app_case",
+                            "perf",
+                        ],
                     },
                     "record_id": {"type": "integer"},
                 },
@@ -584,6 +604,93 @@ READONLY_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "list_ui_cron_jobs",
             "description": "列出项目 UI 定时任务",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_app_cases",
+            "description": "列出项目 App 用例（Android 移动端，摘要）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_app_suites",
+            "description": "列出项目 App 测试套件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_app_plans",
+            "description": "列出项目 App 测试计划",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_app_run_records",
+            "description": "列出 App 执行记录（计划+套件）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "record_type": {"type": "string", "description": "plan|suite|空为全部"},
+                    "keyword": {"type": "string"},
+                    "status": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_app_cron_jobs",
+            "description": "列出项目 App 定时任务",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -806,6 +913,56 @@ PREVIEW_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "preview_run_app_case",
+            "description": "预览单条 App 用例执行（case_id 或 case_name + env_id + 在线 App Runner 的 device_id）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "env_id": {"type": "integer", "description": "运行环境 ID"},
+                    "device_id": {"type": "string", "description": "在线 App Runner 设备 ID"},
+                    "case_id": {"type": "integer", "description": "App 用例 ID，与 case_name 二选一"},
+                    "case_name": {"type": "string", "description": "App 用例名称（精确或模糊匹配）"},
+                },
+                "required": ["project_id", "env_id", "device_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "preview_run_app_suite",
+            "description": "预览 App 套件执行影响（需用户确认后才真正执行）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "suite_id": {"type": "integer"},
+                    "env_id": {"type": "integer"},
+                    "device_id": {"type": "string", "description": "在线 App Runner 设备 ID"},
+                },
+                "required": ["suite_id", "env_id", "device_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "preview_run_app_plan",
+            "description": "预览 App 测试计划执行影响（需用户确认后才真正执行）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_id": {"type": "integer"},
+                    "env_id": {"type": "integer"},
+                    "device_id": {"type": "string", "description": "在线 App Runner 设备 ID"},
+                },
+                "required": ["plan_id", "env_id", "device_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "preview_run_ui_task",
             "description": "预览 UI 测试计划执行影响（需用户确认后才真正执行）",
             "parameters": {
@@ -860,7 +1017,7 @@ PREVIEW_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "project_id": {"type": "integer"},
-                    "target_type": {"type": "string", "enum": ["api", "ui"]},
+                    "target_type": {"type": "string", "enum": ["api", "ui", "app"]},
                     "target_id": {"type": "integer"},
                     "force_refresh": {"type": "boolean"},
                 },
@@ -922,6 +1079,11 @@ def _get_handler_map() -> dict[str, ToolHandler]:
             "list_ui_run_records": mcp_tools.tool_list_ui_run_records,
             "list_ui_suites": mcp_tools.tool_list_ui_suites,
             "list_ui_cron_jobs": mcp_tools.tool_list_ui_cron_jobs,
+            "list_app_cases": mcp_tools.tool_list_app_cases,
+            "list_app_suites": mcp_tools.tool_list_app_suites,
+            "list_app_plans": mcp_tools.tool_list_app_plans,
+            "list_app_run_records": mcp_tools.tool_list_app_run_records,
+            "list_app_cron_jobs": mcp_tools.tool_list_app_cron_jobs,
             "list_perf_scenes": mcp_tools.tool_list_perf_scenes,
             "list_perf_records": mcp_tools.tool_list_perf_records,
             "list_perf_cron_jobs": mcp_tools.tool_list_perf_cron_jobs,
@@ -943,6 +1105,9 @@ def _get_handler_map() -> dict[str, ToolHandler]:
             "preview_run_api_case": mcp_tools.tool_preview_run_api_case,
             "preview_run_qa_eval": mcp_tools.tool_preview_run_qa_eval,
             "preview_run_ui_case": mcp_tools.tool_preview_run_ui_case,
+            "preview_run_app_case": mcp_tools.tool_preview_run_app_case,
+            "preview_run_app_suite": mcp_tools.tool_preview_run_app_suite,
+            "preview_run_app_plan": mcp_tools.tool_preview_run_app_plan,
             "preview_run_ui_task": mcp_tools.tool_preview_run_ui_task,
             "preview_run_ui_suite": mcp_tools.tool_preview_run_ui_suite,
             "preview_run_perf_scene": mcp_tools.tool_preview_run_perf_scene,
@@ -952,6 +1117,9 @@ def _get_handler_map() -> dict[str, ToolHandler]:
             "confirm_run_api_case": mcp_tools.tool_confirm_run_api_case,
             "confirm_run_qa_eval": mcp_tools.tool_confirm_run_qa_eval,
             "confirm_run_ui_case": mcp_tools.tool_confirm_run_ui_case,
+            "confirm_run_app_case": mcp_tools.tool_confirm_run_app_case,
+            "confirm_run_app_suite": mcp_tools.tool_confirm_run_app_suite,
+            "confirm_run_app_plan": mcp_tools.tool_confirm_run_app_plan,
             "confirm_run_ui_task": mcp_tools.tool_confirm_run_ui_task,
             "confirm_run_ui_suite": mcp_tools.tool_confirm_run_ui_suite,
             "confirm_run_perf_scene": mcp_tools.tool_confirm_run_perf_scene,
@@ -982,6 +1150,11 @@ _PROJECT_SCOPED_TOOLS = {
     "list_ui_run_records",
     "list_ui_suites",
     "list_ui_cron_jobs",
+    "list_app_cases",
+    "list_app_suites",
+    "list_app_plans",
+    "list_app_run_records",
+    "list_app_cron_jobs",
     "list_perf_scenes",
     "list_perf_records",
     "list_perf_cron_jobs",
@@ -1000,6 +1173,9 @@ _PROJECT_SCOPED_TOOLS = {
     "preview_run_api_case",
     "preview_run_qa_eval",
     "preview_run_ui_case",
+    "preview_run_app_case",
+    "preview_run_app_suite",
+    "preview_run_app_plan",
     "preview_analyze_failure",
 }
 
@@ -1106,8 +1282,8 @@ async def preview_analyze_failure(
 
     ensure_permission(ctx, AI_TEST_EXECUTE)
     target_type = (target_type or "").lower()
-    if target_type not in ("api", "ui"):
-        raise ValueError("target_type 仅支持 api 或 ui")
+    if target_type not in ("api", "ui", "app"):
+        raise ValueError("target_type 支持 api、ui 或 app")
     impact = {
         "project_id": project_id,
         "target_type": target_type,
@@ -1231,6 +1407,12 @@ def extract_pending_confirm(tool_name: str, result: dict[str, Any]) -> dict[str,
         action = "run_qa_eval"
     elif tool_name == "preview_run_ui_case":
         action = "run_ui_case"
+    elif tool_name == "preview_run_app_case":
+        action = "run_app_case"
+    elif tool_name == "preview_run_app_suite":
+        action = "run_app_suite"
+    elif tool_name == "preview_run_app_plan":
+        action = "run_app_plan"
     elif tool_name == "preview_run_ui_task":
         action = "run_ui_task"
     elif tool_name == "preview_run_ui_suite":
@@ -1279,6 +1461,25 @@ def extract_pending_confirm(tool_name: str, result: dict[str, Any]) -> dict[str,
         confirm_args = {
             "project_id": impact.get("project_id"),
             "case_id": impact.get("case_id"),
+            "env_id": impact.get("env_id"),
+            "device_id": impact.get("device_id"),
+        }
+    elif action == "run_app_case":
+        confirm_args = {
+            "project_id": impact.get("project_id"),
+            "case_id": impact.get("case_id"),
+            "env_id": impact.get("env_id"),
+            "device_id": impact.get("device_id"),
+        }
+    elif action == "run_app_suite":
+        confirm_args = {
+            "suite_id": impact.get("suite_id"),
+            "env_id": impact.get("env_id"),
+            "device_id": impact.get("device_id"),
+        }
+    elif action == "run_app_plan":
+        confirm_args = {
+            "plan_id": impact.get("plan_id"),
             "env_id": impact.get("env_id"),
             "device_id": impact.get("device_id"),
         }

@@ -3,17 +3,28 @@
     <template #title>
       <div class="report-header">
         <span>测试套件报告</span>
-        <el-button type="success" :icon="Download" @click="showExportDialog">
-          导出报告
-        </el-button>
-        <el-button
-          v-if="canAiAnalyze && (runInfo.fail || runInfo.error)"
-          type="warning"
-          :loading="batchAnalyzing"
-          @click="runBatchAnalyze"
-        >
-          批量 AI 分析失败
-        </el-button>
+        <div class="header-actions">
+          <el-button
+            v-if="canEditSuite && runInfo.suite_id"
+            type="primary"
+            :icon="Edit"
+            plain
+            @click="goEditSuite(runInfo.suite_id)"
+          >
+            编辑套件
+          </el-button>
+          <el-button type="success" :icon="Download" @click="showExportDialog">
+            导出报告
+          </el-button>
+          <el-button
+            v-if="canAiAnalyze && (runInfo.fail || runInfo.error)"
+            type="warning"
+            :loading="batchAnalyzing"
+            @click="runBatchAnalyze"
+          >
+            批量 AI 分析失败
+          </el-button>
+        </div>
       </div>
     </template>
     
@@ -84,26 +95,21 @@
         
         <!-- 统计详情 -->
         <div class="stats-detail">
-          <div class="stat-item success">
+          <div
+            v-for="item in suiteStatFilters"
+            :key="item.key"
+            class="stat-item"
+            :class="[item.class, { 'stat-item--active': caseStatusFilter === item.filterStatus, 'stat-item--clickable': item.filterable }]"
+            @click="onStatFilterClick(item)"
+          >
             <span class="stat-dot"></span>
-            <span class="stat-text">通过: {{ runInfo.success }}</span>
+            <span class="stat-text">{{ item.label }}: {{ item.value }}</span>
           </div>
-          <div class="stat-item fail">
-            <span class="stat-dot"></span>
-            <span class="stat-text">失败: {{ runInfo.fail }}</span>
-          </div>
-          <div class="stat-item error">
-            <span class="stat-dot"></span>
-            <span class="stat-text">错误: {{ runInfo.error }}</span>
-          </div>
-          <div class="stat-item skip">
-            <span class="stat-dot"></span>
-            <span class="stat-text">跳过: {{ runInfo.skip }}</span>
-          </div>
-          <div class="stat-item no-run">
-            <span class="stat-dot"></span>
-            <span class="stat-text">未执行: {{ runInfo.no_run }}</span>
-          </div>
+        </div>
+        <div v-if="caseStatusFilter" class="filter-bar">
+          <el-tag closable @close="clearCaseStatusFilter">
+            当前筛选：{{ caseStatusFilterLabel }}
+          </el-tag>
         </div>
       </div>
 
@@ -142,7 +148,7 @@
                   <div class="case-header">
                     <div class="case-title">
                       <span class="case-index">#{{ index + 1 }}</span>
-                      <span class="case-name">{{ caseItem.result_data?.name || '未知用例' }}</span>
+                      <span class="case-name">{{ caseItem.case_name || caseItem.result_data?.name || '未知用例' }}</span>
                       <el-tag size="small" :type="getCaseStatusType(caseItem.status)">
                         {{ getStatusText(caseItem.status) }}
                       </el-tag>
@@ -152,6 +158,14 @@
                       {{ formatDuration(caseItem.result_data?.duration) }}
                       <el-icon><User /></el-icon>
                       {{ caseItem.username }}
+                      <el-button
+                        v-if="canEditCase && resolveCaseId(caseItem)"
+                        link
+                        type="primary"
+                        size="small"
+                        :icon="Edit"
+                        @click.stop="goEditCase(caseItem)"
+                      >编辑用例</el-button>
                       <el-button
                         v-if="isUiFailed(caseItem.status) && canAiAnalyze"
                         link
@@ -211,7 +225,7 @@
           <el-table-column type="index" label="序号" :index="tableRowIndex" width="70"/>
           <el-table-column prop="result_data.name" label="用例名称" min-width='180' show-overflow-tooltip>
             <template #default="scope">
-              {{ scope.row.result_data?.name || '未知用例' }}
+              {{ scope.row.case_name || scope.row.result_data?.name || '未知用例' }}
             </template>
           </el-table-column>
           <el-table-column label="执行状态" width="110">
@@ -252,8 +266,16 @@
               {{ formatDateTime(scope.row.start_time) }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="120" fixed="right">
+          <el-table-column label="操作" width="180" fixed="right">
             <template #default="scope">
+              <el-button
+                v-if="canEditCase && resolveCaseId(scope.row)"
+                link
+                type="primary"
+                size="small"
+                :icon="Edit"
+                @click="goEditCase(scope.row)"
+              >编辑</el-button>
               <el-button
                 v-if="isUiFailed(scope.row.status) && canAiAnalyze"
                 link
@@ -301,7 +323,12 @@
     </template>
     
     <template #bottom>
-      <el-button @click="back" icon="CircleClose" type="danger" plain>返回套件时间轴</el-button>
+      <el-button @click="backToTask" v-if="route.query.fromTask" icon="Back" type="primary" plain>
+        返回计划报告
+      </el-button>
+      <el-button @click="back" icon="CircleClose" type="danger" plain>
+        {{ route.query.fromTask ? '关闭' : '返回执行记录' }}
+      </el-button>
     </template>
   </PageCard>
   
@@ -371,7 +398,9 @@ import {
   Grid,
   Document,
   Setting,
-  Loading
+  Loading,
+  Back,
+  Edit
 } from '@element-plus/icons-vue'
 import http from '@/api/index'
 import PageCard from "@/components/PageCard.vue"
@@ -393,6 +422,8 @@ const proStore = ProjectStore()
 const id = route.params.id
 
 const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
+const canEditCase = computed(() => uStore.hasPermission('ui_case:edit'))
+const canEditSuite = computed(() => uStore.hasPermission('ui_suite:edit'))
 const aiAnalyzeVisible = ref(false)
 const aiAnalyzeTargetId = ref(null)
 const batchAnalyzing = ref(false)
@@ -402,6 +433,23 @@ const isUiFailed = (status) => ['fail', 'failed', 'error'].includes(status)
 const openAiAnalyze = (recordId) => {
   aiAnalyzeTargetId.value = recordId
   aiAnalyzeVisible.value = true
+}
+
+const resolveCaseId = (row) => row?.case_id || row?.result_data?.id || null
+
+const goEditCase = (row) => {
+  const caseId = resolveCaseId(row)
+  if (!caseId) return
+  const query = {}
+  if (row?.id && isUiFailed(row.status)) {
+    query.execution_id = row.id
+  }
+  router.push({ name: 'editCase', params: { id: caseId }, query })
+}
+
+const goEditSuite = (suiteId) => {
+  if (!suiteId) return
+  router.push({ name: 'editSuite', params: { id: suiteId } })
 }
 
 const runBatchAnalyze = async () => {
@@ -449,6 +497,7 @@ const envDisplayName = computed(() => {
   return env.env_name || env.target_host || '-'
 })
 const caseRunList = ref([])
+const caseStatusFilter = ref(route.query.caseStatus || '')
 const pageConfig = reactive({
   page: 1,
   size: 10,
@@ -456,6 +505,43 @@ const pageConfig = reactive({
 })
 
 const tableRowIndex = makeTableRowIndex(pageConfig)
+
+const CASE_STATUS_LABELS = {
+  success: '通过',
+  fail: '失败',
+  error: '错误',
+  skip: '跳过',
+  no_run: '未运行',
+  all: '全部用例'
+}
+
+const caseStatusFilterLabel = computed(() => CASE_STATUS_LABELS[caseStatusFilter.value] || caseStatusFilter.value)
+
+const suiteStatFilters = computed(() => [
+  { key: 'all', label: '全部', value: runInfo.value.case_count || 0, class: 'all', filterable: true, filterStatus: 'all' },
+  { key: 'success', label: '通过', value: runInfo.value.success || 0, class: 'success', filterable: true, filterStatus: 'success' },
+  { key: 'fail', label: '失败', value: runInfo.value.fail || 0, class: 'fail', filterable: true, filterStatus: 'fail' },
+  { key: 'error', label: '错误', value: runInfo.value.error || 0, class: 'error', filterable: true, filterStatus: 'error' },
+  { key: 'skip', label: '跳过', value: runInfo.value.skip || 0, class: 'skip', filterable: true, filterStatus: 'skip' },
+  { key: 'no_run', label: '未执行', value: runInfo.value.no_run || 0, class: 'no-run', filterable: true, filterStatus: 'no_run' }
+])
+
+const onStatFilterClick = (item) => {
+  if (!item.filterable) return
+  if (caseStatusFilter.value === item.filterStatus) {
+    clearCaseStatusFilter()
+    return
+  }
+  caseStatusFilter.value = item.filterStatus
+  pageConfig.page = 1
+  getCaseRunList()
+}
+
+const clearCaseStatusFilter = () => {
+  caseStatusFilter.value = ''
+  pageConfig.page = 1
+  getCaseRunList()
+}
 
 // 状态映射
 const statusMap = {
@@ -467,6 +553,8 @@ const statusMap = {
   failed: { text: '失败', type: 'danger', icon: Warning },
   error: { text: '错误', type: 'warning', icon: CircleClose },
   skip: { text: '跳过', type: 'info', icon: InfoFilled },
+  skipped: { text: '跳过', type: 'info', icon: InfoFilled },
+  pending: { text: '未运行', type: 'info', icon: InfoFilled },
   '执行完成': { text: '执行完成', type: 'success', icon: CircleCheck },
   '等待执行': { text: '等待执行', type: 'info', icon: InfoFilled },
   '运行中': { text: '运行中', type: 'primary', icon: Loading }
@@ -489,6 +577,9 @@ const getCaseRunList = async () => {
       suite_execution_id: id,
       page: pageConfig.page,
       size: pageConfig.size
+    }
+    if (caseStatusFilter.value && caseStatusFilter.value !== 'all') {
+      params.status = caseStatusFilter.value
     }
     const response = await http.resultApi.getCaseRecord(params)
     if (response.status === 200) {
@@ -607,8 +698,22 @@ const formatDateTime = (timestamp) => {
 }
 
 // 返回
+const backToTask = () => {
+  const fromTask = route.query.fromTask
+  if (!fromTask) return
+  const query = {}
+  if (route.query.taskMode) query.mode = route.query.taskMode
+  if (route.query.caseStatus) query.caseStatus = route.query.caseStatus
+  router.push({ name: 'taskReport', params: { id: fromTask }, query })
+  uStore.deleteTabs(route.path)
+}
+
 const back = () => {
-  router.back()
+  if (route.query.fromTask) {
+    uStore.deleteTabs(route.path)
+    return
+  }
+  router.push({ name: 'recordList' })
   uStore.deleteTabs(route.path)
 }
 
@@ -628,6 +733,8 @@ getRunInfo()
     .header-actions {
       display: flex;
       gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
   }
   
@@ -715,7 +822,29 @@ getRunInfo()
         &.error .stat-dot { background: var(--el-color-warning); }
         &.skip .stat-dot { background: var(--el-color-info); }
         &.no-run .stat-dot { background: var(--el-text-color-disabled); }
+        &.all .stat-dot { background: var(--el-color-primary); }
+
+        &.stat-item--clickable {
+          cursor: pointer;
+          padding: 4px 8px;
+          border-radius: 6px;
+          transition: background 0.2s;
+
+          &:hover {
+            background: var(--el-fill-color);
+          }
+        }
+
+        &.stat-item--active {
+          background: var(--el-color-primary-light-9);
+          box-shadow: inset 0 0 0 1px var(--el-color-primary);
+        }
       }
+    }
+
+    .filter-bar {
+      margin-top: 12px;
+      text-align: center;
     }
   }
   

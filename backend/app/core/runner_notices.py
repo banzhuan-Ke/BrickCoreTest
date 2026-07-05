@@ -19,6 +19,7 @@ def build_runner_notices() -> dict[str, Any]:
             "打包版需完整解压：BrickCoreRunner.exe、_internal/、runner/、VERSION.txt 必须在同一目录",
             "运行库：MSVCP140.dll / VCRUNTIME140.dll（安装包已内置；若 greenlet DLL 报错请重新下载最新 zip）",
             "网络：测试机可访问平台 80 端口；MQ 25672、Redis 26379、MinIO 9200（按环境放行）",
+            "App 自动化（v1.4.0+）：本机安装 adb 并加入 PATH；Runner venv 需 uiautomator2；USB 连接 Android 真机并开启调试",
             "磁盘：安装包约 800MB；录制截图会临时占用 runner 缓存目录",
         ],
         "dev_mode_requirements": [
@@ -29,8 +30,9 @@ def build_runner_notices() -> dict[str, Any]:
         "recording_tips": [
             "录制时浏览器会蓝框高亮即将录制的元素；点击后顶部 3 秒内可点「撤销」",
             "顶栏图标按钮请点在文字或图标+文字整块上；常见词（设置/登录）优先选「区域链式」定位",
+            "表格行内操作（勾选/编辑）请点在目标行文字或复选框上，录制会优先生成行级 XPath",
             "建议业务页面为关键按钮添加 data-testid，录制会自动优先生成该定位",
-            "导入前查看步骤「质量」列：风险行可在定位下拉里切换备选；AI 优化会从候选中智能重选默认定位",
+            "导入前查看步骤「质量」列：风险行可在定位下拉里切换备选；AI 优化会从候选中智能重选，已锁定定位不会被改",
         ],
         "troubleshooting": [
             {
@@ -47,7 +49,7 @@ def build_runner_notices() -> dict[str, Any]:
             },
             {
                 "title": "录制定位不准 / 只有一种候选",
-                "detail": "升级至 v1.3.6+；AI 优化会从候选列表智能重选默认定位（如区域链式）；仍不准请手动切换下拉备选。",
+                "detail": "升级至 v1.4.0+：含 App 自动化（u2 + adb）；Web 录制定位升级见 v1.3.16 说明；仍不准请手动切换下拉备选。",
             },
             {
                 "title": "hover 步骤执行极慢（每次多等约 20 秒）",

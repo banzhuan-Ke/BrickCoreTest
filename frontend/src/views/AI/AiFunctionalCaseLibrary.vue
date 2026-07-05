@@ -3,7 +3,7 @@
     <template #title>
       <div class="page-head">
         <span>📚 功能测试用例库</span>
-        <span class="sub">所属产品与所属模块分开维护；禅道 ID 可手工回填；勾选后可生成 UI 自动化用例</span>
+        <span class="sub">所属产品与所属模块分开维护；禅道 ID 可手工回填；勾选后可生成 Web 自动化用例</span>
       </div>
     </template>
     <template #main>
@@ -133,6 +133,12 @@
           type="primary"
           @click="openToUiDialog"
         >AI 生成 UI ({{ selectedIds.length }})</el-button>
+        <el-button
+          v-if="canImportApp && selectedIds.length"
+          type="primary"
+          plain
+          @click="openToAppDialog"
+        >AI 生成 App ({{ selectedIds.length }})</el-button>
         <el-button
           v-if="canImportUi && selectedIds.length === 1"
           type="success"
@@ -265,13 +271,25 @@
           </el-table-column>
           <el-table-column
             v-else-if="col.key === 'ui_import_status'"
-            label="UI 自动化"
+            label="Web 自动化"
             :width="col.width"
             align="center"
           >
             <template #default="{ row }">
               <el-tag :type="uiTagType(row.ui_import_status)" size="small">
                 {{ UI_STATUS_LABELS[row.ui_import_status] || '未生成' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            v-else-if="col.key === 'app_import_status'"
+            label="App自动化"
+            :width="col.width"
+            align="center"
+          >
+            <template #default="{ row }">
+              <el-tag :type="uiTagType(row.app_import_status)" size="small">
+                {{ UI_STATUS_LABELS[row.app_import_status] || '未生成' }}
               </el-tag>
             </template>
           </el-table-column>
@@ -301,7 +319,7 @@
             :width="col.width"
           />
         </template>
-        <el-table-column label="操作" width="140" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
             <el-button
@@ -310,6 +328,12 @@
               type="success"
               @click="goUiCase(row.ui_case_id)"
             >UI 用例</el-button>
+            <el-button
+              v-if="row.app_case_id"
+              link
+              type="success"
+              @click="goAppCase(row.app_case_id)"
+            >App 用例</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -473,6 +497,14 @@
         :project-id="projectId()"
         @done="onToUiDone"
       />
+      <FunctionalCaseToAppDialog
+        v-if="projectId()"
+        v-model="toAppVisible"
+        :case-ids="selectedIds"
+        :cases="caseList"
+        :project-id="projectId()"
+        @done="onToAppDone"
+      />
       <FunctionalCaseRecordDialog
         v-if="projectId()"
         v-model="recordVisible"
@@ -491,6 +523,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import TableColumnPicker from '@/components/TableColumnPicker.vue'
 import FunctionalCaseToUiDialog from '@/views/AI/components/FunctionalCaseToUiDialog.vue'
+import FunctionalCaseToAppDialog from '@/views/AI/components/FunctionalCaseToAppDialog.vue'
 import FunctionalCaseRecordDialog from '@/views/AI/components/FunctionalCaseRecordDialog.vue'
 import { aiFunctionalCaseApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
@@ -529,8 +562,12 @@ const canExecute = computed(() => uStore.hasPermission('ai_test:execute'))
 const canImportUi = computed(
   () => uStore.hasPermission('ai_test:execute') && uStore.hasPermission('ui_case:edit')
 )
+const canImportApp = computed(
+  () => uStore.hasPermission('ai_test:execute') && uStore.hasPermission('app_case:edit')
+)
 
 const toUiVisible = ref(false)
+const toAppVisible = ref(false)
 const recordVisible = ref(false)
 const recordCase = ref(null)
 
@@ -929,6 +966,10 @@ const goUiCase = (id) => {
   router.push({ path: `/case/edit/${id}` })
 }
 
+const goAppCase = (id) => {
+  router.push({ name: 'appCaseEdit', params: { id } })
+}
+
 const goSourceRequirement = (row) => {
   if (!row.source_requirement_id) return
   router.push({
@@ -979,6 +1020,27 @@ const openToUiDialog = () => {
 }
 
 const onToUiDone = () => {
+  selectedIds.value = []
+  loadList()
+}
+
+const openToAppDialog = () => {
+  if (!projectId()) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  if (!selectedIds.value.length) {
+    ElMessage.warning('请先勾选功能用例')
+    return
+  }
+  if (selectedIds.value.length > 10) {
+    ElMessage.warning('单次最多 10 条，请减少勾选')
+    return
+  }
+  toAppVisible.value = true
+}
+
+const onToAppDone = () => {
   selectedIds.value = []
   loadList()
 }

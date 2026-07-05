@@ -7,7 +7,7 @@ Windows 桌面程序：登录 BrickCore 平台、选择环境、**上线**执行
 
 | 方式 | 说明 |
 |------|------|
-| **百度网盘（推荐）** | [BrickCoreRunner.zip](https://pan.baidu.com/s/1Nx2fkPAUi7htJKZAxp1paw?pwd=ye6b) · 提取码 `ye6b` |
+| **百度网盘（推荐）** | [BrickCoreRunner.zip](https://pan.baidu.com/s/1pObFpG-Mt7-Pxo58hklOlg?pwd=9gbi) · 提取码 `9gbi` |
 | **演示平台** | http://43.142.83.156/ → **UI 自动化 → 设备管理** → **网盘下载** |
 | **自建平台** | **系统管理 → 执行器发布** 配置网盘/OSS 链接 → 设备管理页下载 |
 
@@ -27,7 +27,7 @@ Windows 桌面程序：登录 BrickCore 平台、选择环境、**上线**执行
 | 项 | 说明 |
 |----|------|
 | 技术栈 | PySide6 桌面壳 + 调用平台 API |
-| 引擎源码 | 不在本 Git 仓库；请使用网盘 `BrickCoreRunner.zip` |
+| 引擎源码 | 请使用网盘 `BrickCoreRunner.zip` 安装包 |
 | 自行打包安装包 | 本仓库未包含引擎打包脚本 |
 
 从源码运行（仅调试 GUI，**仍需**单独准备 `runner/` 引擎目录）：

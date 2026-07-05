@@ -5,6 +5,7 @@ import json
 from typing import Any, Optional
 
 FAIL_STEP_STATUSES = frozenset({"fail", "failed", "error"})
+CASE_FAIL_STATUSES = FAIL_STEP_STATUSES
 
 
 def normalize_result_data(raw: Any) -> dict:
@@ -113,4 +114,92 @@ def extract_ui_case_failure_summary(result_data: Any) -> dict[str, Any]:
         "has_screenshot": bool(screenshot),
         "has_steps": bool(steps),
         "data_complete": bool(error_msg or failed_step or log_error_hint),
+    }
+
+
+def build_case_execution_hints(result_data: Any) -> dict[str, Any]:
+    """
+    从用例 result_data 提取编辑页用的失败高亮信息（Web / App 共用结构）。
+    """
+    rd = normalize_result_data(result_data)
+    summary = extract_ui_case_failure_summary(rd)
+    steps = rd.get("steps") or []
+    step_failures: list[dict[str, Any]] = []
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        status = str(step.get("status") or "").lower()
+        if status not in FAIL_STEP_STATUSES:
+            continue
+        step_index = step.get("step_index")
+        if step_index is None:
+            step_index = idx
+        try:
+            step_index = int(step_index)
+        except (TypeError, ValueError):
+            step_index = idx
+        message = str(
+            step.get("message")
+            or step.get("error")
+            or step.get("desc")
+            or step.get("keyword")
+            or ""
+        ).strip()
+        step_failures.append(
+            {
+                "step_index": step_index,
+                "status": status,
+                "keyword": step.get("keyword") or step.get("desc") or "",
+                "desc": step.get("desc") or "",
+                "message": message,
+            }
+        )
+
+    status = str(rd.get("status") or summary.get("status") or "").lower()
+    has_failure = status in CASE_FAIL_STATUSES or bool(step_failures)
+
+    if not step_failures and has_failure:
+        failed_idx_raw = summary.get("failed_step_index")
+        if failed_idx_raw is None:
+            failed_idx_raw = rd.get("failed_step_index")
+        nested_summary = rd.get("summary")
+        if failed_idx_raw is None and isinstance(nested_summary, dict):
+            failed_idx_raw = nested_summary.get("failed_step_index")
+        idx = -1
+        if failed_idx_raw is not None:
+            try:
+                raw = int(failed_idx_raw)
+            except (TypeError, ValueError):
+                raw = -1
+            if raw >= 1:
+                idx = raw - 1
+            elif raw >= 0:
+                idx = raw
+        if idx >= 0:
+            step = steps[idx] if idx < len(steps) else None
+            error_hint = summary.get("error_hint") or ""
+            if isinstance(nested_summary, dict):
+                error_hint = error_hint or str(nested_summary.get("error_hint") or "")
+            step_failures.append(
+                {
+                    "step_index": idx,
+                    "status": status or "fail",
+                    "keyword": (step or {}).get("keyword") or (step or {}).get("desc") or "",
+                    "desc": (step or {}).get("desc") or "",
+                    "message": (
+                        (step or {}).get("message")
+                        or (step or {}).get("error")
+                        or error_hint
+                        or ""
+                    ),
+                }
+            )
+
+    return {
+        "has_failure": has_failure,
+        "status": status,
+        "error_msg": summary.get("error_hint") or "",
+        "log_excerpt": summary.get("log_error_excerpt") or "",
+        "log_tail": summary.get("log_tail") or "",
+        "step_failures": step_failures,
     }

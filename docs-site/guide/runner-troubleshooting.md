@@ -57,6 +57,17 @@ cd E:\project2026\fastapi_ui_new\runner
 
 平台 `.env` 可设 `RUNNER_CLIENT_VERSION_MIN`。设备管理列表会标「需升级」。请下载与 `RUNNER_CLIENT_VERSION_LATEST` 一致的 zip（当前 **1.3.15**）。
 
+## 六、App adb（WiFi / 模拟器）
+
+| 现象 | 处理 |
+|------|------|
+| `adb pair` → `protocol fault` | PC 与手机不通（常见 **AP 隔离**）；改 **手机热点** 或 USB；`ping` 手机 IP |
+| WiFi 已 connect 但 Runner 无 App 能力 | `adb devices` 须为 `device` → 客户端 **下线再上线** |
+| 模拟器连不上 | MuMu 等：**设置 → ADB** 查端口 → `adb connect 127.0.0.1:端口` → `uiautomator2 init` |
+| 多台设备跑错机 | 只保留一台 `device`，或定时/执行时 **指定 Runner** |
+
+完整步骤见 [执行器安装指南 → App 自动化](runner-install-guide.md#二app-自动化仅-windows)。
+
 ## 七、相关文档
 
 - [执行器使用说明](runner-client.md)
