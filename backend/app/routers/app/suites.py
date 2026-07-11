@@ -2,10 +2,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from tortoise import transactions
 
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.catalog_utils import resolve_catalog
-from app.core.permissions import APP_SUITE_EDIT, APP_SUITE_VIEW
-from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.core.shared.catalog_utils import resolve_catalog
+from app.core.platform.permissions import APP_SUITE_EDIT, APP_SUITE_VIEW
+from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppCase, AppSuite, AppSuiteExecution, AppSuiteStep
 from app.models.sys import Project
 from app.schemas.app import (

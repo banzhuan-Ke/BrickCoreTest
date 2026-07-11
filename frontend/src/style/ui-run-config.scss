@@ -154,3 +154,10 @@
   justify-content: flex-end;
   gap: 10px;
 }
+
+.ui-run-act-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}

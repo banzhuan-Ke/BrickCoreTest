@@ -3,11 +3,11 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.app_fragment_refs import collect_fragment_references
-from app.core.app_step_expand import FragmentExpandError, expand_fragment_refs
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.permissions import APP_CASE_EDIT, APP_CASE_VIEW
-from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.modules.app.app_fragment_refs import collect_fragment_references
+from app.modules.app.app_step_expand import FragmentExpandError, expand_fragment_refs
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.core.platform.permissions import APP_CASE_EDIT, APP_CASE_VIEW
+from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppStepFragment
 from app.models.sys import Project
 from app.schemas.ai import StandardResponse

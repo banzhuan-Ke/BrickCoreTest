@@ -167,7 +167,6 @@ const EXPLICIT_RULES = [
   {
     pattern: /set_id\s*=\s*(\d+)/gi,
     pickId: (a) => a[1],
-    route: (id) => `#/ai-qa-eval?set_id=${id}`,
   },
   {
     pattern: /(?:App\s*用例|App用例)\s*[（(]?\s*id\s*=\s*(\d+)\s*[）)]?/gi,
@@ -233,11 +232,6 @@ const EXPLICIT_RULES = [
     pattern: /(?:数据源|数据工厂数据源)\s*[（(]?\s*id\s*=\s*(\d+)\s*[）)]?/gi,
     pickId: (a) => a[1],
     route: (id) => `#/api-data-factory?datasource_id=${id}`,
-  },
-  {
-    pattern: /(?:评测集|问答评测集)\s*[（(]?\s*id\s*=\s*(\d+)\s*[）)]?/gi,
-    pickId: (a) => a[1],
-    route: (id) => `#/ai-qa-eval?set_id=${id}`,
   },
   {
     pattern: /(?:接口执行记录)\s*[（(]?\s*id\s*=\s*(\d+)\s*[）)]?/gi,

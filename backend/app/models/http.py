@@ -9,7 +9,7 @@ class ApiDefinition(models.Model):
     catalog = fields.ForeignKeyField("models.TestCatalog", related_name="api_defs", null=True, description="所属目录")
     
     # 请求基本信息
-    protocol = fields.CharField(max_length=20, default="http", description="协议 http/websocket")
+    protocol = fields.CharField(max_length=20, default="http", description="协议 http/websocket/graphql/grpc")
     method = fields.CharField(max_length=10, description="请求方法")
     path = fields.CharField(max_length=500, description="接口路径")
     description = fields.TextField(null=True, description="接口描述")
@@ -23,6 +23,7 @@ class ApiDefinition(models.Model):
     body_type = fields.CharField(max_length=20, default="json", description="请求体类型")
     body_fields = fields.JSONField(default=list, description="form-data 字段")
     ws_config = fields.JSONField(default=dict, description="WebSocket 默认配置（steps 等）")
+    grpc_config = fields.JSONField(default=dict, description="gRPC 配置（service/method/full_method 等）")
     
     # 响应结构定义（支持从 Swagger/Postman 导入或手动维护）
     response_schema = fields.JSONField(default=dict, null=True, description="响应结构定义")

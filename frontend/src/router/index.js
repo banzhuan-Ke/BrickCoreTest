@@ -699,23 +699,6 @@ const routes = [
                 }
             },
             {
-                path: '/ai-qa-eval',
-                name: 'aiQaEval',
-                component: () => import('../views/AI/AiQaEval.vue'),
-                meta: {
-                    title: '问答准确性评测',
-                    icon: 'ChatLineRound',
-                    permission: 'ai_test:view'
-                },
-                beforeEnter: async (_to, _from, next) => {
-                    const { useCommunityEdition } = await import('@/composables/useCommunityEdition.js')
-                    const { loadCommunityEdition, isCommunityEdition } = useCommunityEdition()
-                    await loadCommunityEdition()
-                    if (isCommunityEdition.value) next('/ai-testing')
-                    else next()
-                }
-            },
-            {
                 path: '/browser-lab',
                 component: () => import('../views/AI/browserLab/BrowserLabLayout.vue'),
                 meta: { title: '智能浏览器', icon: 'Monitor', permission: 'ai_test:view' },
@@ -756,6 +739,11 @@ const routes = [
             {
                 path: '/ai-browser-lab',
                 redirect: '/browser-lab/run'
+            },
+            {
+                path: '/ai-knowledge/:pathMatch(.*)*',
+                component: () => import('../modules/knowledge/views/KnowledgeLayout.vue'),
+                meta: { title: '迭代资料库', icon: 'DocumentChecked', permission: 'ai_test:view' }
             },
             {
                 path: '/perf-scenes',

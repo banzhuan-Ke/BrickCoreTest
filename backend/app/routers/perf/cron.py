@@ -13,10 +13,10 @@ import pytz
 
 from app.models.perf import PerfScene, PerfRecord, PerfCronJob
 from app.models.sys import Environment
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import PERF_SCENE_EXECUTE
-from app.core import config as settings
-from app.core.scheduler_lock import with_scheduler_lock
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import PERF_SCENE_EXECUTE
+from app.core.platform import config as settings
+from app.core.infra.scheduler_lock import with_scheduler_lock
 
 # 配置APScheduler存储器
 job_stores = {

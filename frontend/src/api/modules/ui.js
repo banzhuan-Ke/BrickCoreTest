@@ -239,6 +239,43 @@ export const uiExecApi = {
     }
 }
 
+// ========== 交互调试 ==========
+export const uiDebugApi = {
+    async createSession(data) {
+        return await http.post('/ui/debug/sessions', data)
+    },
+    async getSession(sessionId) {
+        return await http.get(`/ui/debug/sessions/${sessionId}`)
+    },
+    async getActiveSession(params) {
+        return await http.get('/ui/debug/sessions/active', { params })
+    },
+    async runSteps(sessionId, data) {
+        return await http.post(`/ui/debug/sessions/${sessionId}/run`, data, { timeout: 120000 })
+    },
+    async resolveRunSegments(sessionId, data) {
+        return await http.post(`/ui/debug/sessions/${sessionId}/resolve-run-segments`, data)
+    },
+    async closeSession(sessionId) {
+        return await http.post(`/ui/debug/sessions/${sessionId}/close`)
+    },
+    async compareSteps(sessionId, data) {
+        return await http.post(`/ui/debug/sessions/${sessionId}/compare-steps`, data)
+    },
+    async syncSteps(sessionId, data) {
+        return await http.post(`/ui/debug/sessions/${sessionId}/sync-steps`, data, { timeout: 120000 })
+    },
+    async highlightStep(sessionId, data) {
+        return await http.post(`/ui/debug/sessions/${sessionId}/highlight`, data, { timeout: 60000 })
+    },
+    async verifyLocator(sessionId, data) {
+        return await http.post(`/ui/debug/sessions/${sessionId}/verify-locator`, data, { timeout: 60000 })
+    },
+    async setPickMode(sessionId, data) {
+        return await http.post(`/ui/debug/sessions/${sessionId}/pick-mode`, data, { timeout: 60000 })
+    },
+}
+
 // ========== 执行记录 ==========
 export const uiRecordApi = {
     // 获取任务执行记录

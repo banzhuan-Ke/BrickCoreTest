@@ -31,7 +31,7 @@ class GlobalHeaderPolicy(BaseModel):
 class ApiDefinitionBase(BaseModel):
     """接口定义基础模型"""
     name: str = Field(..., max_length=100, description="接口名称")
-    protocol: str = Field(default="http", description="协议 http/websocket")
+    protocol: str = Field(default="http", description="协议 http/websocket/graphql/grpc")
     method: str = Field(..., description="请求方法 GET/POST/PUT/DELETE/PATCH/WS")
     path: str = Field(..., max_length=500, description="接口路径")
     description: Optional[str] = Field(None, description="接口描述")
@@ -43,12 +43,13 @@ class ApiDefinitionBase(BaseModel):
     body_type: str = Field(default="json", description="请求体类型 json/form/xml/raw")
     body_fields: List[Dict[str, Any]] = Field(default=[], description="form-data 字段")
     ws_config: Dict[str, Any] = Field(default_factory=dict, description="WebSocket 默认配置")
+    grpc_config: Dict[str, Any] = Field(default_factory=dict, description="gRPC 配置")
     response_schema: Optional[Dict[str, Any]] = Field(default=None, description="响应结构定义")
 
-    @field_validator("global_header_policy", "headers", "params", "body_fields", "ws_config", mode="before")
+    @field_validator("global_header_policy", "headers", "params", "body_fields", "ws_config", "grpc_config", mode="before")
     @classmethod
     def coerce_json_list_or_dict(cls, v, info):
-        if info.field_name in ("global_header_policy", "ws_config"):
+        if info.field_name in ("global_header_policy", "ws_config", "grpc_config"):
             return v if isinstance(v, dict) else {}
         return v if isinstance(v, list) else []
 

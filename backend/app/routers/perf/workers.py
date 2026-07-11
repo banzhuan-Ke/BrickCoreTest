@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from tortoise.transactions import in_transaction
 
 from app.models.perf import PerfWorker, PerfRecord
-from app.core.perf_trace import append_request_detail
+from app.modules.perf.perf_trace import append_request_detail
 from app.routers.perf.perf_state import _running_progress
 from app.routers.perf.progress_utils import compute_running_progress
 from app.routers.perf.case_agg_utils import (
@@ -590,7 +590,7 @@ def _merge_worker_final_into_record(record: PerfRecord, data: WorkerFinalReport)
             append_request_detail(existing_details, detail)
         record.request_details = existing_details
     if data.phase_metrics or data.request_details:
-        from app.core.stream_phase import aggregate_phase_metrics, extract_stream_detail, normalize_stream_profile
+        from app.modules.stream_phase import aggregate_phase_metrics, extract_stream_detail, normalize_stream_profile
         normalized = [extract_stream_detail(d) for d in (record.request_details or [])]
         record.request_details = normalized
         profile = normalize_stream_profile(record.config_snapshot or {})

@@ -72,6 +72,8 @@
             <el-table-column label="请求方法" width="90">
               <template #default="{ row }">
                 <el-tag v-if="row.protocol === 'websocket'" type="warning" size="small">WS</el-tag>
+                <el-tag v-else-if="row.protocol === 'graphql'" type="success" size="small">GQL</el-tag>
+                <el-tag v-else-if="row.protocol === 'grpc'" type="danger" size="small">RPC</el-tag>
                 <el-tag v-else :type="getMethodType(row.method)" size="small">{{ row.method }}</el-tag>
               </template>
             </el-table-column>

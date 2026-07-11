@@ -25,16 +25,3 @@ def is_community_edition() -> bool:
     return not (_repo_root() / "runner" / "WebEngine").is_dir()
 
 
-QA_EVAL_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "list_qa_eval_sets",
-        "get_qa_eval_run",
-        "preview_run_qa_eval",
-        "confirm_run_qa_eval",
-    }
-)
-
-
-def qa_eval_feature_enabled() -> bool:
-    """问答准确性评测能力开关。"""
-    return not is_community_edition()

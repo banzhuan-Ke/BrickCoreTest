@@ -4,9 +4,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.core.auth import get_current_username, require_permissions
-from app.core.header_template_validate import normalize_template_headers
-from app.core.permissions import API_MANAGE_EDIT, API_MANAGE_VIEW
+from app.core.platform.auth import get_current_username, require_permissions
+from app.core.shared.header_template_validate import normalize_template_headers
+from app.core.platform.permissions import API_MANAGE_EDIT, API_MANAGE_VIEW
 from app.models.http import HeaderTemplate
 from app.models.sys import Project
 from app.schemas.ai import StandardResponse

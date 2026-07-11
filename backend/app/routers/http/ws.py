@@ -1,12 +1,12 @@
 """WebSocket 接口调试路由"""
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import API_MANAGE_EDIT
-from app.core.variable_resolver import VariableResolver
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import API_MANAGE_EDIT
+from app.core.case.variable_resolver import VariableResolver
 from app.models.sys import Environment
 from app.schemas.http import WsDebugRequest, WsDebugResponse
-from app.core.ws_executor import (
+from app.modules.http.ws_executor import (
     build_ws_response_body,
     ensure_ws_url,
     execute_ws_steps,
@@ -26,8 +26,8 @@ router = APIRouter(tags=["接口自动化"], dependencies=[Depends(is_authentica
 )
 async def debug_ws(item: WsDebugRequest, username: str = Depends(get_current_username)):
     """在线调试 WebSocket：连接 → 发送/接收 → 断言"""
-    from app.core.header_merge import merge_request_headers
-    from app.core.data_tools.tag_service import merge_execution_variables
+    from app.core.shared.header_merge import merge_request_headers
+    from app.modules.data_tools.tag_service import merge_execution_variables
 
     variables = dict(item.variables or {})
     project_id = item.project_id

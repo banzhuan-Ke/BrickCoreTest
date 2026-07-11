@@ -8,12 +8,12 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 
-from app.core.auth import get_current_username, require_permissions
-from app.core.config import UI_TEST_FILE_BUCKET, UI_TEST_FILE_MAX_BYTES
-from app.core.minio_client import is_minio_storage, minio_client
-from app.core.test_file_service import get_test_file_download_url, get_test_file_preview_payload
-from app.core.permissions import UI_CASE_EDIT, UI_CASE_VIEW
-from app.core.ui_test_file_refs import (
+from app.core.platform.auth import get_current_username, require_permissions
+from app.core.platform.config import UI_TEST_FILE_BUCKET, UI_TEST_FILE_MAX_BYTES
+from app.core.infra.minio_client import is_minio_storage, minio_client
+from app.core.shared.test_file_service import get_test_file_download_url, get_test_file_preview_payload
+from app.core.platform.permissions import UI_CASE_EDIT, UI_CASE_VIEW
+from app.modules.ui.ui_test_file_refs import (
     build_file_reference_map,
     collect_file_references,
     scan_legacy_upload_steps,

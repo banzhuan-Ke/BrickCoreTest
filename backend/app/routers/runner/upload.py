@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.core.auth import verify_runner_or_internal
-from app.core.minio_client import is_minio_storage, minio_client
+from app.core.platform.auth import verify_runner_or_internal
+from app.core.infra.minio_client import is_minio_storage, minio_client
 from app.schemas.runner import RunnerUploadPresignRequest, RunnerUploadPresignResponse
 
 router = APIRouter(prefix="/runner", tags=["Runner 客户端"])

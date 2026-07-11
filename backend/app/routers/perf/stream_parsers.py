@@ -4,10 +4,10 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from app.core.auth import require_permissions
-from app.core.permissions import PERF_SCENE_VIEW, PERF_SCENE_EDIT
-from app.core.stream_phase.registry import list_parsers, get_parser_preset, parse_stream_lines
-from app.core.stream_phase.parsers.rule_based import DEFAULT_RULES
+from app.core.platform.auth import require_permissions
+from app.core.platform.permissions import PERF_SCENE_VIEW, PERF_SCENE_EDIT
+from app.modules.stream_phase.registry import list_parsers, get_parser_preset, parse_stream_lines
+from app.modules.stream_phase.parsers.rule_based import DEFAULT_RULES
 
 router = APIRouter(prefix="/stream-parsers", tags=["流式阶段解析器"])
 

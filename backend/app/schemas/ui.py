@@ -233,7 +233,11 @@ class RunForm(BaseModel):
     username: str = Field(description="创建人")
     ai_heal_enabled: Optional[bool] = Field(
         default=None,
-        description="本次执行是否启用 AI 定位器自愈；不传则使用 Runner 环境默认",
+        description="本次执行是否启用 AI 定位器自愈；不传则使用项目默认",
+    )
+    ai_act_enabled: Optional[bool] = Field(
+        default=None,
+        description="本次执行是否启用 AI Act 兜底（自愈失败后再调 LLM）；不传则使用项目默认",
     )
     trigger_source: Optional[str] = Field(
         default=None,
@@ -245,6 +249,52 @@ class CaseDebugForm(RunForm):
     """用例步骤级调试：执行 steps[0:through_index+1] 后停止"""
     steps: list = Field(description="当前编辑器步骤（可未保存）")
     through_index: int = Field(ge=0, description="调试到此步（含该步，0-based）")
+
+
+class DebugSessionCreateForm(BaseModel):
+    """创建 UI 交互调试会话（手动就位，从指定步试跑）"""
+    case_id: int = Field(description="用例 ID")
+    env_id: int = Field(description="环境 ID")
+    browser_type: str = Field(default="chromium", description="浏览器类型")
+    config: bool = Field(default=False, description="True=无头；交互调试请保持 False")
+    device_id: str = Field(description="Runner 设备 ID")
+    steps: list = Field(default_factory=list, description="当前编辑器步骤（可未保存）")
+    username: Optional[str] = Field(default=None, description="创建人（可选，默认取当前登录用户）")
+    auto_navigate: bool = Field(default=True, description="打开浏览器后自动导航到环境地址或首步 open_url")
+    ai_heal_enabled: Optional[bool] = Field(default=None, description="是否启用 AI 定位器自愈")
+    ai_act_enabled: Optional[bool] = Field(default=None, description="是否启用 AI Act")
+
+
+class DebugSessionSyncForm(BaseModel):
+    """同步编辑器步骤到调试会话"""
+    steps: list = Field(default_factory=list, description="当前编辑器步骤（可未保存）")
+
+
+class DebugSessionCompareForm(BaseModel):
+    """比对编辑器步骤与会话快照是否一致"""
+    steps: list = Field(default_factory=list, description="当前编辑器步骤（可未保存）")
+
+
+class DebugSessionRunForm(BaseModel):
+    """在已打开的调试会话中执行指定步骤区间"""
+    from_index: int = Field(ge=0, description="起始步骤下标（0-based，会话展开后步骤）")
+    through_index: Optional[int] = Field(default=None, ge=0, description="结束步骤下标（含）；默认等于 from_index")
+
+
+class DebugSessionResolveRunForm(BaseModel):
+    """将编辑器勾选的步骤解析为会话侧执行区间"""
+    steps: list = Field(default_factory=list, description="当前编辑器步骤（可未保存）")
+    editor_indices: list[int] = Field(default_factory=list, description="编辑器步骤下标（0-based）")
+
+
+class DebugSessionStepActionForm(BaseModel):
+    """对指定步骤执行定位器相关操作"""
+    step_index: int = Field(ge=0, description="步骤下标（0-based）")
+
+
+class DebugSessionPickModeForm(BaseModel):
+    """开启/关闭元素拾取模式"""
+    enabled: bool = Field(default=True, description="True=进入拾取；False=退出")
 
 
 class SuiteResultSchemas(BaseModel):

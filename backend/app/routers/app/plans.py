@@ -1,10 +1,10 @@
 """App 计划 CRUD"""
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.catalog_utils import resolve_catalog
-from app.core.permissions import APP_PLAN_EDIT, APP_PLAN_VIEW
-from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.core.shared.catalog_utils import resolve_catalog
+from app.core.platform.permissions import APP_PLAN_EDIT, APP_PLAN_VIEW
+from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppPlan, AppPlanExecution, AppSuite
 from app.models.sys import Project
 from app.schemas.app import AddAppPlanForm, AppPlanSchemas, UpdateAppPlanForm, UpdateAppPlanSuitesForm

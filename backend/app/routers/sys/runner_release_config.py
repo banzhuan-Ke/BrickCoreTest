@@ -1,9 +1,9 @@
 """执行器安装包发布配置（网盘外链等）"""
 from fastapi import APIRouter, Depends
 
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.permissions import DEVICE_EDIT
-from app.core.runner_release_config_service import (
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.core.platform.permissions import DEVICE_EDIT
+from app.core.runner.runner_release_config_service import (
     get_runner_release_config_for_admin,
     save_runner_release_config,
 )

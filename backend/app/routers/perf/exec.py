@@ -14,9 +14,9 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from app.models.perf import PerfScene, PerfRecord, PerfWorker
 from app.models.http import ApiTestCase
 from app.models.sys import Environment, Project
-from app.core.auth import require_permissions, get_current_username
-from app.core.permissions import PERF_SCENE_EXECUTE
-from app.core.notification import NotificationService
+from app.core.platform.auth import require_permissions, get_current_username
+from app.core.platform.permissions import PERF_SCENE_EXECUTE
+from app.core.ops.notification import NotificationService
 from app.routers.http.utils import (
     replace_variables_with_detail,
     evaluate_assertion,
@@ -24,12 +24,12 @@ from app.routers.http.utils import (
     prepare_httpx_headers,
     extract_variables,
 )
-from app.core.variable_resolver import VariableResolver
+from app.core.case.variable_resolver import VariableResolver
 from app.routers.perf.report_utils import build_rt_histogram
 from app.routers.perf.perf_state import _running_records, _running_progress
 from app.routers.perf.progress_utils import normalize_distribution_mode
-from app.core.stream_phase.engine import is_stream_queue_result
-from app.core.stream_phase import (
+from app.modules.stream_phase.engine import is_stream_queue_result
+from app.modules.stream_phase import (
     aggregate_phase_metrics,
     execute_stream_request,
     stream_result_to_perf_queue_item,
@@ -41,7 +41,7 @@ from app.core.stream_phase import (
     has_stream_profile_config,
     STREAM_BURST_MODE,
 )
-from app.core.perf_journey import (
+from app.modules.perf.perf_journey import (
     JOURNEY_FIXED_MODE,
     JOURNEY_LOOP_MODE,
     is_journey_mode,
@@ -53,7 +53,7 @@ from app.core.perf_journey import (
     JourneyStatsCollector,
     run_one_journey,
 )
-from app.core.perf_trace import (
+from app.modules.perf.perf_trace import (
     attach_trace_meta,
     build_trace_meta,
     collect_result_diagnostics,
@@ -223,15 +223,15 @@ async def build_perf_request(
     if not api:
         raise ValueError(f"用例 {case.id} 关联接口不存在")
 
-    from app.core.data_tools.tag_service import merge_execution_variables
-    from app.core.data_tools.inline_tools import ensure_dt_cache
+    from app.modules.data_tools.tag_service import merge_execution_variables
+    from app.modules.data_tools.inline_tools import ensure_dt_cache
 
     all_variables = ensure_dt_cache(await merge_execution_variables(case.project_id, env.id))
     if session_variables:
-        from app.core.global_vars_validate import flatten_global_vars
+        from app.core.shared.global_vars_validate import flatten_global_vars
         all_variables = {**all_variables, **flatten_global_vars(session_variables)}
 
-    from app.core.header_merge import merge_request_headers
+    from app.core.shared.header_merge import merge_request_headers
 
     headers = merge_request_headers(
         api_headers=api.headers,
@@ -1844,8 +1844,8 @@ async def run_perf_scene(record_id: int, use_workers: bool = False):
         await record.save()
         return
 
-    from app.core.data_tools.tag_service import merge_execution_variables
-    from app.core.data_tools.inline_tools import ensure_dt_cache
+    from app.modules.data_tools.tag_service import merge_execution_variables
+    from app.modules.data_tools.inline_tools import ensure_dt_cache
 
     project = await Project.get_or_none(id=scene.project_id, is_del=False)
     project_global_vars = (project.global_vars or {}) if project else {}
@@ -1902,7 +1902,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = False):
     config["distribution_mode"] = normalize_distribution_mode(config.get("distribution_mode"))
 
     # 构建带断言和 api 信息的 scene_items（供 Worker 使用，不修改快照）
-    from app.core.header_merge import merge_request_headers
+    from app.core.shared.header_merge import merge_request_headers
 
     scene_items_for_worker = []
     for item in scene_items:

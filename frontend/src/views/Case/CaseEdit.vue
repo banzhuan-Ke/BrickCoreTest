@@ -137,7 +137,19 @@
           <el-button type="success" @click="recordDialogVisible = true" icon="VideoCamera">🎬 AI 录制步骤</el-button>
           <el-button type="warning" plain @click="openOptimizeDialog" icon="MagicStick">✨ AI 优化步骤</el-button>
           <el-button type="primary" plain @click="fragmentPickerVisible = true" icon="Collection">插入片段</el-button>
+          <el-button type="success" plain @click="openInteractiveDebug" icon="Monitor">交互调试</el-button>
         </div>
+
+        <UiInteractiveDebugPanel
+          ref="debugPanelRef"
+          :case-id="caseId"
+          :steps="caseInfo.steps"
+          :selected-step-index="selectedStepIndex"
+          @session-change="interactiveSession = $event"
+          @debug-hints-change="debugExecutionHints = $event"
+          @focus-step="onDebugSelectStep"
+          @apply-locator="applyDebugLocator"
+        />
 
         <!-- 步骤编辑器 -->
         <div class="steps-section">
@@ -145,7 +157,16 @@
             <span>执行步骤</span>
             <el-text type="info" size="small">编辑步骤时在弹窗内插入变量/工具/标签；参数支持 <code v-pre>${{变量名}}</code>、<code v-pre>${{df:标签名}}</code>、<code v-pre>${{dt:md5|text=@a}}</code></el-text>
           </div>
-          <StepEditor v-model:steps="caseInfo.steps" :execution-hints="executionHints" @debug-step="openDebugDialog" />
+          <StepEditor
+            v-model:steps="caseInfo.steps"
+            :execution-hints="executionHints"
+            :debug-execution-hints="debugExecutionHints"
+            :debug-selected-index="selectedStepIndex"
+            :debug-selected-indices="debugHighlightIndices"
+            @debug-step="openDebugDialog"
+            @debug-select-step="onDebugSelectStep"
+            @debug-selected-steps="onDebugSelectedSteps"
+          />
         </div>
 
         <CaseDebugDialog
@@ -193,7 +214,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, onMounted, computed, provide, watch } from 'vue'
+import { reactive, ref, onMounted, computed, provide, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueDraggable } from 'vue-draggable-plus'
 import { StepEditor } from '@/components/StepEditor'
@@ -201,6 +222,7 @@ import UiCaseGenerator from '@/views/AI/components/UiCaseGenerator.vue'
 import UiCaseRecorder from '@/views/AI/components/UiCaseRecorder.vue'
 import UiCaseStepOptimizeDialog from '@/views/AI/components/UiCaseStepOptimizeDialog.vue'
 import CaseDebugDialog from '@/components/CaseDebugDialog.vue'
+import UiInteractiveDebugPanel from '@/components/UiInteractiveDebugPanel.vue'
 import CaseUsedVarsPanel from '@/components/CaseUsedVarsPanel.vue'
 import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
 import { UserStore } from '@/stores/module/UserStore'
@@ -208,11 +230,13 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import { resolveCaseDescriptionForContext, extractOpenUrlFromSteps, normalizeRecorderApplyPayload } from '@/utils/caseDescription.js'
 import http from '@/api/index'
-import { ElNotification, ElMessage } from 'element-plus'
+import { ElNotification, ElMessage, ElMessageBox } from 'element-plus'
 import dateTools from '@/tools/dateTools'
 import ActionGroup from '@/datas/ActionGroup.js'
 import { cloneKeywordForDrag } from '@/utils/stepHelper'
+import { applyWebLocatorToStep } from '@/utils/debugLocator.js'
 import { parseExecutionIdQuery } from '@/utils/caseExecutionHints'
+import { formatDebugStepRange } from '@/utils/debugSession.js'
 import {
   Rank, Check, Close,
   ChromeFilled, Position, Mouse,
@@ -229,7 +253,29 @@ const router = useRouter()
 const userStore = UserStore()
 const proStore = ProjectStore()
 const varInsertEnvId = ref(proStore.envList[0]?.id || null)
+const debugPanelRef = ref(null)
+const selectedStepIndex = ref(0)
+const debugHighlightIndices = ref([])
+const pendingDebugIndices = ref(null)
+const interactiveSession = ref(null)
 provide('varInsertEnvId', varInsertEnvId)
+provide('interactiveDebugSession', interactiveSession)
+provide('runInteractiveDebugStep', (index) => {
+  selectedStepIndex.value = index
+  debugPanelRef.value?.runStepAt(index, false)
+})
+
+watch(interactiveSession, async (sess, prev) => {
+  const pending = pendingDebugIndices.value
+  if (!pending?.length) return
+  if (sess?.status !== 'ready') return
+  if (prev?.status === 'ready' && sess?.id === prev?.id) return
+  pendingDebugIndices.value = null
+  debugHighlightIndices.value = pending
+  selectedStepIndex.value = pending[0]
+  await nextTick()
+  await debugPanelRef.value?.runSelectedSteps(pending)
+})
 const fragmentPickerVisible = ref(false)
 
 const caseId = route.params.id
@@ -240,6 +286,7 @@ const recordDialogVisible = ref(false)
 const optimizeDialogVisible = ref(false)
 const debugDialogVisible = ref(false)
 const debugThroughIndex = ref(0)
+const debugExecutionHints = ref(null)
 const executionHints = ref(null)
 const hintsExpanded = ref([])
 
@@ -409,13 +456,103 @@ function handleOptimizeApply(steps) {
   ElNotification.success(`已应用 AI 优化后的 ${steps.length} 个步骤，请核对用例描述与步骤后保存`)
 }
 
-function openDebugDialog(index) {
+async function openDebugDialog(index) {
   if (!caseInfo.steps?.length) {
     ElNotification.warning('请先添加步骤')
     return
   }
-  debugThroughIndex.value = index
-  debugDialogVisible.value = true
+  onDebugSelectStep(index)
+
+  const sess = interactiveSession.value
+  if (sess?.status === 'ready') {
+    await debugPanelRef.value?.runFromStartThrough(index)
+    return
+  }
+  if (sess && ['starting', 'running', 'closing'].includes(sess.status)) {
+    ElMessage.warning('交互调试会话尚未就绪，请稍候')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      '推荐使用「交互调试」：浏览器保持打开，可手动操作页面后从第 1 步试跑到目标步。',
+      `调试至第 ${index + 1} 步`,
+      {
+        confirmButtonText: '打开交互调试',
+        cancelButtonText: '旧版一次性调试',
+        distinguishCancelAndClose: true,
+        type: 'info',
+      },
+    )
+    debugPanelRef.value?.showOpenDialog()
+  } catch (action) {
+    if (action === 'cancel') {
+      debugThroughIndex.value = index
+      debugDialogVisible.value = true
+    }
+  }
+}
+
+function onDebugSelectStep(index) {
+  selectedStepIndex.value = index
+  debugHighlightIndices.value = [index]
+}
+
+async function onDebugSelectedSteps(indices) {
+  if (!caseInfo.steps?.length || !indices?.length) return
+  const sorted = [...indices].sort((a, b) => a - b)
+  debugHighlightIndices.value = sorted
+  selectedStepIndex.value = sorted[0]
+
+  const sess = interactiveSession.value
+  if (sess?.status === 'ready') {
+    await debugPanelRef.value?.runSelectedSteps(sorted)
+    return
+  }
+  if (sess?.status === 'starting') {
+    pendingDebugIndices.value = sorted
+    ElMessage.info('调试会话启动中，就绪后将自动执行所选步骤')
+    return
+  }
+  if (sess && ['running', 'closing'].includes(sess.status)) {
+    ElMessage.warning('交互调试会话尚未就绪，请稍候')
+    return
+  }
+
+  const rangeText = formatDebugStepRange(sorted)
+  try {
+    await ElMessageBox.confirm(
+      `将执行 ${rangeText}（共 ${sorted.length} 步）。请先打开「交互调试」，浏览器保持打开后可反复试跑。`,
+      '多步调试',
+      {
+        confirmButtonText: '打开交互调试',
+        cancelButtonText: '取消',
+        type: 'info',
+      },
+    )
+    pendingDebugIndices.value = sorted
+    debugPanelRef.value?.showOpenDialog()
+  } catch {
+    pendingDebugIndices.value = null
+  }
+}
+
+function applyDebugLocator(payload) {
+  const { steps, updated } = applyWebLocatorToStep(caseInfo.steps, payload.stepIndex, payload)
+  if (!updated) {
+    ElMessage.warning('未能回填定位器')
+    return
+  }
+  caseInfo.steps = steps
+  ElNotification.success(`步骤 ${payload.stepIndex + 1} 定位器已更新（请保存用例）`)
+}
+
+function openInteractiveDebug() {
+  if (!caseInfo.steps?.length) {
+    ElNotification.warning('请先添加步骤')
+    return
+  }
+  debugPanelRef.value?.showOpenDialog()
 }
 
 onMounted(async () => {

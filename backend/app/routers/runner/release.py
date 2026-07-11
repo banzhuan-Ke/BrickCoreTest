@@ -4,13 +4,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
-from app.core.auth import is_authenticated_from_header_or_query
-from app.core.runner_release import (
+from app.core.platform.auth import is_authenticated_from_header_or_query
+from app.core.runner.runner_release import (
     PACKAGE_FILENAME,
     build_client_release_info,
     runner_package_path,
 )
-from app.core.runner_release_config_service import enrich_release_info
+from app.core.runner.runner_release_config_service import enrich_release_info
 from app.schemas.runner import RunnerVersionResponse
 
 router = APIRouter(prefix="/runner", tags=["Runner 客户端"])

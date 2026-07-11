@@ -43,6 +43,11 @@
         </div>
       </div>
 
+      <KnowledgeRefSelector
+        v-model="knowledgeRefs"
+        hint="可选：引用 Bug 导出、测试计划等资料，辅助分析失败根因"
+      />
+
       <el-alert
         v-if="result?.vision_used"
         type="success"
@@ -124,6 +129,7 @@ import { ElMessage } from 'element-plus'
 import { aiAnalyzeApi, aiConfigApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+import KnowledgeRefSelector from '@/modules/knowledge/components/KnowledgeRefSelector.vue'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -142,6 +148,7 @@ const parseFailed = ref(false)
 const textConfigId = ref(null)
 const visionConfigId = ref(null)
 const configList = ref([])
+const knowledgeRefs = ref({ folder_ids: [], document_ids: [] })
 
 const visible = computed({
   get: () => props.modelValue,
@@ -198,6 +205,16 @@ const loadCached = async () => {
   return false
 }
 
+const knowledgePayload = () => {
+  const folderIds = (knowledgeRefs.value?.folder_ids || []).filter(Boolean)
+  const docIds = (knowledgeRefs.value?.document_ids || []).filter(Boolean)
+  if (!folderIds.length && !docIds.length) return {}
+  return {
+    knowledge_folder_ids: folderIds.length ? folderIds : undefined,
+    knowledge_document_ids: docIds.length ? docIds : undefined
+  }
+}
+
 const runAnalyze = async (force = false) => {
   if (!uStore.hasPermission('ai_test:execute')) {
     ElMessage.warning('无 AI 分析权限（需要 ai_test:execute）')
@@ -216,7 +233,8 @@ const runAnalyze = async (force = false) => {
         target_id: props.targetId,
         ai_config_id: textConfigId.value || undefined,
         vision_config_id: visionConfigId.value || undefined,
-        force_refresh: force
+        force_refresh: force,
+        ...knowledgePayload()
       },
       projectId.value
     )
@@ -257,6 +275,7 @@ const copyResult = async () => {
 const handleClosed = () => {
   result.value = null
   parseFailed.value = false
+  knowledgeRefs.value = { folder_ids: [], document_ids: [] }
 }
 
 watch(
@@ -274,6 +293,9 @@ watch(
 <style scoped>
 .failure-analyzer {
   min-height: 200px;
+}
+.knowledge-ref-selector {
+  margin-bottom: 12px;
 }
 .toolbar {
   margin-bottom: 16px;

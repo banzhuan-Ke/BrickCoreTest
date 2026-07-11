@@ -456,6 +456,10 @@ const lastOptimizeStats = reactive({
   locators_ai_picked: 0,
   locators_rule_picked: 0,
   risk_steps_count: 0,
+  llm_applied: true,
+  fallback_reason: '',
+  meta_patched: 0,
+  source_traced: 0,
 })
 
 const riskStepsCount = computed(() => {
@@ -490,22 +494,53 @@ function normalizeDescKey(desc) {
   return (desc || '').replace(/['"「」\s]/g, '')
 }
 
+function buildOriginalMetaMaps(originalSteps) {
+  const byKey = new Map()
+  const byIndex = new Map()
+  originalSteps.forEach((s, idx) => {
+    const meta = s.meta || {}
+    byKey.set(`${s.method}|${normalizeDescKey(s.desc)}`, meta)
+    byKey.set(`${s.method}|${s.params?.locator || ''}`, meta)
+    byKey.set(`${s.method}|${s.params?.url || ''}`, meta)
+    byIndex.set(idx + 1, meta)
+    const recIdx = meta.rec_step_index
+    if (recIdx) byIndex.set(recIdx, meta)
+  })
+  return { byKey, byIndex }
+}
+
+function restoreMetaForStep(step, maps) {
+  const sourceIds = step.meta?.source_step_ids
+    || (Array.isArray(step.source_step_ids) ? step.source_step_ids : null)
+  if (Array.isArray(sourceIds) && sourceIds.length) {
+    const merged = {}
+    const cands = []
+    sourceIds.forEach((id) => {
+      const m = maps.byIndex.get(Number(id))
+      if (!m) return
+      Object.assign(merged, m)
+      ;(m.candidates || []).forEach((c) => { if (c && !cands.includes(c)) cands.push(c) })
+    })
+    if (cands.length) merged.candidates = cands
+    if (Object.keys(merged).length) return merged
+  }
+  return (
+    maps.byKey.get(`${step.method}|${normalizeDescKey(step.desc)}`) ||
+    maps.byKey.get(`${step.method}|${step.params?.locator || ''}`) ||
+    maps.byKey.get(`${step.method}|${step.params?.url || ''}`) ||
+    null
+  )
+}
+
 function handleRestoreMetaFromOriginal() {
   if (!steps.value.length || !optimizedSteps.value.length) {
     ElMessage.warning('无原始步骤可恢复')
     return
   }
-  const origMap = new Map()
-  steps.value.forEach(s => {
-    const key = `${s.method}|${normalizeDescKey(s.desc)}`
-    origMap.set(key, s.meta || {})
-    origMap.set(`${s.method}|${s.params?.locator || ''}`, s.meta || {})
-  })
+  const maps = buildOriginalMetaMaps(steps.value)
   let count = 0
   optimizedSteps.value.forEach(s => {
-    const meta =
-      origMap.get(`${s.method}|${normalizeDescKey(s.desc)}`) ||
-      origMap.get(`${s.method}|${s.params?.locator || ''}`)
+    const meta = restoreMetaForStep(s, maps)
     if (meta && Object.keys(meta).length) {
       s.meta = JSON.parse(JSON.stringify(meta))
       count++
@@ -747,22 +782,40 @@ const handleOptimize = async () => {
       lastOptimizeStats.locators_ai_picked = d.locators_ai_picked || 0
       lastOptimizeStats.locators_rule_picked = d.locators_rule_picked || 0
       lastOptimizeStats.risk_steps_count = d.risk_steps_count || 0
+      lastOptimizeStats.llm_applied = d.llm_applied !== false
+      lastOptimizeStats.fallback_reason = d.fallback_reason || ''
+      lastOptimizeStats.meta_patched = d.meta_patched || 0
+      lastOptimizeStats.source_traced = d.source_traced || 0
       optimizedStepParamsJson.value = optimizedSteps.value.map(s => {
         const { locator, ...rest } = s.params || {}
         return JSON.stringify(rest, null, 2)
       })
       stepVersion.value = 'optimized'
-      const parts = ['AI 优化完成']
-      if (lastOptimizeStats.trimmed_count) parts.push(`精简 ${lastOptimizeStats.trimmed_count} 步`)
-      if (lastOptimizeStats.assertions_count) parts.push(`断言 ${lastOptimizeStats.assertions_count} 条`)
-      if (lastOptimizeStats.locators_picked) {
-        const pickParts = []
-        if (lastOptimizeStats.locators_ai_picked) pickParts.push(`AI 选 ${lastOptimizeStats.locators_ai_picked}`)
-        if (lastOptimizeStats.locators_rule_picked) pickParts.push(`规则优选 ${lastOptimizeStats.locators_rule_picked}`)
-        parts.push(`定位${pickParts.length ? pickParts.join('、') : `优选 ${lastOptimizeStats.locators_picked}`}`)
+      if (!lastOptimizeStats.llm_applied || lastOptimizeStats.fallback_reason) {
+        ElMessage.warning(
+          lastOptimizeStats.fallback_reason
+            ? `AI 优化未完全生效（${lastOptimizeStats.fallback_reason}），已保留原始步骤结构，请核对`
+            : 'AI 优化未生效，已保留原始步骤，请核对或重试'
+        )
+      } else if (d.no_change) {
+        ElMessage.info('AI 已完成描述优化，操作步骤与参数基本未变，请重点核对描述与断言')
+      } else {
+        const parts = ['AI 优化完成']
+        if (lastOptimizeStats.trimmed_count) parts.push(`精简 ${lastOptimizeStats.trimmed_count} 步`)
+        if (lastOptimizeStats.assertions_count) parts.push(`断言 ${lastOptimizeStats.assertions_count} 条`)
+        if (lastOptimizeStats.source_traced) parts.push(`溯源 ${lastOptimizeStats.source_traced} 步`)
+        if (lastOptimizeStats.locators_picked) {
+          const pickParts = []
+          if (lastOptimizeStats.locators_ai_picked) pickParts.push(`AI 选 ${lastOptimizeStats.locators_ai_picked}`)
+          if (lastOptimizeStats.locators_rule_picked) pickParts.push(`规则优选 ${lastOptimizeStats.locators_rule_picked}`)
+          parts.push(`定位${pickParts.length ? pickParts.join('、') : `优选 ${lastOptimizeStats.locators_picked}`}`)
+        }
+        if (lastOptimizeStats.risk_steps_count) parts.push(`${lastOptimizeStats.risk_steps_count} 步需核对`)
+        if (d.assertions_skipped_reason === 'no_expectations_in_description' && optimizeOptions.append_assertions) {
+          parts.push('未补充断言（描述中缺少「预期」）')
+        }
+        ElMessage.success(parts.join('，'))
       }
-      if (lastOptimizeStats.risk_steps_count) parts.push(`${lastOptimizeStats.risk_steps_count} 步需核对`)
-      ElMessage.success(parts.join('，'))
     } else {
       ElMessage.error(res.data?.message || 'AI 优化失败')
     }

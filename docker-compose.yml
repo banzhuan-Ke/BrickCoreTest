@@ -1,5 +1,5 @@
 # CE 演示环境专用（同步时覆盖 docker-compose.yml）
-# 中间件密码从仓库根目录 .env 读取（由 scripts/ce-stubs/demo-middleware.env 同步生成，勿提交 Git）
+# 中间件密码从仓库根目录 .env 读取（自建部署时在根目录创建 .env，勿提交 Git）
 version: '3.8'
 
 services:

@@ -4,8 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from app.core.auth import verify_token
-from app.core.mcp_config_service import get_mcp_runtime_config
+from app.core.platform.auth import verify_token
+from app.core.integration.mcp_config_service import get_mcp_runtime_config
 from app.models.sys import User
 
 
@@ -49,7 +49,7 @@ async def resolve_mcp_auth(headers: dict[str, str]) -> McpAuthContext:
     if not user.is_active:
         raise ValueError("用户已被停用")
 
-    from app.core.permissions import get_user_permissions
+    from app.core.platform.permissions import get_user_permissions
 
     perms = set(await get_user_permissions(user))
     return McpAuthContext(

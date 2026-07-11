@@ -14,10 +14,10 @@ import pytz
 
 from app.models.http import ApiTestSuite, ApiTestPlan, ApiSuiteRunRecord, ApiCronJob
 from app.schemas.http import ApiCronJobCreate, ApiCronJobUpdate, ApiCronJobOut, ApiCronJobListResponse
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import API_CRON_VIEW, API_CRON_EDIT
-from app.core import config as settings
-from app.core.scheduler_lock import with_scheduler_lock
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import API_CRON_VIEW, API_CRON_EDIT
+from app.core.platform import config as settings
+from app.core.infra.scheduler_lock import with_scheduler_lock
 
 # 配置APScheduler存储器
 job_stores = {
@@ -376,7 +376,7 @@ async def execute_cron_job(job_id: str):
 async def _execute_suite_cron(job: ApiCronJob, env) -> tuple:
     """套件模式执行，返回 (status, record_id)"""
     from app.models.http import ApiSuiteCase
-    from app.core.api_suite_runner import execute_api_suite_cases
+    from app.modules.http.api_suite_runner import execute_api_suite_cases
 
     suite = await ApiTestSuite.get_or_none(id=job.suite_id, is_del=False)
     if not suite:

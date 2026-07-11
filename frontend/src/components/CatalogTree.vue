@@ -1,5 +1,5 @@
 <template>
-  <div class="catalog-tree">
+  <div class="catalog-tree" :class="{ 'catalog-tree--fill': fillHeight }">
     <div class="tree-header">
       <span class="tree-title">测试目录</span>
       <el-button
@@ -12,6 +12,17 @@
         @click="openCreateDialog(null)"
       />
     </div>
+
+    <el-input
+      v-if="showSearch"
+      v-model="filterText"
+      placeholder="搜索目录"
+      clearable
+      size="small"
+      prefix-icon="Search"
+      class="tree-search"
+    />
+
     <el-tree
       ref="treeRef"
       v-loading="loading"
@@ -21,12 +32,22 @@
       highlight-current
       :default-expand-all="defaultExpandAll"
       :current-node-key="currentKey"
+      :filter-node-method="filterNode"
+      class="catalog-tree-inner"
       @node-click="handleNodeClick"
     >
       <template #default="{ node, data }">
-        <span class="tree-node">
-          <el-icon><Folder /></el-icon>
-          <span class="node-label">{{ node.label }}</span>
+        <span
+          class="tree-node"
+          :class="{ 'is-all-node': data.id === 'all' }"
+        >
+          <el-icon class="node-icon">
+            <FolderOpened v-if="data.id === 'all'" />
+            <Folder v-else-if="!node.expanded || !data.children?.length" />
+            <FolderOpened v-else />
+          </el-icon>
+          <span class="node-label" :title="node.label">{{ node.label }}</span>
+          <span v-if="badgeForNode(data)" class="node-badge">{{ badgeForNode(data) }}</span>
           <span v-if="showManage && data.id !== 'all'" class="node-actions">
             <el-button type="primary" link size="small" icon="Plus" title="新建子目录" @click.stop="openCreateDialog(data.id)" />
             <el-button type="primary" link size="small" icon="Edit" title="编辑" @click.stop="openEditDialog(data)" />
@@ -75,7 +96,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch } from 'vue'
-import { Folder } from '@element-plus/icons-vue'
+import { Folder, FolderOpened } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { catalogApi, buildCatalogTree } from '@/api/modules/catalog'
 
@@ -100,18 +121,33 @@ const props = defineProps({
     type: String,
     default: '全部'
   },
-  /** 节点较多时建议关闭，避免 el-tree 展开全部 DOM 占用过高 */
   defaultExpandAll: {
+    type: Boolean,
+    default: false
+  },
+  /** 目录 id -> 资产数量，用于节点徽章 */
+  countMap: {
+    type: Object,
+    default: () => ({})
+  },
+  /** 是否显示搜索框 */
+  showSearch: {
+    type: Boolean,
+    default: false
+  },
+  /** 是否撑满父容器高度 */
+  fillHeight: {
     type: Boolean,
     default: false
   }
 })
 
-const emit = defineEmits(['update:modelValue', 'change', 'loaded'])
+const emit = defineEmits(['update:modelValue', 'change', 'loaded', 'changed'])
 
 const treeRef = ref()
 const loading = ref(false)
 const rawTree = ref([])
+const filterText = ref('')
 
 const currentKey = computed(() => props.modelValue ?? (props.includeAllNode ? 'all' : null))
 
@@ -152,6 +188,48 @@ const normalizeTreeResponse = (data) => {
   return hasNested ? data : buildCatalogTree(data)
 }
 
+const badgeMap = computed(() => {
+  const map = {}
+  const countOf = (id) => props.countMap[id] ?? props.countMap[String(id)] ?? 0
+  const sumSubtree = (node) => {
+    if (!node || node.id === 'all') return 0
+    let total = countOf(node.id)
+    for (const child of node.children || []) {
+      total += sumSubtree(child)
+    }
+    return total
+  }
+  const walk = (nodes) => {
+    for (const node of nodes) {
+      if (node.id === 'all') {
+        const total = Object.values(props.countMap).reduce((a, b) => a + (b || 0), 0)
+        if (total > 0) map.all = total
+      } else {
+        const count = sumSubtree(node)
+        if (count > 0) map[node.id] = count
+      }
+      if (node.children?.length) walk(node.children)
+    }
+  }
+  walk(treeData.value)
+  return map
+})
+
+const badgeForNode = (data) => {
+  const id = data?.id
+  if (id == null) return null
+  return badgeMap.value[id] ?? badgeMap.value[String(id)] ?? null
+}
+
+const filterNode = (value, data) => {
+  if (!value) return true
+  return (data.name || '').toLowerCase().includes(value.toLowerCase())
+}
+
+watch(filterText, (val) => {
+  treeRef.value?.filter(val)
+})
+
 const loadTree = async () => {
   if (!props.projectId) {
     rawTree.value = []
@@ -183,6 +261,8 @@ watch(
   (val) => {
     if (treeRef.value && val != null) {
       treeRef.value.setCurrentKey(val)
+    } else if (treeRef.value && props.includeAllNode) {
+      treeRef.value.setCurrentKey('all')
     }
   }
 )
@@ -243,6 +323,7 @@ const handleDelete = async (data) => {
     await catalogApi.delete(data.id, cascade ? { cascade: true } : {})
     ElMessage.success('删除成功')
     await loadTree()
+    emit('changed')
   } catch (error) {
     if (error !== 'cancel') {
       ElMessage.error(error.response?.data?.detail || '删除失败')
@@ -277,6 +358,7 @@ const saveCatalog = async () => {
     ElMessage.success('保存成功')
     dialog.visible = false
     await loadTree()
+    emit('changed')
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '保存失败')
   } finally {
@@ -289,22 +371,58 @@ defineExpose({ loadTree, rawTree })
 
 <style scoped lang="scss">
 .catalog-tree {
-  background: var(--el-fill-color-light);
-  border-radius: 8px;
-  padding: 15px;
-  overflow-y: auto;
+  background: var(--el-bg-color);
+  border-radius: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  padding: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  &--fill {
+    height: 100%;
+    min-height: 0;
+  }
 
   .tree-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
     padding-bottom: 10px;
     border-bottom: 1px solid var(--el-border-color-lighter);
+    flex-shrink: 0;
 
     .tree-title {
       font-weight: 600;
       font-size: 14px;
+    }
+  }
+
+  .tree-search {
+    margin-bottom: 10px;
+    flex-shrink: 0;
+  }
+
+  .catalog-tree-inner {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    background: transparent;
+
+    :deep(.el-tree-node__content) {
+      height: 36px;
+      border-radius: 6px;
+      margin-bottom: 2px;
+    }
+
+    :deep(.el-tree-node.is-current > .el-tree-node__content) {
+      background: var(--el-color-primary-light-9);
+      box-shadow: inset 3px 0 0 var(--el-color-primary);
+    }
+
+    :deep(.el-tree-node__content:hover) {
+      background: var(--el-fill-color-light);
     }
   }
 
@@ -313,11 +431,17 @@ defineExpose({ loadTree, rawTree })
     align-items: center;
     flex: 1;
     min-width: 0;
+    padding-right: 4px;
 
-    .el-icon {
-      margin-right: 5px;
+    &.is-all-node .node-label {
+      font-weight: 600;
+    }
+
+    .node-icon {
+      margin-right: 6px;
       color: var(--el-color-primary);
       flex-shrink: 0;
+      font-size: 15px;
     }
 
     .node-label {
@@ -325,11 +449,26 @@ defineExpose({ loadTree, rawTree })
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      font-size: 13px;
+    }
+
+    .node-badge {
+      flex-shrink: 0;
+      margin-left: 6px;
+      padding: 0 6px;
+      height: 18px;
+      line-height: 18px;
+      font-size: 11px;
+      border-radius: 9px;
+      background: var(--el-color-primary-light-8);
+      color: var(--el-color-primary);
+      font-variant-numeric: tabular-nums;
     }
 
     .node-actions {
       display: none;
       flex-shrink: 0;
+      margin-left: 4px;
     }
 
     &:hover .node-actions {

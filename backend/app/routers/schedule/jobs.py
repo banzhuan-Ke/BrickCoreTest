@@ -14,12 +14,12 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 import pytz
 from app.models.ui import Task
-from app.core import config as settings
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import UI_CRON_VIEW, UI_CRON_EDIT
+from app.core.platform import config as settings
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import UI_CRON_VIEW, UI_CRON_EDIT
 from tortoise import transactions
 from app.models.ui import UiPlanExecution
-from app.core.scheduler_lock import with_scheduler_lock
+from app.core.infra.scheduler_lock import with_scheduler_lock
 from app.models.sys import Device
 
 # 创建路由对象
@@ -56,7 +56,7 @@ async def run_task(task_id, env_id, cronjob_id=None):
         devices = []
         device_id = online_devices[0].id
 
-    from app.core.ui_plan_runner import execute_ui_plan
+    from app.modules.ui.ui_plan_runner import execute_ui_plan
 
     return await execute_ui_plan(
         task,

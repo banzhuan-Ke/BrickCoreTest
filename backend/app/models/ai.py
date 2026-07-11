@@ -470,6 +470,39 @@ class AiUsageLog(models.Model):
         table_description = "AI 模型使用记录"
 
 
+class AiEmbedConfig(models.Model):
+    """Embedding 模型配置（平台级，供资料库向量索引选用）"""
+
+    id = fields.IntField(pk=True, description="配置ID")
+    name = fields.CharField(max_length=100, default="默认 Embedding", description="配置名称")
+    provider = fields.CharField(
+        max_length=20,
+        description="供应商",
+        choices=[
+            ("openai", "OpenAI"),
+            ("deepseek", "DeepSeek"),
+            ("qwen", "通义千问"),
+            ("claude", "Claude"),
+            ("custom", "自定义"),
+        ],
+    )
+    api_key = fields.CharField(max_length=255, description="API Key（加密存储）")
+    api_base = fields.CharField(max_length=500, null=True, description="自定义 Base URL")
+    model = fields.CharField(max_length=100, default="text-embedding-v3", description="Embedding 模型")
+    dimensions = fields.IntField(default=1024, description="向量维度")
+    timeout = fields.IntField(default=120, description="请求超时(秒)")
+    is_default = fields.BooleanField(default=False, description="是否为默认配置")
+    is_enabled = fields.BooleanField(default=True, description="是否启用")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+    create_by = fields.CharField(max_length=50, default="", description="创建人")
+
+    class Meta:
+        table = "ai_embed_config"
+        table_description = "Embedding 模型配置"
+
+
 class AiRecordSession(models.Model):
     """AI 录制会话表"""
     id = fields.IntField(pk=True, description="录制ID")
@@ -522,120 +555,6 @@ class AiRecordSession(models.Model):
         table = "ai_record_session"
         table_description = "AI 录制会话"
 
-
-class AiQaEvalSet(models.Model):
-    """问答准确性评测集"""
-    id = fields.IntField(pk=True)
-    project_id = fields.IntField(description="项目ID")
-    name = fields.CharField(max_length=200, description="评测集名称")
-    description = fields.TextField(null=True, description="描述")
-    is_del = fields.BooleanField(default=False)
-    create_by = fields.CharField(max_length=50, default="")
-    create_time = fields.DatetimeField(auto_now_add=True)
-    update_time = fields.DatetimeField(auto_now=True)
-
-    class Meta:
-        table = "ai_qa_eval_set"
-        table_description = "问答评测集"
-
-
-class AiQaEvalCase(models.Model):
-    """问答评测用例"""
-    id = fields.IntField(pk=True)
-    set_id = fields.IntField(description="评测集ID")
-    seq_no = fields.IntField(null=True, description="Excel序号")
-    question = fields.TextField(description="测试问题")
-    expected_points = fields.JSONField(default=list, description="标准要点")
-    expected_answer = fields.TextField(null=True, description="标准完整答案")
-    preset_answer = fields.TextField(null=True, description="预置实际回答(导入或批量拉取)")
-    chat_path = fields.JSONField(default=list, description="问答目录")
-    multi_turn = fields.BooleanField(default=False, description="是否多轮")
-    scenario_type = fields.CharField(max_length=64, default="", description="场景类型")
-    source_file = fields.CharField(max_length=500, default="", description="来源文件")
-    file_type = fields.CharField(max_length=100, default="", description="文件类型")
-    category = fields.CharField(max_length=100, default="", description="分类")
-    case_type = fields.CharField(max_length=32, default="事实", description="题型")
-    sort_order = fields.IntField(default=0)
-    is_del = fields.BooleanField(default=False)
-    create_time = fields.DatetimeField(auto_now_add=True)
-    update_time = fields.DatetimeField(auto_now=True)
-
-    class Meta:
-        table = "ai_qa_eval_case"
-        table_description = "问答评测用例"
-
-
-class AiQaEvalTarget(models.Model):
-    """被测问答 API 配置"""
-    id = fields.IntField(pk=True)
-    project_id = fields.IntField(description="项目ID")
-    name = fields.CharField(max_length=200, description="配置名称")
-    config = fields.JSONField(default=dict, description="API 配置")
-    is_del = fields.BooleanField(default=False)
-    create_by = fields.CharField(max_length=50, default="")
-    create_time = fields.DatetimeField(auto_now_add=True)
-    update_time = fields.DatetimeField(auto_now=True)
-
-    class Meta:
-        table = "ai_qa_eval_target"
-        table_description = "被测问答API"
-
-
-class AiQaEvalRun(models.Model):
-    """问答评测跑批记录"""
-    id = fields.IntField(pk=True)
-    project_id = fields.IntField()
-    set_id = fields.IntField()
-    target_id = fields.IntField(null=True, description="被测API，仅评判模式可为空")
-    judge_config_id = fields.IntField(null=True)
-    status = fields.CharField(max_length=20, default="pending")
-    total_count = fields.IntField(default=0)
-    passed_count = fields.IntField(default=0)
-    failed_count = fields.IntField(default=0)
-    avg_score = fields.FloatField(default=0)
-    pass_rate = fields.FloatField(default=0)
-    error = fields.TextField(null=True)
-    extra = fields.JSONField(default=dict)
-    create_by = fields.CharField(max_length=50, default="")
-    started_at = fields.DatetimeField(null=True)
-    finished_at = fields.DatetimeField(null=True)
-    create_time = fields.DatetimeField(auto_now_add=True)
-
-    class Meta:
-        table = "ai_qa_eval_run"
-        table_description = "问答评测跑批"
-
-
-class AiQaEvalResult(models.Model):
-    """问答评测单题结果"""
-    id = fields.IntField(pk=True)
-    run_id = fields.IntField()
-    case_id = fields.IntField()
-    question = fields.TextField()
-    actual_answer = fields.TextField(null=True)
-    score = fields.FloatField(default=0)
-    passed = fields.BooleanField(default=False)
-    hallucination = fields.BooleanField(default=False)
-    level = fields.CharField(max_length=20, default="")
-    dimension_scores = fields.JSONField(default=dict)
-    missed_points = fields.JSONField(default=list)
-    extra_issues = fields.JSONField(default=list)
-    reason = fields.TextField(null=True)
-    judge_raw = fields.TextField(null=True)
-    api_error = fields.TextField(null=True)
-    api_latency_ms = fields.IntField(default=0)
-    api_meta = fields.JSONField(default=dict, description="API扩展字段")
-    judge_tokens = fields.IntField(default=0)
-    status = fields.CharField(max_length=20, default="pending")
-    manual_status = fields.CharField(max_length=20, default="pending", description="人工审核状态")
-    manual_comment = fields.TextField(null=True, description="人工审核备注")
-    manual_reviewed_by = fields.CharField(max_length=50, default="", description="审核人")
-    manual_reviewed_at = fields.DatetimeField(null=True, description="审核时间")
-    create_time = fields.DatetimeField(auto_now_add=True)
-
-    class Meta:
-        table = "ai_qa_eval_result"
-        table_description = "问答评测结果"
 
 
 class BrowserLabCase(models.Model):

@@ -7,16 +7,16 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.core import config as app_config
-from app.core.auth import (
+from app.core.platform import config as app_config
+from app.core.platform.auth import (
     create_runner_token,
     require_permissions,
     verify_runner_token,
 )
-from app.core.permissions import DEVICE_EDIT
-from app.core.runner_connect import build_runner_connect_bundle, resolve_public_base_url
-from app.core.runner_middleware import provision_device_middleware, revoke_device_middleware
-from app.core.runner_version import ensure_client_version, get_version_info
+from app.core.platform.permissions import DEVICE_EDIT
+from app.core.runner.runner_connect import build_runner_connect_bundle, resolve_public_base_url
+from app.core.runner.runner_middleware import provision_device_middleware, revoke_device_middleware
+from app.core.runner.runner_version import ensure_client_version, get_version_info
 from app.models.sys import Device
 from app.schemas.runner import (
     RunnerConnectRequest,
@@ -157,7 +157,7 @@ async def runner_disconnect(
     except Exception:
         pass
 
-    from app.core.app_execution_stale import close_inflight_executions_for_udid
+    from app.modules.app.app_execution_stale import close_inflight_executions_for_udid
 
     udid = (device.app_udid or "").strip()
     if udid:

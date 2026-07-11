@@ -4,8 +4,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import USER_EDIT, USER_VIEW
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import USER_EDIT, USER_VIEW
 from app.models.sys import InviteCode, Role
 from app.schemas.sys import (
     CreateInviteCodeForm,

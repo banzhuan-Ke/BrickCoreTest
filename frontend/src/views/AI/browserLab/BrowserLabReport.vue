@@ -10,6 +10,14 @@
         </div>
         <div class="actions">
           <el-button @click="goBack">返回记录</el-button>
+          <el-button
+            v-if="canImport && report && importableStatus"
+            type="success"
+            plain
+            @click="importVisible = true"
+          >
+            导入 Web 用例
+          </el-button>
           <el-button v-if="canExecute && report" type="primary" @click="rerun">再次执行</el-button>
         </div>
       </div>
@@ -73,6 +81,13 @@
       </div>
     </template>
   </PageCard>
+  <BrowserLabImportDialog
+    v-model="importVisible"
+    :task-id="taskId"
+    :project-id="projectId"
+    :default-case-name="report?.case_name || ''"
+    :task-text="report?.task_text || ''"
+  />
 </template>
 
 <script setup>
@@ -80,6 +95,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
+import BrowserLabImportDialog from './BrowserLabImportDialog.vue'
 import { browserLabApi } from '@/api/modules/ai.js'
 import { browserLabGifPreviewHref } from './browserLabGif.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
@@ -90,6 +106,13 @@ const router = useRouter()
 const taskId = computed(() => route.params.taskId)
 const projectId = computed(() => ProjectStore().projectInfo?.id)
 const canExecute = computed(() => UserStore().hasPermission('ai_test:execute'))
+const canImport = computed(() =>
+  UserStore().hasPermission('ai_test:execute') && UserStore().hasPermission('ui_case:edit')
+)
+const importableStatus = computed(() =>
+  ['done', 'failed', 'stopped'].includes(report.value?.status)
+)
+const importVisible = ref(false)
 
 const loading = ref(false)
 const report = ref(null)

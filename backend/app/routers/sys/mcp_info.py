@@ -4,15 +4,15 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.config import MCP_HTTP_PATH
-from app.core.mcp_config_service import (
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.core.platform.config import MCP_HTTP_PATH
+from app.core.integration.mcp_config_service import (
     get_mcp_config_for_admin,
     get_mcp_runtime_config,
     resolve_public_base_url,
     save_mcp_config,
 )
-from app.core.permissions import MCP_CONFIG_EDIT, MCP_CONFIG_VIEW
+from app.core.platform.permissions import MCP_CONFIG_EDIT, MCP_CONFIG_VIEW
 from app.mcp.server import MCP_DANGEROUS_OPS, MCP_TOOL_GROUPS, build_client_config, get_registered_tool_count
 
 router = APIRouter(prefix="/mcp", tags=["MCP"], dependencies=[Depends(is_authenticated)])

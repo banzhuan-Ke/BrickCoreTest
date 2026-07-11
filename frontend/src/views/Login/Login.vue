@@ -94,6 +94,7 @@ import {ElNotification, ElMessage} from 'element-plus'
 import {ref, reactive, computed, onMounted, watch} from 'vue'
 import http from '@/api/index'
 import {UserStore} from '@/stores/module/UserStore'
+import { resetMenuExpandedSession } from '@/datas/Menu'
 import {ProjectStore} from '@/stores/module/ProjectStore'
 import {useRouter, useRoute} from 'vue-router'
 import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
@@ -179,6 +180,7 @@ function loginSubmit(elForm) {
           localStorage.removeItem('password')
         }
         // 清理旧标签和旧项目状态，确保每次登录都是全新会话
+        resetMenuExpandedSession()
         uStore.clearAllTabs()
         proStore.$reset()
         localStorage.removeItem('projectStore')

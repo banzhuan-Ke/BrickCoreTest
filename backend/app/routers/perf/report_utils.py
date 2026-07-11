@@ -168,7 +168,7 @@ def build_config_summary(config: Optional[dict], distribution_info: Optional[dic
 
     cfg = config or {}
     mode = cfg.get("mode", "fixed")
-    from app.core.stream_phase import normalize_perf_mode, STREAM_BURST_MODE
+    from app.modules.stream_phase import normalize_perf_mode, STREAM_BURST_MODE
     mode_labels = {
         "fixed": "固定模式", "loop": "循环模式", "stepping": "梯度模式",
         STREAM_BURST_MODE: "流式阶段压测", "sse_burst": "流式阶段压测",
@@ -362,7 +362,7 @@ def paginate_perf_request_items(
     size: int = 50,
 ) -> dict[str, Any]:
     """分页返回流式阶段明细或 HTTP 请求 trace（报告页懒加载）。"""
-    from app.core.stream_phase import migrate_legacy_detail
+    from app.modules.stream_phase import migrate_legacy_detail
 
     page = max(1, page)
     size = max(1, min(size, 100))
@@ -634,7 +634,7 @@ def render_perf_html_request_traces(record: Any, *, max_rows: int = 500) -> str:
 
 def render_perf_html_stream_sections(record: Any, *, max_detail_rows: int = 500) -> str:
     """流式阶段汇总 + 逐路请求明细（仅 stream 压测有数据时输出）。"""
-    from app.core.stream_phase import detail_to_excel_row, migrate_legacy_detail
+    from app.modules.stream_phase import detail_to_excel_row, migrate_legacy_detail
 
     details = [migrate_legacy_detail(d) for d in (record.request_details or [])]
     phase_metrics = record.phase_metrics or {}

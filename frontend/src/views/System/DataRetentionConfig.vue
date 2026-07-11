@@ -9,7 +9,7 @@
         :closable="false"
         show-icon
         title="删除策略说明"
-        description="配置 UI 用例运行记录的删除方式。逻辑删除仅从列表隐藏；物理删除立即从数据库清除；回收站模式删除后可在回收站恢复或永久删除。"
+        description="配置 UI 用例运行记录与资料库（生成记录、迭代文件夹上传文档）的删除方式。逻辑删除仅从列表隐藏；物理删除立即从数据库清除，并删除关联存储文件。"
         style="margin-bottom: 20px; max-width: 960px;"
       />
 
@@ -19,6 +19,12 @@
             <el-radio value="logical">逻辑删除（从列表隐藏，不可恢复）</el-radio>
             <el-radio value="physical">物理删除（立即永久删除）</el-radio>
             <el-radio value="recycle_bin">回收站（可恢复或永久删除）</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="资料库删除">
+          <el-radio-group v-model="form.knowledge_report_delete_mode">
+            <el-radio value="logical">逻辑删除（从列表隐藏；生成记录输出文件、上传文档源文件均保留）</el-radio>
+            <el-radio value="physical">物理删除（删除记录及生成输出 / 上传源文件 / 分块索引）</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="form.update_time" label="最后修改">
@@ -44,6 +50,7 @@ defineProps({
 
 const form = reactive({
   ui_case_record_delete_mode: 'logical',
+  knowledge_report_delete_mode: 'logical',
   update_by: '',
   update_time: '',
 })
@@ -56,6 +63,7 @@ const loadConfig = async () => {
     const data = res?.data ?? res ?? {}
     Object.assign(form, {
       ui_case_record_delete_mode: data.ui_case_record_delete_mode || 'logical',
+      knowledge_report_delete_mode: data.knowledge_report_delete_mode || 'logical',
       update_by: data.update_by || '',
       update_time: data.update_time || '',
     })
@@ -69,6 +77,7 @@ const saveConfig = async () => {
   try {
     const res = await platformSettingsApi.updateConfig({
       ui_case_record_delete_mode: form.ui_case_record_delete_mode,
+      knowledge_report_delete_mode: form.knowledge_report_delete_mode,
     })
     const data = res?.data ?? res ?? {}
     Object.assign(form, data)

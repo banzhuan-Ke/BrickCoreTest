@@ -13,9 +13,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
-from app.core.auth import get_current_username, require_permissions
-from app.core.edition import is_community_edition
-from app.core.docs_catalog import (
+from app.core.platform.auth import get_current_username, require_permissions
+from app.core.platform.edition import is_community_edition
+from app.core.shared.docs_catalog import (
     BUILTIN_DOC_IDS,
     build_manage_builtin_items,
     get_builtin_doc_entries,
@@ -26,9 +26,9 @@ from app.core.docs_catalog import (
     merge_builtin_tree,
     read_builtin_markdown,
 )
-from app.core.minio_client import minio_client, is_minio_storage
-from app.core.config import API_FILE_BUCKET
-from app.core.permissions import DOCS_EDIT, DOCS_VIEW
+from app.core.infra.minio_client import minio_client, is_minio_storage
+from app.core.platform.config import API_FILE_BUCKET
+from app.core.platform.permissions import DOCS_EDIT, DOCS_VIEW
 from app.models.sys import PlatformDoc
 from app.schemas.ai import StandardResponse
 
@@ -523,7 +523,7 @@ async def upload_doc_file(file: UploadFile = File(...)):
             raise HTTPException(status_code=500, detail="上传到存储失败")
         access_url = await _presigned(object_name)
     else:
-        from app.core.config import BASE_DIR
+        from app.core.platform.config import BASE_DIR
         local_dir = Path(BASE_DIR) / "static" / "platform_docs"
         local_dir.mkdir(parents=True, exist_ok=True)
         local_path = local_dir / object_name.replace("/", "_")

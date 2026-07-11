@@ -4,13 +4,50 @@ from pydantic import BaseModel, Field
 from app.models.sys import Project
 from app.models.ui import UiPlanExecution
 from app.models.ui import Suite
-from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.schemas.ui import AddTaskForm, TaskSchemas, UpdateTaskForm, AddSuiteToTaskForm, TaskDetailSchemas
 from app.models.ui import Task
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import UI_TASK_VIEW, UI_TASK_EDIT
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import UI_TASK_VIEW, UI_TASK_EDIT
+from app.modules.ui.ui_list_query import (
+    load_count_by_fk,
+    load_latest_status_by_fk,
+    load_task_suite_count,
+)
 
 router = APIRouter(prefix="/tasks", tags=['测试计划'], dependencies=[Depends(is_authenticated)])
+
+# 列表页不预加载套件，避免拉取 suite 表大 JSON 列
+_TASK_LIST_FIELDS = (
+    "id", "name", "username", "update_by", "catalog_id",
+    "parallel", "create_time", "update_time", "is_del", "project_id",
+)
+
+
+async def _build_task_list_items(tasks: list[Task]) -> list[dict]:
+    task_ids = [task.id for task in tasks]
+    run_count_map = await load_count_by_fk(UiPlanExecution, "task_id", task_ids)
+    status_map = await load_latest_status_by_fk(
+        "ui_plan_execution", "task_id", task_ids, default="等待执行",
+    )
+    suite_count_map = await load_task_suite_count(task_ids)
+    return [
+        {
+            "id": task.id,
+            "name": task.name,
+            "username": task.username,
+            "update_by": task.update_by or task.username,
+            "catalog_id": task.catalog_id,
+            "parallel": bool(task.parallel),
+            "status": status_map.get(task.id, "等待执行"),
+            "create_time": task.create_time,
+            "update_time": task.update_time,
+            "suites_count": suite_count_map.get(task.id, 0),
+            "run_count": run_count_map.get(task.id, 0),
+            "is_del": task.is_del,
+        }
+        for task in tasks
+    ]
 
 
 async def _touch_task_updated(task: Task, username: str) -> None:
@@ -54,32 +91,30 @@ async def get_task(project_id: int, page: int = 1, size: int = 10,
     if catalog_id is not None:
         await resolve_catalog(project_id, catalog_id)
         query = await apply_catalog_filter(query, project_id, catalog_id, include_children=include_children)
-    all_tasks = await query.prefetch_related("suites").order_by("-id").all()
-    result = []
-    for task in all_tasks:
-        # 获取最近一次执行状态（只考虑未删除的记录）
-        run_record = await UiPlanExecution.filter(task=task.id, is_del=False).order_by("-id").first()
-        state = run_record.status if run_record else '等待执行'
-        if status and state != status:
-            continue
-        # 只统计未删除的关联套件
-        valid_suites = [s for s in task.suites if not s.is_del]
-        result.append({
-            "id": task.id,
-            "name": task.name,
-            "username": task.username,
-            "update_by": task.update_by or task.username,
-            "catalog_id": task.catalog_id,
-            "parallel": bool(task.parallel),
-            "status": state,
-            'create_time': task.create_time,
-            "update_time": task.update_time,
-            "suites_count": len(valid_suites),
-            "run_count": await UiPlanExecution.filter(task=task.id, is_del=False).count(),
-            "is_del": task.is_del
-        })
-    total = len(result)
-    data = result[(page - 1) * size: page * size]
+
+    if status:
+        all_tasks = await query.order_by("-id").only(*_TASK_LIST_FIELDS).all()
+        status_map = await load_latest_status_by_fk(
+            "ui_plan_execution", "task_id", [task.id for task in all_tasks], default="等待执行",
+        )
+        filtered_tasks = [
+            task for task in all_tasks
+            if status_map.get(task.id, "等待执行") == status
+        ]
+        total = len(filtered_tasks)
+        page_tasks = filtered_tasks[(page - 1) * size: page * size]
+        data = await _build_task_list_items(page_tasks)
+        return {"total": total, "data": data}
+
+    total = await query.count()
+    page_tasks = await (
+        query.order_by("-id")
+        .offset((page - 1) * size)
+        .limit(size)
+        .only(*_TASK_LIST_FIELDS)
+        .all()
+    )
+    data = await _build_task_list_items(page_tasks)
     return {"total": total, "data": data}
 
 

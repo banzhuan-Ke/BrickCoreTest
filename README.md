@@ -1,8 +1,8 @@
 # BrickCore 自动化测试平台
 
-> **当前版本 v1.2.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
+> **当前版本 v1.3.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
 
-覆盖 **Web UI、App、接口、性能、AI** 等测试能力，支持自建部署、文档中心与执行器网盘分发。执行器请使用下方 **BrickCoreRunner** 安装包。
+覆盖 **Web UI、App、接口、性能、AI** 等测试能力，支持自建部署、文档中心与执行器网盘分发。平台源码见本仓库；执行器请使用下方 **BrickCoreRunner** 安装包。
 
 ---
 
@@ -117,7 +117,7 @@ docker exec -it fastapi_backend aerich upgrade
 | 平台 | admin | BrickCore123456 |
 | MySQL | admin | BrickCore123456 |
 
-升级至 **v1.2.0** 时务必执行 `aerich upgrade`（含 App 相关表结构迁移）。
+升级至 **v1.3.0** 时务必执行 `aerich upgrade`（含 v1.2.x → v1.3.0 表结构迁移）。
 
 ---
 
@@ -126,7 +126,7 @@ docker exec -it fastapi_backend aerich upgrade
 | 文档 | 说明 |
 |------|------|
 | [docs-site/](docs-site/) | 平台使用说明（与登录后「文档中心」内置文档同源） |
-| [版本更新记录](docs-site/guide/release-notes.md) | **v1.2.0** 变更与升级指引 |
+| [版本更新记录](docs-site/guide/release-notes.md) | **v1.3.0** 变更与升级指引 |
 | [亮点功能](docs-site/guide/highlights.md) | 能力总览与快速跳转 |
 | [Docker 部署](docs-site/guide/docker-deploy.md) | 云服务器自建 |
 

@@ -3,12 +3,12 @@ import uuid
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.core.auth import get_current_username, is_authenticated, require_any_permissions, require_permissions
-from app.core.minio_client import is_minio_storage, minio_client
-from app.core.app_locator_validate import validate_element_payload
-from app.core.app_element_refs import collect_element_references, ensure_element_deletable
-from app.core.permissions import APP_CASE_EDIT, APP_ELEMENT_EDIT, APP_ELEMENT_VIEW
-from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.core.platform.auth import get_current_username, is_authenticated, require_any_permissions, require_permissions
+from app.core.infra.minio_client import is_minio_storage, minio_client
+from app.modules.app.app_locator_validate import validate_element_payload
+from app.modules.app.app_element_refs import collect_element_references, ensure_element_deletable
+from app.core.platform.permissions import APP_CASE_EDIT, APP_ELEMENT_EDIT, APP_ELEMENT_VIEW
+from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppElement
 from app.models.sys import Project
 from app.schemas.app import AddAppElementForm, AppElementSchemas, AppTemplatePresignForm, UpdateAppElementForm

@@ -15,10 +15,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, PROJECT_EDIT
-from app.core.ai_prompts import PromptManager, append_extra_instructions
-from app.core.case_naming import (
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, PROJECT_EDIT
+from app.modules.ai.ai_prompts import PromptManager, append_extra_instructions
+from app.core.case.case_naming import (
     BUILTIN_TEMPLATE_CATALOG,
     apply_naming_to_cases,
     build_section_context,
@@ -34,17 +34,17 @@ from app.core.case_naming import (
     save_naming_config,
     suggest_template_id_for_profile,
 )
-from app.core.export_profile import EXPORT_PROFILE_GENERIC, EXPORT_PROFILE_LABELS
-from app.core.requirement_storage import (
+from app.core.shared.export_profile import EXPORT_PROFILE_GENERIC, EXPORT_PROFILE_LABELS
+from app.modules.ai.requirement_storage import (
     get_storage_summary,
     load_images_from_meta,
     load_requirement_source,
     save_requirement_images,
     save_requirement_source,
 )
-from app.core.case_steps import align_steps_expects, normalize_corner_quotes
-from app.core.document_loader import load_document, SUPPORTED_EXTENSIONS
-from app.core.requirement_document import (
+from app.core.case.case_steps import align_steps_expects, normalize_corner_quotes
+from app.modules.ai.document_loader import load_document, SUPPORTED_EXTENSIONS
+from app.modules.ai.requirement_document import (
     BLOCK_ESTIMATED_INPUT_TOKENS,
     attach_section_parents,
     build_interleaved_content,
@@ -56,8 +56,8 @@ from app.core.requirement_document import (
     truncate_scope_text,
     vision_summary_to_text,
 )
-from app.core.zentao_case_types import DEFAULT_ZENTAO_CASE_TYPE, split_case_type_fields
-from app.core.zentao_bindings import (
+from app.modules.ai.zentao_case_types import DEFAULT_ZENTAO_CASE_TYPE, split_case_type_fields
+from app.modules.ai.zentao_bindings import (
     apply_bindings_to_case_fields,
     bindings_for_export,
     build_requirement_case_extra,
@@ -69,16 +69,16 @@ from app.core.zentao_bindings import (
     save_project_bindings,
     validate_bindings,
 )
-from app.core.zentao_case_export import (
+from app.modules.ai.zentao_case_export import (
     STAGE_OPTIONS,
     ZENTAO_DEFAULT_COLUMNS,
     build_xlsx_bytes,
     case_to_export_row,
     format_numbered_cell,
 )
-from app.core.encryption import decrypt_value
-from app.core.ai_usage_log import log_ai_usage
-from app.core.llm_client import LLMClientFactory
+from app.core.platform.encryption import decrypt_value
+from app.core.llm.ai_usage_log import log_ai_usage
+from app.core.llm.llm_client import LLMClientFactory
 from app.models.ai import (
     AiConfig,
     AiGenerateRecord,
@@ -255,12 +255,12 @@ def _case_to_dict(case: AiRequirementCase) -> dict:
 
 
 async def _get_ai_config(config_id: Optional[int]) -> AiConfig:
-    from app.core.ai_scene_config import resolve_config_for_scene
+    from app.modules.ai.ai_scene_config import resolve_config_for_scene
     return await resolve_config_for_scene("requirement_case", config_id)
 
 
 async def _get_vision_config(config_id: Optional[int]) -> Optional[AiConfig]:
-    from app.core.ai_scene_config import resolve_vision_config
+    from app.modules.ai.ai_scene_config import resolve_vision_config
     return await resolve_vision_config(config_id)
 
 
@@ -327,6 +327,10 @@ async def _analyze_images_with_vision(
     blocks: list[dict],
     sections: list[dict],
     image_indices: Optional[list[int]] = None,
+    *,
+    project_id: Optional[int] = None,
+    username: str = "",
+    requirement_id: Optional[int] = None,
 ) -> tuple[dict[int, str], int, dict]:
     """返回 (image_index -> 读图文本, tokens, 报告)"""
     report = {
@@ -382,6 +386,7 @@ async def _analyze_images_with_vision(
         excerpt = ctx[:VISION_CONTEXT_MAX_CHARS]
         user_text = user_template_base.replace("（见下方章节上下文）", excerpt)
 
+        img_t0 = time.time()
         try:
             resp = await client.chat_with_image(
                 system_prompt=system_prompt,
@@ -402,12 +407,39 @@ async def _analyze_images_with_vision(
                 vision_text_by_index[idx] = vision_summary_to_text(parsed)
             else:
                 vision_text_by_index[idx] = raw_content[:4000]
+            if project_id:
+                await log_ai_usage(
+                    vision_config,
+                    "requirement_doc_understand",
+                    username=username,
+                    project_id=project_id,
+                    tokens_used=item["tokens"],
+                    duration_ms=int((time.time() - img_t0) * 1000),
+                    input_summary=f"需求#{requirement_id or '-'} · 图片 {idx}"[:500],
+                    output_summary=(item["content"] or "")[:500],
+                    requirement_id=requirement_id,
+                    image_index=idx,
+                )
         except Exception as e:
             logger.warning(f"[requirements] Vision 图片分析失败: {e}")
             err = str(e)
             item["error"] = err
             report["fail_count"] += 1
             vision_text_by_index[idx] = f"（读图失败: {err}）"
+            if project_id:
+                await log_ai_usage(
+                    vision_config,
+                    "requirement_doc_understand",
+                    username=username,
+                    project_id=project_id,
+                    tokens_used=0,
+                    duration_ms=int((time.time() - img_t0) * 1000),
+                    status="failed",
+                    input_summary=f"需求#{requirement_id or '-'} · 图片 {idx}"[:500],
+                    output_summary=err[:500],
+                    requirement_id=requirement_id,
+                    image_index=idx,
+                )
         report["images"].append(item)
 
     report["success"] = report["ok_count"] > 0 and report["fail_count"] == 0
@@ -727,6 +759,14 @@ class GenerateCasesRequest(BaseModel):
         max_length=200,
         description="写入 source_ref=batch:名称；单次生成建议传章节/批次名便于筛选",
     )
+    knowledge_folder_ids: Optional[list[int]] = Field(
+        default=None,
+        description="可选：引用资料库文件夹 ID 列表",
+    )
+    knowledge_document_ids: Optional[list[int]] = Field(
+        default=None,
+        description="可选：引用资料库文档 ID 列表",
+    )
 
 
 class ScopeEstimateRequest(BaseModel):
@@ -760,6 +800,14 @@ class GenerateCasesBatchRequest(BaseModel):
         default=None,
         max_length=2000,
         description="批量生成默认额外要求，各批次可单独覆盖",
+    )
+    knowledge_folder_ids: Optional[list[int]] = Field(
+        default=None,
+        description="可选：引用资料库文件夹 ID 列表",
+    )
+    knowledge_document_ids: Optional[list[int]] = Field(
+        default=None,
+        description="可选：引用资料库文档 ID 列表",
     )
     batches: list[GenerateCasesBatchItem] = Field(..., min_length=1, max_length=30)
 
@@ -957,7 +1005,7 @@ async def list_requirements(
 @router.get("/export-template", summary="禅道用例导出列模板", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
 async def get_export_template(user_info: dict = Depends(is_authenticated)):
     """返回默认禅道导入列（后续可扩展为可配置模板）"""
-    from app.core.zentao_bindings import DEFAULT_BINDINGS
+    from app.modules.ai.zentao_bindings import DEFAULT_BINDINGS
 
     return StandardResponse(
         data={
@@ -1358,6 +1406,7 @@ async def _execute_generate_cases(
 ) -> dict:
     """单次范围生成用例，返回 cases / generate_report / tokens / duration_ms"""
     start_time = time.time()
+    username = user_info.get("username", "")
     supplement_name = (body.supplement_batch_name or "").strip()
     is_supplement = bool(supplement_name)
     if body.supplement_batch_name is not None and body.supplement_batch_name.strip() == "":
@@ -1418,7 +1467,7 @@ async def _execute_generate_cases(
                 status_code=400,
                 detail=f"选中范围包含 {image_count} 张图片，请选择 Vision 模型配置（如通义 qwen-vl）",
             )
-        from app.core.ai_scene_config import resolve_vision_config
+        from app.modules.ai.ai_scene_config import resolve_vision_config
         vision_config = await resolve_vision_config(vision_config_id)
         if not vision_config:
             raise HTTPException(status_code=400, detail="未配置 Vision 模型，请在场景绑定或模型配置中设置")
@@ -1445,6 +1494,9 @@ async def _execute_generate_cases(
             blocks,
             selected_sections,
             scoped_image_indices,
+            project_id=project_id,
+            username=username,
+            requirement_id=req.id,
         )
         vision_report.update(vision_detail)
         total_tokens += v_tokens
@@ -1514,6 +1566,48 @@ async def _execute_generate_cases(
 
     extra_instructions = (body.extra_instructions or "").strip()
     user_prompt = append_extra_instructions(user_prompt, extra_instructions)
+
+    from app.modules.knowledge.knowledge_context import build_knowledge_context
+    from app.modules.knowledge.knowledge_refs_resolve import resolve_knowledge_refs_for_scene
+
+    k_folder_ids, k_doc_ids = await resolve_knowledge_refs_for_scene(
+        project_id,
+        "case_generate",
+        folder_ids=body.knowledge_folder_ids,
+        document_ids=body.knowledge_document_ids,
+    )
+    knowledge_meta: dict = {}
+    if k_folder_ids or k_doc_ids:
+        kctx = await build_knowledge_context(
+            project_id,
+            folder_ids=k_folder_ids,
+            document_ids=k_doc_ids,
+        )
+        knowledge_meta = {
+            "refs": kctx.get("refs") or [],
+            "resolved_folder_ids": k_folder_ids or [],
+            "resolved_document_ids": k_doc_ids or [],
+        }
+        ktext = (kctx.get("knowledge_context") or "").strip()
+        if ktext:
+            user_prompt += (
+                "\n\n## 迭代测试资料库参考\n"
+                "以下材料来自项目资料库，生成用例时可参考历史 Bug、测试范围与计划，"
+                "但须以当前需求文档为准；可针对高频缺陷模块补充回归用例。\n\n"
+                f"{ktext}"
+            )
+        if kctx.get("bug_export_summary"):
+            user_prompt += f"\n\n## Bug 导出摘要\n{kctx['bug_export_summary']}"
+        from app.modules.knowledge.knowledge_bug_hints import summarize_bug_modules
+
+        bug_hints = await summarize_bug_modules(
+            project_id,
+            folder_ids=k_folder_ids,
+            document_ids=k_doc_ids,
+        )
+        if bug_hints.get("hint_text"):
+            user_prompt += f"\n\n## Bug 模块覆盖提示\n{bug_hints['hint_text']}"
+            knowledge_meta["bug_hints"] = bug_hints
 
     prompt_len = len(user_prompt or "")
     logger.info(
@@ -1620,6 +1714,8 @@ async def _execute_generate_cases(
         "duration_ms": 0,
         "tokens_used": total_tokens,
     }
+    if knowledge_meta.get("refs"):
+        generate_report["knowledge_sources"] = knowledge_meta
 
     if not cases_data:
         duration_ms = int((time.time() - start_time) * 1000)
@@ -1916,6 +2012,8 @@ async def _run_batch_generate_core(
             scope_section_ids=item.scope_section_ids,
             supplement_batch_name=batch_name if use_supplement else None,
             extra_instructions=item_extra or batch_extra or None,
+            knowledge_folder_ids=body.knowledge_folder_ids,
+            knowledge_document_ids=body.knowledge_document_ids,
         )
         zentao_override = item_effective if item.export_defaults else None
         try:
@@ -2510,7 +2608,7 @@ async def export_cases_xlsx(
     export_columns = template.get("export_columns") or []
     columns = get_export_columns_for_template(template) or ZENTAO_DEFAULT_COLUMNS
 
-    from app.core.zentao_bindings import resolve_stage
+    from app.modules.ai.zentao_bindings import resolve_stage
 
     rows = []
     for case in cases:

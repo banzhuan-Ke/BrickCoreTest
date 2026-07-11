@@ -9,29 +9,29 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from tortoise.expressions import Q, RawSQL
 
-from app.core.auth import is_authenticated, require_permissions
-from app.core.case_steps import align_steps_expects
-from app.core.functional_case_duplicate import find_duplicate_groups
-from app.core.functional_case_service import (
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.case.case_steps import align_steps_expects
+from app.modules.ai.functional_case_duplicate import find_duplicate_groups
+from app.modules.ai.functional_case_service import (
     copy_requirement_cases_to_library,
     functional_case_to_dict,
 )
-from app.core.functional_case_to_ui import (
+from app.modules.ai.functional_case_to_ui import (
     MAX_UI_PREVIEW_BATCH,
     UiGenerationContext,
     import_functional_cases_to_ui,
     preview_functional_cases_to_ui,
 )
-from app.core.functional_case_to_app import (
+from app.modules.ai.functional_case_to_app import (
     MAX_APP_PREVIEW_BATCH,
     AppGenerationContext,
     import_functional_cases_to_app,
     preview_functional_cases_to_app,
 )
-from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, APP_CASE_EDIT, UI_CASE_EDIT
-from app.core.zentao_bindings import bindings_for_export, load_project_bindings
-from app.core.zentao_case_export import ZENTAO_EXPORT_COLUMNS, build_xlsx_bytes, case_to_export_row
-from app.core.zentao_case_import import parse_zentao_xlsx_to_cases
+from app.core.platform.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, APP_CASE_EDIT, UI_CASE_EDIT
+from app.modules.ai.zentao_bindings import bindings_for_export, load_project_bindings
+from app.modules.ai.zentao_case_export import ZENTAO_EXPORT_COLUMNS, build_xlsx_bytes, case_to_export_row
+from app.modules.ai.zentao_case_import import parse_zentao_xlsx_to_cases
 from app.models.ai import AiFunctionalCase, AiRequirement, AiRequirementCase
 from app.schemas.ai import StandardResponse
 

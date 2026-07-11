@@ -36,7 +36,7 @@ from runner_client.app.runtime_check import is_packaged_app
 
 
 def _is_public_source_tree() -> bool:
-    """开发环境无 runner/WebEngine 与打包脚本。"""
+    """公开仓库无 runner/WebEngine 与打包脚本。"""
     here = Path(__file__).resolve()
     for root in here.parents:
         if (root / "docs-site").is_dir():

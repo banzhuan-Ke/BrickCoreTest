@@ -9,7 +9,7 @@
         :closable="false"
         show-icon
         title="用途说明"
-        description="在此维护 SSE 流式接口的解析方案（内置解析器 + 规则/选项）。问答准确性评测「被测 API」与压测「流式阶段」均可引用此处配置，无需改代码。"
+        description="在此维护 SSE 流式接口的解析方案（内置解析器 + 规则/选项）。压测「流式阶段」与接口流式调试均可引用此处配置，无需改代码。"
         style="margin-bottom: 16px;"
       />
       <div class="toolbar">

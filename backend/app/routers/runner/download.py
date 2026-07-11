@@ -6,9 +6,9 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 
-from app.core.auth import verify_runner_token
-from app.core.config import UI_TEST_FILE_BUCKET
-from app.core.minio_client import is_minio_storage, minio_client
+from app.core.platform.auth import verify_runner_token
+from app.core.platform.config import UI_TEST_FILE_BUCKET
+from app.core.infra.minio_client import is_minio_storage, minio_client
 from app.models.ui import UiTestFolder
 from app.routers.ui.folders import validate_folder_key
 from app.schemas.runner import (

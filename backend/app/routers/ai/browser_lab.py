@@ -13,11 +13,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from tortoise.expressions import Q
 
-from app.core import config as settings
-from app.core.auth import is_authenticated, require_permissions
-from app.core.browser_lab_runner import ensure_browser_lab_dir, request_stop, run_browser_lab_task
-from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW
+from app.core.platform import config as settings
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.modules.browser_lab.browser_lab_runner import ensure_browser_lab_dir, request_stop, run_browser_lab_task
+from app.core.platform.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, UI_CASE_EDIT
 from app.models.ai import BrowserLabCase, BrowserLabTask
+from app.models.ui import Case
 from app.schemas.ai import StandardResponse
 
 logger = logging.getLogger(__name__)
@@ -682,7 +683,7 @@ async def optimize_task_text(
     pid = _resolve_project_id(user_info, project_id)
     username = user_info.get("username") or user_info.get("sub") or ""
     try:
-        from app.core.browser_lab_task_optimizer import optimize_browser_lab_task_text
+        from app.modules.browser_lab.browser_lab_task_optimizer import optimize_browser_lab_task_text
 
         data = await optimize_browser_lab_task_text(
             task_text=body.task_text,
@@ -698,3 +699,117 @@ async def optimize_task_text(
     except Exception as ex:
         logger.exception("[browser_lab] optimize task text failed")
         raise HTTPException(status_code=500, detail=f"AI 优化失败: {ex}") from ex
+
+
+class BrowserLabImportUiCaseRequest(BaseModel):
+    case_name: str = Field(..., min_length=1, max_length=200)
+    catalog_id: Optional[int] = Field(default=None, description="Web 用例目录")
+    description: Optional[str] = Field(default=None, max_length=4000)
+    include_open_browser: bool = Field(default=True, description="是否插入 open_browser 步骤")
+    steps: Optional[list] = Field(default=None, description="可选：前端预览后编辑过的步骤")
+
+
+@router.get(
+    "/tasks/{task_id}/ui-steps-preview",
+    summary="预览 Browser Lab 转 Web UI 步骤",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def preview_ui_steps_from_task(
+    task_id: int,
+    project_id: Optional[int] = Query(None),
+    include_open_browser: bool = Query(True),
+    user_info: dict = Depends(is_authenticated),
+):
+    pid = _resolve_project_id(user_info, project_id)
+    task = await BrowserLabTask.get_or_none(id=task_id, project_id=pid)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status not in ("done", "failed", "stopped"):
+        raise HTTPException(status_code=400, detail="任务尚未结束，无法导入")
+
+    from app.modules.browser_lab.browser_lab_import import convert_browser_lab_to_ui_steps
+    from app.routers.ai.generate import _normalize_ui_steps
+
+    raw_steps = convert_browser_lab_to_ui_steps(
+        start_url=task.start_url,
+        task_text=task.task_text,
+        step_log=list(task.step_log or []),
+        include_open_browser=include_open_browser,
+    )
+    steps, errors = _normalize_ui_steps(raw_steps)
+    default_name = task.case_name or f"BrowserLab-{task.id}"
+    if not default_name.strip():
+        default_name = f"BrowserLab-{task.id}"
+    return StandardResponse(
+        data={
+            "task_id": task.id,
+            "default_case_name": default_name[:200],
+            "start_url": task.start_url,
+            "steps": steps,
+            "warnings": errors,
+            "step_count": len(steps),
+        }
+    )
+
+
+@router.post(
+    "/tasks/{task_id}/import-ui-case",
+    summary="Browser Lab 执行记录导入 Web 用例",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE, UI_CASE_EDIT))],
+)
+async def import_ui_case_from_task(
+    task_id: int,
+    body: BrowserLabImportUiCaseRequest,
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    pid = _resolve_project_id(user_info, project_id)
+    task = await BrowserLabTask.get_or_none(id=task_id, project_id=pid)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status not in ("done", "failed", "stopped"):
+        raise HTTPException(status_code=400, detail="任务尚未结束，无法导入")
+
+    from app.modules.browser_lab.browser_lab_import import convert_browser_lab_to_ui_steps
+    from app.routers.ai.generate import _normalize_ui_steps
+
+    if body.steps:
+        raw_steps = body.steps
+    else:
+        raw_steps = convert_browser_lab_to_ui_steps(
+            start_url=task.start_url,
+            task_text=task.task_text,
+            step_log=list(task.step_log or []),
+            include_open_browser=body.include_open_browser,
+        )
+    steps, errors = _normalize_ui_steps(raw_steps)
+    if not steps:
+        raise HTTPException(status_code=422, detail="未能生成有效步骤，请检查 Browser Lab 记录是否包含操作")
+
+    username = user_info.get("username") or user_info.get("sub") or ""
+    desc_parts = [
+        f"来源：智能浏览器任务 #{task.id}",
+        (task.task_text or "")[:500],
+    ]
+    description = (body.description or "\n".join(p for p in desc_parts if p)).strip()[:4000]
+
+    case = await Case.create(
+        name=body.case_name.strip(),
+        level="P2",
+        project_id=pid,
+        steps=steps,
+        description=description or None,
+        username=username,
+        update_by=username,
+        is_del=False,
+        catalog_id=body.catalog_id,
+    )
+    return StandardResponse(
+        data={
+            "case_id": case.id,
+            "case_name": case.name,
+            "step_count": len(steps),
+            "warnings": errors,
+        },
+        message="已导入 Web 用例，请核对定位器后保存到套件",
+    )

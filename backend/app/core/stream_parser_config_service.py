@@ -46,7 +46,7 @@ async def ensure_builtin_stream_parser_configs() -> None:
             "name": "问答流式 v1（KCF 默认）",
             "description": (
                 "适用于 KCF `/api/v1/qa` 标准 SSE 协议：think / output_text / eof references。\n\n"
-                "问答准确性评测与压测「流式阶段」均可选用。"
+                "压测「流式阶段」与接口流式调试均可选用。"
             ),
             "parser_id": "qa_sse_v1",
             "parser_options": {},
@@ -182,7 +182,7 @@ async def resolve_parser_spec(cfg: dict[str, Any]) -> dict[str, Any]:
                 "config_id": row.id,
                 "config_name": row.name,
             }
-    from app.core.qa_eval_target_client import normalize_sse_parser
+    from app.modules.stream_phase.parsers.qa_sse_v1 import normalize_sse_parser
 
     parser_id = normalize_sse_parser(cfg.get("sse_parser"))
     return {
@@ -211,7 +211,7 @@ def extract_qa_fields_from_parse_result(result: dict[str, Any]) -> dict[str, Any
     }
 
 
-def parse_sse_lines_for_qa_eval(
+def parse_sse_lines_for_stream_qa(
     lines: list[str],
     *,
     parser_id: str,
@@ -219,8 +219,8 @@ def parse_sse_lines_for_qa_eval(
     success_rule: dict | None = None,
     started: float | None = None,
 ) -> dict[str, Any]:
-    """统一 SSE 解析入口（问答评测 / 接口调试）。"""
-    from app.core.qa_eval_target_client import is_qa_sse_v1_parser, parse_qa_sse_v1
+    """统一 SSE 解析入口（流式接口调试 / 压测）。"""
+    from app.modules.stream_phase.parsers.qa_sse_v1 import is_qa_sse_v1_parser, parse_qa_sse_v1
 
     if is_qa_sse_v1_parser(parser_id):
         return parse_qa_sse_v1(lines)
@@ -252,7 +252,7 @@ async def test_stream_parser_config(
     if not get_parser(parser_id):
         raise ValueError(f"未知解析器: {parser_id}")
     started = time.perf_counter()
-    qa_fields = parse_sse_lines_for_qa_eval(
+    qa_fields = parse_sse_lines_for_stream_qa(
         lines,
         parser_id=parser_id,
         parser_options=parser_options,

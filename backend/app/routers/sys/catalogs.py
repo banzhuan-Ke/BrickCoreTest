@@ -9,9 +9,9 @@ from app.models.ui import Case, Suite, Task
 from app.models.http import ApiDefinition, ApiTestCase, ApiTestSuite, ApiTestPlan
 from app.models.perf import PerfScene
 from app.models.app import AppCase, AppSuite, AppPlan
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import MODULE_VIEW, MODULE_EDIT
-from app.core.catalog_utils import build_catalog_tree, resolve_catalog, apply_catalog_filter
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import MODULE_VIEW, MODULE_EDIT
+from app.core.shared.catalog_utils import build_catalog_tree, resolve_catalog, apply_catalog_filter
 
 router = APIRouter(prefix="/catalogs", tags=["测试目录"], dependencies=[Depends(is_authenticated)])
 

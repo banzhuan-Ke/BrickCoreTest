@@ -8,6 +8,7 @@ export const APP_METHODS = new Set(allAppSteps.map((item) => item.method))
 /** method -> 有序可见参数列表（未列出的字段不展示） */
 export const APP_STEP_PARAM_ORDER = {
   launch_app: ['app_id', 'stop'],
+  launch_wechat: ['stop'],
   terminate_app: ['app_id'],
   clear_app: ['app_id'],
   install_app: ['app_path'],
@@ -25,6 +26,8 @@ export const APP_STEP_PARAM_ORDER = {
   scroll_to: ['locator', 'locator_ref'],
   assert_exists: ['locator', 'locator_ref', 'timeout'],
   assert_not_exists: ['locator', 'locator_ref', 'timeout'],
+  assert_image_exists: ['locator', 'locator_ref', 'timeout'],
+  assert_image_not_exists: ['locator', 'locator_ref', 'timeout'],
   assert_text: ['locator', 'locator_ref', 'text', 'timeout'],
   assert_text_contains: ['locator', 'locator_ref', 'text', 'timeout'],
   extract_text: ['locator', 'locator_ref', 'var_name', 'timeout'],
@@ -53,6 +56,8 @@ export const APP_REQUIRED_PARAMS = {
   wait_gone: ['locator'],
   assert_exists: ['locator'],
   assert_not_exists: ['locator'],
+  assert_image_exists: ['locator'],
+  assert_image_not_exists: ['locator'],
   assert_text: ['locator', 'text'],
   assert_text_contains: ['locator', 'text'],
   extract_text: ['locator', 'var_name'],
@@ -271,7 +276,7 @@ export function getAppOrderedVisibleParams(method, params = {}) {
       result[key] = params[key] || 'home'
     } else if (key === 'name' && method === 'screenshot') {
       result[key] = params[key] || 'screenshot'
-    } else if (key === 'stop' && method === 'launch_app') {
+    } else if (key === 'stop' && (method === 'launch_app' || method === 'launch_wechat')) {
       result[key] = !!params[key]
     } else if (key === 'app_id' && APP_ID_PARAM_METHODS.has(method)) {
       result[key] = params[key] ?? ''

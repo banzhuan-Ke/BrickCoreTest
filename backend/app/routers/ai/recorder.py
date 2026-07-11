@@ -15,15 +15,15 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request, Body
 from pydantic import BaseModel, Field
 
-from app.core.auth import is_authenticated, verify_runner_or_internal
-from app.core.mq_producer import MQProducer
-from app.core.recorder_converter import convert_actions_to_steps
-from app.core.recorder_quality import (
+from app.core.platform.auth import is_authenticated, verify_runner_or_internal
+from app.core.infra.mq_producer import MQProducer
+from app.modules.ai.recorder_converter import convert_actions_to_steps
+from app.modules.ai.recorder_quality import (
     assess_steps,
-    extract_desc_targets,
     resolve_locators_after_optimize,
-    _normalize_desc,
 )
+from app.modules.ai.recorder_step_merge import patch_meta_from_original_steps
+from app.modules.ui.ui_device_guard import assert_device_available_for_record
 from app.models.ai import AiRecordSession
 from app.models.sys import Device
 from app.schemas.ai import StandardResponse
@@ -31,60 +31,23 @@ from app.schemas.ai import StandardResponse
 logger = logging.getLogger(__name__)
 
 
-def _normalize_step_desc(desc: str) -> str:
-    """用于优化前后步骤描述模糊匹配。"""
-    return _normalize_desc(desc)
+def _steps_content_unchanged(optimized: list, original: list) -> bool:
+    """判断 LLM 输出是否与原始步骤实质相同（仅描述微调不计）。"""
+    if len(optimized) != len(original):
+        return False
 
+    def _fp(step: dict) -> tuple:
+        params = step.get("params") or {}
+        return (
+            step.get("method"),
+            params.get("locator") or params.get("url"),
+            params.get("value"),
+            params.get("start_selector"),
+            params.get("end_selector"),
+            params.get("timeout"),
+        )
 
-def _patch_meta_from_original_steps(optimized_steps: list, original_steps: list):
-    """从原始步骤中补回 meta 到优化后的步骤
-    
-    LLM 优化时不会返回 meta 字段，但前端 LocatorSelector 需要 meta 来生成候选定位器。
-    匹配顺序：method+locator/url → method+desc → method+捕获文案/描述目标（禁止按 method 盲绑）。
-    """
-    locator_meta_map: dict[tuple, dict] = {}
-    desc_meta_map: dict[tuple, dict] = {}
-    label_meta_map: dict[tuple, dict] = {}
-
-    for orig in original_steps:
-        if not isinstance(orig, dict):
-            continue
-        meta = orig.get("meta", {})
-        if not meta:
-            continue
-        method = orig.get("method", "")
-        params = orig.get("params", {})
-        if method == "open_url":
-            locator_meta_map[(method, params.get("url", ""))] = meta
-        else:
-            locator_meta_map[(method, params.get("locator", ""))] = meta
-        desc_meta_map[(method, _normalize_step_desc(orig.get("desc", "")))] = meta
-        acc = (meta.get("accessibleName") or meta.get("text") or "").strip()
-        if acc:
-            label_meta_map[(method, _normalize_step_desc(acc))] = meta
-        for target in extract_desc_targets(orig.get("desc", "")):
-            label_meta_map[(method, _normalize_step_desc(target))] = meta
-
-    for opt in optimized_steps:
-        if not isinstance(opt, dict) or opt.get("meta"):
-            continue
-        method = opt.get("method", "")
-        params = opt.get("params", {})
-        if method == "open_url":
-            key = (method, params.get("url", ""))
-        else:
-            key = (method, params.get("locator", ""))
-
-        meta = locator_meta_map.get(key)
-        if not meta:
-            meta = desc_meta_map.get((method, _normalize_step_desc(opt.get("desc", ""))))
-        if not meta:
-            for target in extract_desc_targets(opt.get("desc", "")):
-                meta = label_meta_map.get((method, _normalize_step_desc(target)))
-                if meta:
-                    break
-        if meta:
-            opt["meta"] = meta
+    return [_fp(s) for s in optimized] == [_fp(s) for s in original]
 
 
 def _extract_json_from_text(content: str) -> Optional[str]:
@@ -218,6 +181,8 @@ async def start_record(
         device = await Device.filter(status="在线", is_del=False).first()
         if not device:
             raise HTTPException(status_code=503, detail="当前没有可用的 Runner 设备，请检查 Runner 是否在线")
+
+    await assert_device_available_for_record(device.id)
     
     # 创建录制会话
     record = await AiRecordSession.create(
@@ -518,8 +483,8 @@ async def _execute_step_optimize(
     step_module: str = "ui",
 ) -> dict:
     """执行步骤优化流水线，供录制会话与用例编辑共用。"""
-    from app.core.ai_usage_log import log_ai_usage
-    from app.core.recorder_optimize import (
+    from app.core.llm.ai_usage_log import log_ai_usage
+    from app.modules.ai.recorder_optimize import (
         extract_page_context,
         generate_assertion_steps,
         insert_assertions_into_steps,
@@ -529,9 +494,12 @@ async def _execute_step_optimize(
     total_tokens = 0
     config = await _resolve_ai_config(ai_config_id)
 
-    trimmed, opt_tokens = await _optimize_steps(original_steps, description, config, step_module=step_module)
+    trimmed, opt_tokens, trim_meta = await _optimize_steps(
+        original_steps, description, config, step_module=step_module,
+    )
     total_tokens += opt_tokens
     assertion_steps: list = []
+    assertion_skip_reason: Optional[str] = None
     page_context = ""
     actions = raw_actions or []
 
@@ -539,7 +507,7 @@ async def _execute_step_optimize(
         if use_page_context and step_module == "ui":
             page_context = extract_page_context(actions)
         if config:
-            assertion_steps, assert_tokens = await generate_assertion_steps(
+            assertion_steps, assert_tokens, assertion_skip_reason = await generate_assertion_steps(
                 trimmed_steps=trimmed,
                 description=description or "",
                 page_context=page_context,
@@ -550,6 +518,7 @@ async def _execute_step_optimize(
             total_tokens += assert_tokens
         else:
             logger.warning("[recorder.optimize] 无 AI 配置，跳过断言生成")
+            assertion_skip_reason = "no_ai_config"
 
     optimized = insert_assertions_into_steps(trimmed, assertion_steps)
     if step_module == "app":
@@ -580,9 +549,17 @@ async def _execute_step_optimize(
         "optimized_count": len(optimized),
         "trimmed_count": max(0, len(original_steps) - len(trimmed)),
         "assertions_count": len(assertion_steps),
+        "assertions_skipped_reason": assertion_skip_reason,
         "append_assertions": append_assertions,
         "use_page_context": use_page_context,
         "page_context_used": bool(page_context),
+        "llm_applied": trim_meta.get("llm_applied", False),
+        "fallback_reason": trim_meta.get("fallback_reason"),
+        "meta_patched": trim_meta.get("meta_patched", 0),
+        "params_restored": trim_meta.get("params_restored", 0),
+        "source_traced": trim_meta.get("source_traced", 0),
+        "normalize_warnings": trim_meta.get("normalize_warnings", []),
+        "no_change": trim_meta.get("no_change", False),
         "locators_picked": locator_stats["ai_picked"] + locator_stats["rule_picked"],
         "locators_ai_picked": locator_stats["ai_picked"],
         "locators_rule_picked": locator_stats["rule_picked"],
@@ -695,22 +672,32 @@ async def optimize_record(
     return StandardResponse(data=data)
 
 
-async def _optimize_steps(steps: list, description: str, config=None, step_module: str = "ui") -> tuple[list, int]:
+async def _optimize_steps(steps: list, description: str, config=None, step_module: str = "ui") -> tuple[list, int, dict]:
     """
     使用 LLM 优化录制步骤（删除多余步骤 + 优化描述）
     
-    返回 (优化后的步骤列表, tokens_used)，不修改原始列表。
+    返回 (优化后的步骤列表, tokens_used, 优化元信息)，不修改原始列表。
     """
-    from app.core.ai_prompts import PromptManager
-    from app.core.llm_client import LLMClientFactory
-    from app.core.encryption import decrypt_value
+    from app.modules.ai.ai_prompts import PromptManager
+    from app.core.llm.llm_client import LLMClientFactory
+    from app.core.platform.encryption import decrypt_value
     from app.models.ai import AiConfig
+
+    optimize_meta: dict = {
+        "llm_applied": False,
+        "fallback_reason": None,
+        "meta_patched": 0,
+        "params_restored": 0,
+        "source_traced": 0,
+        "normalize_warnings": [],
+    }
     
     if config is None:
         config = await AiConfig.filter(is_enabled=True, is_del=False).order_by("-is_default", "-id").first()
     if not config:
         logger.warning("[recorder.optimize] 未找到可用的 AI 配置，跳过优化")
-        return steps, 0
+        optimize_meta["fallback_reason"] = "no_ai_config"
+        return steps, 0, optimize_meta
     
     # 构建步骤文本（含候选定位，供 AI 在列表内智能重选）
     steps_lines = []
@@ -743,7 +730,8 @@ async def _optimize_steps(steps: list, description: str, config=None, step_modul
         )
     except Exception as e:
         logger.warning(f"[recorder] 渲染 prompt 模板失败: {e}，跳过优化")
-        return steps, 0
+        optimize_meta["fallback_reason"] = "prompt_render_failed"
+        return steps, 0, optimize_meta
     
     # 调用 LLM
     api_key = decrypt_value(config.api_key)
@@ -766,8 +754,8 @@ async def _optimize_steps(steps: list, description: str, config=None, step_modul
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.3,
-        max_tokens=4096,
+        temperature=0.2,
+        max_tokens=max(4096, min(len(steps) * 180, 16384)),
         extra_body=extra_body or None,
         **kwargs,
     )
@@ -781,41 +769,65 @@ async def _optimize_steps(steps: list, description: str, config=None, step_modul
     
     if not json_str:
         logger.warning("[recorder.optimize] 未从 LLM 返回中提取到 JSON，回退到原始步骤")
-        return steps, tokens_used
+        optimize_meta["fallback_reason"] = "no_json_in_response"
+        return steps, tokens_used, optimize_meta
     
     try:
         data = json.loads(json_str)
-        # 新格式：返回完整 steps 数组
         optimized_steps = data.get("steps", [])
         if optimized_steps and isinstance(optimized_steps, list):
-            # 校验每个步骤的必填字段
             valid_steps = []
             for s in optimized_steps:
                 if isinstance(s, dict) and s.get("method") and s.get("desc"):
-                    # 确保 keyword 存在
                     if not s.get("keyword"):
                         s["keyword"] = s.get("desc", "")[:20]
                     valid_steps.append(s)
-            
-            # 从原始步骤中补回 meta（LLM 不会返回 meta）
-            # 匹配策略：method + params.locator / params.url 一致则认为同一元素
-            _patch_meta_from_original_steps(valid_steps, steps)
 
-            logger.info(f"[recorder.optimize] 解析成功: 原始{len(steps)}步 → 优化后{len(valid_steps)}步")
-            return valid_steps if valid_steps else steps, tokens_used
-        else:
-            logger.warning(f"[recorder.optimize] LLM 返回的 steps 为空或不合法: {type(optimized_steps)}")
+            patch_stats = patch_meta_from_original_steps(valid_steps, steps)
+            optimize_meta.update(patch_stats)
+
+            if step_module == "ui":
+                from app.routers.ai.generate import _normalize_ui_steps
+                normalized, norm_errors = _normalize_ui_steps(valid_steps)
+                if normalized:
+                    # 保留 normalize 未覆盖的 meta
+                    for i, step in enumerate(normalized):
+                        if i < len(valid_steps) and valid_steps[i].get("meta"):
+                            step["meta"] = valid_steps[i]["meta"]
+                    valid_steps = normalized
+                if norm_errors:
+                    optimize_meta["normalize_warnings"] = norm_errors[:10]
+
+            if valid_steps:
+                if _steps_content_unchanged(valid_steps, steps):
+                    optimize_meta["no_change"] = True
+                optimize_meta["llm_applied"] = True
+                logger.info(
+                    "[recorder.optimize] 解析成功: 原始%s步 → 优化后%s步, meta_patched=%s, source_traced=%s",
+                    len(steps), len(valid_steps),
+                    optimize_meta.get("meta_patched"), optimize_meta.get("source_traced"),
+                )
+                return valid_steps, tokens_used, optimize_meta
+            logger.warning("[recorder.optimize] 校验后无有效步骤，回退原始")
+            optimize_meta["fallback_reason"] = "no_valid_steps"
+            return steps, tokens_used, optimize_meta
+
+        logger.warning(f"[recorder.optimize] LLM 返回的 steps 为空或不合法: {type(optimized_steps)}")
         
-        # 兼容旧格式：只返回 descriptions 数组
         descriptions = data.get("descriptions", [])
         if len(descriptions) == len(steps):
             for i, desc in enumerate(descriptions):
                 if desc and isinstance(desc, str):
                     steps[i]["desc"] = desc
-            logger.info(f"[recorder.optimize] 使用旧格式 descriptions 更新描述")
-            return steps, tokens_used
+            logger.info("[recorder.optimize] 使用旧格式 descriptions 更新描述")
+            optimize_meta["llm_applied"] = True
+            optimize_meta["fallback_reason"] = "legacy_descriptions_only"
+            return steps, tokens_used, optimize_meta
     except Exception as e:
         logger.warning(f"[recorder.optimize] 解析 LLM 返回的 JSON 失败: {e}, json_str={json_str[:500]}")
+        optimize_meta["fallback_reason"] = "json_parse_failed"
+        return steps, tokens_used, optimize_meta
     
     logger.warning("[recorder.optimize] 所有解析路径失败，回退到原始步骤")
-    return steps, tokens_used
+    optimize_meta["fallback_reason"] = optimize_meta.get("fallback_reason") or "unknown"
+    return steps, tokens_used, optimize_meta

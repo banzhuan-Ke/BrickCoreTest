@@ -17,7 +17,7 @@
           <li><strong>创建项目</strong> → 管理测试项目</li>
           <li><strong>配置环境</strong> → 设置测试网址</li>
           <li><strong>安装执行器</strong> → 设备管理下载 zip，登录后上线（见下方「BrickCore 执行器」）</li>
-          <li><strong>编写用例</strong> → 录制测试步骤；编辑页每步可「调试到此步」（无需先保存）</li>
+          <li><strong>编写用例</strong> → 录制测试步骤；编辑页可用 <strong>交互调试</strong> 手动就位后按步试跑，或步骤行「调试到此步」</li>
           <li><strong>执行测试</strong> → 选择在线设备，查看测试结果</li>
         </ol>
 
@@ -157,17 +157,6 @@
           来源标识：<code>requirement_copy</code>（需求复制）、<code>zentao_xlsx</code>（禅道导入）、<code>manual</code>（手工新建）。
         </p>
 
-        <h4 v-if="!isCommunityEdition">三-A、问答准确性评测（知识库 / 问答机器人）</h4>
-        <template v-if="!isCommunityEdition">
-        <p>路径：<strong>AI 测试 → 问答准确性评测</strong>。维护标准问答集，批量调用被测 API 并输出统计与对比报告。</p>
-        <ol>
-          <li><strong>评测集</strong>：下载 Excel 模板导入（问题、标准答案必填；序号、问答目录、多轮、问题类型等）</li>
-          <li><strong>被测 API</strong>：配置 SSE 流式或 HTTP 问答接口，支持接口调试</li>
-          <li><strong>执行评测</strong>：填写<strong>评测名称</strong>（默认评测集名，可在执行记录中识别）；模式：自动（API+LLM 评判）/ 仅评判 / 仅拉取；支持序号范围、失败重跑、自动分批（大批量题目）</li>
-          <li><strong>报告</strong>：统计报告（优秀率/场景类型分析）、单题报告、人工审核、合并导出与迭代对比</li>
-        </ol>
-        <p style="color:#909399;font-size:13px;">评判模型在「AI 模型配置 → 场景绑定 → 问答准确性评判」。</p>
-        </template>
 
         <h4>四、AI 生成 API 测试用例</h4>
         <ol>
@@ -375,7 +364,7 @@
             <tr><th>菜单</th><th>说明</th></tr>
           </thead>
           <tbody>
-            <tr><td>用例管理</td><td>驱动模式、步骤编排、调试到此步、单用例运行</td></tr>
+            <tr><td>用例管理</td><td>驱动模式、步骤编排、交互调试、调试到此步、单用例运行</td></tr>
             <tr><td>元素库</td><td>原生 / H5 / 图像模板；图像支持上传与 presign 预览</td></tr>
             <tr><td>元素探查</td><td>控件树、截图选控件、App WebView / 手机 Chrome DOM 探测</td></tr>
             <tr><td>套件 / 计划 / 执行记录</td><td>与 Web UI 类似；报告含环境摘要、步骤分布、match_score</td></tr>

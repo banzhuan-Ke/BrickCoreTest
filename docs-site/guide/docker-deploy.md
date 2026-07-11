@@ -243,7 +243,7 @@ Test-NetConnection <公网IP> -Port 26379
 Test-NetConnection <公网IP> -Port 9200
 ```
 
-详见 [执行器使用说明](runner-client.md)、[执行器打包](runner-packaging.md)。
+详见 [执行器使用说明](runner-client.md)、[执行器打包](runner-packaging.md)（Pro 仓 `docs/其他文档/CE同步与发布手册.md` 有 Pro→CE 发布流程）。
 
 ---
 

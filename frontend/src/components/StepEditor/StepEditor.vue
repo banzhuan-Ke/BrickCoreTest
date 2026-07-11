@@ -4,6 +4,17 @@
       <span class="selection-summary">已选 <strong>{{ selectedCount }}</strong> 步</span>
       <el-button link type="primary" @click="selectAll">全选</el-button>
       <el-button link @click="clearSelection">清空</el-button>
+      <el-tooltip content="在交互调试浏览器中执行勾选的步骤（需先打开交互调试）" placement="top">
+        <el-button
+          type="success"
+          size="small"
+          :icon="VideoPlay"
+          :disabled="selectedCount === 0"
+          @click="runDebugSelectedSteps"
+        >
+          调试执行
+        </el-button>
+      </el-tooltip>
       <el-button
         type="primary"
         size="small"
@@ -16,7 +27,7 @@
     </div>
     <div v-else-if="localSteps.length > 0" class="selection-toolbar is-compact">
       <el-button link type="primary" @click="enterSelectionMode">多选步骤</el-button>
-      <el-text type="info" size="small">勾选多个步骤后可生成可复用片段</el-text>
+      <el-text type="info" size="small">勾选多个步骤后可调试执行或生成可复用片段</el-text>
     </div>
 
     <!-- 步骤列表 -->
@@ -45,9 +56,12 @@
             :selected="selectedIndices.has(index)"
             :debug-enabled="debugEnabled"
             :execution-hint="stepExecutionHint(index)"
+            :debug-selected="isDebugHighlighted(index)"
+            :debug-run-result="stepDebugRunResult(index)"
             @toggle-select="toggleStepSelection(index)"
             @edit="openEditDialog(step, index)"
             @debug="onDebugStep"
+            @debug-select="onDebugSelectStep(index)"
             @copy="copyStep(index)"
             @update:step="updateStep(index, $event)"
             @delete="deleteStep(index)"
@@ -99,7 +113,7 @@
 <script setup>
 import { ref, computed, provide, watch, nextTick } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, VideoPlay } from '@element-plus/icons-vue'
 import StepItem from './StepItem.vue'
 import StepEditDialog from './StepEditDialog.vue'
 import FragmentRefEditDialog from './FragmentRefEditDialog.vue'
@@ -120,6 +134,7 @@ import { uiFragmentApi } from '@/api/modules/ui'
 import { appFragmentApi } from '@/api/modules/app'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { getStepExecutionHint } from '@/utils/caseExecutionHints'
+import { getDebugStepResult } from '@/utils/debugSession'
 
 const proStore = ProjectStore()
 
@@ -131,6 +146,18 @@ const props = defineProps({
   executionHints: {
     type: Object,
     default: null
+  },
+  debugExecutionHints: {
+    type: Object,
+    default: null,
+  },
+  debugSelectedIndex: {
+    type: Number,
+    default: -1,
+  },
+  debugSelectedIndices: {
+    type: Array,
+    default: () => [],
   },
   /** web | app — App 用例编辑传 app */
   module: {
@@ -151,10 +178,27 @@ const props = defineProps({
 provide('stepEditorModule', computed(() => props.module))
 
 function stepExecutionHint(index) {
+  const fromDebug = getStepExecutionHint(props.debugExecutionHints, index)
+  if (fromDebug) return fromDebug
   return getStepExecutionHint(props.executionHints, index)
 }
 
-const emit = defineEmits(['update:steps', 'debug-step'])
+function stepDebugRunResult(index) {
+  return getDebugStepResult(props.debugExecutionHints, index)
+}
+
+function isDebugHighlighted(index) {
+  if (props.debugSelectedIndices?.length) {
+    return props.debugSelectedIndices.includes(index)
+  }
+  return props.debugSelectedIndex === index
+}
+
+function onDebugSelectStep(index) {
+  emit('debug-select-step', index)
+}
+
+const emit = defineEmits(['update:steps', 'debug-step', 'debug-select-step', 'debug-selected-steps'])
 
 // 本地步骤数据
 const localSteps = computed({
@@ -310,6 +354,16 @@ function openCreateFragmentDialog() {
     [...selectedIndices.value],
   )
   createFragmentVisible.value = true
+}
+
+function runDebugSelectedSteps() {
+  if (selectedCount.value === 0) {
+    ElMessage.warning('请先勾选要调试的步骤')
+    return
+  }
+  const indices = [...selectedIndices.value].sort((a, b) => a - b)
+  emit('debug-selected-steps', indices)
+  exitSelectionMode()
 }
 
 function handleFragmentCreated({ fragment, replaceWithRef }) {

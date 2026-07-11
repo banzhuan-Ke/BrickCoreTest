@@ -2,16 +2,16 @@ import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, status, Depends
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import DEVICE_VIEW, DEVICE_EDIT
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import DEVICE_VIEW, DEVICE_EDIT
 from app.schemas.sys import DeviceSchemas
 from app.models.sys import Device
-from app.core import config as settings
+from app.core.platform import config as settings
 from redis.asyncio import Redis
 import json
-from app.core.mq_producer import MQProducer
-from app.core.runner_device_control import STOPPED_STATUS, force_stop_runner_device
-from app.core.runner_middleware import revoke_device_middleware
+from app.core.infra.mq_producer import MQProducer
+from app.modules.runner.runner_device_control import STOPPED_STATUS, force_stop_runner_device
+from app.core.runner.runner_middleware import revoke_device_middleware
 
 # 创建路由对象
 router = APIRouter(prefix="/devices", tags=["设备管理"])

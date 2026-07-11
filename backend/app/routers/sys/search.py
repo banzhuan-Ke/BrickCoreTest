@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.auth import get_current_username
+from app.core.platform.auth import get_current_username
 from app.models.http import ApiDefinition, ApiTestCase, ApiTestPlan, ApiTestSuite
 from app.models.app import AppCase, AppElement, AppPlan, AppSuite
 from app.models.sys import Project

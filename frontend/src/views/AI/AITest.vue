@@ -120,7 +120,10 @@
         <el-col :xs="24" :lg="8">
           <el-card shadow="never" class="panel-card" v-loading="loading">
             <template #header>
-              <span class="card-header-title">本月 Token（当前项目）</span>
+              <div class="recent-header">
+                <span class="card-header-title">本月 Token（当前项目）</span>
+                <el-button link type="primary" @click="router.push('/ai-usage')">模型使用情况</el-button>
+              </div>
             </template>
             <div class="token-grid">
               <div class="token-item">
@@ -128,12 +131,19 @@
                 <div class="token-label">总消耗</div>
               </div>
               <div class="token-item">
-                <div class="token-value">{{ tokenStats.month_generate_count ?? 0 }}</div>
-                <div class="token-label">生成次数</div>
+                <div class="token-value">{{ tokenStats.month_usage_log_count ?? tokenStats.month_generate_count ?? 0 }}</div>
+                <div class="token-label">AI 调用次数</div>
               </div>
               <div class="token-item">
-                <div class="token-value">{{ tokenStats.month_job_count ?? 0 }}</div>
-                <div class="token-label">批量任务</div>
+                <div class="token-value">{{ formatToken(usageSummary.today_tokens) }}</div>
+                <div class="token-label">今日消耗</div>
+              </div>
+            </div>
+            <div v-if="usageSummary.top_scenes?.length" class="usage-scenes">
+              <div class="usage-scenes-title">Top 场景（本月 Token）</div>
+              <div v-for="item in usageSummary.top_scenes" :key="item.scene" class="usage-scene-row">
+                <span class="usage-scene-label">{{ item.label }}</span>
+                <span class="usage-scene-tokens">{{ formatToken(item.tokens) }}</span>
               </div>
             </div>
           </el-card>
@@ -141,10 +151,10 @@
         <el-col :xs="24" :lg="16">
           <el-card shadow="never" class="panel-card" v-loading="loading">
             <template #header>
-              <span class="card-header-title">近 7 日生成趋势（当前项目）</span>
+              <span class="card-header-title">近 7 日 AI 调用趋势（当前项目）</span>
             </template>
             <div v-show="generateTrend.length" ref="trendChartRef" class="trend-chart"></div>
-            <el-empty v-if="!generateTrend.length" description="暂无生成记录" :image-size="64" />
+            <el-empty v-if="!generateTrend.length" description="暂无 AI 调用记录" :image-size="64" />
           </el-card>
         </el-col>
       </el-row>
@@ -368,7 +378,10 @@ import {
   Link,
   Mouse,
   Upload,
-  ChatLineRound
+  ChatLineRound,
+  DataLine,
+  FolderOpened,
+  Monitor
 } from '@element-plus/icons-vue'
 import PageCard from '@/components/PageCard.vue'
 import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
@@ -395,6 +408,7 @@ const funnel = ref([])
 const funnelColors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399']
 const todos = ref([])
 const tokenStats = ref({})
+const usageSummary = ref({ top_scenes: [] })
 const generateTrend = ref([])
 const funnelChartRef = ref(null)
 const trendChartRef = ref(null)
@@ -500,6 +514,27 @@ const primaryEntries = computed(() => [
 const secondaryEntries = computed(() => {
   const items = [
   {
+    name: '模型使用情况',
+    desc: 'Token 统计 · 场景占比 · 调用明细',
+    path: '/ai-usage',
+    icon: DataLine,
+    disabled: !canAiTest.value
+  },
+  {
+    name: '迭代资料库',
+    desc: '迭代文档 · 报告向导 · RAG 检索',
+    path: '/ai-knowledge/folders',
+    icon: FolderOpened,
+    disabled: !canAiTest.value
+  },
+  {
+    name: '智能浏览器',
+    desc: '自然语言驱动浏览器探索',
+    path: '/browser-lab/run',
+    icon: Monitor,
+    disabled: !canAiTest.value
+  },
+  {
     name: '接口 AI 生成',
     desc: '接口管理 / 用例 → AI 生成',
     path: '/api-module',
@@ -520,16 +555,9 @@ const secondaryEntries = computed(() => {
     icon: Document,
     disabled: !canAiTest.value
   },
-  {
-    name: '问答准确性评测',
-    desc: '标准集 · 被测 API · LLM 打分',
-    path: '/ai-qa-eval',
-    icon: ChatLineRound,
-    disabled: !canAiTest.value
-  }
   ]
   if (isCommunityEdition.value) {
-    return items.filter((item) => item.path !== '/ai-qa-eval')
+    return items.filter((item) => item.path !== '/ai-knowledge/folders')
   }
   return items
 })
@@ -622,12 +650,12 @@ const initTrendChart = () => {
   const dates = generateTrend.value.map(i => i.date?.slice(5) || i.date)
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
-    legend: { data: ['总生成', '成功', '失败'], bottom: 0 },
+    legend: { data: ['总调用', '成功', '失败'], bottom: 0 },
     grid: { left: '3%', right: '4%', top: '8%', bottom: '16%', containLabel: true },
     xAxis: { type: 'category', data: dates },
     yAxis: { type: 'value', minInterval: 1 },
     series: [
-      { name: '总生成', type: 'line', smooth: true, data: generateTrend.value.map(i => i.total) },
+      { name: '总调用', type: 'line', smooth: true, data: generateTrend.value.map(i => i.total) },
       { name: '成功', type: 'line', smooth: true, data: generateTrend.value.map(i => i.success) },
       { name: '失败', type: 'line', smooth: true, data: generateTrend.value.map(i => i.failed) },
     ]
@@ -643,7 +671,11 @@ const openCases = (row) => {
 }
 
 const openRunningJob = (job) => {
-  router.push({ path: '/ai-requirements', query: { reqId: String(job.requirement_id) } })
+  router.push({
+    name: 'aiTestingWorkspace',
+    params: { reqId: String(job.requirement_id) },
+    query: { tab: 'cases' }
+  })
 }
 
 const recordStatusType = (status) => {
@@ -657,7 +689,7 @@ const openRecord = (row) => {
   const reqId = row.requirement_id
   if (t.startsWith('requirement_test') && reqId) {
     if (t === 'requirement_test_scheme') {
-      router.push({ path: '/ai-test-analysis', query: { reqId: String(reqId) } })
+      router.push({ name: 'aiTestingWorkspace', params: { reqId: String(reqId) }, query: { tab: 'mindmap' } })
     } else {
       openAnalysis({ id: reqId })
     }
@@ -687,6 +719,7 @@ const loadOverview = async (silent = false) => {
     funnel.value = []
     todos.value = []
     tokenStats.value = {}
+    usageSummary.value = { top_scenes: [] }
     generateTrend.value = []
     if (funnelChart) {
       funnelChart.dispose()
@@ -712,6 +745,7 @@ const loadOverview = async (silent = false) => {
       funnel.value = d.funnel || []
       todos.value = d.todos || []
       tokenStats.value = d.token_stats || {}
+      usageSummary.value = d.usage_summary || { top_scenes: [] }
       generateTrend.value = d.generate_trend || []
       nextTick(() => {
         initFunnelChart()
@@ -892,6 +926,34 @@ onUnmounted(() => {
   font-size: 12px;
   color: #909399;
   margin-top: 4px;
+}
+.usage-scenes {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #ebeef5;
+}
+.usage-scenes-title {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 8px;
+}
+.usage-scene-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.usage-scene-label {
+  color: #606266;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-scene-tokens {
+  color: #409eff;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 .trend-chart {
   width: 100%;

@@ -10,7 +10,7 @@ from fastapi.responses import Response
 
 from app.models.http import ApiDefinition, ApiTestCase
 from app.models.sys import TestCatalog
-from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.schemas.http import (
     ApiTestCaseCreate, ApiTestCaseUpdate, ApiTestCaseOut, ApiTestCaseListResponse,
     ApiRunRequest, ApiRunResult,
@@ -19,8 +19,8 @@ from app.schemas.http import (
     VariablePreviewRequest,
 )
 from uuid import uuid4
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import API_CASE_VIEW, API_CASE_EDIT, API_CASE_EXECUTE
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import API_CASE_VIEW, API_CASE_EDIT, API_CASE_EXECUTE
 
 router = APIRouter(tags=["接口测试用例"], dependencies=[Depends(is_authenticated), Depends(require_permissions(API_CASE_VIEW))])
 
@@ -474,8 +474,8 @@ async def copy_test_case(
     user_info: dict = Depends(require_permissions(API_CASE_EDIT)),
 ):
     """复制接口测试用例；可跨项目复制（自动匹配或复制关联接口）。"""
-    from app.core.cross_project_copy import copy_api_case_to_project, ensure_target_project, resolve_target_catalog
-    from app.core.ui_project_guard import assert_user_project_member
+    from app.core.shared.cross_project_copy import copy_api_case_to_project, ensure_target_project, resolve_target_catalog
+    from app.modules.ui.ui_project_guard import assert_user_project_member
 
     case = await ApiTestCase.get_or_none(id=case_id, is_del=False)
     if not case:
@@ -507,8 +507,8 @@ async def copy_test_case(
              dependencies=[Depends(require_permissions(API_CASE_VIEW))])
 async def preview_variables(body: VariablePreviewRequest):
     """合并项目/环境/额外变量，返回快照及示例字符串替换结果（执行前预览）。"""
-    from app.core.variable_resolver import VariableResolver
-    from app.core.data_tools.tag_service import merge_execution_variables
+    from app.core.case.variable_resolver import VariableResolver
+    from app.modules.data_tools.tag_service import merge_execution_variables
     from app.models.sys import Environment
 
     project_id = body.project_id

@@ -4,7 +4,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.core.api_auth_service import (
+from app.modules.http.api_auth_service import (
     DEFAULT_CUSTOM_CODE,
     auth_config_to_dict,
     get_enabled_auth_config,
@@ -12,8 +12,8 @@ from app.core.api_auth_service import (
     refresh_auth_config,
 )
 from app.routers.http.utils import normalize_extractor
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.permissions import API_AUTH_EDIT, API_AUTH_VIEW
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.core.platform.permissions import API_AUTH_EDIT, API_AUTH_VIEW
 from app.models.http import ApiAuthConfig, ApiDefinition
 from app.models.sys import Environment, Project
 from app.schemas.ai import StandardResponse

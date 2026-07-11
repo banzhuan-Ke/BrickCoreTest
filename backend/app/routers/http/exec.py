@@ -10,10 +10,10 @@ from app.models.http import (
     ApiTestSuite, ApiSuiteCase, ApiTestCase, ApiDefinition,
     ApiRunRecord, ApiSuiteRunRecord
 )
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import API_CASE_EXECUTE
-from app.core.notification import NotificationService
-from app.core.data_tools.inline_tools import ensure_dt_cache
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import API_CASE_EXECUTE
+from app.core.ops.notification import NotificationService
+from app.modules.data_tools.inline_tools import ensure_dt_cache
 from app.models.sys import Environment, NotificationConfig, Project
 
 # 导入 schemas
@@ -88,7 +88,7 @@ router = APIRouter(prefix="/exec", tags=["接口测试执行"], dependencies=[De
 from .suites import run_single_case  # noqa: E402
 
 
-from app.core.api_suite_runner import execute_api_suite_cases as _execute_api_suite_cases
+from app.modules.http.api_suite_runner import execute_api_suite_cases as _execute_api_suite_cases
 
 
 # ============ 批量执行和套件执行 ============

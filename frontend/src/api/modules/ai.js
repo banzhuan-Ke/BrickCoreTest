@@ -75,6 +75,34 @@ export const aiConfigApi = {
     }
 }
 
+// ========== Embedding 配置管理 ==========
+export const embedConfigApi = {
+    async create(data) {
+        return await http.post('/ai/embed-configs', data)
+    },
+    async getList(params = {}) {
+        return await http.get('/ai/embed-configs', { params })
+    },
+    async getDetail(id) {
+        return await http.get(`/ai/embed-configs/${id}`)
+    },
+    async update(id, data) {
+        return await http.put(`/ai/embed-configs/${id}`, data)
+    },
+    async delete(id) {
+        return await http.delete(`/ai/embed-configs/${id}`)
+    },
+    async test(id) {
+        return await http.post(`/ai/embed-configs/${id}/test`)
+    },
+    async setDefault(id) {
+        return await http.post(`/ai/embed-configs/${id}/set-default`)
+    },
+    async getSelectOptions() {
+        return await http.get('/ai/embed-configs/select-options')
+    }
+}
+
 // ========== Prompt 模板管理 ==========
 export const aiPromptApi = {
     // 获取所有模板
@@ -211,6 +239,9 @@ export const aiGenerateApi = {
     },
     async applyHealedLocatorToCase(data) {
         return await http.post('/ai/generate/locator-heal/apply-to-case', data, { timeout: 30000 })
+    },
+    async applyAiActToCase(data) {
+        return await http.post('/ai/generate/ai-act/apply-to-case', data, { timeout: 30000 })
     },
     // 预抓取页面元素
     async fetchPage(url) {
@@ -707,186 +738,6 @@ export const aiRecordApi = {
     }
 }
 
-// ========== 问答准确性评测 ==========
-export const qaEvalApi = {
-    async listSets(projectId) {
-        return await http.get('/ai/qa-eval/sets', {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async createSet(data, projectId) {
-        return await http.post('/ai/qa-eval/sets', data, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async updateSet(setId, data, projectId) {
-        return await http.put(`/ai/qa-eval/sets/${setId}`, data, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async deleteSet(setId, projectId) {
-        return await http.delete(`/ai/qa-eval/sets/${setId}`, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async listCases(setId, projectId) {
-        return await http.get(`/ai/qa-eval/sets/${setId}/cases`, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async createCase(setId, data, projectId) {
-        return await http.post(`/ai/qa-eval/sets/${setId}/cases`, data, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async updateCase(setId, caseId, data, projectId) {
-        return await http.put(`/ai/qa-eval/sets/${setId}/cases/${caseId}`, data, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async deleteCase(setId, caseId, projectId) {
-        return await http.delete(`/ai/qa-eval/sets/${setId}/cases/${caseId}`, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async importCases(setId, file, projectId, replace = false) {
-        const form = new FormData()
-        form.append('file', file)
-        form.append('replace', replace ? 'true' : 'false')
-        return await http.post(`/ai/qa-eval/sets/${setId}/cases/import`, form, {
-            params: projectId != null ? { project_id: projectId } : {},
-            headers: { 'Content-Type': 'multipart/form-data' },
-            timeout: 120000
-        })
-    },
-    async listTargets(projectId) {
-        return await http.get('/ai/qa-eval/targets', {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async createTarget(data, projectId) {
-        return await http.post('/ai/qa-eval/targets', data, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async updateTarget(targetId, data, projectId) {
-        return await http.put(`/ai/qa-eval/targets/${targetId}`, data, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async deleteTarget(targetId, projectId) {
-        return await http.delete(`/ai/qa-eval/targets/${targetId}`, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async testTarget(data, projectId, targetId = null) {
-        const url = targetId
-            ? `/ai/qa-eval/targets/${targetId}/test`
-            : '/ai/qa-eval/targets/test'
-        return await http.post(url, data, {
-            params: projectId != null ? { project_id: projectId } : {},
-            timeout: 360000
-        })
-    },
-    async getQaSsePreset(projectId) {
-        return await http.get('/ai/qa-eval/targets/presets/qa-sse', {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async listQuestionTypes(projectId) {
-        return await http.get('/ai/qa-eval/question-types', {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async listRuns(setId, projectId) {
-        return await http.get(`/ai/qa-eval/sets/${setId}/runs`, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async deleteRun(runId, projectId) {
-        return await http.delete(`/ai/qa-eval/runs/${runId}`, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async runEval(setId, data, projectId) {
-        return await http.post(`/ai/qa-eval/sets/${setId}/run`, data, {
-            params: projectId != null ? { project_id: projectId } : {},
-            timeout: 60000
-        })
-    },
-    async runEvalBatch(setId, data, projectId) {
-        return await http.post(`/ai/qa-eval/sets/${setId}/runs/batch`, data, {
-            params: projectId != null ? { project_id: projectId } : {},
-            timeout: 60000
-        })
-    },
-    async mergeExportRuns(setId, data, projectId) {
-        return await http.post(`/ai/qa-eval/sets/${setId}/runs/merge-export`, data, {
-            params: projectId != null ? { project_id: projectId } : {},
-            responseType: 'blob',
-            timeout: 120000
-        })
-    },
-    async mergeStatsReport(setId, data, projectId) {
-        return await http.post(`/ai/qa-eval/sets/${setId}/runs/merge-stats-report`, data, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async compareRunsReport(setId, data, projectId) {
-        return await http.post(`/ai/qa-eval/sets/${setId}/runs/compare-report`, data, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async downloadImportTemplate(projectId) {
-        return await http.get('/ai/qa-eval/import-template', {
-            params: projectId != null ? { project_id: projectId } : {},
-            responseType: 'blob'
-        })
-    },
-    async getStatsReport(runId, projectId) {
-        return await http.get(`/ai/qa-eval/runs/${runId}/stats-report`, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async reviewResult(runId, resultId, data, projectId) {
-        return await http.patch(`/ai/qa-eval/runs/${runId}/results/${resultId}/review`, data, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async regenerateResult(runId, resultId, projectId) {
-        return await http.post(`/ai/qa-eval/runs/${runId}/results/${resultId}/regenerate`, null, {
-            params: projectId != null ? { project_id: projectId } : {},
-            timeout: 360000
-        })
-    },
-    async bulkReviewResults(runId, data, projectId) {
-        return await http.post(`/ai/qa-eval/runs/${runId}/results/bulk-review`, data, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async getActiveRun(setId, projectId) {
-        return await http.get(`/ai/qa-eval/sets/${setId}/runs/active`, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async getRunReport(runId, projectId) {
-        return await http.get(`/ai/qa-eval/runs/${runId}`, {
-            params: projectId != null ? { project_id: projectId } : {}
-        })
-    },
-    async exportSetCases(setId, projectId) {
-        return await http.get(`/ai/qa-eval/sets/${setId}/cases/export`, {
-            params: projectId != null ? { project_id: projectId } : {},
-            responseType: 'blob'
-        })
-    },
-    async exportRunAnswers(runId, projectId) {
-        return await http.get(`/ai/qa-eval/runs/${runId}/export-answers`, {
-            params: projectId != null ? { project_id: projectId } : {},
-            responseType: 'blob'
-        })
-    }
-}
 
 // ========== 智能浏览器（browser-use） ==========
 export const browserLabApi = {
@@ -958,6 +809,17 @@ export const browserLabApi = {
     async getTaskReport(taskId, projectId) {
         return await http.get(`/ai/browser-lab/tasks/${taskId}/report`, {
             params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async previewUiSteps(taskId, projectId, params = {}) {
+        return await http.get(`/ai/browser-lab/tasks/${taskId}/ui-steps-preview`, {
+            params: { project_id: projectId, ...params }
+        })
+    },
+    async importUiCase(taskId, data, projectId) {
+        return await http.post(`/ai/browser-lab/tasks/${taskId}/import-ui-case`, data, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 120000
         })
     },
     async deleteTask(taskId, projectId) {

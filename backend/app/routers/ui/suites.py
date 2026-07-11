@@ -1,15 +1,60 @@
 from typing import List
 from fastapi import APIRouter, HTTPException, Depends, status, Query
 from app.models.sys import Project, TestCatalog
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import UI_SUITE_VIEW, UI_SUITE_EDIT
-from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import UI_SUITE_VIEW, UI_SUITE_EDIT
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.schemas.ui import AddSuiteForm, SuiteSchemas, UpdateSuiteForm, AddStepForm, StepSchemas, StepListSchemas, UpdateSuiteCaseSortForm
-from app.core.ui_execution_stale import cleanup_stale_ui_executions
+from app.modules.ui.ui_execution_stale import cleanup_stale_ui_executions
+from app.modules.ui.ui_list_query import (
+    load_catalog_names,
+    load_count_by_fk,
+    load_json_array_length,
+    load_latest_status_by_fk,
+)
 from app.models.ui import Suite, Step, Case, UiCaseExecution, UiSuiteExecution
 
 # 创建路由对象
 router = APIRouter(prefix="/suites", dependencies=[Depends(is_authenticated)])
+
+# 列表页仅需摘要字段；避免 SELECT 大 JSON 列后在 ORDER BY 时触发 sort buffer 溢出
+_SUITE_LIST_FIELDS = (
+    "id", "name", "username", "update_by", "suite_type",
+    "catalog_id", "create_time", "update_time", "is_del", "project_id",
+)
+
+
+async def _build_suite_list_items(suites: list[Suite]) -> list[dict]:
+    suite_ids = [suite.id for suite in suites]
+    catalog_ids = [suite.catalog_id for suite in suites if suite.catalog_id]
+    run_count_map = await load_count_by_fk(UiSuiteExecution, "suite_id", suite_ids)
+    status_map = await load_latest_status_by_fk(
+        "ui_suite_execution", "suite_id", suite_ids, default="等待执行",
+    )
+    case_count_map = await load_count_by_fk(Step, "suite_id", suite_ids)
+    pre_actions_count_map = await load_json_array_length("suite", suite_ids, "pre_actions")
+    catalog_name_map = await load_catalog_names(catalog_ids)
+    result = []
+    for suite in suites:
+        catalog_name = catalog_name_map.get(suite.catalog_id, "") if suite.catalog_id else ""
+        result.append({
+            "create_time": suite.create_time,
+            "update_time": suite.update_time,
+            "id": suite.id,
+            "name": suite.name,
+            "username": suite.username,
+            "update_by": suite.update_by or suite.username,
+            "status": status_map.get(suite.id, "等待执行"),
+            "suite_type": suite.suite_type,
+            "case_count": case_count_map.get(suite.id, 0),
+            "suite_step_count": pre_actions_count_map.get(suite.id, 0),
+            "catalog": catalog_name,
+            "catalog_id": suite.catalog_id,
+            "module": catalog_name,
+            "run_count": run_count_map.get(suite.id, 0),
+            "is_del": suite.is_del,
+        })
+    return result
 
 
 async def _touch_suite_updated(suite: Suite, username: str) -> None:
@@ -60,34 +105,29 @@ async def get_suite(project: int | None = None, project_id: int | None = None,
         query = query.filter(name__icontains=name)
     if suite_type:
         query = query.filter(suite_type=suite_type)
-    all_suites = await query.prefetch_related("steps").all()
-    result = []
-    for suite in all_suites:
-        catalog = await suite.catalog
-        run_record = await UiSuiteExecution.filter(suite=suite.id, is_del=False).order_by("-id").first()
-        latest_status = run_record.status if run_record else '等待执行'
-        if status and latest_status != status:
-            continue
-        cases = await suite.steps.filter(is_del=False).all()
-        result.append({
-            "create_time": suite.create_time,
-            "update_time": suite.update_time,
-            "id": suite.id,
-            "name": suite.name,
-            "username": suite.username,
-            "update_by": suite.update_by or suite.username,
-            "status": latest_status,
-            "suite_type": suite.suite_type,
-            "case_count": len(cases),
-            "suite_step_count": len(suite.pre_actions),
-            "catalog": catalog.name if catalog else "",
-            "catalog_id": suite.catalog_id,
-            "module": catalog.name if catalog else "",
-            "run_count": await UiSuiteExecution.filter(suite=suite.id, is_del=False).count(),
-            "is_del": suite.is_del
-        })
-    total = len(result)
-    data = result[(page - 1) * size: page * size]
+
+    if status:
+        all_suites = await query.only(*_SUITE_LIST_FIELDS).all()
+        status_map = await load_latest_status_by_fk(
+            "ui_suite_execution", "suite_id", [suite.id for suite in all_suites], default="等待执行",
+        )
+        filtered_suites = [
+            suite for suite in all_suites
+            if status_map.get(suite.id, "等待执行") == status
+        ]
+        total = len(filtered_suites)
+        page_suites = filtered_suites[(page - 1) * size: page * size]
+        data = await _build_suite_list_items(page_suites)
+        return {"data": data, "total": total}
+
+    total = await query.count()
+    page_suites = await (
+        query.offset((page - 1) * size)
+        .limit(size)
+        .only(*_SUITE_LIST_FIELDS)
+        .all()
+    )
+    data = await _build_suite_list_items(page_suites)
     return {"data": data, "total": total}
 
 

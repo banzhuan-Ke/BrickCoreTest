@@ -61,7 +61,7 @@
 
 扫码加入 **BrickCoreAI 测试平台交流群**，交流使用问题、部署与版本动态。
 
-<img src="../assets/wechat-group.png" width="200" alt="BrickCoreAI 测试平台交流群" /><br />
+<img src="/showcase/assets/wechat-group.png" width="200" alt="BrickCoreAI 测试平台交流群" /><br />
 <sub>微信加群</sub>
 
 </td>

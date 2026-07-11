@@ -118,6 +118,9 @@ const lastStats = reactive({
   trimmed_count: 0,
   assertions_count: 0,
   risk_steps_count: 0,
+  llm_applied: true,
+  fallback_reason: '',
+  assertions_skipped_reason: '',
 })
 
 function resetState() {
@@ -128,6 +131,9 @@ function resetState() {
   lastStats.trimmed_count = 0
   lastStats.assertions_count = 0
   lastStats.risk_steps_count = 0
+  lastStats.llm_applied = true
+  lastStats.fallback_reason = ''
+  lastStats.assertions_skipped_reason = ''
 }
 
 function handleOpen() {
@@ -164,16 +170,32 @@ const handleOptimize = async () => {
       lastStats.trimmed_count = d.trimmed_count || 0
       lastStats.assertions_count = d.assertions_count || 0
       lastStats.risk_steps_count = d.risk_steps_count || 0
+      lastStats.llm_applied = d.llm_applied !== false
+      lastStats.fallback_reason = d.fallback_reason || ''
+      lastStats.assertions_skipped_reason = d.assertions_skipped_reason || ''
       stepVersion.value = 'optimized'
-      const parts = ['AI 优化完成']
-      if (d.original_count && d.optimized_count && d.original_count > d.optimized_count) {
-        parts.push(`精简 ${d.original_count - d.optimized_count} 步`)
-      } else if (lastStats.trimmed_count) {
-        parts.push(`精简 ${lastStats.trimmed_count} 步`)
+      if (!lastStats.llm_applied || lastStats.fallback_reason) {
+        ElMessage.warning(
+          lastStats.fallback_reason
+            ? `AI 优化未完全生效（${lastStats.fallback_reason}），请核对步骤`
+            : 'AI 优化未生效，请核对或重试'
+        )
+      } else if (d.no_change) {
+        ElMessage.info('AI 已完成描述优化，操作步骤与参数基本未变')
+      } else {
+        const parts = ['AI 优化完成']
+        if (d.original_count && d.optimized_count && d.original_count > d.optimized_count) {
+          parts.push(`精简 ${d.original_count - d.optimized_count} 步`)
+        } else if (lastStats.trimmed_count) {
+          parts.push(`精简 ${lastStats.trimmed_count} 步`)
+        }
+        if (lastStats.assertions_count) parts.push(`断言 ${lastStats.assertions_count} 条`)
+        if (lastStats.assertions_skipped_reason === 'no_expectations_in_description' && optimizeOptions.append_assertions) {
+          parts.push('未补充断言（描述中缺少「预期」）')
+        }
+        if (lastStats.risk_steps_count) parts.push(`${lastStats.risk_steps_count} 步需核对`)
+        ElMessage.success(parts.join('，'))
       }
-      if (lastStats.assertions_count) parts.push(`断言 ${lastStats.assertions_count} 条`)
-      if (lastStats.risk_steps_count) parts.push(`${lastStats.risk_steps_count} 步需核对`)
-      ElMessage.success(parts.join('，'))
     } else {
       ElMessage.error(res.data?.message || 'AI 优化失败')
     }

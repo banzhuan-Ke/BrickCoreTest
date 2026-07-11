@@ -13,11 +13,11 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.core import config as settings
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.permissions import APP_PLAN_EDIT, APP_PLAN_EXECUTE, APP_PLAN_VIEW
-from app.core.scheduler_lock import with_scheduler_lock
-from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.core.platform import config as settings
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.core.platform.permissions import APP_PLAN_EDIT, APP_PLAN_EXECUTE, APP_PLAN_VIEW
+from app.core.infra.scheduler_lock import with_scheduler_lock
+from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppCronJob, AppPlan, AppPlanExecution, AppSuite
 from app.models.sys import Device, Environment
 from app.schemas.app import AppCronJobCreate, AppCronJobUpdate, AppRunForm
@@ -185,7 +185,7 @@ async def _execute_suite_cron(job: AppCronJob) -> tuple[str, int | None]:
 
 
 async def _execute_plan_cron(job: AppCronJob) -> tuple[str, int | None]:
-    from app.core.app_plan_runner import execute_app_plan
+    from app.modules.app.app_plan_runner import execute_app_plan
 
     plan = await AppPlan.get_or_none(id=job.plan_id, is_del=False)
     if not plan:

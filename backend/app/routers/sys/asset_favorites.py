@@ -4,8 +4,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.core.auth import get_current_username, require_permissions
-from app.core.permissions import API_MANAGE_VIEW, UI_CASE_VIEW
+from app.core.platform.auth import get_current_username, require_permissions
+from app.core.platform.permissions import API_MANAGE_VIEW, UI_CASE_VIEW
 from app.models.sys import AssetFavorite, Project, User
 from app.schemas.ai import StandardResponse
 

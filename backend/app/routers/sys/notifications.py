@@ -5,13 +5,13 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, Field
 
-from app.core.auth import is_authenticated, require_permissions, verify_runner_or_internal
-from app.core.permissions import (
+from app.core.platform.auth import is_authenticated, require_permissions, verify_runner_or_internal
+from app.core.platform.permissions import (
     NOTIFICATION_CONFIG_VIEW, NOTIFICATION_CONFIG_EDIT,
     SMTP_CONFIG_VIEW, SMTP_CONFIG_EDIT,
     NOTIFICATION_LOG_VIEW, NOTIFICATION_LOG_EDIT
 )
-from app.core.notification import NotificationService
+from app.core.ops.notification import NotificationService
 from app.models.sys import NotificationConfig, SystemSmtpConfig, Project, NotificationLog
 
 router = APIRouter(prefix="/notifications", tags=["通知配置"], dependencies=[Depends(is_authenticated)])

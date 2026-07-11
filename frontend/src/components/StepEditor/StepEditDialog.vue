@@ -15,10 +15,20 @@
       <!-- 步骤名称 -->
       <el-form-item label="操作名称" prop="desc">
         <div class="param-input-row">
-          <el-input v-model="form.desc" placeholder="请输入操作描述" style="flex: 1" />
+          <el-input v-model="form.desc" placeholder="简短名称，如：点击登录" style="flex: 1" />
           <VarInsertButton :env-id="varInsertEnvId" label="变量" />
           <ToolInsertButton label="工具" />
         </div>
+      </el-form-item>
+
+      <el-form-item label="业务意图" prop="intent">
+        <el-input
+          v-model="form.intent"
+          type="textarea"
+          :rows="2"
+          placeholder="可选。描述本步要完成的操作目标，供 AI 自愈参考。例：点击左侧导航栏的「基础设置」菜单项"
+        />
+        <p class="step-intent-hint">未填写时自愈使用「操作名称」。填写更具体的意图可提高自愈准确率。</p>
       </el-form-item>
 
       <el-form-item label="变量参考">
@@ -79,6 +89,36 @@
       </el-form-item>
       <el-form-item label="测试文件夹" v-if="isUploadFileStep && uploadMode === 'folder'">
         <UiTestFolderPicker v-model="form.params" :env-id="varInsertEnvId" />
+      </el-form-item>
+
+      <el-form-item label="识别图" v-if="isWebVisionStep">
+        <div class="web-vision-template">
+          <el-upload
+            :show-file-list="false"
+            accept="image/png,image/jpeg,image/webp"
+            :http-request="handleWebVisionTemplateUpload"
+            :disabled="stepTemplateUploading"
+          >
+            <el-button type="primary" plain size="small" :loading="stepTemplateUploading">上传模板图</el-button>
+          </el-upload>
+          <el-input
+            v-model="form.params.template"
+            placeholder="MinIO 对象键，如 app-elements/1/xxx.png"
+            class="web-vision-template-input"
+          />
+          <div class="web-vision-threshold">
+            <span>相似度阈值</span>
+            <el-slider v-model="form.params.threshold" :min="0.1" :max="0.99" :step="0.01" style="width: 200px" />
+          </div>
+          <el-image
+            v-if="webVisionPreviewSrc"
+            :src="webVisionPreviewSrc"
+            fit="contain"
+            class="step-template-preview"
+            :preview-src-list="[webVisionPreviewSrc]"
+          />
+          <el-text type="info" size="small">固定 viewport 下匹配页面截图；Canvas/纯图标场景兜底，优先 DOM 定位。</el-text>
+        </div>
       </el-form-item>
 
       <!-- 参数配置 -->
@@ -448,6 +488,7 @@ const form = ref({
   id: '',
   keyword: '',
   desc: '',
+  intent: '',
   method: '',
   params: {},
   config: { timeout: 30000, retry: false }
@@ -504,6 +545,13 @@ const isDbAssertStep = computed(() => form.value.method === 'kw_db_assert')
 
 const isUploadFileStep = computed(() => form.value.method === 'upload_file')
 
+const WEB_VISION_METHODS = new Set(['click_by_image', 'wait_for_image', 'kw_assert_image', 'kw_assert_image_not_exists'])
+const isWebVisionStep = computed(
+  () => !isAppStep.value && WEB_VISION_METHODS.has(form.value.method),
+)
+
+const webVisionHiddenKeys = new Set(['template', 'threshold'])
+
 const uploadMode = computed({
   get: () => (form.value.params?.upload_mode || 'single'),
   set: (val) => {
@@ -538,6 +586,9 @@ const filteredParams = computed(() => {
   const keepTimeoutMethods = ['wait_for_time', 'set_default_timeout']
   if (form.value.method === 'upload_file') {
     uploadFileHiddenKeys.forEach((key) => delete raw[key])
+  }
+  if (isWebVisionStep.value) {
+    webVisionHiddenKeys.forEach((key) => delete raw[key])
   }
   if (!keepTimeoutMethods.includes(form.value.method) && !isAppStep.value) {
     delete raw.timeout
@@ -595,6 +646,9 @@ function isRequiredParam(key) {
   }
   if (assertionRequired[method]) {
     return assertionRequired[method].includes(key)
+  }
+  if (WEB_VISION_METHODS.has(method)) {
+    return key === 'template'
   }
   const requiredParams = ['selector', 'condition', 'locator', 'var_name', 'attr_name', 'url', 'value', 'text']
   return requiredParams.includes(key)
@@ -933,6 +987,40 @@ async function handleStepTemplateUpload(options, key) {
   }
 }
 
+const webVisionPreviewSrc = computed(() => {
+  const key = form.value.params?.template
+  return resolveTemplatePreviewUrl(key, stepTemplatePreviewMap.value)
+})
+
+async function handleWebVisionTemplateUpload(options) {
+  const file = options.file
+  if (!file || !projectId.value) return
+  stepTemplateUploading.value = true
+  try {
+    const res = await appElementApi.uploadTemplate(projectId.value, file)
+    const data = res.data?.data || res.data
+    const objectKey = data?.object_key || ''
+    const accessUrl = data?.access_url || ''
+    if (!objectKey) {
+      ElMessage.error('上传失败')
+      return
+    }
+    if (!form.value.params) form.value.params = {}
+    form.value.params.template = objectKey
+    form.value.params.threshold = form.value.params.threshold ?? 0.8
+    if (accessUrl) {
+      stepTemplatePreviewMap.value = { ...stepTemplatePreviewMap.value, [objectKey]: accessUrl }
+    } else {
+      await hydrateStepTemplatePreview(objectKey)
+    }
+    ElMessage.success('模板图已上传')
+  } catch (e) {
+    ElMessage.error('模板图上传失败')
+  } finally {
+    stepTemplateUploading.value = false
+  }
+}
+
 import { setAppInspectorContext, setAppInspectorCaseDraft } from '@/utils/appInspectorContext.js'
 
 function openAppInspector() {
@@ -1005,6 +1093,7 @@ async function handleAppHealLocator() {
       method: form.value.method,
       failed_locator: serializeAppLocatorForSave(locator),
       step_desc: form.value.desc,
+      step_intent: form.value.intent || undefined,
     })
     if (res.data?.code === 200 && res.data.data?.locator) {
       form.value.params.locator = prepareAppLocatorForEdit(res.data.data.locator)
@@ -1025,7 +1114,8 @@ async function confirmHeal() {
   const payload = {
     method: form.value.method,
     failed_locator: failed,
-    step_desc: form.value.desc
+    step_desc: form.value.desc,
+    step_intent: form.value.intent || undefined,
   }
 
   if (healMode.value === 'replay' && canReplay.value) {
@@ -1190,6 +1280,12 @@ async function handleSave() {
     method: form.value.method || form.value.keyword,
     params: { ...(form.value.params || {}) },
   }
+  const intent = (savedStep.intent || '').trim()
+  if (intent) {
+    savedStep.intent = intent
+  } else {
+    delete savedStep.intent
+  }
   if (isAppStep.value) {
     if (savedStep.params?.locator) {
       savedStep.params.locator = serializeAppLocatorForSave(savedStep.params.locator)
@@ -1238,6 +1334,7 @@ function handleClose() {
     id: '',
     keyword: '',
     desc: '',
+    intent: '',
     method: '',
     params: {},
     config: { timeout: 30000, retry: false }
@@ -1402,6 +1499,20 @@ function handleClose() {
   word-break: break-all;
 }
 
+.web-vision-template {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.web-vision-template-input {
+  max-width: 520px;
+}
+.web-vision-threshold {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .step-template-preview {
   width: 72px;
   height: 72px;
@@ -1438,6 +1549,13 @@ function handleClose() {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.5;
+}
+
+.step-intent-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
 }
 
 .step-insert-toolbar {

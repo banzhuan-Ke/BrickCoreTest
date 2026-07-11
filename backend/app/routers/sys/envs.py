@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException, Depends, status
 from app.schemas.sys import EnvironmentSchemas, AddEnvironmentForm, UpdateEnvironmentForm
 from app.models.sys import Environment
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import ENVIRONMENT_VIEW, ENVIRONMENT_EDIT
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import ENVIRONMENT_VIEW, ENVIRONMENT_EDIT
 from app.models.sys import Project
-from app.core.global_vars_validate import normalize_global_vars
-from app.core.default_headers_validate import normalize_default_headers
+from app.core.shared.global_vars_validate import normalize_global_vars
+from app.core.shared.default_headers_validate import normalize_default_headers
 
 # 创建路由对象
 router = APIRouter(prefix="/envs", tags=['测试环境'], dependencies=[Depends(is_authenticated)])

@@ -10,7 +10,7 @@
           @change="handleToggleSelect"
         />
         <!--步骤序号-->
-        <span class="step-index">步骤 {{ index + 1 }}</span>
+        <span class="step-index" @click="handleSelectForDebug">步骤 {{ index + 1 }}</span>
         <!--图标-->
         <el-icon class="header-icon" size="18px" :color="stepIconColor">
           <Collection v-if="step.method === 'fragment_ref'" />
@@ -34,9 +34,21 @@
         <!--按钮-->
         <div class="btn">
           <el-tooltip
+            v-if="depth === 0 && interactiveReady"
+            content="在已打开的交互调试浏览器中执行本步"
+            placement="top"
+          >
+            <el-button
+              plain
+              size="small"
+              type="warning"
+              :icon="VideoPlay"
+              @click="handleInteractiveRun"
+            >执行本步</el-button>
+          </el-tooltip>
+          <el-tooltip
             v-if="depth === 0"
-            content="请先保存用例后再使用调试"
-            :disabled="debugEnabled"
+            :content="interactiveReady ? '交互调试已就绪：将执行第 1 步到本步' : '推荐先打开「交互调试」；也可使用旧版一次性调试'"
             placement="top"
           >
             <span>
@@ -147,7 +159,24 @@
         </div>
         <div v-show="errorExpanded" class="execution-error-body">
           <p v-if="executionHint.message" class="execution-error-message">{{ executionHint.message }}</p>
+          <el-image
+            v-if="executionHint.screenshot"
+            :src="executionHint.screenshot"
+            :preview-src-list="[executionHint.screenshot]"
+            fit="contain"
+            class="execution-error-shot"
+            preview-teleported
+          />
         </div>
+      </div>
+
+      <div v-else-if="debugRunResult?.status === 'running'" class="execution-running-box">
+        <el-tag type="primary" size="small">调试执行中</el-tag>
+        <span v-if="debugRunResult.message" class="execution-running-msg">{{ debugRunResult.message }}</span>
+      </div>
+
+      <div v-else-if="debugRunResult && debugRunResult.status === 'success'" class="execution-success-box">
+        <el-tag type="success" size="small">调试成功</el-tag>
       </div>
     </div>
   </div>
@@ -192,17 +221,28 @@ const props = defineProps({
     type: Object,
     default: null
   },
+  debugSelected: {
+    type: Boolean,
+    default: false,
+  },
+  debugRunResult: {
+    type: Object,
+    default: null,
+  },
   debugEnabled: {
     type: Boolean,
     default: true,
   },
 })
 
-const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug', 'copy', 'expand-fragment', 'toggle-select'])
+const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug', 'copy', 'expand-fragment', 'toggle-select', 'debug-select'])
 
 const fragmentRefEdit = inject('fragmentRefEdit', null)
 const expandFragmentStep = inject('expandFragmentStep', null)
 const editStepMethod = inject('editStepMethod', null)
+const interactiveDebugSession = inject('interactiveDebugSession', ref(null))
+const runInteractiveDebugStep = inject('runInteractiveDebugStep', null)
+const interactiveReady = computed(() => interactiveDebugSession.value?.status === 'ready')
 const proStore = ProjectStore()
 const stepModule = inject('stepEditorModule', computed(() => 'web'))
 const latestFragmentVersion = ref(null)
@@ -227,6 +267,10 @@ const stepClasses = computed(() => ({
   'is-fragment': props.step.method === 'fragment_ref',
   'is-selected': props.selectable && props.selected,
   'is-failed': !!props.executionHint,
+  'is-debug-selected': props.debugSelected,
+  'is-debug-running': props.debugRunResult?.status === 'running',
+  'is-debug-success': props.debugRunResult?.status === 'success' && !props.executionHint,
+  'is-debug-failed': props.executionHint && props.debugSelected,
 }))
 
 const executionHintLabel = computed(() => formatExecutionHintStatus(props.executionHint?.status))
@@ -321,6 +365,18 @@ function handleEdit() {
 
 function handleDebug() {
   emit('debug', props.index)
+}
+
+function handleInteractiveRun() {
+  if (typeof runInteractiveDebugStep === 'function') {
+    runInteractiveDebugStep(props.index)
+  }
+}
+
+function handleSelectForDebug() {
+  if (props.depth === 0) {
+    emit('debug-select', props.index)
+  }
 }
 
 function handleCopy() {
@@ -445,6 +501,25 @@ function getParamsDisplay(params) {
       background: var(--el-color-danger-light-7);
     }
   }
+
+  &.is-debug-selected {
+    box-shadow: 0 0 0 2px var(--el-color-primary-light-5);
+    border-color: var(--el-color-primary);
+  }
+
+  &.is-debug-running {
+    border-left: 3px solid var(--el-color-primary);
+    animation: debug-running-pulse 1.2s ease-in-out infinite;
+  }
+
+  &.is-debug-success {
+    border-left: 3px solid var(--el-color-success);
+  }
+}
+
+@keyframes debug-running-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(64, 158, 255, 0.15); }
+  50% { box-shadow: 0 0 0 4px rgba(64, 158, 255, 0.08); }
 }
 
 .line1 {
@@ -467,6 +542,7 @@ function getParamsDisplay(params) {
     border-radius: 4px;
     min-width: 50px;
     text-align: center;
+    cursor: pointer;
   }
   
   .header-icon {
@@ -566,6 +642,37 @@ function getParamsDisplay(params) {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.execution-error-shot {
+  margin-top: 8px;
+  max-width: 320px;
+  max-height: 180px;
+  border-radius: 4px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.execution-success-box {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-top: 1px dashed var(--el-color-success-light-7);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.execution-running-box {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-top: 1px dashed var(--el-color-primary-light-7);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.execution-running-msg {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .branches-container {

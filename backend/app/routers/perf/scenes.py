@@ -11,16 +11,16 @@ from pydantic import BaseModel, Field
 from app.models.perf import PerfScene
 from app.models.http import ApiTestCase
 from app.models.sys import Project, TestCatalog
-from app.core.auth import require_permissions, get_current_username
-from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
-from app.core.permissions import PERF_SCENE_EDIT, PERF_SCENE_EXECUTE
-from app.core.stream_phase import (
+from app.core.platform.auth import require_permissions, get_current_username
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
+from app.core.platform.permissions import PERF_SCENE_EDIT, PERF_SCENE_EXECUTE
+from app.modules.stream_phase import (
     normalize_perf_mode,
     has_stream_profile_config,
     normalize_stream_profile,
 )
-from app.core.stream_phase.registry import get_parser
-from app.core.perf_journey import (
+from app.modules.stream_phase.registry import get_parser
+from app.modules.perf.perf_journey import (
     JOURNEY_FIXED_MODE,
     JOURNEY_LOOP_MODE,
     is_journey_mode,

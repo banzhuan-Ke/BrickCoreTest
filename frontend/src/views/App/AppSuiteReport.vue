@@ -4,13 +4,19 @@
       <div class="report-header">
         <span>App 套件报告</span>
         <div>
-          <el-button
-            v-if="canAiAnalyze && ((runInfo.fail || 0) + (runInfo.error || 0) > 0)"
-            type="warning"
-            plain
-            :loading="batchAnalyzing"
-            @click="runBatchAnalyze"
-          >批量 AI 分析失败</el-button>
+          <IterationReportShortcut
+            v-if="runInfo.id"
+            :record-id="runInfo.id"
+            report-type="app_suite"
+            :title="runInfo.suite_name"
+          />
+          <ReportKnowledgeBridge
+            v-if="runInfo.id && proStore.projectInfo?.id"
+            :project-id="proStore.projectInfo.id"
+            report-type="app_suite"
+            :record-id="runInfo.id"
+            :title="runInfo.suite_name"
+          />
           <el-button v-if="runInfo.suite_id" type="primary" plain @click="goEditSuite">编辑套件</el-button>
           <el-button type="success" :loading="exportLoading" @click="exportReport">导出 HTML</el-button>
         </div>
@@ -18,6 +24,13 @@
     </template>
     <template #main>
       <ReportSummaryPanel report-type="app_suite" :record-id="Number(route.params.id)" />
+      <ReportFailureBatchBar
+        v-if="canAiAnalyze && ((runInfo.fail || 0) + (runInfo.error || 0) > 0)"
+        :project-id="proStore.projectInfo?.id"
+        report-type="app_suite"
+        :record-id="runInfo.id"
+        :record-title="runInfo.suite_name"
+      />
       <AppReportOverview
         :title="runInfo.suite_name"
         :status="runInfo.status"
@@ -93,8 +106,10 @@ import AppReportOverview from '@/views/App/components/AppReportOverview.vue'
 import AppReportEnvSummary from '@/views/App/components/AppReportEnvSummary.vue'
 import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
 import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
+import ReportFailureBatchBar from '@/components/ReportFailureBatchBar.vue'
+import ReportKnowledgeBridge from '@/components/ReportKnowledgeBridge.vue'
+import IterationReportShortcut from '@/components/IterationReportShortcut.vue'
 import { appRecordApi } from '@/api'
-import { aiAnalyzeApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
 import dateTools from '@/tools/dateTools.js'
@@ -106,29 +121,10 @@ const uStore = UserStore()
 const runInfo = ref({})
 const cases = ref([])
 const exportLoading = ref(false)
-const batchAnalyzing = ref(false)
 const aiAnalyzeVisible = ref(false)
 const aiAnalyzeTargetId = ref(null)
 
 const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
-
-async function runBatchAnalyze() {
-  if (!proStore.projectInfo?.id || !route.params.id) return
-  batchAnalyzing.value = true
-  try {
-    const res = await aiAnalyzeApi.analyzeFailureBatch(
-      { report_type: 'app_suite', record_id: Number(route.params.id), limit: 5 },
-      proStore.projectInfo.id,
-    )
-    if (res.data?.code === 200) {
-      ElMessage.success(res.data.message || '批量分析完成')
-    }
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '批量分析失败')
-  } finally {
-    batchAnalyzing.value = false
-  }
-}
 
 function openAiAnalyze(recordId) {
   aiAnalyzeTargetId.value = recordId

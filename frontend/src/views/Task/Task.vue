@@ -199,6 +199,33 @@
           :title="`本次将按项目默认：${healRunOptions.locator_heal_default_on_execute ? '开启' : '关闭'}自愈`"
         />
       </el-form-item>
+      <el-form-item v-if="healRunOptions?.locator_heal_enabled" label="AI Act 兜底">
+        <UiRunAiActDisabledTip v-if="!healRunOptions.ai_act_enabled" />
+        <template v-else>
+          <div v-if="healRunOptions.ai_act_allow_run_override" class="ui-run-segment-group">
+            <div
+              :class="['ui-run-segment', 'ui-run-segment--grow', { active: runParams.ai_act_enabled === true }]"
+              @click="runParams.ai_act_enabled = true"
+            >
+              <el-icon><CircleCheck /></el-icon><span>开启</span>
+            </div>
+            <div
+              :class="['ui-run-segment', 'ui-run-segment--grow', { active: runParams.ai_act_enabled === false }]"
+              @click="runParams.ai_act_enabled = false"
+            >
+              <el-icon><CircleClose /></el-icon><span>关闭</span>
+            </div>
+          </div>
+          <el-alert
+            v-else
+            type="info"
+            :closable="false"
+            show-icon
+            :title="`本次将按项目默认：${healRunOptions.ai_act_default_on_execute ? '开启' : '关闭'} AI Act`"
+          />
+        </template>
+        <p class="ui-run-act-hint">自愈仍失败时，按 intent/操作名称由 AI 重新规划并执行一步。</p>
+      </el-form-item>
       <el-form-item label="执行设备" required>
         <template v-if="runTaskParallel">
           <el-alert
@@ -300,6 +327,7 @@ import PageCard from "@/components/PageCard.vue"
 import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
+import UiRunAiActDisabledTip from '@/components/UiRunAiActDisabledTip.vue'
 import {useRouter, useRoute} from "vue-router"
 import {UserStore} from "@/stores/module/UserStore.js"
 import { makeTableRowIndex } from '@/utils/tableIndex'
@@ -515,6 +543,7 @@ const runParams = reactive({
   username: uStore.userInfo.username,
   headless: false,
   ai_heal_enabled: true,
+  ai_act_enabled: false,
   concurrency: 3,
 })
 
@@ -529,6 +558,7 @@ const loadHealRunOptions = async () => {
     if (res.data?.code === 200) {
       healRunOptions.value = res.data.data || null
       runParams.ai_heal_enabled = healRunOptions.value?.locator_heal_default_on_execute ?? true
+      runParams.ai_act_enabled = healRunOptions.value?.ai_act_default_on_execute ?? false
     }
   } catch {
     healRunOptions.value = null
@@ -544,6 +574,7 @@ const clickRun = async (task_id) => {
   runParams.username = uStore.userInfo.username
   runParams.headless = false
   runParams.ai_heal_enabled = true
+  runParams.ai_act_enabled = false
   runParams.concurrency = 3
   runTaskParallel.value = false
   await loadHealRunOptions()
@@ -595,6 +626,9 @@ async function runTask() {
   }
   if (healRunOptions.value?.locator_heal_allow_run_override) {
     payload.ai_heal_enabled = runParams.ai_heal_enabled
+  }
+  if (healRunOptions.value?.ai_act_enabled && healRunOptions.value?.ai_act_allow_run_override) {
+    payload.ai_act_enabled = runParams.ai_act_enabled
   }
 
   running.value = true

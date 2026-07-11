@@ -1,7 +1,7 @@
 """性能测试路由模块"""
 from fastapi import APIRouter, Depends
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import PERF_SCENE_VIEW
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import PERF_SCENE_VIEW
 
 from .scenes import router as scenes_router
 from .exec import router as exec_router

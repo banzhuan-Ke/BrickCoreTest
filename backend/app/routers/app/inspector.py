@@ -6,13 +6,13 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
-from app.core.app_device_lock import (
+from app.modules.app.app_device_lock import (
     acquire_device_lock,
     refresh_device_lock,
     release_device_lock,
     release_device_lock_by_holder,
 )
-from app.core.app_inspector_service import (
+from app.modules.app.app_inspector_service import (
     apply_dump_result,
     apply_explore_result,
     apply_screenshot_result,
@@ -27,10 +27,10 @@ from app.core.app_inspector_service import (
     mark_webview_probing,
     prepare_session_for_client,
 )
-from app.core.auth import get_current_username, is_authenticated, require_any_permissions, require_permissions, verify_runner_or_internal
-from app.core.mq_producer import MQProducer
-from app.core.permissions import APP_CASE_EDIT, APP_ELEMENT_EDIT, APP_ELEMENT_VIEW
-from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.core.platform.auth import get_current_username, is_authenticated, require_any_permissions, require_permissions, verify_runner_or_internal
+from app.core.infra.mq_producer import MQProducer
+from app.core.platform.permissions import APP_CASE_EDIT, APP_ELEMENT_EDIT, APP_ELEMENT_VIEW
+from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.sys import Device
 from app.schemas.app import (
     AppInspectorCallbackForm,

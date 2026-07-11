@@ -2,22 +2,23 @@
 
 平台 **平台下载** 读取容器内路径：`/app/static/runner/BrickCoreRunner.zip`。
 
-## 制作 zip
+## 获取安装包
 
-```powershell
-cd E:\project2026\fastapi_ui_new
-.\scripts\build_runner_client.ps1
-# 产出 runner_client\dist\BrickCoreRunner.zip
+| 方式 | 说明 |
+|------|------|
+| **网盘（推荐）** | 见根目录 README 或 [执行器获取与发布](../../docs-site/guide/runner-packaging.md) |
+| **本目录放置 zip** | 将 `BrickCoreRunner.zip` 放到本目录，供容器内 `GET /runner/client-download` 使用 |
+
+维护者无需在本仓库内打包客户端；请使用官方发布的 `BrickCoreRunner.zip`，版本号与 `RUNNER_CLIENT_VERSION_LATEST` 保持一致。
+
+## 上传到自建服务器
+
+若使用本目录分发（非网盘），可将 zip 复制到服务器后挂载或 `docker cp` 进 `fastapi_backend`：
+
+```bash
+# 示例：复制到运行中的后端容器
+docker cp BrickCoreRunner.zip fastapi_backend:/app/static/runner/BrickCoreRunner.zip
 ```
-
-## 上传到服务器
-
-```bat
-cd E:\project2026\fastapi_ui_new\runner_client
-upload-to-server.bat
-```
-
-（scp 到宿主机 + docker cp 进 `fastapi_backend`）
 
 ## 推荐：网盘分发
 
@@ -42,7 +43,7 @@ upload-to-server.bat
 | Playwright | Chromium 已内置；勿只复制 exe，须保留 `_internal/` 与 `runner/` |
 | 网络 | 平台 80；MQ 25672；Redis 26379；MinIO 9200 |
 
-开发调试见 `runner_client/start-client.bat`；排查见文档站 **Runner 排查指南**（`runner-troubleshooting`）。
+用户安装与排查见文档站 [执行器使用说明](../../docs-site/guide/runner-client.md)、[Runner 排查指南](../../docs-site/guide/runner-troubleshooting.md)。
 
 ## API
 
@@ -55,5 +56,3 @@ upload-to-server.bat
 volumes:
   - ./backend/static/runner:/app/static/runner
 ```
-
-详见 [Runner客户端与执行器后续计划.md](../../docs/Runner客户端与执行器后续计划.md) 中 R-1。

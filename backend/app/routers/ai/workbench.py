@@ -5,8 +5,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import AI_TEST_VIEW
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import AI_TEST_VIEW
 from app.models.ai import (
     AiConfig,
     AiFunctionalCase,
@@ -17,12 +17,13 @@ from app.models.ai import (
     AiRequirementTestPoint,
     AiRequirementTestScheme,
 )
-from app.core.report_summary_context import fetch_recent_failures
-from app.core.ai_dashboard_stats import (
+from app.core.shared.report_summary_context import fetch_recent_failures
+from app.modules.ai.ai_dashboard_stats import (
     build_workbench_funnel,
     build_workbench_todos,
     collect_generate_trend,
     collect_token_stats,
+    collect_usage_summary,
 )
 from app.models.ui import Case as UiCase
 from app.routers.ai.requirements import _job_to_dict, _requirement_to_dict, _resolve_project_id
@@ -236,6 +237,7 @@ async def workbench_overview(
     todos = await build_workbench_todos(project_id)
     token_stats = await collect_token_stats(project_id)
     generate_trend = await collect_generate_trend(project_id, days=7)
+    usage_summary = await collect_usage_summary(project_id)
 
     return StandardResponse(
         data={
@@ -244,6 +246,7 @@ async def workbench_overview(
             "todos": todos,
             "token_stats": token_stats,
             "generate_trend": generate_trend,
+            "usage_summary": usage_summary,
             "config": config_summary,
             "recent_requirements": recent_requirements,
             "recent_records": recent_records,
