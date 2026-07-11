@@ -196,6 +196,45 @@ const elementSteps = [
         }
     }
 ]
+// 2.5、图像定位（Canvas/纯图标兜底）
+const visionSteps = [
+    {
+        keyword: '图像模板点击',
+        method: 'click_by_image',
+        params: {
+            template: '',
+            threshold: 0.8,
+            timeout: 20000,
+        },
+    },
+    {
+        keyword: '等待图像出现',
+        method: 'wait_for_image',
+        params: {
+            template: '',
+            threshold: 0.8,
+            timeout: 20000,
+        },
+    },
+    {
+        keyword: '断言图像存在',
+        method: 'kw_assert_image',
+        params: {
+            template: '',
+            threshold: 0.8,
+            timeout: 20000,
+        },
+    },
+    {
+        keyword: '断言图像不存在',
+        method: 'kw_assert_image_not_exists',
+        params: {
+            template: '',
+            threshold: 0.8,
+            timeout: 20000,
+        },
+    },
+]
 // 3、鼠标操作步骤
 const mouseSteps = [
     {
@@ -627,6 +666,12 @@ const actionGroup = [
         items: elementSteps,
     },
     {
+        groupId: "2b",
+        groupIcon: 'Picture',
+        name: '图像定位',
+        items: visionSteps,
+    },
+    {
         groupId: "3",
         groupIcon: 'Mouse',
         name: '鼠标键盘',
@@ -671,6 +716,7 @@ export default actionGroup
 export const allSteps = [
     ...pageSteps,
     ...elementSteps,
+    ...visionSteps,
     ...mouseSteps,
     ...waitSteps,
     ...assertSteps,
@@ -683,6 +729,7 @@ export const allSteps = [
 export {
     pageSteps,
     elementSteps,
+    visionSteps,
     mouseSteps,
     waitSteps,
     assertSteps,

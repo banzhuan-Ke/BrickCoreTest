@@ -6,7 +6,6 @@
 .env
 .env.local
 .env.*.local
-scripts/ce-stubs/demo-middleware.env
 
 # Python
 __pycache__/
@@ -22,6 +21,7 @@ ENV/
 # IDE
 .idea/
 .vscode/
+.cursor/skills/
 *.swp
 *.swo
 *~
@@ -75,6 +75,9 @@ tmp/
 temp/
 *.tmp
 
+# 本地质量报告调试输出（平台生成物勿提交）
+output/
+
 # Docker 镜像离线包（用于无网络环境部署）
 *.tar
 
@@ -101,6 +104,17 @@ frontend/.env
 # backend/migrations/
 
 # 后端本地运行时上传（已改用 MinIO 时使用本地回退目录）
+backend/static/ai_knowledge/
+backend/static/ai_requirements/
+backend/static/avatars/
+backend/static/exports/
+backend/static/login-bg/
+backend/static/screenshots/
+backend/static/browser_lab/
+backend/scripts/
+docs-site/demo/
+docs-site/reference/
+# 兼容旧路径（若仍存在）
 backend/app/static/ai_requirements/
 
 # 其他敏感文件

@@ -13,25 +13,25 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.core.ai_prompts import PromptManager
-from app.core.ai_usage_log import log_ai_usage
-from app.core.auth import is_authenticated, require_permissions
-from app.core.encryption import decrypt_value
-from app.core.failure_context import build_api_failure_context, build_app_failure_context, build_ui_failure_context
-from app.core.report_summary_context import (
+from app.modules.ai.ai_prompts import PromptManager
+from app.core.llm.ai_usage_log import log_ai_usage
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.encryption import decrypt_value
+from app.modules.ai.failure_context import build_api_failure_context, build_app_failure_context, build_ui_failure_context
+from app.core.shared.report_summary_context import (
     ReportType,
     build_report_execution_data,
     collect_failure_targets,
     fetch_recent_failures,
 )
-from app.core.llm_client import LLMClientFactory
-from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW
+from app.core.llm.llm_client import LLMClientFactory
+from app.core.platform.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW
 from app.models.ai import AiConfig, AiGenerateRecord
 from app.models.http import ApiRunRecord
 from app.models.ui import UiCaseExecution
 from app.models.app import AppCaseExecution
 from app.routers.ai.generate import _build_extra_body, _call_llm, _get_ai_config
-from app.core.ai_scene_config import resolve_vision_config
+from app.modules.ai.ai_scene_config import resolve_vision_config
 from app.routers.ai.requirements import _resolve_project_id
 from app.schemas.ai import StandardResponse
 
@@ -49,6 +49,14 @@ class AnalyzeFailureRequest(BaseModel):
     ai_config_id: Optional[int] = Field(None, description="文本分析模型，不传用默认配置")
     vision_config_id: Optional[int] = Field(None, description="UI 截图 Vision 模型，不传则自动匹配")
     force_refresh: bool = Field(False, description="忽略缓存重新分析")
+    knowledge_folder_ids: Optional[list[int]] = Field(
+        default=None,
+        description="可选：引用资料库文件夹",
+    )
+    knowledge_document_ids: Optional[list[int]] = Field(
+        default=None,
+        description="可选：引用资料库文档",
+    )
 
 
 class FailureTargetItem(BaseModel):
@@ -64,6 +72,8 @@ class BatchFailureRequest(BaseModel):
     ai_config_id: Optional[int] = None
     vision_config_id: Optional[int] = None
     force_refresh: bool = False
+    knowledge_folder_ids: Optional[list[int]] = None
+    knowledge_document_ids: Optional[list[int]] = None
 
 
 class ReportSummaryRequest(BaseModel):
@@ -221,6 +231,24 @@ def _summary_to_response(record: AiGenerateRecord) -> dict[str, Any]:
     }
 
 
+async def _append_knowledge_context_to_prompt(
+    user_prompt: str,
+    project_id: int,
+    *,
+    knowledge_folder_ids: Optional[list[int]] = None,
+    knowledge_document_ids: Optional[list[int]] = None,
+) -> tuple[str, dict[str, Any]]:
+    from app.modules.knowledge.knowledge_context import append_knowledge_context_to_prompt as _append
+
+    return await _append(
+        user_prompt,
+        project_id,
+        knowledge_folder_ids=knowledge_folder_ids,
+        knowledge_document_ids=knowledge_document_ids,
+        scene="failure_analysis",
+    )
+
+
 async def _execute_failure_analysis(
     *,
     project_id: int,
@@ -230,8 +258,19 @@ async def _execute_failure_analysis(
     ai_config_id: Optional[int],
     vision_config_id: Optional[int],
     force_refresh: bool,
+    knowledge_folder_ids: Optional[list[int]] = None,
+    knowledge_document_ids: Optional[list[int]] = None,
 ) -> dict[str, Any]:
-    if not force_refresh:
+    from app.modules.knowledge.knowledge_refs_resolve import resolve_knowledge_refs_for_scene
+
+    resolved_folders, resolved_docs = await resolve_knowledge_refs_for_scene(
+        project_id,
+        "failure_analysis",
+        folder_ids=knowledge_folder_ids,
+        document_ids=knowledge_document_ids,
+    )
+    has_knowledge_refs = bool(resolved_folders or resolved_docs)
+    if not force_refresh and not has_knowledge_refs:
         cached = await _find_cached_analysis(project_id, target_type, target_id)
         if cached:
             data = _analysis_to_response(cached)
@@ -246,6 +285,13 @@ async def _execute_failure_analysis(
         system_prompt, user_prompt = await PromptManager.render("failure_analysis", prompt_vars)
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+    user_prompt, knowledge_meta = await _append_knowledge_context_to_prompt(
+        user_prompt,
+        project_id,
+        knowledge_folder_ids=knowledge_folder_ids,
+        knowledge_document_ids=knowledge_document_ids,
+    )
 
     vision_config: Optional[AiConfig] = None
     text_config: Optional[AiConfig] = None
@@ -349,6 +395,8 @@ async def _execute_failure_analysis(
     data = _analysis_to_response(record)
     data["cached"] = False
     data["ok"] = True
+    if knowledge_meta.get("refs"):
+        data["knowledge_sources"] = knowledge_meta
     return data
 
 
@@ -413,6 +461,8 @@ async def analyze_failure(
         ai_config_id=body.ai_config_id,
         vision_config_id=body.vision_config_id,
         force_refresh=body.force_refresh,
+        knowledge_folder_ids=body.knowledge_folder_ids,
+        knowledge_document_ids=body.knowledge_document_ids,
     )
 
     if data.get("ok") is False:
@@ -463,6 +513,8 @@ async def analyze_failure_batch(
                 ai_config_id=body.ai_config_id,
                 vision_config_id=body.vision_config_id,
                 force_refresh=body.force_refresh,
+                knowledge_folder_ids=body.knowledge_folder_ids,
+                knowledge_document_ids=body.knowledge_document_ids,
             )
             if item.get("case_name"):
                 data["case_name"] = item["case_name"]

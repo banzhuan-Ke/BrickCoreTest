@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.core.auth import is_authenticated
-from app.core.project_access import (
+from app.core.platform.auth import is_authenticated
+from app.core.platform.project_access import (
     ALL_PROJECT_ROLES,
     PROJECT_ROLE_LABELS,
     PROJECT_ROLE_MANAGER,

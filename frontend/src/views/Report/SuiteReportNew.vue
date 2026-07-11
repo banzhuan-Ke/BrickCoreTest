@@ -16,20 +16,32 @@
           <el-button type="success" :icon="Download" @click="showExportDialog">
             导出报告
           </el-button>
-          <el-button
-            v-if="canAiAnalyze && (runInfo.fail || runInfo.error)"
-            type="warning"
-            :loading="batchAnalyzing"
-            @click="runBatchAnalyze"
-          >
-            批量 AI 分析失败
-          </el-button>
+          <IterationReportShortcut
+            v-if="runInfo.id"
+            :record-id="runInfo.id"
+            report-type="ui_suite"
+            :title="runInfo.suite_name"
+          />
+          <ReportKnowledgeBridge
+            v-if="runInfo.id && proStore.projectInfo?.id"
+            :project-id="proStore.projectInfo.id"
+            report-type="ui_suite"
+            :record-id="runInfo.id"
+            :title="runInfo.suite_name"
+          />
         </div>
       </div>
     </template>
     
     <template #main>
       <ReportSummaryPanel report-type="ui_suite" :record-id="Number(id)" />
+      <ReportFailureBatchBar
+        v-if="canAiAnalyze && (runInfo.fail || runInfo.error)"
+        :project-id="proStore.projectInfo?.id"
+        report-type="ui_suite"
+        :record-id="runInfo.id"
+        :record-title="runInfo.suite_name"
+      />
       <!-- 套件概览卡片 -->
       <div class="suite-overview">
         <div class="suite-title">{{ runInfo.suite_name }}</div>
@@ -409,7 +421,9 @@ import ExecutionLogScroller from '@/components/Report/ExecutionLogScroller.vue'
 import ExecutionEnvPanel from '@/components/Report/ExecutionEnvPanel.vue'
 import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
 import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
-import { aiAnalyzeApi } from '@/api/modules/ai.js'
+import ReportFailureBatchBar from '@/components/ReportFailureBatchBar.vue'
+import ReportKnowledgeBridge from '@/components/ReportKnowledgeBridge.vue'
+import IterationReportShortcut from '@/components/IterationReportShortcut.vue'
 import { UserStore } from "@/stores/module/UserStore.js"
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
@@ -426,7 +440,6 @@ const canEditCase = computed(() => uStore.hasPermission('ui_case:edit'))
 const canEditSuite = computed(() => uStore.hasPermission('ui_suite:edit'))
 const aiAnalyzeVisible = ref(false)
 const aiAnalyzeTargetId = ref(null)
-const batchAnalyzing = ref(false)
 
 const isUiFailed = (status) => ['fail', 'failed', 'error'].includes(status)
 
@@ -450,24 +463,6 @@ const goEditCase = (row) => {
 const goEditSuite = (suiteId) => {
   if (!suiteId) return
   router.push({ name: 'editSuite', params: { id: suiteId } })
-}
-
-const runBatchAnalyze = async () => {
-  if (!proStore.projectInfo?.id || !runInfo.value?.id) return
-  batchAnalyzing.value = true
-  try {
-    const res = await aiAnalyzeApi.analyzeFailureBatch(
-      { report_type: 'ui_suite', record_id: runInfo.value.id, limit: 5 },
-      proStore.projectInfo.id
-    )
-    if (res.data?.code === 200) {
-      ElMessage.success(res.data.message || '批量分析完成')
-    }
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '批量分析失败')
-  } finally {
-    batchAnalyzing.value = false
-  }
 }
 
 // 状态

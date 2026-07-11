@@ -5,14 +5,14 @@ import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.config import LOGIN_BG_DIR
-from app.core.login_page_config_service import (
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.core.platform.config import LOGIN_BG_DIR
+from app.core.platform.login_page_config_service import (
     get_login_page_config,
     get_login_page_public_config,
     save_login_page_config,
 )
-from app.core.permissions import LOGIN_PAGE_CONFIG_EDIT, LOGIN_PAGE_CONFIG_VIEW
+from app.core.platform.permissions import LOGIN_PAGE_CONFIG_EDIT, LOGIN_PAGE_CONFIG_VIEW
 
 router = APIRouter(prefix="/login-page", tags=["登录页配置"])
 
@@ -25,7 +25,7 @@ class LoginPageConfigForm(BaseModel):
     pro_bg_url: str | None = Field(default=None, description="Pro 自定义背景 URL（key=custom 时）")
     classic_bg_url: str | None = Field(default=None, description="经典自定义背景 URL（key=custom 时）")
     welcome_title: str = Field(default="欢迎登录 BrickCore", max_length=200)
-    footer_text: str = Field(default="© 2025-2026 BrickCore v1.2.0. All Rights Reserved.", max_length=500)
+    footer_text: str = Field(default="© 2025-2026 BrickCore v1.3.0. All Rights Reserved.", max_length=500)
     show_register: bool = True
     bg_brick_count: int = Field(default=30, ge=0, le=60, description="漂浮积木数量")
     bg_star_count: int = Field(default=15, ge=0, le=40, description="四角星数量")

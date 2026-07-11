@@ -225,6 +225,61 @@ export const MenuGroups = [
         ]
     },
     {
+        title: '迭代资料库',
+        icon: 'DocumentChecked',
+        expanded: false,
+        items: [
+            {
+                name: '资料检索',
+                path: '/ai-knowledge/search',
+                icon: 'Search',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '资料问答',
+                path: '/ai-knowledge/qa',
+                icon: 'ChatDotRound',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '迭代文件夹',
+                path: '/ai-knowledge/folders',
+                icon: 'FolderOpened',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '输出模板',
+                path: '/ai-knowledge/templates',
+                icon: 'Document',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '模板变量',
+                path: '/ai-knowledge/variables',
+                icon: 'Tickets',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '报告向导',
+                path: '/ai-knowledge/reports',
+                icon: 'EditPen',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '生成记录',
+                path: '/ai-knowledge/records',
+                icon: 'List',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '生成配置',
+                path: '/ai-knowledge/settings',
+                icon: 'Setting',
+                permission: 'ai_test:view'
+            },
+        ]
+    },
+    {
         title: 'AI 测试',
         icon: 'Cpu',
         expanded: false,
@@ -245,12 +300,6 @@ export const MenuGroups = [
                 name: '功能用例库',
                 path: '/ai-functional-cases',
                 icon: 'DocumentChecked',
-                permission: 'ai_test:view'
-            },
-            {
-                name: '问答准确性评测',
-                path: '/ai-qa-eval',
-                icon: 'ChatLineRound',
                 permission: 'ai_test:view'
             },
             {
@@ -385,3 +434,15 @@ export const MenuGroups = [
 
 // 兼容旧代码，保留 MenuList 导出
 export const MenuList = MenuGroups.flatMap(group => group.items)
+
+/** 侧边栏分组展开状态（sessionStorage，重新登录后恢复默认） */
+export const MENU_EXPANDED_SESSION_KEY = 'brickcore_menu_expanded_groups'
+
+export function resetMenuExpandedSession() {
+  try {
+    sessionStorage.removeItem(MENU_EXPANDED_SESSION_KEY)
+    localStorage.removeItem(MENU_EXPANDED_SESSION_KEY)
+  } catch {
+    /* ignore */
+  }
+}

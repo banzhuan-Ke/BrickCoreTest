@@ -1,0 +1,308 @@
+"""录制步骤 AI 优化后的 meta/params 合并与溯源。"""
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from app.modules.ai.recorder_quality import (
+    DRAG_METHODS,
+    extract_desc_targets,
+    _normalize_desc,
+)
+
+# 各 method 需从原始步骤恢复的 params 字段（LLM 易误改或合并时丢失）
+_PRESERVE_PARAM_KEYS: dict[str, tuple[str, ...]] = {
+    "open_url": ("url",),
+    "fill_value": ("value", "timeout", "index", "clear"),
+    "click_ele": ("index", "timeout", "button", "clickCount", "force"),
+    "double_click_ele": ("index", "timeout", "button"),
+    "hover": ("index", "timeout"),
+    "press_key": ("key", "timeout"),
+    "wait_for_time": ("timeout",),
+    "select_option": ("value", "label", "index", "timeout"),
+    "upload_file": ("file_path", "index", "timeout"),
+    "scroll": ("direction", "distance", "timeout"),
+    "mouse_click": ("x", "y", "button", "timeout"),
+    "drag_and_drop": ("start_selector", "end_selector", "timeout"),
+    "frame_drag_and_drop": ("start_selector", "end_selector", "timeout"),
+}
+
+
+def parse_source_step_ids(step: dict, *, pop: bool = False) -> list[int]:
+    """解析 LLM 返回的 source_step_ids（1-based）为 0-based 下标列表。"""
+    raw = step.pop("source_step_ids", None) if pop else step.get("source_step_ids")
+    if raw is None:
+        raw = (step.get("meta") or {}).get("source_step_ids")
+    if not isinstance(raw, list):
+        return []
+    indices: list[int] = []
+    for item in raw:
+        try:
+            idx = int(item) - 1
+            if idx >= 0:
+                indices.append(idx)
+        except (TypeError, ValueError):
+            continue
+    return indices
+
+
+def resolve_original_steps_for_optimized(
+    opt: dict,
+    original_steps: list[dict],
+    used: Optional[set[int]] = None,
+) -> list[dict]:
+    """根据 source_step_ids 或单步匹配，解析优化步骤对应的原始步骤列表。"""
+    if not original_steps:
+        return []
+
+    source_indices = parse_source_step_ids(opt)
+    if source_indices:
+        resolved: list[dict] = []
+        for idx in source_indices:
+            if 0 <= idx < len(original_steps):
+                orig = original_steps[idx]
+                if isinstance(orig, dict):
+                    resolved.append(orig)
+        if resolved:
+            return resolved
+
+    from app.modules.ai.recorder_quality import _find_original_for_optimized
+
+    used_set = used if used is not None else set()
+    orig, _ = _find_original_for_optimized(opt, original_steps, used_set)
+    return [orig] if orig else []
+
+
+def _pick_primary_original(opt: dict, originals: list[dict]) -> Optional[dict]:
+    """多步合并时，选取用于 locator/params 的主原始步骤。"""
+    if not originals:
+        return None
+    if len(originals) == 1:
+        return originals[0]
+
+    method = opt.get("method") or ""
+    for orig in reversed(originals):
+        if orig.get("method") == method:
+            return orig
+
+    for orig in reversed(originals):
+        if method == "fill_value" and orig.get("method") in ("fill_value", "click_ele"):
+            if (orig.get("params") or {}).get("value") not in (None, ""):
+                return orig
+        if method == "click_ele" and orig.get("method") == "click_ele":
+            return orig
+
+    return originals[-1]
+
+
+def merge_meta_from_originals(opt: dict, originals: list[dict]) -> bool:
+    """合并一个或多个原始步骤的 meta（含 candidates）到优化步骤。"""
+    if not originals:
+        return False
+
+    merged: dict[str, Any] = dict(opt.get("meta") or {})
+    for orig in originals:
+        om = orig.get("meta") or {}
+        if not om:
+            continue
+        # candidates 合并去重
+        existing = list(merged.get("candidates") or [])
+        for c in om.get("candidates") or []:
+            if c and c not in existing:
+                existing.append(c)
+        if existing:
+            merged["candidates"] = existing
+        for key, val in om.items():
+            if key == "candidates":
+                continue
+            if key not in merged or merged[key] in (None, "", [], {}):
+                merged[key] = val
+
+    source_ids = parse_source_step_ids(opt)
+    if source_ids:
+        merged["source_step_ids"] = [i + 1 for i in source_ids]
+
+    opt["meta"] = merged
+    return True
+
+
+def merge_params_from_originals(opt: dict, originals: list[dict]) -> int:
+    """从原始步骤恢复关键 params，返回恢复字段数。"""
+    if not originals:
+        return 0
+
+    method = opt.get("method") or ""
+    opt_params = opt.setdefault("params", {})
+    if not isinstance(opt_params, dict):
+        opt_params = {}
+        opt["params"] = opt_params
+
+    primary = _pick_primary_original(opt, originals)
+    restored = 0
+
+    def _restore_from(orig: dict) -> None:
+        nonlocal restored
+        orig_params = orig.get("params") or {}
+        keys = _PRESERVE_PARAM_KEYS.get(method, ())
+        for key in keys:
+            if key not in orig_params:
+                continue
+            orig_val = orig_params[key]
+            if orig_val in (None, ""):
+                continue
+            if opt_params.get(key) != orig_val:
+                opt_params[key] = orig_val
+                restored += 1
+
+    if primary:
+        _restore_from(primary)
+
+    # 合并 fill：value 优先取自 fill_value 原始步
+    if method == "fill_value":
+        for orig in originals:
+            if orig.get("method") != "fill_value":
+                continue
+            val = (orig.get("params") or {}).get("value")
+            if val not in (None, "") and opt_params.get("value") != val:
+                opt_params["value"] = val
+                restored += 1
+                break
+
+    # locator：若 LLM 改动了 locator，且原始有更具体的，在 merge 阶段先回填（后续 resolve_locators 再智能重选）
+    if method not in ("open_url", *DRAG_METHODS):
+        orig_locs = [
+            (o.get("params") or {}).get("locator", "")
+            for o in originals
+            if (o.get("params") or {}).get("locator")
+        ]
+        if orig_locs and not opt_params.get("locator"):
+            opt_params["locator"] = orig_locs[-1]
+            restored += 1
+
+    return restored
+
+
+def _meta_is_rich(meta: dict) -> bool:
+    """meta 是否已含定位候选或捕获文案，无需再模糊匹配。"""
+    if not meta:
+        return False
+    return bool(
+        meta.get("candidates")
+        or meta.get("text")
+        or meta.get("accessibleName")
+        or meta.get("id")
+        or meta.get("dataTestid")
+    )
+
+
+def patch_meta_from_original_steps(optimized_steps: list, original_steps: list) -> dict[str, int]:
+    """从原始步骤补回 meta；优先 source_step_ids，再回退 locator/desc 匹配。"""
+    stats = {"meta_patched": 0, "params_restored": 0, "source_traced": 0}
+    if not optimized_steps or not original_steps:
+        return stats
+
+    locator_meta_map: dict[tuple, dict] = {}
+    desc_meta_map: dict[tuple, dict] = {}
+    label_meta_map: dict[tuple, dict] = {}
+
+    index_meta_map: dict[int, dict] = {}
+    for i, orig in enumerate(original_steps):
+        if not isinstance(orig, dict):
+            continue
+        meta = orig.get("meta") or {}
+        if meta:
+            index_meta_map[i] = meta
+            rec_idx = meta.get("rec_step_index")
+            if rec_idx is not None:
+                try:
+                    index_meta_map[int(rec_idx) - 1] = meta
+                except (TypeError, ValueError):
+                    pass
+
+    for orig in original_steps:
+        if not isinstance(orig, dict):
+            continue
+        meta = orig.get("meta", {})
+        if not meta:
+            continue
+        method = orig.get("method", "")
+        params = orig.get("params", {})
+        if method == "open_url":
+            locator_meta_map[(method, params.get("url", ""))] = meta
+        else:
+            locator_meta_map[(method, params.get("locator", ""))] = meta
+        desc_meta_map[(method, _normalize_desc(orig.get("desc", "")))] = meta
+        acc = (meta.get("accessibleName") or meta.get("text") or "").strip()
+        if acc:
+            label_meta_map[(method, _normalize_desc(acc))] = meta
+        for target in extract_desc_targets(orig.get("desc", "")):
+            label_meta_map[(method, _normalize_desc(target))] = meta
+
+    for opt in optimized_steps:
+        if not isinstance(opt, dict):
+            continue
+
+        source_indices = parse_source_step_ids(opt)
+        if source_indices:
+            originals = [
+                original_steps[i]
+                for i in source_indices
+                if 0 <= i < len(original_steps) and isinstance(original_steps[i], dict)
+            ]
+            if originals:
+                if merge_meta_from_originals(opt, originals):
+                    stats["meta_patched"] += 1
+                stats["params_restored"] += merge_params_from_originals(opt, originals)
+                stats["source_traced"] += 1
+                parse_source_step_ids(opt, pop=True)
+                continue
+
+        meta = opt.get("meta") or {}
+        if _meta_is_rich(meta):
+            stats["params_restored"] += merge_params_from_originals(
+                opt, resolve_original_steps_for_optimized(opt, original_steps)
+            )
+            continue
+
+        # 尝试 rec_step_index 精确匹配
+        rec_idx = meta.get("rec_step_index") or meta.get("source_step_ids")
+        if isinstance(rec_idx, list) and rec_idx:
+            try:
+                rec_idx = int(rec_idx[0])
+            except (TypeError, ValueError):
+                rec_idx = None
+        if rec_idx is not None:
+            try:
+                idx = int(rec_idx) - 1
+                if 0 <= idx < len(original_steps):
+                    orig_meta = index_meta_map.get(idx) or (original_steps[idx].get("meta") or {})
+                    if orig_meta:
+                        merge_meta_from_originals(opt, [original_steps[idx]])
+                        stats["meta_patched"] += 1
+                        stats["params_restored"] += merge_params_from_originals(opt, [original_steps[idx]])
+                        continue
+            except (TypeError, ValueError):
+                pass
+
+        method = opt.get("method", "")
+        params = opt.get("params", {})
+        if method == "open_url":
+            key = (method, params.get("url", ""))
+        else:
+            key = (method, params.get("locator", ""))
+
+        meta = locator_meta_map.get(key)
+        if not meta:
+            meta = desc_meta_map.get((method, _normalize_desc(opt.get("desc", ""))))
+        if not meta:
+            for target in extract_desc_targets(opt.get("desc", "")):
+                meta = label_meta_map.get((method, _normalize_desc(target)))
+                if meta:
+                    break
+        if meta:
+            opt["meta"] = dict(meta)
+            stats["meta_patched"] += 1
+        stats["params_restored"] += merge_params_from_originals(
+            opt, resolve_original_steps_for_optimized(opt, original_steps)
+        )
+
+    return stats

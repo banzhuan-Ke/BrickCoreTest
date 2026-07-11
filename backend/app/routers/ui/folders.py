@@ -7,15 +7,15 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.core.auth import get_current_username, require_permissions
-from app.core.config import (
+from app.core.platform.auth import get_current_username, require_permissions
+from app.core.platform.config import (
     UI_TEST_FILE_BUCKET,
     UI_TEST_FOLDER_MAX_BYTES,
     UI_TEST_FOLDER_MAX_FILES,
 )
-from app.core.minio_client import is_minio_storage, minio_client
-from app.core.permissions import UI_CASE_EDIT, UI_CASE_VIEW
-from app.core.ui_test_folder_refs import (
+from app.core.infra.minio_client import is_minio_storage, minio_client
+from app.core.platform.permissions import UI_CASE_EDIT, UI_CASE_VIEW
+from app.modules.ui.ui_test_folder_refs import (
     build_folder_reference_map,
     collect_folder_references,
     empty_folder_reference_summary,

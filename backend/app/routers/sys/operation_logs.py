@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel
 from tortoise import connections
 
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import OPERATION_LOG_VIEW, OPERATION_LOG_EDIT
-from app.core.operation_log import resolve_route_info
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import OPERATION_LOG_VIEW, OPERATION_LOG_EDIT
+from app.core.ops.operation_log import resolve_route_info
 from app.models.sys import OperationLog
 
 router = APIRouter(

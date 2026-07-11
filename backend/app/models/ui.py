@@ -199,6 +199,31 @@ class UiCaseExecution(models.Model):
         table_description = "测试用例运行记录"
 
 
+class UiDebugSession(models.Model):
+    """UI 交互调试会话：Runner 保活浏览器，用户手动就位后按步试跑"""
+    id = fields.IntField(pk=True, auto_increment=True, description="会话ID")
+    case_id = fields.IntField(description="用例ID")
+    project_id = fields.IntField(description="项目ID")
+    device_id = fields.CharField(max_length=100, description="Runner 设备ID")
+    username = fields.CharField(max_length=50, description="创建人")
+    status = fields.CharField(
+        max_length=20,
+        default="starting",
+        description="starting/ready/running/closing/closed/error",
+    )
+    env = fields.JSONField(default=dict, description="执行环境")
+    steps = fields.JSONField(default=list, description="步骤快照")
+    pending_command = fields.JSONField(null=True, description="待执行命令")
+    last_result = fields.JSONField(default=dict, description="最近执行结果")
+    error = fields.TextField(null=True, description="错误信息")
+    create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    update_time = fields.DatetimeField(auto_now=True, description="更新时间")
+
+    class Meta:
+        table = "ui_debug_session"
+        table_description = "UI交互调试会话"
+
+
 class UiTestFile(models.Model):
     """Web 自动化 input 文件上传测试素材（MinIO ui-test-files）"""
     id = fields.IntField(pk=True, auto_increment=True)

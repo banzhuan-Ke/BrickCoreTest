@@ -5,8 +5,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.core.auth import verify_internal_token, verify_runner_token
-from app.core.runner_results import save_runner_results
+from app.core.platform.auth import verify_internal_token, verify_runner_token
+from app.modules.runner.runner_results import save_runner_results
 from app.models.sys import Device
 from app.schemas.runner import RunnerEngineReadyRequest, RunnerResultsPayload
 

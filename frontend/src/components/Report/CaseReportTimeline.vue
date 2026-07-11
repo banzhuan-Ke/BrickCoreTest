@@ -126,6 +126,13 @@
           link
           @click="applyAllHealedToCase"
         >写回全部自愈 ({{ healedSteps.length }})</el-button>
+        <el-button
+          v-if="caseIdForWriteback && aiActSteps.length"
+          size="small"
+          type="success"
+          link
+          @click="applyAllAiActToCase"
+        >写回全部 AI Act ({{ aiActSteps.length }})</el-button>
       </div>
       <div class="timeline-container">
         <el-timeline>
@@ -208,6 +215,18 @@
                     link
                     :loading="applyingStepIndex === index"
                     @click="applyHealedToCase(step, index)"
+                  >写回用例</el-button>
+                </div>
+                <div v-if="step.ai_act_used && step.ai_act" class="step-heal-info">
+                  <el-tag size="small" type="success">AI Act 兜底</el-tag>
+                  <span class="heal-act-desc">{{ step.ai_act.act_desc || step.ai_act.reason || '已重新规划并执行' }}</span>
+                  <el-button
+                    v-if="caseIdForWriteback && step.ai_act.act_params && Object.keys(step.ai_act.act_params).length"
+                    size="small"
+                    type="primary"
+                    link
+                    :loading="applyingAiActIndex === index"
+                    @click="applyAiActToCase(step, index)"
                   >写回用例</el-button>
                 </div>
                 <!-- 步骤截图缩略图（无模板对比时显示） -->
@@ -627,6 +646,7 @@ watch(() => props.runInfo, () => {
 
 const currentScreenshot = ref(0)
 const applyingStepIndex = ref(-1)
+const applyingAiActIndex = ref(-1)
 
 const caseIdForWriteback = computed(() => {
   const info = processedRunInfo.value
@@ -638,6 +658,76 @@ const healedSteps = computed(() =>
     .map((step, index) => ({ step, index }))
     .filter(({ step }) => step?.locator_healed?.new)
 )
+
+const aiActSteps = computed(() =>
+  steps.value
+    .map((step, index) => ({ step, index }))
+    .filter(({ step }) => step?.ai_act_used && step?.ai_act?.act_params && Object.keys(step.ai_act.act_params).length)
+)
+
+function formatAiActWritebackPreview(aiAct) {
+  const params = aiAct?.act_params || {}
+  const keys = ['locator', 'selector', 'start_selector', 'end_selector', 'first_locator', 'second_locator']
+  const parts = keys
+    .filter((k) => params[k])
+    .map((k) => `${k}=${params[k]}`)
+  return parts.length ? parts.join('\n') : JSON.stringify(params, null, 2)
+}
+
+async function applyAiActToCase(step, index, skipConfirm = false) {
+  const caseId = caseIdForWriteback.value
+  const aiAct = step.ai_act
+  if (!caseId || !aiAct?.act_params) return
+  if (!skipConfirm) {
+    try {
+      await ElMessageBox.confirm(
+        `将步骤 ${index + 1} 的 AI Act 定位参数写回用例 #${caseId}？\n${formatAiActWritebackPreview(aiAct)}`,
+        '写回 AI Act 结果',
+        { type: 'warning' }
+      )
+    } catch {
+      return
+    }
+  }
+  applyingAiActIndex.value = index
+  try {
+    const res = await aiGenerateApi.applyAiActToCase({
+      case_id: caseId,
+      step_index: step.step_index ?? index,
+      act_params: aiAct.act_params,
+      act_method: aiAct.act_method,
+    })
+    if (res.data?.code === 200) {
+      if (!skipConfirm) ElMessage.success('已写回用例')
+      return true
+    }
+    ElMessage.error(res.data?.message || '写回失败')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '写回失败')
+  } finally {
+    applyingAiActIndex.value = -1
+  }
+  return false
+}
+
+async function applyAllAiActToCase() {
+  const caseId = caseIdForWriteback.value
+  if (!caseId || !aiActSteps.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      `将 ${aiActSteps.value.length} 处 AI Act 定位参数全部写回用例 #${caseId}？`,
+      '批量写回 AI Act',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  let ok = 0
+  for (const { step, index } of aiActSteps.value) {
+    if (await applyAiActToCase(step, index, true)) ok += 1
+  }
+  if (ok) ElMessage.success(`已写回 ${ok} 处 AI Act 定位参数`)
+}
 
 async function applyHealedToCase(step, index, skipConfirm = false) {
   const caseId = caseIdForWriteback.value

@@ -70,6 +70,10 @@
                 <el-button @click="openXmindImport">导入 XMind</el-button>
                 <el-button @click="loadMindmap">刷新导图</el-button>
               </div>
+              <KnowledgeRefSelector
+                v-model="knowledgeRefs"
+                hint="可选：引用资料库中的历史 Bug、测试计划等，辅助生成测试点"
+              />
               <div class="gen-bar secondary-bar">
                 <el-tooltip content="未勾选：展示全部测试点，按需求文档章节结构排列。勾选：仅展示左侧当前勾选的章节范围。" placement="top">
                   <el-checkbox v-model="mindmapScopeOnly" @change="loadMindmap">导图仅显示当前勾选章节</el-checkbox>
@@ -208,6 +212,10 @@
                 <el-checkbox v-model="schemeForm.include_unconfirmed">包含未确认测试点</el-checkbox>
                 <el-button type="primary" :loading="schemeGenerating" @click="handleGenerateScheme">生成方案</el-button>
               </div>
+              <KnowledgeRefSelector
+                v-model="knowledgeRefs"
+                hint="可选：引用资料库补充方案背景与历史缺陷信息"
+              />
               <el-collapse v-model="schemeEnvCollapse" class="scheme-env-collapse">
                 <el-collapse-item title="测试环境补充（建议填写，避免 AI 编造环境信息）" name="env">
                   <el-form :inline="true" class="scheme-env-form">
@@ -402,6 +410,10 @@
               placeholder="例如：优先覆盖 P0 测试点；步骤须含具体控件名与提示文案"
             />
           </el-form-item>
+          <KnowledgeRefSelector
+            v-model="caseGenKnowledgeRefs"
+            hint="可选：引用资料库中的历史缺陷、测试计划等，辅助生成用例步骤"
+          />
         </el-form>
         <template #footer>
           <el-button @click="caseGenVisible = false">取消</el-button>
@@ -525,6 +537,7 @@ import PageCard from '@/components/PageCard.vue'
 import TestingEmbedShell from '@/components/TestingEmbedShell.vue'
 import TestPointMindMap from '@/components/TestPointMindMap.vue'
 import MarkdownReport from '@/components/MarkdownReport.vue'
+import KnowledgeRefSelector from '@/modules/knowledge/components/KnowledgeRefSelector.vue'
 import { aiTestAnalysisApi, aiConfigApi, aiRequirementApi, aiFunctionalCaseApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
@@ -626,6 +639,26 @@ const schemeEnvHints = reactive({
 })
 const schemeGenerating = ref(false)
 const savingScheme = ref(false)
+const knowledgeRefs = ref({ folder_ids: [], document_ids: [] })
+const caseGenKnowledgeRefs = ref({ folder_ids: [], document_ids: [] })
+
+const knowledgeRefsPayload = () => {
+  const folderIds = (knowledgeRefs.value?.folder_ids || []).filter(Boolean)
+  const docIds = (knowledgeRefs.value?.document_ids || []).filter(Boolean)
+  const payload = {}
+  if (folderIds.length) payload.knowledge_folder_ids = folderIds
+  if (docIds.length) payload.knowledge_document_ids = docIds
+  return payload
+}
+
+const caseGenKnowledgeRefsPayload = () => {
+  const folderIds = (caseGenKnowledgeRefs.value?.folder_ids || []).filter(Boolean)
+  const docIds = (caseGenKnowledgeRefs.value?.document_ids || []).filter(Boolean)
+  const payload = {}
+  if (folderIds.length) payload.knowledge_folder_ids = folderIds
+  if (docIds.length) payload.knowledge_document_ids = docIds
+  return payload
+}
 
 const caseGenVisible = ref(false)
 const caseGenLoading = ref(false)
@@ -942,7 +975,8 @@ const handleGeneratePoints = async () => {
         count: genForm.count,
         batch_name: genForm.batch_name,
         replace_existing: genForm.replace_batch,
-        supplement: false
+        supplement: false,
+        ...knowledgeRefsPayload()
       },
       proStore.projectInfo.id
     )
@@ -973,7 +1007,8 @@ const handleGenerateScheme = async () => {
         text_config_id: schemeForm.text_config_id,
         include_unconfirmed_points: schemeForm.include_unconfirmed,
         scope_section_ids: selectedSectionIds.value,
-        environment_hints: { ...schemeEnvHints }
+        environment_hints: { ...schemeEnvHints },
+        ...knowledgeRefsPayload()
       },
       proStore.projectInfo.id
     )
@@ -1399,7 +1434,8 @@ const handleGenerateCasesFromPoints = async () => {
     supplement: caseGenForm.supplement,
     extra_instructions: (caseGenForm.extra_instructions || '').trim() || undefined,
     include_unconfirmed_points: caseGenForm.scope_mode === 'all',
-    test_point_ids: scopePointIds
+    test_point_ids: scopePointIds,
+    ...caseGenKnowledgeRefsPayload()
   }
   caseGenLoading.value = true
   try {

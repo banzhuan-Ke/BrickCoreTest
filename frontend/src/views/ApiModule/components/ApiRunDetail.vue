@@ -5,13 +5,19 @@
       <div class="overview-header">
         <h3>{{ isPlanRecord ? '计划执行概览' : '执行概览' }}</h3>
         <div class="overview-actions">
-          <el-button
-            v-if="canAiAnalyze && record && record.failed_cases > 0"
-            type="warning"
-            size="small"
-            :loading="batchAnalyzing"
-            @click="runBatchAnalyze"
-          >批量 AI 分析失败</el-button>
+          <IterationReportShortcut
+            v-if="recordId"
+            :record-id="recordId"
+            :report-type="isPlanRecord ? 'api_plan' : 'api_suite'"
+            :title="record?.suite_name || record?.plan_name"
+          />
+          <ReportKnowledgeBridge
+            v-if="recordId && projectId"
+            :project-id="projectId"
+            :report-type="isPlanRecord ? 'api_plan' : 'api_suite'"
+            :record-id="recordId"
+            :title="record?.suite_name || record?.plan_name"
+          />
           <el-button type="success" size="small" @click="exportReport">导出报告</el-button>
         </div>
       </div>
@@ -19,6 +25,13 @@
         v-if="record"
         :report-type="isPlanRecord ? 'api_plan' : 'api_suite'"
         :record-id="recordId"
+      />
+      <ReportFailureBatchBar
+        v-if="canAiAnalyze && record && record.failed_cases > 0"
+        :project-id="projectId"
+        :report-type="isPlanRecord ? 'api_plan' : 'api_suite'"
+        :record-id="recordId"
+        :record-title="record?.suite_name || record?.plan_name"
       />
       <el-row :gutter="20">
         <el-col :span="overviewColSpan">
@@ -190,7 +203,9 @@ import http from '@/api/index'
 import CaseResultItem from './CaseResultItem.vue'
 import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
 import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
-import { aiAnalyzeApi } from '@/api/modules/ai.js'
+import ReportFailureBatchBar from '@/components/ReportFailureBatchBar.vue'
+import ReportKnowledgeBridge from '@/components/ReportKnowledgeBridge.vue'
+import IterationReportShortcut from '@/components/IterationReportShortcut.vue'
 import { UserStore } from '@/stores/module/UserStore.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { getHttpResponseMs, sumHttpResponseMs, sumHttpFromPlanItems } from '../utils/runTiming'
@@ -198,6 +213,7 @@ import { getHttpResponseMs, sumHttpResponseMs, sumHttpFromPlanItems } from '../u
 const uStore = UserStore()
 const proStore = ProjectStore()
 const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
+const projectId = computed(() => proStore.projectInfo?.id)
 
 const props = defineProps({
   recordId: {
@@ -220,29 +236,6 @@ const planActiveNames = ref([0])
 
 const aiAnalyzeVisible = ref(false)
 const aiAnalyzeTarget = ref({ type: 'api', id: null })
-const batchAnalyzing = ref(false)
-
-const runBatchAnalyze = async () => {
-  if (!proStore.projectInfo?.id || !props.recordId) return
-  batchAnalyzing.value = true
-  try {
-    const res = await aiAnalyzeApi.analyzeFailureBatch(
-      {
-        report_type: isPlanRecord.value ? 'api_plan' : 'api_suite',
-        record_id: props.recordId,
-        limit: 5
-      },
-      proStore.projectInfo.id
-    )
-    if (res.data?.code === 200) {
-      ElMessage.success(res.data.message || '批量分析完成')
-    }
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '批量分析失败')
-  } finally {
-    batchAnalyzing.value = false
-  }
-}
 
 const isApiFailed = (item) => item && item.status && item.status !== 'success'
 

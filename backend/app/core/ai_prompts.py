@@ -5,11 +5,6 @@ Prompt 模板管理器
 import re
 from jinja2 import Template as Jinja2Template
 from app.core.edition import is_community_edition
-from app.core.qa_judge_prompt_ce import (
-    QA_JUDGE_DESCRIPTION_CE,
-    QA_JUDGE_SYSTEM_PROMPT_CE,
-    QA_JUDGE_USER_PROMPT_TEMPLATE_CE,
-)
 from app.models.ai import AiPromptTemplate
 
 
@@ -1252,29 +1247,8 @@ Vision 屏幕描述：
 }
 intent=name 时可省略 steps；intent=steps 时可省略 element_name。""",
             "examples": [],
-        },
-        "qa_judge": {
-            "name": "问答准确性评判",
-            "scene_type": "qa_eval",
-            "description": (
-                "RAG 评测公式 v2（范畴+完整性+准确性+表达，0~1 分 + 5 级等级）。"
-                "变量：question=问题，ground_truth=标准答案，answer=实际回答（被测 API 或导入）"
-            ),
-            "system_prompt": (
-                "你是企业知识库问答质量评审专家。"
-                "必须严格按用户给出的分项公式与 5 级等级映射执行评估，"
-                "仅输出 1 个 JSON 对象（不要 Markdown 代码块）。"
-            ),
-            "user_prompt_template": "",
-            "examples": [],
-        },
+        }
     }
-
-    @classmethod
-    def _qa_judge_pro_user_template(cls) -> str:
-        from app.core.qa_judge_prompt import QA_JUDGE_USER_PROMPT_TEMPLATE
-
-        return QA_JUDGE_USER_PROMPT_TEMPLATE
 
     @classmethod
     def _resolve_default_template(cls, code: str) -> dict | None:
@@ -1282,15 +1256,6 @@ intent=name 时可省略 steps；intent=steps 时可省略 element_name。""",
         if not data:
             return None
         out = dict(data)
-        if code == "qa_judge":
-            if is_community_edition():
-                out.update(
-                    description=QA_JUDGE_DESCRIPTION_CE,
-                    system_prompt=QA_JUDGE_SYSTEM_PROMPT_CE,
-                    user_prompt_template=QA_JUDGE_USER_PROMPT_TEMPLATE_CE,
-                )
-            else:
-                out["user_prompt_template"] = cls._qa_judge_pro_user_template()
         return out
 
     @classmethod

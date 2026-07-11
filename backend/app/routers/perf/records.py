@@ -7,9 +7,9 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from app.models.perf import PerfRecord, PerfScene
-from app.core.auth import require_permissions
-from app.core.notification import NotificationService
-from app.core.permissions import PERF_RECORD_VIEW
+from app.core.platform.auth import require_permissions
+from app.core.ops.notification import NotificationService
+from app.core.platform.permissions import PERF_RECORD_VIEW
 from app.routers.perf.report_utils import (
     build_report_payload,
     build_config_summary,
@@ -21,7 +21,7 @@ from app.routers.perf.report_utils import (
     render_perf_html_stream_sections,
     render_perf_html_request_traces,
 )
-from app.core.stream_phase import detail_to_excel_row, is_stream_burst_mode, normalize_perf_mode, migrate_legacy_detail
+from app.modules.stream_phase import detail_to_excel_row, is_stream_burst_mode, normalize_perf_mode, migrate_legacy_detail
 
 router = APIRouter(prefix="/records", tags=["性能测试记录"])
 

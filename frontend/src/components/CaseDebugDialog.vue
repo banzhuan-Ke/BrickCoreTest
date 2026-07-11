@@ -8,6 +8,13 @@
     @closed="resetState"
   >
     <el-alert
+      type="warning"
+      :closable="false"
+      show-icon
+      title="旧版调试会一次性跑完步骤后关闭浏览器。推荐改用工具栏「交互调试」，可手动就位、按步试跑并拾取元素。"
+      style="margin-bottom: 12px;"
+    />
+    <el-alert
       type="info"
       :closable="false"
       show-icon

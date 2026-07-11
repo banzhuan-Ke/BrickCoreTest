@@ -1,15 +1,17 @@
 """
 AI LLM 配置管理路由
 """
+import time
 from fastapi import APIRouter, HTTPException, Depends, status, Query
 from pydantic import BaseModel, Field
 from typing import Optional
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import AI_CONFIG_VIEW, AI_CONFIG_EDIT, AI_TEST_EXECUTE, UI_CASE_EXECUTE
-from app.core.encryption import encrypt_value, decrypt_value, mask_key
-from app.core.llm_client import LLMClientFactory
-from app.core.ai_project_settings import load_ai_project_settings, save_ai_project_settings
-from app.core.ai_scene_config import list_scene_bindings, save_scene_bindings, apply_scene_recommendations
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import AI_CONFIG_VIEW, AI_CONFIG_EDIT, AI_TEST_EXECUTE, UI_CASE_EXECUTE
+from app.core.platform.encryption import encrypt_value, decrypt_value, mask_key
+from app.core.llm.llm_client import LLMClientFactory
+from app.core.llm.ai_usage_log import log_ai_usage
+from app.modules.ai.ai_project_settings import load_ai_project_settings, save_ai_project_settings
+from app.modules.ai.ai_scene_config import list_scene_bindings, save_scene_bindings, apply_scene_recommendations
 from app.models.ai import AiConfig
 from app.routers.ai.requirements import _resolve_project_id
 from app.schemas.ai import (
@@ -24,7 +26,11 @@ router = APIRouter(prefix="/configs", tags=["AI配置"])
 class AiExecutionSettingsBody(BaseModel):
     locator_heal_enabled: bool = Field(True, description="项目是否允许 Runner 定位器自愈")
     locator_heal_default_on_execute: bool = Field(True, description="执行时默认是否开启自愈")
-    locator_heal_allow_run_override: bool = Field(True, description="是否允许运行弹窗单次覆盖")
+    locator_heal_allow_run_override: bool = Field(True, description="是否允许运行弹窗单次覆盖自愈")
+    ai_act_enabled: bool = Field(False, description="项目是否允许 AI Act 兜底")
+    ai_act_default_on_execute: bool = Field(False, description="执行时默认是否开启 AI Act")
+    ai_act_allow_run_override: bool = Field(True, description="是否允许运行弹窗单次覆盖 AI Act")
+    ai_act_max_per_case: int = Field(3, ge=1, le=10, description="单用例 AI Act 最大次数")
 
 
 def _mask_config(config: AiConfig) -> dict:
@@ -298,6 +304,7 @@ async def test_config(
         kwargs = {}
         if config.thinking_enabled and config.reasoning_effort:
             kwargs["reasoning_effort"] = config.reasoning_effort
+        t0 = time.time()
         resp = await client.chat(
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
@@ -310,15 +317,42 @@ async def test_config(
         )
 
         content = resp.get("content", "").strip()
+        tokens_used = int(resp.get("tokens", 0) or 0)
+        duration_ms = int((time.time() - t0) * 1000)
+        project_id = user_info.get("project_id") or user_info.get("current_project_id")
+        await log_ai_usage(
+            config,
+            "config_test",
+            user_info=user_info,
+            project_id=project_id,
+            tokens_used=tokens_used,
+            duration_ms=duration_ms,
+            input_summary=f"连通性测试 · {config.name}"[:500],
+            output_summary=content[:500],
+            config_id=config.id,
+        )
         return StandardResponse(
             data={
                 "connected": True,
                 "response": content,
-                "tokens_used": resp.get("tokens", 0),
+                "tokens_used": tokens_used,
             }
         )
 
     except Exception as e:
+        project_id = user_info.get("project_id") or user_info.get("current_project_id")
+        await log_ai_usage(
+            config,
+            "config_test",
+            user_info=user_info,
+            project_id=project_id,
+            tokens_used=0,
+            duration_ms=0,
+            status="failed",
+            input_summary=f"连通性测试 · {config.name}"[:500],
+            output_summary=str(e)[:500],
+            config_id=config.id,
+        )
         return StandardResponse(
             code=500,
             message=f"连通性测试失败: {str(e)}",

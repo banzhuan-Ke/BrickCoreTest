@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.core.auth import is_authenticated, require_permissions
-from app.core.project_access import (
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.project_access import (
     PROJECT_ROLE_MANAGER,
     PROJECT_ROLE_MEMBER,
     PROJECT_ROLE_OWNER,
@@ -197,7 +197,7 @@ async def update_project(
     if item.global_vars is not None:
         project.global_vars = item.global_vars
     if item.default_headers is not None:
-        from app.core.default_headers_validate import normalize_default_headers
+        from app.core.shared.default_headers_validate import normalize_default_headers
 
         try:
             project.default_headers = normalize_default_headers(item.default_headers)

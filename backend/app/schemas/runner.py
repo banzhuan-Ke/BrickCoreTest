@@ -86,7 +86,7 @@ class RunnerVersionResponse(BaseModel):
     middleware_isolation: bool = True
     runner_notices: Optional[dict[str, Any]] = None
     community_edition: bool = False
-    platform_version: str = "1.2.0"
+    platform_version: str = "1.3.0"
 
 
 class RunnerReleaseConfigForm(BaseModel):

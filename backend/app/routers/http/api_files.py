@@ -7,16 +7,16 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 
-from app.core.api_test_file_refs import (
+from app.modules.http.api_test_file_refs import (
     build_file_reference_map,
     collect_file_references,
     empty_reference_summary,
 )
-from app.core.auth import get_current_username, require_any_permissions, require_permissions
-from app.core.config import API_FILE_BUCKET, UI_TEST_FILE_MAX_BYTES
-from app.core.minio_client import is_minio_storage, minio_client
-from app.core.test_file_service import get_test_file_download_url, get_test_file_preview_payload
-from app.core.permissions import API_CASE_EDIT, API_MANAGE_EDIT, API_MANAGE_VIEW
+from app.core.platform.auth import get_current_username, require_any_permissions, require_permissions
+from app.core.platform.config import API_FILE_BUCKET, UI_TEST_FILE_MAX_BYTES
+from app.core.infra.minio_client import is_minio_storage, minio_client
+from app.core.shared.test_file_service import get_test_file_download_url, get_test_file_preview_payload
+from app.core.platform.permissions import API_CASE_EDIT, API_MANAGE_EDIT, API_MANAGE_VIEW
 from app.models.http import ApiTestFile
 from app.models.sys import Project
 from app.schemas.ai import StandardResponse

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, status
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import PERMISSIONS, ROLE_VIEW, ROLE_EDIT
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import PERMISSIONS, ROLE_VIEW, ROLE_EDIT
 from app.models.sys import User
 from app.models.sys import Role
 from app.schemas.sys import RoleSchemas, RoleListSchemas, AddRoleForm, UpdateRoleForm
@@ -38,7 +38,7 @@ async def update_role(role_id: int, item: UpdateRoleForm, user_info: dict = Depe
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="系统预置角色不可删除")
     data = item.model_dump(exclude_unset=True)
     if role.code == "system_admin" and "permissions" in data:
-        from app.core.default_roles import sanitize_system_admin_permissions
+        from app.core.platform.default_roles import sanitize_system_admin_permissions
 
         data["permissions"] = sanitize_system_admin_permissions(data["permissions"])
     await role.update_from_dict(data)

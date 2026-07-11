@@ -1,13 +1,4 @@
-"""
-核心模块
-"""
-from .config import *
-from .auth import *
-from .security import *
+"""平台内核：子包见 platform / infra / llm / runner / case / shared / db / ops / integration。"""
+from app.core.platform import config
 
-# 为了兼容旧导入，导出 settings
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
-from . import config
-settings = config
+__all__ = ["config"]

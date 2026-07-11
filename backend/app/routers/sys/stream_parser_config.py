@@ -4,9 +4,9 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.permissions import AI_CONFIG_EDIT, AI_CONFIG_VIEW, AI_TEST_VIEW
-from app.core.stream_parser_config_service import (
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.core.platform.permissions import AI_CONFIG_EDIT, AI_CONFIG_VIEW, AI_TEST_VIEW
+from app.core.integration.stream_parser_config_service import (
     create_stream_parser_config,
     delete_stream_parser_config,
     get_stream_parser_config,

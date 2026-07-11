@@ -28,7 +28,11 @@ playwright==1.51.0
 browser-use==0.12.9
 pymupdf==1.25.5
 python-docx==1.2.0
+docxtpl>=0.16.0
+matplotlib>=3.8.0
 openpyxl==3.1.5
+xlrd==2.0.1
+python-pptx==0.6.23
 jsonpath-ng==1.8.0
 jsonschema==4.23.0
 RestrictedPython>=7.1
@@ -36,3 +40,6 @@ Faker==37.4.2
 qrcode[pil]==8.0
 markdown==3.8
 fastmcp>=3.3.0
+grpcio>=1.68.0
+grpcio-reflection>=1.68.0
+protobuf>=5.29.0

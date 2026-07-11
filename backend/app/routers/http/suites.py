@@ -18,11 +18,11 @@ from app.schemas.http import (
     ApiRunResult, ApiAssertionResult,
     ApiSuiteRunRecordOut, ApiSuiteRunListResponse
 )
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import API_SUITE_VIEW, API_SUITE_EDIT, API_CASE_EXECUTE
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import API_SUITE_VIEW, API_SUITE_EDIT, API_CASE_EXECUTE
 from app.models.sys import Environment, Project, TestCatalog
-from app.core.config import API_FILE_BUCKET
-from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
+from app.core.platform.config import API_FILE_BUCKET
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 
 router = APIRouter(tags=["接口测试套件"], dependencies=[Depends(is_authenticated), Depends(require_permissions(API_SUITE_VIEW))])
 
@@ -311,8 +311,8 @@ from .utils import (
     build_form_data_multipart,
     prepare_httpx_headers,
 )
-from app.core.variable_resolver import VariableResolver
-from app.core.data_tools.errors import ToolExecutionError
+from app.core.case.variable_resolver import VariableResolver
+from app.modules.data_tools.errors import ToolExecutionError
 
 
 async def run_single_case(
@@ -357,7 +357,7 @@ async def run_single_case(
     env_vars = env.global_vars or {}
     all_variables = {**proj_vars, **env_vars, **(variables or {})}
 
-    from app.core.data_tools.tag_service import merge_execution_variables
+    from app.modules.data_tools.tag_service import merge_execution_variables
 
     all_variables = await merge_execution_variables(
         case.project_id, env_id, all_variables
@@ -367,7 +367,7 @@ async def run_single_case(
     _stage_start = time.time()
 
     # ===== API Token 授权注入 =====
-    from app.core.api_auth_service import inject_auth_variables
+    from app.modules.http.api_auth_service import inject_auth_variables
     auth_vars, auth_err = await inject_auth_variables(case.project_id, env_id, all_variables)
     if auth_err:
         return ApiRunResult(record_id=0, status="failed", error=f"授权刷新失败: {auth_err}")
@@ -390,7 +390,7 @@ async def run_single_case(
     _stage_start = time.time()
 
     # 安全获取配置，确保是字典类型
-    from app.core.header_merge import merge_request_headers
+    from app.core.shared.header_merge import merge_request_headers
 
     headers = merge_request_headers(
         api_headers=api.headers,
@@ -477,10 +477,12 @@ async def run_single_case(
     # 内部函数：执行一次请求（含断言和变量提取）
     last_attempt_timings = {}
     is_ws = api_protocol == "websocket"
+    is_graphql = api_protocol == "graphql"
+    is_grpc = api_protocol == "grpc"
     
     async def _execute_once():
         if is_ws:
-            from app.core.ws_executor import execute_ws_case_attempt
+            from app.modules.http.ws_executor import execute_ws_case_attempt
 
             (
                 response,
@@ -505,6 +507,75 @@ async def run_single_case(
             )
             last_attempt_timings.update(attempt_timings)
             request_detail["ws_messages"] = message_log
+            return (
+                response,
+                response_body,
+                assertions_result,
+                all_passed,
+                extracted_vars,
+                extractor_results,
+                db_assertion_results,
+            )
+
+        if is_graphql:
+            from app.modules.http.graphql_executor import execute_graphql_case_attempt
+
+            (
+                response,
+                response_body,
+                assertions_result,
+                all_passed,
+                extracted_vars,
+                extractor_results,
+                db_assertion_results,
+                attempt_timings,
+                _,
+            ) = await execute_graphql_case_attempt(
+                url=url,
+                headers=headers if isinstance(headers, dict) else {},
+                case=case,
+                api=api,
+                all_variables=all_variables,
+                var_resolver=var_resolver,
+                auto_validate_schema=auto_validate_schema,
+                env_id=env_id,
+                script_logs=script_logs,
+            )
+            last_attempt_timings.update(attempt_timings)
+            return (
+                response,
+                response_body,
+                assertions_result,
+                all_passed,
+                extracted_vars,
+                extractor_results,
+                db_assertion_results,
+            )
+
+        if is_grpc:
+            from app.modules.http.grpc_executor import execute_grpc_case_attempt
+
+            (
+                response,
+                response_body,
+                assertions_result,
+                all_passed,
+                extracted_vars,
+                extractor_results,
+                db_assertion_results,
+                attempt_timings,
+                _,
+            ) = await execute_grpc_case_attempt(
+                host=url,
+                case=case,
+                api=api,
+                all_variables=all_variables,
+                var_resolver=var_resolver,
+                auto_validate_schema=auto_validate_schema,
+                env_id=env_id,
+                script_logs=script_logs,
+            )
+            last_attempt_timings.update(attempt_timings)
             return (
                 response,
                 response_body,
@@ -602,7 +673,7 @@ async def run_single_case(
             _t0 = time.time()
             db_assertion_results = []
             if getattr(case, "db_assertions", None):
-                from app.core.db_factory_service import evaluate_db_assertions
+                from app.core.db.db_factory_service import evaluate_db_assertions
                 script_vars = {**all_variables, **extracted_vars}
                 db_eval = await evaluate_db_assertions(
                     case.db_assertions or [],

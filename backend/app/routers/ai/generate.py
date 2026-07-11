@@ -12,16 +12,16 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, Field
 
-from app.core.auth import is_authenticated, require_permissions, verify_runner_or_internal
-from app.core.permissions import AI_TEST_EXECUTE, APP_CASE_EDIT, UI_CASE_EDIT
-from app.core.ai_prompts import PromptManager, append_extra_instructions
-from app.core.ai_usage_log import log_ai_usage
-from app.core.llm_client import LLMClientFactory
-from app.core.encryption import decrypt_value
-from app.core.page_fetcher import fetch_page_structure, format_elements_for_prompt, SmartPageExplorer
-from app.core.ui_agent_explorer import UiMcpAgentExplorer
-from app.core.ui_locator_heal import heal_locator
-from app.core.ui_keywords import (
+from app.core.platform.auth import is_authenticated, require_permissions, verify_runner_or_internal
+from app.core.platform.permissions import AI_TEST_EXECUTE, APP_CASE_EDIT, UI_CASE_EDIT
+from app.modules.ai.ai_prompts import PromptManager, append_extra_instructions
+from app.core.llm.ai_usage_log import log_ai_usage
+from app.core.llm.llm_client import LLMClientFactory
+from app.core.platform.encryption import decrypt_value
+from app.modules.ui.page_fetcher import fetch_page_structure, format_elements_for_prompt, SmartPageExplorer
+from app.modules.ui.ui_agent_explorer import UiMcpAgentExplorer
+from app.modules.ui.ui_locator_heal import heal_locator
+from app.core.shared.ui_keywords import (
     UI_DEFAULT_PARAMS as _UI_DEFAULT_PARAMS,
     UI_REQUIRED_PARAMS as _UI_REQUIRED_PARAMS,
     UI_VALID_METHODS as _UI_VALID_METHODS,
@@ -290,111 +290,21 @@ def _validate_api_cases(cases: list) -> tuple[list[str], list[dict]]:
 
 async def _get_default_ai_config() -> Optional[AiConfig]:
     """获取默认 LLM 配置"""
-    from app.core.ai_scene_config import _pick_default_config
+    from app.modules.ai.ai_scene_config import _pick_default_config
     return await _pick_default_config()
 
 
 async def _get_ai_config(config_id: Optional[int], scene: Optional[str] = None) -> AiConfig:
     """按 ID 或场景绑定获取 LLM 配置，未指定则返回默认配置"""
-    from app.core.ai_scene_config import resolve_config_for_scene
+    from app.modules.ai.ai_scene_config import resolve_config_for_scene
     return await resolve_config_for_scene(scene or "", config_id)
 
 
-def _build_extra_body(config: AiConfig, *, disable_thinking: bool = False) -> dict:
-    """根据配置构造 extra_body（用于 thinking 等供应商特定参数）"""
-    extra_body = {}
-    if disable_thinking:
-        return extra_body
-    if config.thinking_enabled:
-        extra_body["thinking"] = {"type": "enabled"}
-    return extra_body
-
-
-def _is_retryable_llm_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return any(
-        k in msg
-        for k in (
-            "timeout",
-            "timed out",
-            "stream timeout",
-            "connection",
-            "503",
-            "502",
-            "504",
-            "429",
-            "rate limit",
-        )
-    )
-
-
-async def _call_llm(
-    system_prompt: str,
-    user_prompt: str,
-    config: AiConfig,
-    *,
-    min_timeout: int = 0,
-    max_retries: int = 0,
-    param_overrides: dict | None = None,
-    disable_thinking: bool = False,
-) -> dict:
-    """调用 LLM，返回 {"content": str, "tokens": int}
-    param_overrides: 场景绑定上的 max_tokens / temperature / timeout / min_timeout 覆盖
-    """
-    po = param_overrides or {}
-    api_key = decrypt_value(config.api_key)
-    eff_timeout = int(po.get("timeout") or config.timeout or 60)
-    if po.get("min_timeout") is not None:
-        eff_timeout = max(eff_timeout, int(po["min_timeout"]))
-    timeout = max(eff_timeout, int(min_timeout or 0))
-    eff_temperature = po.get("temperature", config.temperature)
-    eff_max_tokens = int(po.get("max_tokens") or config.max_tokens or 4096)
-    client = LLMClientFactory.create(
-        provider=config.provider,
-        api_key=api_key,
-        api_base=config.api_base,
-        model=config.model,
-        timeout=timeout,
-    )
-    extra_body = _build_extra_body(config, disable_thinking=disable_thinking)
-    kwargs = {}
-    if not disable_thinking and config.thinking_enabled and config.reasoning_effort:
-        kwargs["reasoning_effort"] = config.reasoning_effort
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-    last_err: Optional[Exception] = None
-    attempts = max_retries + 1
-    for attempt in range(attempts):
-        try:
-            return await client.chat(
-                messages=messages,
-                temperature=eff_temperature,
-                max_tokens=eff_max_tokens,
-                extra_body=extra_body or None,
-                stream=False,
-                **kwargs,
-            )
-        except Exception as e:
-            last_err = e
-            if attempt < attempts - 1 and _is_retryable_llm_error(e):
-                wait_s = 3 * (attempt + 1)
-                logger.warning(
-                    "[_call_llm] 第 %s/%s 次失败(%s)，%ss 后重试 model=%s prompt_len=%s",
-                    attempt + 1,
-                    attempts,
-                    e,
-                    wait_s,
-                    config.model,
-                    len(user_prompt or ""),
-                )
-                await asyncio.sleep(wait_s)
-                continue
-            raise
-    if last_err:
-        raise last_err
-    raise RuntimeError("LLM 调用失败")
+from app.core.llm.llm_invoke import (
+    build_extra_body as _build_extra_body,
+    call_llm as _call_llm,
+    is_retryable_llm_error as _is_retryable_llm_error,
+)
 
 
 def _normalize_ui_steps(steps: list) -> tuple[list[dict], list[str]]:
@@ -439,6 +349,9 @@ def _normalize_ui_steps(steps: list) -> tuple[list[dict], list[str]]:
             "params": params,
             "children": step.get("children", []) if isinstance(step.get("children"), list) else [],
         }
+        intent = (step.get("intent") or "").strip()
+        if intent:
+            normalized["intent"] = intent
         valid_steps.append(normalized)
 
     return valid_steps, errors
@@ -985,6 +898,7 @@ class LocatorHealRequest(BaseModel):
     method: str = Field(..., description="步骤方法名")
     failed_locator: str = Field(..., description="失败的定位器")
     step_desc: Optional[str] = Field(default=None, max_length=500)
+    step_intent: Optional[str] = Field(default=None, max_length=500, description="业务意图，优先于 desc")
     error_message: Optional[str] = Field(default=None, max_length=1000)
     page_url: Optional[str] = Field(default=None, max_length=500)
     accessibility_snapshot: Optional[str] = Field(default=None, max_length=50000)
@@ -1021,7 +935,7 @@ async def _locator_heal_handler(
     page_elements = body.page_elements
 
     if body.replay_steps is not None and body.replay_through_index is not None:
-        from app.core.step_replay_snapshot import capture_snapshot_after_replay
+        from app.core.case.step_replay_snapshot import capture_snapshot_after_replay
 
         replay_result = await capture_snapshot_after_replay(
             body.replay_steps,
@@ -1037,7 +951,7 @@ async def _locator_heal_handler(
         snapshot = replay_result.get("accessibility_snapshot")
         page_url = replay_result.get("page_url") or page_url
 
-    from app.core.ai_scene_config import get_scene_llm_overrides
+    from app.modules.ai.ai_scene_config import get_scene_llm_overrides
 
     overrides = await get_scene_llm_overrides("locator_heal")
 
@@ -1056,6 +970,7 @@ async def _locator_heal_handler(
             method=body.method,
             failed_locator=body.failed_locator,
             step_desc=body.step_desc,
+            step_intent=body.step_intent,
             error_message=body.error_message,
             page_url=page_url,
             accessibility_snapshot=snapshot,
@@ -1156,6 +1071,124 @@ async def locator_heal_internal(
     return StandardResponse(data=result)
 
 
+class UiAiActRequest(BaseModel):
+    method: str = Field(..., description="步骤方法名")
+    failed_locator: Optional[str] = Field(default="", max_length=2000)
+    step_desc: Optional[str] = Field(default=None, max_length=500)
+    step_intent: Optional[str] = Field(default=None, max_length=500)
+    original_params: Optional[dict] = Field(default=None, description="原步骤 params")
+    error_message: Optional[str] = Field(default=None, max_length=1000)
+    page_url: Optional[str] = Field(default=None, max_length=500)
+    accessibility_snapshot: Optional[str] = Field(default=None, max_length=50000)
+    page_elements: Optional[list] = Field(default=None)
+    ai_config_id: Optional[int] = None
+    project_id: Optional[int] = Field(default=None)
+
+
+async def _ui_ai_act_handler(
+    body: UiAiActRequest,
+    project_id: Optional[int],
+    username: str,
+) -> dict[str, Any]:
+    from app.modules.ui.ui_ai_act import plan_ai_act_step
+
+    try:
+        await _check_agent_daily_quota(project_id)
+    except HTTPException as exc:
+        return {"success": False, "reason": str(exc.detail)}
+
+    try:
+        config = await _get_ai_config(body.ai_config_id, scene="ai_act")
+    except HTTPException as e:
+        return {"success": False, "reason": e.detail}
+
+    start_time = time.time()
+    from app.modules.ai.ai_scene_config import get_scene_llm_overrides
+
+    overrides = await get_scene_llm_overrides("ai_act")
+
+    async def call_llm(system_prompt: str, user_prompt: str) -> dict:
+        return await _call_llm(
+            system_prompt,
+            user_prompt,
+            config,
+            min_timeout=45,
+            param_overrides=overrides,
+            disable_thinking=True,
+        )
+
+    try:
+        result = await plan_ai_act_step(
+            method=body.method,
+            failed_locator=body.failed_locator or "",
+            step_desc=body.step_desc,
+            step_intent=body.step_intent,
+            original_params=body.original_params,
+            error_message=body.error_message,
+            page_url=body.page_url,
+            accessibility_snapshot=body.accessibility_snapshot,
+            page_elements=body.page_elements,
+            call_llm=call_llm,
+        )
+    except Exception as exc:
+        logger.exception("[ui_ai_act] plan failed")
+        return {"success": False, "reason": f"AI Act 处理异常: {exc}"}
+
+    duration_ms = int((time.time() - start_time) * 1000)
+    tokens_used = result.get("tokens_used", 0)
+
+    if project_id:
+        try:
+            await AiGenerateRecord.create(
+                project_id=project_id,
+                generate_type="ai_act",
+                input_summary={
+                    "method": body.method,
+                    "step_intent": body.step_intent or body.step_desc,
+                    "page_url": body.page_url,
+                },
+                output_content=result,
+                status="imported" if result.get("success") else "rejected",
+                ai_config_id=config.id,
+                tokens_used=tokens_used,
+                duration_ms=duration_ms,
+                create_by=username or "system",
+            )
+        except Exception as e:
+            logger.warning(f"[ui_ai_act] 保存记录失败: {e}")
+
+    try:
+        await log_ai_usage(
+            config,
+            "ai_act",
+            username=username,
+            project_id=project_id,
+            tokens_used=tokens_used,
+            duration_ms=duration_ms,
+            input_summary=f"{body.method}: {(body.step_intent or body.step_desc or '')}"[:500],
+            output_summary=(result.get("reason") or str(result.get("step") or ""))[:500],
+            status="success" if result.get("success") else "failed",
+        )
+    except Exception as exc:
+        logger.warning("[ui_ai_act] log_ai_usage failed: %s", exc)
+
+    return {**result, "duration_ms": duration_ms}
+
+
+@router.post(
+    "/ui-act/internal",
+    summary="UI AI Act 兜底（Runner 内部）",
+    dependencies=[Depends(verify_runner_or_internal)],
+)
+async def ui_ai_act_internal(
+    body: UiAiActRequest,
+    project_id: Optional[int] = None,
+):
+    effective_project_id = project_id or body.project_id
+    result = await _ui_ai_act_handler(body, effective_project_id, "runner")
+    return StandardResponse(data=result)
+
+
 class ApplyHealedLocatorBody(BaseModel):
     case_id: int = Field(..., ge=1)
     step_index: int = Field(..., ge=0, description="步骤序号，从 0 开始")
@@ -1216,6 +1249,61 @@ async def apply_healed_locator_to_case(
     )
 
 
+class ApplyAiActToCaseBody(BaseModel):
+    case_id: int = Field(..., ge=1)
+    step_index: int = Field(..., ge=0, description="步骤序号，从 0 开始")
+    act_params: dict = Field(..., description="AI Act 成功步骤的 params，写回定位相关字段")
+    act_method: Optional[str] = Field(default=None, max_length=100, description="可选，与用例原 method 一致时不必传")
+
+
+@router.post(
+    "/ai-act/apply-to-case",
+    summary="将 AI Act 兜底结果写回 UI 用例",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE, UI_CASE_EDIT))],
+)
+async def apply_ai_act_to_case(
+    body: ApplyAiActToCaseBody,
+    user_info: dict = Depends(is_authenticated),
+):
+    """执行报告确认后，将 AI Act 规划出的定位参数合并写回用例 steps"""
+    from app.modules.ui.ui_ai_act_writeback import apply_ai_act_patch_to_step, extract_ai_act_writeback_patch
+    from app.models.ui import Case
+
+    case = await Case.get_or_none(id=body.case_id, is_del=False)
+    if not case:
+        raise HTTPException(status_code=404, detail="用例不存在")
+
+    steps = case.steps if isinstance(case.steps, list) else []
+    if body.step_index >= len(steps):
+        raise HTTPException(status_code=400, detail=f"步骤序号超出范围（共 {len(steps)} 步）")
+
+    step = steps[body.step_index]
+    if not isinstance(step, dict):
+        raise HTTPException(status_code=400, detail="步骤数据格式异常")
+
+    patch = extract_ai_act_writeback_patch(body.act_params)
+    if not patch:
+        raise HTTPException(status_code=400, detail="AI Act 结果中无可写回的定位参数")
+
+    changes = apply_ai_act_patch_to_step(step, patch)
+    if not changes:
+        raise HTTPException(status_code=400, detail="定位参数与用例当前一致，无需写回")
+
+    steps[body.step_index] = step
+    case.steps = steps
+    await case.save()
+
+    return StandardResponse(
+        data={
+            "case_id": body.case_id,
+            "step_index": body.step_index,
+            "changes": changes,
+            "patched_keys": list(patch.keys()),
+        },
+        message="已写回用例（AI Act 定位参数）",
+    )
+
+
 # ========== App 用例生成 ==========
 
 class GenerateAppCaseRequest(BaseModel):
@@ -1234,7 +1322,7 @@ async def generate_app_case(
     body: GenerateAppCaseRequest,
     user_info: dict = Depends(is_authenticated),
 ):
-    from app.core.functional_case_to_app import (
+    from app.modules.ai.functional_case_to_app import (
         AppGenerationContext,
         _generate_app_steps,
         validate_app_generation_context,
@@ -1277,7 +1365,7 @@ async def app_inspector_suggest(
     body: AppInspectorSuggestRequest,
     user_info: dict = Depends(is_authenticated),
 ):
-    from app.core.app_inspector_ai import suggest_inspector_ai
+    from app.modules.app.app_inspector_ai import suggest_inspector_ai
 
     project_id = user_info.get("project_id") or user_info.get("current_project_id")
     data = await suggest_inspector_ai(
@@ -1300,6 +1388,7 @@ class AppLocatorHealRequest(BaseModel):
     method: str
     failed_locator: dict
     step_desc: Optional[str] = Field(default=None, max_length=500)
+    step_intent: Optional[str] = Field(default=None, max_length=500, description="业务意图，优先于 desc")
     error_message: Optional[str] = Field(default=None, max_length=1000)
     match_score: Optional[float] = None
     control_tree_excerpt: Optional[str] = Field(default=None, max_length=30000)
@@ -1309,7 +1398,7 @@ class AppLocatorHealRequest(BaseModel):
 
 
 async def _app_locator_heal_handler(body: AppLocatorHealRequest, project_id: Optional[int], username: str) -> dict:
-    from app.core.app_locator_heal import heal_app_locator
+    from app.modules.app.app_locator_heal import heal_app_locator
 
     try:
         config = await _get_ai_config(body.ai_config_id, scene="locator_heal")
@@ -1347,6 +1436,7 @@ async def _app_locator_heal_handler(body: AppLocatorHealRequest, project_id: Opt
         method=body.method,
         failed_locator=body.failed_locator,
         step_desc=body.step_desc,
+        step_intent=body.step_intent,
         error_message=body.error_message,
         match_score=body.match_score,
         control_tree_excerpt=body.control_tree_excerpt,
@@ -1355,6 +1445,8 @@ async def _app_locator_heal_handler(body: AppLocatorHealRequest, project_id: Opt
         call_vision=call_vision,
     )
     result["duration_ms"] = int((time.time() - start_time) * 1000)
+    tokens_used = int(result.get("tokens_used") or 0)
+    duration_ms = result["duration_ms"]
 
     if project_id and result.get("success"):
         try:
@@ -1365,12 +1457,28 @@ async def _app_locator_heal_handler(body: AppLocatorHealRequest, project_id: Opt
                 output_content=result,
                 status="imported",
                 ai_config_id=config.id,
-                tokens_used=result.get("tokens_used", 0),
-                duration_ms=result["duration_ms"],
+                tokens_used=tokens_used,
+                duration_ms=duration_ms,
                 create_by=username or "system",
             )
         except Exception as exc:
             logger.warning("[app_locator_heal] save record: %s", exc)
+
+    try:
+        await log_ai_usage(
+            config,
+            "locator_heal",
+            username=username,
+            project_id=project_id,
+            tokens_used=tokens_used,
+            duration_ms=duration_ms,
+            input_summary=f"App {body.method}: {body.failed_locator}"[:500],
+            output_summary=(result.get("locator") or result.get("reason") or "")[:500],
+            status="success" if result.get("success") else "failed",
+            platform="app",
+        )
+    except Exception as exc:
+        logger.warning("[app_locator_heal] log_ai_usage failed: %s", exc)
     return result
 
 

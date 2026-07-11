@@ -6,10 +6,10 @@ from typing import Any, Optional
 
 from tortoise.expressions import Q
 
-from app.core.mcp_confirm import consume_confirm_token, create_confirm_token
-from app.core.report_summary_context import fetch_recent_failures
+from app.core.integration.mcp_confirm import consume_confirm_token, create_confirm_token
+from app.core.shared.report_summary_context import fetch_recent_failures
 from app.mcp.auth import McpAuthContext, ensure_permission, ensure_any_permission
-from app.core.permissions import (
+from app.core.platform.permissions import (
     AI_TEST_EXECUTE,
     AI_TEST_VIEW,
     DATA_FACTORY_VIEW,
@@ -42,10 +42,6 @@ from app.core.permissions import (
 )
 from app.models.ai import (
     AiFunctionalCase,
-    AiQaEvalCase,
-    AiQaEvalRun,
-    AiQaEvalSet,
-    AiQaEvalTarget,
     AiRequirement,
     AiRequirementCase,
     AiRequirementGenerateJob,
@@ -80,8 +76,8 @@ from app.models.app import (
 )
 from app.schemas.app import AppRunForm
 from app.routers.ai.analyze import _execute_failure_analysis
-from app.core.functional_case_service import functional_case_to_dict
-from app.core.db_factory_service import datasource_to_dict, sql_template_to_dict
+from app.modules.ai.functional_case_service import functional_case_to_dict
+from app.core.db.db_factory_service import datasource_to_dict, sql_template_to_dict
 from app.routers.ai.requirements import (
     GenerateCasesBatchRequest,
     GenerateCasesBatchItem,
@@ -538,6 +534,83 @@ async def tool_search_functional_cases(
     return {"total": total, "items": [functional_case_to_dict(c) for c in rows]}
 
 
+async def tool_search_test_knowledge(
+    ctx: McpAuthContext,
+    project_id: int,
+    query: str,
+    folder_ids: Optional[list[int]] = None,
+    document_ids: Optional[list[int]] = None,
+    top_k: int = 12,
+    strategy: Optional[str] = None,
+) -> dict[str, Any]:
+    """检索迭代测试资料库（RAG 分块优先，无索引时回退全文）。"""
+    ensure_permission(ctx, AI_TEST_VIEW)
+    from app.modules.knowledge.knowledge_retrieve import retrieve_knowledge
+
+    return await retrieve_knowledge(
+        project_id,
+        query=query,
+        folder_ids=folder_ids,
+        document_ids=document_ids,
+        top_k=top_k,
+        strategy=strategy,
+    )
+
+
+async def tool_ask_test_knowledge(
+    ctx: McpAuthContext,
+    project_id: int,
+    query: str,
+    mode: str = "smart",
+    folder_ids: Optional[list[int]] = None,
+    document_ids: Optional[list[int]] = None,
+    top_k: int = 12,
+    strategy: Optional[str] = None,
+) -> dict[str, Any]:
+    """资料库问答：retrieve 仅检索；smart 检索后一次 LLM 生成答案。"""
+    ensure_permission(ctx, AI_TEST_VIEW)
+    from app.modules.knowledge.knowledge_qa import ask_knowledge
+
+    return await ask_knowledge(
+        project_id,
+        mode=mode,
+        query=query,
+        folder_ids=folder_ids,
+        document_ids=document_ids,
+        top_k=top_k,
+        strategy=strategy,
+        username=ctx.username or "",
+    )
+
+
+async def tool_list_knowledge_folders(
+    ctx: McpAuthContext,
+    project_id: int,
+    keyword: str = "",
+    page: int = 1,
+    size: int = 50,
+) -> dict[str, Any]:
+    """列出迭代测试资料库文件夹（含文档数量）。"""
+    ensure_permission(ctx, AI_TEST_VIEW)
+    from app.modules.knowledge import knowledge_service as svc
+
+    page = max(page, 1)
+    size = min(max(size, 1), 100)
+    items = await svc.list_folders(project_id)
+    kw = (keyword or "").strip().lower()
+    if kw:
+        items = [
+            x for x in items
+            if kw in (x.get("name") or "").lower()
+            or kw in (x.get("iteration_label") or "").lower()
+            or kw in (x.get("description") or "").lower()
+        ]
+    total = len(items)
+    start = (page - 1) * size
+    page_items = items[start : start + size]
+    return {"total": total, "items": page_items}
+
+
 async def tool_get_functional_case(ctx: McpAuthContext, case_id: int, project_id: int) -> dict[str, Any]:
     ensure_permission(ctx, AI_TEST_VIEW)
     case = await AiFunctionalCase.get_or_none(id=case_id, project_id=project_id, is_del=False)
@@ -783,282 +856,6 @@ async def tool_confirm_run_api_case(
         "assertions": serialized.get("assertions"),
         "message": "用例执行完成",
         "result": serialized,
-    }
-
-
-async def tool_list_qa_eval_sets(
-    ctx: McpAuthContext,
-    project_id: int,
-    keyword: str = "",
-) -> dict[str, Any]:
-    ensure_permission(ctx, AI_TEST_VIEW)
-    qs = AiQaEvalSet.filter(project_id=project_id, is_del=False)
-    kw = (keyword or "").strip()
-    if kw:
-        qs = qs.filter(name__icontains=kw)
-    rows = await qs.order_by("-id").limit(30)
-    items = []
-    for s in rows:
-        cnt = await AiQaEvalCase.filter(set_id=s.id, is_del=False).count()
-        targets = await AiQaEvalTarget.filter(project_id=project_id, is_del=False).limit(5)
-        items.append(
-            {
-                "id": s.id,
-                "name": s.name,
-                "description": (s.description or "")[:200],
-                "case_count": cnt,
-                "target_options": [{"id": t.id, "name": t.name} for t in targets],
-            }
-        )
-    return {"project_id": project_id, "items": items, "total": len(items)}
-
-
-async def tool_get_qa_eval_run(
-    ctx: McpAuthContext,
-    run_id: int,
-    project_id: int,
-) -> dict[str, Any]:
-    ensure_permission(ctx, AI_TEST_VIEW)
-    from app.core.qa_eval_service import run_to_dict, set_to_dict
-
-    run = await AiQaEvalRun.get_or_none(id=run_id, project_id=project_id)
-    if not run:
-        raise ValueError("问答评测跑批记录不存在")
-    s = await AiQaEvalSet.get_or_none(id=run.set_id)
-    t = await AiQaEvalTarget.get_or_none(id=run.target_id) if run.target_id else None
-    data = run_to_dict(run, set_name=s.name if s else "", target_name=t.name if t else "")
-    data["set"] = set_to_dict(s) if s else None
-    return data
-
-
-async def _validate_qa_eval_run_payload(
-    set_id: int,
-    project_id: int,
-    payload: dict[str, Any],
-) -> tuple[AiQaEvalTarget | None, int, AiQaEvalSet]:
-    from app.core.qa_eval_service import (
-        CASE_SCOPE_ALL,
-        CASE_SCOPE_RANGE,
-        CASE_SCOPE_RETRY_FAILED,
-        MAX_CASES_PER_RUN,
-        RUN_MODE_AUTO,
-        RUN_MODE_FETCH_ONLY,
-        RUN_MODE_JUDGE_ONLY,
-        RUN_MODE_LABELS,
-        resolve_cases_for_run,
-    )
-
-    s = await AiQaEvalSet.get_or_none(id=set_id, project_id=project_id, is_del=False)
-    if not s:
-        raise ValueError("评测集不存在")
-
-    run_mode = (payload.get("run_mode") or RUN_MODE_AUTO).strip()
-    if run_mode not in RUN_MODE_LABELS:
-        raise ValueError("无效的 run_mode")
-
-    target: AiQaEvalTarget | None = None
-    target_id = payload.get("target_id")
-    if run_mode in (RUN_MODE_AUTO, RUN_MODE_FETCH_ONLY):
-        if not target_id:
-            raise ValueError("自动评测需指定 target_id（被测 API 配置）")
-        target = await AiQaEvalTarget.get_or_none(
-            id=int(target_id), project_id=project_id, is_del=False
-        )
-        if not target:
-            raise ValueError("被测 API 配置不存在")
-    elif run_mode == RUN_MODE_JUDGE_ONLY:
-        target_id = payload.get("target_id")
-
-    case_scope = (payload.get("case_scope") or CASE_SCOPE_ALL).strip()
-    range_start = payload.get("range_start")
-    range_end = payload.get("range_end")
-    if case_scope == CASE_SCOPE_RANGE:
-        if range_start is None or range_end is None:
-            raise ValueError("范围跑批需填写 range_start 与 range_end")
-        if int(range_start) > int(range_end):
-            raise ValueError("起始序号不能大于结束序号")
-    if case_scope == CASE_SCOPE_RETRY_FAILED:
-        if not payload.get("retry_source_run_id"):
-            raise ValueError("重跑失败需指定 retry_source_run_id")
-
-    run_name = (payload.get("run_name") or s.name or "").strip()[:100]
-    extra: dict[str, Any] = {
-        "user_id": None,
-        "username": "",
-        "run_name": run_name,
-        "judge_config_id": payload.get("judge_config_id"),
-        "run_mode": run_mode,
-        "case_scope": case_scope,
-        "request_interval_ms": int(payload.get("request_interval_ms") or 0),
-        "trigger_source": ASSISTANT_TRIGGER,
-        "done_count": 0,
-        "progress_percent": 0,
-        "current_question": "",
-    }
-    if case_scope == CASE_SCOPE_RANGE:
-        extra["range_start"] = int(range_start)
-        extra["range_end"] = int(range_end)
-    if case_scope == CASE_SCOPE_RETRY_FAILED:
-        extra["retry_source_run_id"] = int(payload["retry_source_run_id"])
-
-    probe = AiQaEvalRun(
-        set_id=set_id,
-        project_id=project_id,
-        target_id=int(target_id) if target_id else None,
-        extra=extra,
-    )
-    cases = await resolve_cases_for_run(probe)
-    if not cases:
-        raise ValueError("没有符合条件的评测用例")
-    if len(cases) > MAX_CASES_PER_RUN:
-        raise ValueError(
-            f"本次用例数 {len(cases)} 超过上限 {MAX_CASES_PER_RUN}，请缩小范围或使用自动分批"
-        )
-    if run_mode == RUN_MODE_JUDGE_ONLY:
-        missing = sum(1 for c in cases if not (c.preset_answer or "").strip())
-        if missing:
-            raise ValueError(
-                f"{missing} 条用例缺少「实际回答」，请 Excel 导入该列或在用例表单中填写"
-            )
-    return target, len(cases), s
-
-
-async def tool_preview_run_qa_eval(
-    ctx: McpAuthContext,
-    project_id: int,
-    set_id: int,
-    target_id: int | None = None,
-    run_name: str = "",
-    run_mode: str = "auto",
-    case_scope: str = "all",
-    range_start: int | None = None,
-    range_end: int | None = None,
-    retry_source_run_id: int | None = None,
-) -> dict[str, Any]:
-    ensure_permission(ctx, AI_TEST_EXECUTE)
-    payload = {
-        "target_id": target_id,
-        "run_name": run_name,
-        "run_mode": run_mode,
-        "case_scope": case_scope,
-        "range_start": range_start,
-        "range_end": range_end,
-        "retry_source_run_id": retry_source_run_id,
-    }
-    target, case_count, s = await _validate_qa_eval_run_payload(set_id, project_id, payload)
-    from app.core.qa_eval_service import CASE_SCOPE_LABELS, RUN_MODE_LABELS, has_active_run
-
-    existing = await has_active_run(set_id, project_id)
-    if existing:
-        raise ValueError(
-            f"该评测集已有进行中的任务（#{existing.id}），请等待完成或在执行记录查看进度"
-        )
-    impact = {
-        "project_id": project_id,
-        "set_id": set_id,
-        "set_name": s.name,
-        "target_id": target.id if target else target_id,
-        "target_name": target.name if target else "",
-        "run_name": (run_name or s.name).strip()[:100],
-        "run_mode": run_mode,
-        "run_mode_label": RUN_MODE_LABELS.get(run_mode, run_mode),
-        "case_scope": case_scope,
-        "case_scope_label": CASE_SCOPE_LABELS.get(case_scope, case_scope),
-        "case_count": case_count,
-        "range_start": range_start,
-        "range_end": range_end,
-        "warning": "将后台执行问答准确性评测，可能消耗较多 Token 与 API 调用",
-    }
-    confirm_token = await create_confirm_token(
-        "run_qa_eval",
-        {"set_id": set_id, "project_id": project_id, **payload},
-        ctx.username,
-    )
-    return {
-        "impact": impact,
-        "confirm_token": confirm_token,
-        "expires_in_seconds": 300,
-        "next_step": "调用 confirm_run_qa_eval 并传入 confirm_token",
-    }
-
-
-async def tool_confirm_run_qa_eval(
-    ctx: McpAuthContext,
-    confirm_token: str,
-    set_id: int,
-    project_id: int | None = None,
-    target_id: int | None = None,
-    run_name: str = "",
-    run_mode: str = "auto",
-    case_scope: str = "all",
-    range_start: int | None = None,
-    range_end: int | None = None,
-    retry_source_run_id: int | None = None,
-) -> dict[str, Any]:
-    ensure_permission(ctx, AI_TEST_EXECUTE)
-    from app.core.qa_eval_service import RUN_MODE_LABELS, has_active_run, run_qa_eval_background, run_to_dict
-
-    payload = await consume_confirm_token(confirm_token, "run_qa_eval", ctx.username)
-    if int(payload.get("set_id", 0)) != set_id:
-        raise ValueError("set_id 与确认 Token 不匹配")
-    resolved_project_id = int(project_id or payload.get("project_id") or 0)
-    merged = {
-        "target_id": target_id if target_id is not None else payload.get("target_id"),
-        "run_name": run_name or payload.get("run_name") or "",
-        "run_mode": run_mode or payload.get("run_mode") or "auto",
-        "case_scope": case_scope or payload.get("case_scope") or "all",
-        "range_start": range_start if range_start is not None else payload.get("range_start"),
-        "range_end": range_end if range_end is not None else payload.get("range_end"),
-        "retry_source_run_id": retry_source_run_id
-        if retry_source_run_id is not None
-        else payload.get("retry_source_run_id"),
-        "judge_config_id": payload.get("judge_config_id"),
-        "request_interval_ms": payload.get("request_interval_ms") or 0,
-    }
-    target, case_count, s = await _validate_qa_eval_run_payload(set_id, resolved_project_id, merged)
-    existing = await has_active_run(set_id, resolved_project_id)
-    if existing:
-        raise ValueError(f"该评测集已有进行中的任务（#{existing.id}）")
-
-    run_name_norm = (merged.get("run_name") or s.name or "").strip()[:100]
-    extra: dict[str, Any] = {
-        "user_id": ctx.user_id,
-        "username": ctx.username,
-        "run_name": run_name_norm,
-        "judge_config_id": merged.get("judge_config_id"),
-        "run_mode": merged["run_mode"],
-        "case_scope": merged["case_scope"],
-        "request_interval_ms": int(merged.get("request_interval_ms") or 0),
-        "trigger_source": ASSISTANT_TRIGGER,
-        "done_count": 0,
-        "progress_percent": 0,
-        "current_question": "",
-    }
-    if merged["case_scope"] == "range":
-        extra["range_start"] = int(merged["range_start"])
-        extra["range_end"] = int(merged["range_end"])
-    if merged["case_scope"] == "retry_failed":
-        extra["retry_source_run_id"] = int(merged["retry_source_run_id"])
-
-    run = await AiQaEvalRun.create(
-        project_id=resolved_project_id,
-        set_id=set_id,
-        target_id=target.id if target else merged.get("target_id"),
-        judge_config_id=merged.get("judge_config_id"),
-        status="pending",
-        create_by=ctx.username,
-        extra=extra,
-    )
-    asyncio.create_task(run_qa_eval_background(run.id))
-    mode_label = RUN_MODE_LABELS.get(merged["run_mode"], merged["run_mode"])
-    return {
-        "run_id": run.id,
-        "set_id": set_id,
-        "set_name": s.name,
-        "case_count": case_count,
-        "run_mode_label": mode_label,
-        "message": f"{mode_label}任务已提交（#{run.id}），共 {case_count} 题，可说「查询问答评测跑批 {run.id}」查看进度",
-        "run": run_to_dict(run, set_name=s.name, target_name=target.name if target else ""),
     }
 
 
@@ -2724,7 +2521,7 @@ async def tool_confirm_run_app_case(
         raise ValueError("用例不属于当前项目")
     from tortoise import transactions
     from app.routers.app.exec import AppExecutionService, expand_app_steps
-    from app.core.app_execution_env import build_case_env
+    from app.modules.app.app_execution_env import build_case_env
 
     env_payload: dict[str, Any] = {}
     suite_payload: dict[str, Any] = {}
@@ -2910,7 +2707,7 @@ async def tool_confirm_run_app_plan(
     payload = await consume_confirm_token(confirm_token, "run_app_plan", ctx.username)
     if int(payload.get("plan_id", 0)) != plan_id:
         raise ValueError("plan_id 与确认 Token 不匹配")
-    from app.core.app_plan_runner import execute_app_plan
+    from app.modules.app.app_plan_runner import execute_app_plan
 
     plan = await AppPlan.get_or_none(id=plan_id, is_del=False)
     if not plan:

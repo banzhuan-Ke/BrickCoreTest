@@ -6,8 +6,8 @@ from fastapi import FastAPI, Request, status, Depends, HTTPException
 import uvicorn
 from starlette.responses import JSONResponse, Response
 from tortoise.contrib.fastapi import register_tortoise
-from app.core import config as settings
-from app.core.config import MCP_ENABLED, MCP_HTTP_PATH
+from app.core.platform import config as settings
+from app.core.platform.config import MCP_ENABLED, MCP_HTTP_PATH
 from app.routers.sys.users import router as user_router
 from app.routers.sys.roles import router as role_router
 from app.routers.sys.projects import router as project_router
@@ -27,7 +27,7 @@ from app.routers.sys.platform_settings import router as platform_settings_router
 from app.routers.sys.stream_parser_config import router as stream_parser_config_router
 from app.routers.sys.invite_codes import router as invite_code_router
 from app.routers.sys.project_members import router as project_member_router
-from app.core.project_access_deps import optional_project_access_check
+from app.core.platform.project_access_deps import optional_project_access_check
 from app.routers.ui.cases import router as case_router
 from app.routers.ui.fragments import router as ui_fragment_router
 from app.routers.ui.suites import router as suite_router
@@ -36,6 +36,7 @@ from app.routers.ui.records import router as runner_router
 from app.routers.ui.exec import router as ui_exec_router
 from app.routers.ui.files import router as ui_files_router
 from app.routers.ui.folders import router as ui_folders_router
+from app.routers.ui.debug import router as ui_debug_router
 from app.routers.app import (
     app_case_router,
     app_suite_router,
@@ -74,7 +75,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager, AsyncExitStack
 from app.routers.schedule.jobs import scheduler
-from app.core.operation_log import OperationLogMiddleware
+from app.core.ops.operation_log import OperationLogMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
 import base64
@@ -154,9 +155,11 @@ async def _core_lifespan(app: FastAPI):
     """BrickCore 主应用生命周期（调度器、日志等）"""
     click.echo(banner)
     scheduler.start()
-    from app.core.ui_execution_stale import register_stale_cleanup_job
+    from app.modules.ui.ui_execution_stale import register_stale_cleanup_job
     register_stale_cleanup_job(scheduler)
-    from app.core.app_execution_stale import register_stale_cleanup_job as register_app_stale_cleanup_job
+    from app.modules.ui.ui_debug_session_lifecycle import register_debug_session_cleanup_job
+    register_debug_session_cleanup_job(scheduler)
+    from app.modules.app.app_execution_stale import register_stale_cleanup_job as register_app_stale_cleanup_job
     register_app_stale_cleanup_job(scheduler)
     api_cron_scheduler.start()
     app_cron_scheduler.start()
@@ -167,7 +170,7 @@ async def _core_lifespan(app: FastAPI):
     handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logger.addHandler(handler)
     try:
-        from app.core.minio_client import init_minio_buckets
+        from app.core.infra.minio_client import init_minio_buckets
 
         try:
             await asyncio.to_thread(init_minio_buckets)
@@ -175,8 +178,8 @@ async def _core_lifespan(app: FastAPI):
             logging.getLogger(__name__).warning(
                 "MinIO bucket 自动初始化失败（MinIO 未就绪时可忽略，首次上传会重试）: %s", exc
             )
-        from app.core.role_seed import ensure_default_roles
-        from app.core.project_access import backfill_project_members
+        from app.core.platform.role_seed import ensure_default_roles
+        from app.core.platform.project_access import backfill_project_members
 
         try:
             await ensure_default_roles()
@@ -187,7 +190,7 @@ async def _core_lifespan(app: FastAPI):
         except Exception as exc:
             logging.getLogger(__name__).warning("项目成员回填失败: %s", exc)
         try:
-            from app.core.stream_parser_config_service import ensure_builtin_stream_parser_configs
+            from app.core.integration.stream_parser_config_service import ensure_builtin_stream_parser_configs
 
             await ensure_builtin_stream_parser_configs()
         except Exception as exc:
@@ -347,6 +350,7 @@ app.include_router(runner_router, prefix="/ui", dependencies=_project_access_dep
 app.include_router(ui_exec_router, prefix="/ui", dependencies=_project_access_dep)
 app.include_router(ui_files_router, prefix="/ui", dependencies=_project_access_dep)
 app.include_router(ui_folders_router, prefix="/ui", dependencies=_project_access_dep)
+app.include_router(ui_debug_router, prefix="/ui", dependencies=_project_access_dep)
 
 app.include_router(app_case_router, prefix="/app-module", dependencies=_project_access_dep)
 app.include_router(app_suite_router, prefix="/app-module", dependencies=_project_access_dep)

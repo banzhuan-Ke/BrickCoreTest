@@ -10,9 +10,9 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from tortoise.functions import Count, Sum
 
-from app.core.ai_scene_config import AI_SCENE_DEFINITIONS
-from app.core.auth import require_permissions
-from app.core.permissions import AI_TEST_VIEW
+from app.modules.ai.ai_scene_config import AI_SCENE_DEFINITIONS
+from app.core.platform.auth import require_permissions
+from app.core.platform.permissions import AI_TEST_VIEW
 from app.models.ai import AiUsageLog
 from app.schemas.ai import StandardResponse
 

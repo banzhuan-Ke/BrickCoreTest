@@ -8,19 +8,19 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
-from app.core.auth import is_authenticated, require_permissions
-from app.core.config import BASE_DIR
-from app.core.minio_client import is_minio_storage, minio_client
-from app.core.permissions import APP_RECORD_VIEW
-from app.core.notification import NotificationService
-from app.core.report_export import ImageExportOptions, generate_html_report
-from app.core.platform_settings_service import (
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.config import BASE_DIR
+from app.core.infra.minio_client import is_minio_storage, minio_client
+from app.core.platform.permissions import APP_RECORD_VIEW
+from app.core.ops.notification import NotificationService
+from app.core.shared.report_export import ImageExportOptions, generate_html_report
+from app.core.platform.platform_settings_service import (
     delete_app_case_execution,
     get_ui_case_record_delete_mode,
     restore_app_case_execution,
 )
-from app.core.app_execution_env import enrich_app_env_for_display
-from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.modules.app.app_execution_env import enrich_app_env_for_display
+from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppCaseExecution, AppPlanExecution, AppSuiteExecution
 
 router = APIRouter(

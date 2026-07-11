@@ -74,9 +74,10 @@
             :width="col.width"
           />
         </template>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">用例</el-button>
+            <el-button v-if="!isCommunityEdition" link type="success" @click="openArchiveDialog(row)">归档</el-button>
             <el-button link type="danger" @click="handleDeleteReq(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -124,6 +125,29 @@
         </template>
       </el-dialog>
 
+      <el-dialog v-if="!isCommunityEdition" v-model="archiveDialog.visible" title="归档到资料库" width="480px" destroy-on-close>
+        <el-form label-width="90px">
+          <el-form-item label="需求">
+            <span>{{ archiveDialog.reqName }}</span>
+          </el-form-item>
+          <el-form-item label="目标文件夹">
+            <el-select v-model="archiveDialog.folderId" placeholder="可选，不选则归入未分类" clearable filterable style="width: 100%;">
+              <el-option v-for="f in archiveFolders" :key="f.id" :label="f.name" :value="f.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="文档标题">
+            <el-input v-model="archiveDialog.title" placeholder="默认使用需求名称" />
+          </el-form-item>
+          <el-form-item label="">
+            <el-checkbox v-model="archiveDialog.replaceIfExists">若已归档则替换</el-checkbox>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="archiveDialog.visible = false">取消</el-button>
+          <el-button type="primary" :loading="archiveDialog.loading" @click="submitArchive">确认归档</el-button>
+        </template>
+      </el-dialog>
+
       <!-- 详情 / 用例抽屉 -->
       <TestingEmbedShell
         :inline="embedMode"
@@ -153,6 +177,12 @@
             <el-descriptions-item label="图片">{{ currentReq.image_count || 0 }} 张</el-descriptions-item>
             <el-descriptions-item label="页数">{{ currentReq.page_count || '-' }}</el-descriptions-item>
           </el-descriptions>
+          <div v-if="showEmbedSection('meta') && canImportLibrary && !isCommunityEdition" class="detail-archive-bar">
+            <el-button type="success" plain size="small" @click="openArchiveDialog(currentReq)">
+              归档到资料库
+            </el-button>
+            <span class="detail-archive-hint">将需求正文归档为资料库文档，供报告生成与 RAG 检索引用</span>
+          </div>
 
           <el-alert
             v-if="showEmbedSection('meta') && currentReq.image_count > 0"
@@ -782,6 +812,7 @@
                 <el-switch v-model="genForm.replace_existing" />
               </el-form-item>
             </el-form>
+            <KnowledgeRefSelector v-model="knowledgeRefs" />
             <el-form :model="genForm" label-width="88px" class="extra-instructions-form">
               <el-form-item label="额外要求">
                 <el-input
@@ -1400,6 +1431,7 @@ import { QuestionFilled } from '@element-plus/icons-vue'
 import PageCard from '@/components/PageCard.vue'
 import TableColumnPicker from '@/components/TableColumnPicker.vue'
 import TestingEmbedShell from '@/components/TestingEmbedShell.vue'
+import { useCommunityEdition } from '@/composables/useCommunityEdition.js'
 import { useTableColumns } from '@/composables/useTableColumns.js'
 import { aiRequirementApi, aiConfigApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
@@ -1413,6 +1445,8 @@ import {
   formatCaseSourceRefLabel,
   isCaseInLibraryCopy
 } from '@/utils/aiCaseSource.js'
+import KnowledgeRefSelector from '@/modules/knowledge/components/KnowledgeRefSelector.vue'
+import { knowledgeApi } from '@/api/modules/knowledge.js'
 
 const props = defineProps({
   embedMode: { type: Boolean, default: false },
@@ -1433,6 +1467,7 @@ const proStore = ProjectStore()
 const uStore = UserStore()
 const route = useRoute()
 const router = useRouter()
+const { isCommunityEdition, loadCommunityEdition } = useCommunityEdition()
 const canEditNaming = computed(() => uStore.hasPermission('project:edit'))
 const canImportLibrary = computed(() => uStore.hasPermission('ai_test:execute'))
 const canDeleteGenerateJob = computed(() => uStore.hasPermission('ai_test:execute'))
@@ -1511,6 +1546,16 @@ const detailUsageTooltip = `
 const listLoading = ref(false)
 const reqList = ref([])
 const uploadVisible = ref(false)
+const archiveDialog = ref({
+  visible: false,
+  loading: false,
+  requirementId: null,
+  reqName: '',
+  folderId: null,
+  title: '',
+  replaceIfExists: false
+})
+const archiveFolders = ref([])
 const uploading = ref(false)
 const uploadForm = reactive({ name: '', file: null })
 
@@ -1538,6 +1583,7 @@ const genForm = reactive({
   replace_existing: false,
   extra_instructions: ''
 })
+const knowledgeRefs = ref({ folder_ids: [], document_ids: [] })
 
 const projectZentao = reactive({ export_profile: 'zentao', product: '', module: '', related_story: '' })
 const reqZentao = reactive({ product: '', module: '', related_story: '' })
@@ -2212,6 +2258,16 @@ const batchSourceRef = (name) => {
   return n ? `batch:${n}` : ''
 }
 
+const knowledgeRefsPayload = () => {
+  const folderIds = (knowledgeRefs.value?.folder_ids || []).filter(Boolean)
+  const docIds = (knowledgeRefs.value?.document_ids || []).filter(Boolean)
+  if (!folderIds.length && !docIds.length) return {}
+  return {
+    knowledge_folder_ids: folderIds.length ? folderIds : undefined,
+    knowledge_document_ids: docIds.length ? docIds : undefined
+  }
+}
+
 const countCasesForBatch = (name) => {
   const ref = batchSourceRef(name)
   if (!ref) return 0
@@ -2229,6 +2285,7 @@ const buildGeneratePayload = (row, { supplement = false } = {}) => {
     supplement_batch_name: supplement ? batchName : undefined,
     extra_instructions: (genForm.extra_instructions || '').trim() || undefined
   }
+  Object.assign(payload, knowledgeRefsPayload())
   const hasBatchZentao =
     row.useCustomZentao ||
     (row.product?.trim() && row.module?.trim() && row.related_story?.trim())
@@ -2874,6 +2931,53 @@ const onFileChange = (file) => {
   uploadForm.file = file.raw
 }
 
+const openArchiveDialog = async (row) => {
+  if (isCommunityEdition.value) return
+  if (!ensureProject() || !row?.id) return
+  archiveDialog.value = {
+    visible: true,
+    loading: false,
+    requirementId: row.id,
+    reqName: row.name || `需求#${row.id}`,
+    folderId: null,
+    title: row.name || '',
+    replaceIfExists: false
+  }
+  try {
+    const res = await knowledgeApi.listFolders(proStore.projectInfo.id)
+    archiveFolders.value = res.data?.items || []
+  } catch {
+    archiveFolders.value = []
+  }
+}
+
+const submitArchive = async () => {
+  if (isCommunityEdition.value) return
+  if (!ensureProject() || !archiveDialog.value.requirementId) return
+  archiveDialog.value.loading = true
+  try {
+    const res = await knowledgeApi.archiveFromRequirement(
+      {
+        requirement_id: archiveDialog.value.requirementId,
+        folder_id: archiveDialog.value.folderId || undefined,
+        title: (archiveDialog.value.title || '').trim() || undefined,
+        replace_if_exists: archiveDialog.value.replaceIfExists
+      },
+      proStore.projectInfo.id
+    )
+    ElMessage.success(res.message || '归档成功')
+    archiveDialog.value.visible = false
+    const folderId = res.data?.folder_id
+    if (folderId) {
+      router.push(`/ai-knowledge/folders/${folderId}`)
+    }
+  } catch (e) {
+    ElMessage.error(apiErrorMsg(e, '归档失败'))
+  } finally {
+    archiveDialog.value.loading = false
+  }
+}
+
 const handleUpload = async () => {
   if (!ensureProject()) return
   if (!uploadForm.file) {
@@ -3194,7 +3298,8 @@ const handleGenerate = async () => {
         related_story: reqZentao.related_story
       },
       scope_section_ids: selectedSectionIds.value,
-      batch_name: inferBatchName(selectedSectionIds.value) || undefined
+      batch_name: inferBatchName(selectedSectionIds.value) || undefined,
+      ...knowledgeRefsPayload()
     }
     const res = await aiRequirementApi.generateCases(
       currentReq.value.id,
@@ -3299,7 +3404,8 @@ const handleBatchGenerate = async () => {
         case_gen_config_id: genForm.case_gen_config_id || undefined,
         replace_existing: genForm.replace_existing,
         extra_instructions: (genForm.extra_instructions || '').trim() || undefined,
-        batches
+        batches,
+        ...knowledgeRefsPayload()
       },
       proStore.projectInfo.id
     )
@@ -3559,6 +3665,7 @@ const openDetailFromRoute = async () => {
 }
 
 onMounted(async () => {
+  await loadCommunityEdition()
   loadConfigs()
   loadExportTemplate()
   if (props.embedMode && props.embedReqId) {
@@ -3594,6 +3701,17 @@ onUnmounted(() => {
 }
 .detail-panel {
   padding: 0 4px;
+}
+.detail-archive-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 4px;
+}
+.detail-archive-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .scope-card {
   margin: 12px 0;

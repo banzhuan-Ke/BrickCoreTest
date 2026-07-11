@@ -3,13 +3,15 @@ AI Prompt 模板管理路由
 """
 import json
 import logging
+import time
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import AI_CONFIG_VIEW, AI_CONFIG_EDIT
-from app.core.ai_prompts import PromptManager
-from app.core.llm_client import LLMClientFactory
-from app.core.encryption import decrypt_value
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import AI_CONFIG_VIEW, AI_CONFIG_EDIT
+from app.modules.ai.ai_prompts import PromptManager
+from app.core.llm.llm_client import LLMClientFactory
+from app.core.llm.ai_usage_log import log_ai_usage
+from app.core.platform.encryption import decrypt_value
 from app.models.ai import AiPromptTemplate, AiConfig
 from app.schemas.ai import (
     PromptTemplateUpdate,
@@ -213,6 +215,7 @@ async def test_prompt(
         kwargs = {}
         if config.thinking_enabled and config.reasoning_effort:
             kwargs["reasoning_effort"] = config.reasoning_effort
+        t0 = time.time()
         resp = await client.chat(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -223,16 +226,39 @@ async def test_prompt(
             extra_body=extra_body or None,
             **kwargs,
         )
-        logger.warning(f"[test_prompt] LLM 调用成功, tokens={resp.get('tokens', 0)}")
+        tokens_used = int(resp.get("tokens", 0) or 0)
+        duration_ms = int((time.time() - t0) * 1000)
+        await log_ai_usage(
+            config,
+            "prompt_test",
+            user_info=user_info,
+            tokens_used=tokens_used,
+            duration_ms=duration_ms,
+            input_summary=f"Prompt 测试 · {code}"[:500],
+            output_summary=(resp.get("content") or "")[:500],
+            prompt_code=code,
+        )
+        logger.warning(f"[test_prompt] LLM 调用成功, tokens={tokens_used}")
 
         return StandardResponse(data={
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
             "llm_response": resp.get("content", ""),
-            "tokens_used": resp.get("tokens", 0),
+            "tokens_used": tokens_used,
         })
 
     except Exception as e:
+        await log_ai_usage(
+            config,
+            "prompt_test",
+            user_info=user_info,
+            tokens_used=0,
+            duration_ms=0,
+            status="failed",
+            input_summary=f"Prompt 测试 · {code}"[:500],
+            output_summary=str(e)[:500],
+            prompt_code=code,
+        )
         logger.error(f"[test_prompt] LLM 调用失败: {e}", exc_info=True)
         return StandardResponse(
             code=500,

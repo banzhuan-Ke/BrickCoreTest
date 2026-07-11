@@ -63,12 +63,10 @@
 import { ArrowRight } from '@element-plus/icons-vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
-import { MenuGroups } from '@/datas/Menu'
+import { MenuGroups, MENU_EXPANDED_SESSION_KEY } from '@/datas/Menu'
 import { useRoute, useRouter } from 'vue-router'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useCommunityEdition } from '@/composables/useCommunityEdition'
-
-const MENU_EXPANDED_STORAGE_KEY = 'brickcore_menu_expanded_groups'
 
 const router = useRouter()
 const route = useRoute()
@@ -104,15 +102,33 @@ function resolveGroupTitleByPath(path) {
   return MenuGroups[0]?.title || ''
 }
 
-function syncExpandedToRoute(path = route.path) {
+function defaultExpandedForRoute(path = route.path) {
   const title = resolveGroupTitleByPath(path)
-  if (title) {
-    expandedGroups.value = [title]
+  return title ? [title] : []
+}
+
+function ensureCurrentGroupExpanded(path = route.path) {
+  const title = resolveGroupTitleByPath(path)
+  if (title && !expandedGroups.value.includes(title)) {
+    expandedGroups.value = [...expandedGroups.value, title]
   }
 }
 
 function loadExpandedGroups() {
-  syncExpandedToRoute(route.path)
+  try {
+    const raw = sessionStorage.getItem(MENU_EXPANDED_SESSION_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed) && parsed.length) {
+        expandedGroups.value = parsed.filter((t) => MenuGroups.some((g) => g.title === t))
+        ensureCurrentGroupExpanded()
+        return
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  expandedGroups.value = defaultExpandedForRoute()
 }
 
 function isGroupCurrent(group) {
@@ -130,7 +146,7 @@ onMounted(() => {
 watch(
   () => route.path,
   (path) => {
-    syncExpandedToRoute(path)
+    ensureCurrentGroupExpanded(path)
   }
 )
 
@@ -139,7 +155,7 @@ const activeMenuPath = computed(() => resolveMenuItemPath(route.path))
 watch(
   expandedGroups,
   (titles) => {
-    localStorage.setItem(MENU_EXPANDED_STORAGE_KEY, JSON.stringify(titles))
+    sessionStorage.setItem(MENU_EXPANDED_SESSION_KEY, JSON.stringify(titles))
   },
   { deep: true }
 )
@@ -147,7 +163,7 @@ watch(
 const filteredMenuGroups = computed(() => {
   return MenuGroups.map((group) => {
     const items = group.items.filter((item) => {
-      if (isCommunityEdition.value && item.path === '/ai-qa-eval') {
+      if (isCommunityEdition.value && item.path?.startsWith('/ai-knowledge')) {
         return false
       }
       if (item.anyPermissions?.length) {
@@ -166,10 +182,10 @@ const filteredMenuGroups = computed(() => {
 
 function toggleGroup(title) {
   if (expandedGroups.value.includes(title)) {
-    expandedGroups.value = []
-    return
+    expandedGroups.value = expandedGroups.value.filter((t) => t !== title)
+  } else {
+    expandedGroups.value = [...expandedGroups.value, title]
   }
-  expandedGroups.value = [title]
 }
 
 const isMenuItemEnabled = (item, group) => {

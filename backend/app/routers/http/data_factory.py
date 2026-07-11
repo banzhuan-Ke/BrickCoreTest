@@ -6,8 +6,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from tortoise.expressions import Q
 
-from app.core.auth import get_current_username, require_permissions, verify_internal_token
-from app.core.db_factory_service import (
+from app.core.platform.auth import get_current_username, require_permissions, verify_internal_token
+from app.core.db.db_factory_service import (
     datasource_to_dict,
     encrypt_datasource_password,
     evaluate_db_assertions,
@@ -18,15 +18,15 @@ from app.core.db_factory_service import (
     substitute_sql,
     test_datasource_connection,
 )
-from app.core.data_tools.executor import ToolExecutionError, execute_tool
-from app.core.data_tools.registry import TOOL_CATEGORIES, get_tool_definition, list_tools
-from app.core.data_tools.tag_refs import (
+from app.modules.data_tools.executor import ToolExecutionError, execute_tool
+from app.modules.data_tools.registry import TOOL_CATEGORIES, get_tool_definition, list_tools
+from app.modules.data_tools.tag_refs import (
     RESOURCE_TYPE_LABELS,
     build_project_df_tag_usage_index,
     get_tags_usages,
 )
-from app.core.data_tools.tag_service import format_record_output, normalize_output_data_for_storage
-from app.core.permissions import DATA_FACTORY_EDIT, DATA_FACTORY_VIEW
+from app.modules.data_tools.tag_service import format_record_output, normalize_output_data_for_storage
+from app.core.platform.permissions import DATA_FACTORY_EDIT, DATA_FACTORY_VIEW
 from app.models.http import DataToolFavorite, DataToolRecord, EnvDatasource, SqlTemplate
 from app.models.sys import User
 from app.models.sys import Environment, Project
@@ -512,7 +512,7 @@ async def internal_evaluate_assertion(body: EvaluateAssertionRequest):
     dependencies=[Depends(verify_internal_token)],
 )
 async def run_ui_suite_db_hooks(body: UiSuiteDbHooksRequest):
-    from app.core.ui_suite_hooks import run_ui_suite_post_hooks
+    from app.modules.ui.ui_suite_hooks import run_ui_suite_post_hooks
     from app.models.ui import Suite, UiSuiteExecution
 
     suite = await Suite.get_or_none(id=body.suite_id, is_del=False)
@@ -618,7 +618,7 @@ async def get_tools_catalog(category: Optional[str] = Query(None)):
     dependencies=[Depends(require_permissions(DATA_FACTORY_VIEW))],
 )
 async def get_inline_tools_catalog():
-    from app.core.data_tools.inline_tools import list_inline_insertable_tools
+    from app.modules.data_tools.inline_tools import list_inline_insertable_tools
 
     tools = list_inline_insertable_tools()
     cat_ids = {t["category"] for t in tools}

@@ -27,7 +27,7 @@ Windows 桌面程序：登录 BrickCore 平台、选择环境、**上线**执行
 | 项 | 说明 |
 |----|------|
 | 技术栈 | PySide6 桌面壳 + 调用平台 API |
-| 引擎源码 | 请使用网盘 `BrickCoreRunner.zip` 安装包 |
+| 引擎源码 | 不在本 Git 仓库；请使用网盘 `BrickCoreRunner.zip` |
 | 自行打包安装包 | 本仓库未包含引擎打包脚本 |
 
 从源码运行（仅调试 GUI，**仍需**单独准备 `runner/` 引擎目录）：

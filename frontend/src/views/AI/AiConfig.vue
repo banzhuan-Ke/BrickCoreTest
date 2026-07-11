@@ -61,6 +61,10 @@
           </el-table>
         </el-tab-pane>
 
+        <el-tab-pane label="Embedding 模型配置" name="embed">
+          <AiEmbedConfig />
+        </el-tab-pane>
+
         <!-- Tab: 执行与自愈（Backend 策略，Runner 只执行） -->
         <el-tab-pane label="执行与自愈" name="execution">
           <el-alert
@@ -68,7 +72,7 @@
             :closable="false"
             show-icon
             style="margin-bottom: 16px;"
-            title="定位器自愈策略由 Backend 按项目配置；Runner 仅读取派发结果。Runner .env 的 AI_HEAL_ENABLED 仅作运维熔断。"
+            title="定位器自愈与 AI Act 策略由 Backend 按项目配置；Runner 仅读取派发结果。Runner .env 的 AI_HEAL_ENABLED / AI_ACT_ENABLED 仅作运维熔断。"
           />
           <el-form v-loading="execSettingsLoading" label-width="200px" style="max-width: 720px;">
             <el-form-item label="启用定位器自愈">
@@ -87,6 +91,31 @@
                 :disabled="!execSettings.locator_heal_enabled"
               />
               <div class="form-tip">关闭后，测试人员不能在单次运行中改开关</div>
+            </el-form-item>
+            <el-divider content-position="left">AI Act 兜底</el-divider>
+            <el-form-item label="启用 AI Act">
+              <el-switch v-model="execSettings.ai_act_enabled" />
+              <div class="form-tip">自愈仍失败时，按 intent/操作名称由 LLM 重新规划并执行一步</div>
+            </el-form-item>
+            <el-form-item label="执行时默认开启">
+              <el-switch
+                v-model="execSettings.ai_act_default_on_execute"
+                :disabled="!execSettings.ai_act_enabled"
+              />
+            </el-form-item>
+            <el-form-item label="允许运行弹窗覆盖">
+              <el-switch
+                v-model="execSettings.ai_act_allow_run_override"
+                :disabled="!execSettings.ai_act_enabled"
+              />
+            </el-form-item>
+            <el-form-item label="单用例最大次数">
+              <el-input-number
+                v-model="execSettings.ai_act_max_per_case"
+                :min="1"
+                :max="10"
+                :disabled="!execSettings.ai_act_enabled"
+              />
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="execSettingsSaving" @click="saveExecutionSettings">保存</el-button>
@@ -263,7 +292,7 @@
           :closable="false"
           show-icon
           style="margin-bottom: 12px;"
-          title="覆盖绑定模型上的 max_tokens / 温度 / 超时；留空表示使用 LLM 配置中的默认值。问答评判建议 max_tokens≥16384、timeout≥180。"
+          title="覆盖绑定模型上的 max_tokens / 温度 / 超时；留空表示使用 LLM 配置中的默认值。长文本场景建议 max_tokens≥16384、timeout≥180。"
         />
         <el-form label-width="110px">
           <el-form-item label="最大 Token">
@@ -465,6 +494,7 @@
 
 <script setup>
 import ConfigShell from '@/components/ConfigShell.vue'
+import AiEmbedConfig from '@/views/AI/AiEmbedConfig.vue'
 
 defineProps({
   embedded: { type: Boolean, default: false }
@@ -520,7 +550,11 @@ const configRules = {
 const execSettings = reactive({
   locator_heal_enabled: true,
   locator_heal_default_on_execute: true,
-  locator_heal_allow_run_override: true
+  locator_heal_allow_run_override: true,
+  ai_act_enabled: false,
+  ai_act_default_on_execute: false,
+  ai_act_allow_run_override: true,
+  ai_act_max_per_case: 3,
 })
 const execSettingsLoading = ref(false)
 const execSettingsSaving = ref(false)

@@ -304,6 +304,33 @@
           :title="`本次将按项目默认：${healRunOptions.locator_heal_default_on_execute ? '开启' : '关闭'}自愈（运行弹窗不可改）`"
         />
       </el-form-item>
+      <el-form-item v-if="healRunOptions?.locator_heal_enabled" label="AI Act 兜底">
+        <UiRunAiActDisabledTip v-if="!healRunOptions.ai_act_enabled" />
+        <template v-else>
+          <div v-if="healRunOptions.ai_act_allow_run_override" class="ui-run-segment-group">
+            <div
+              :class="['ui-run-segment', 'ui-run-segment--grow', { active: runParams.ai_act_enabled === true }]"
+              @click="runParams.ai_act_enabled = true"
+            >
+              <el-icon><CircleCheck /></el-icon><span>开启</span>
+            </div>
+            <div
+              :class="['ui-run-segment', 'ui-run-segment--grow', { active: runParams.ai_act_enabled === false }]"
+              @click="runParams.ai_act_enabled = false"
+            >
+              <el-icon><CircleClose /></el-icon><span>关闭</span>
+            </div>
+          </div>
+          <el-alert
+            v-else
+            type="info"
+            :closable="false"
+            show-icon
+            :title="`本次将按项目默认：${healRunOptions.ai_act_default_on_execute ? '开启' : '关闭'} AI Act（运行弹窗不可改）`"
+          />
+        </template>
+        <p class="ui-run-act-hint">开启后，定位器自愈仍失败时，将按步骤 intent/操作名称由 AI 重新规划并执行一步。</p>
+      </el-form-item>
       <el-form-item label="执行设备" required>
         <el-select v-model="runParams.device_id" placeholder="请选择执行设备" style="width: 100%">
           <el-option
@@ -413,6 +440,7 @@ import CaseRecord from "@/views/Case/componets/CaseRecord.vue"
 import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 import BatchCatalogDialog from '@/components/BatchCatalogDialog.vue'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
+import UiRunAiActDisabledTip from '@/components/UiRunAiActDisabledTip.vue'
 import {UserStore} from "@/stores/module/UserStore.js"
 import CopyToProjectDialog from '@/components/CopyToProjectDialog.vue'
 import { useAssetFavorites } from '@/composables/useAssetFavorites'
@@ -605,6 +633,7 @@ const loadHealRunOptions = async () => {
     if (res.data?.code === 200) {
       healRunOptions.value = res.data.data || null
       runParams.ai_heal_enabled = healRunOptions.value?.locator_heal_default_on_execute ?? true
+      runParams.ai_act_enabled = healRunOptions.value?.ai_act_default_on_execute ?? false
     }
   } catch {
     healRunOptions.value = null
@@ -631,7 +660,8 @@ const runParams = reactive({
   case_id: 1,
   username: uStore.userInfo.username,
   headless: false,
-  ai_heal_enabled: true
+  ai_heal_enabled: true,
+  ai_act_enabled: false,
 })
 
 const clickRun = async (case_id) => {
@@ -643,6 +673,7 @@ const clickRun = async (case_id) => {
   runParams.username = uStore.userInfo.username
   runParams.headless = false
   runParams.ai_heal_enabled = true
+  runParams.ai_act_enabled = false
   await loadHealRunOptions()
   // 获取设备列表
   await getDeviceList()
@@ -677,6 +708,9 @@ async function runCase() {
     }
     if (healRunOptions.value?.locator_heal_allow_run_override) {
       payload.ai_heal_enabled = runParams.ai_heal_enabled
+    }
+    if (healRunOptions.value?.ai_act_enabled && healRunOptions.value?.ai_act_allow_run_override) {
+      payload.ai_act_enabled = runParams.ai_act_enabled
     }
     const response = await http.runnerApi.runCase(payload.case_id, payload)
     showRunDlg.value = false

@@ -6,19 +6,29 @@ from fastapi import APIRouter, HTTPException, Depends, status, Form, UploadFile,
 from pydantic import BaseModel
 from fastapi.responses import Response
 from app.models.sys import Project
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import UI_CASE_VIEW, UI_CASE_EDIT
-from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
-from app.core.ui_execution_stale import cleanup_stale_ui_executions
-from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import UI_CASE_VIEW, UI_CASE_EDIT
+from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.modules.ui.ui_execution_stale import cleanup_stale_ui_executions
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.schemas.ui import CaseSchemas, AddCaseForm, UpdateCaseForm, UiCaseBatchExportRequest, UiCaseImportResult, UiCaseBatchUpdateCatalogRequest
-from app.core.case_execution_hints import build_execution_hints_response, resolve_latest_failure_record
+from app.core.case.case_execution_hints import build_execution_hints_response, resolve_latest_failure_record
+from tortoise import connections
+from tortoise.functions import Count
+
 from app.models.ui import Case, UiCaseExecution
 
 # 创建路由对象，并指定依赖项为is_authenticated的验证，确保用户已通过身份验证
 router = APIRouter(prefix="/cases", dependencies=[Depends(is_authenticated)], tags=["测试用例"])
 
 _UI_CASE_FAIL_STATUSES = frozenset({"fail", "failed"})
+
+# 列表页仅需摘要字段；避免 SELECT 大 JSON 列后在 ORDER BY 时触发 sort buffer 溢出
+_CASE_LIST_FIELDS = (
+    "id", "name", "username", "update_by", "level",
+    "source_functional_case_id", "source_functional_case_title",
+    "catalog_id", "create_time", "update_time", "project_id",
+)
 
 
 def _match_case_run_status(state: str, filter_status: str | None) -> bool:
@@ -30,6 +40,116 @@ def _match_case_run_status(state: str, filter_status: str | None) -> bool:
     if filter_status in _UI_CASE_FAIL_STATUSES and state in _UI_CASE_FAIL_STATUSES:
         return True
     return False
+
+
+def _row_value(row, key: str, index: int = 0):
+    if isinstance(row, dict):
+        return row.get(key)
+    if isinstance(row, (list, tuple)):
+        return row[index]
+    return None
+
+
+async def _load_run_count_by_case(case_ids: list[int]) -> dict[int, int]:
+    result = {case_id: 0 for case_id in case_ids}
+    if not case_ids:
+        return result
+    rows = (
+        await UiCaseExecution.filter(case_id__in=case_ids, is_del=False)
+        .annotate(cnt=Count("id"))
+        .group_by("case_id")
+        .values("case_id", "cnt")
+    )
+    for row in rows:
+        result[row["case_id"]] = int(row["cnt"])
+    return result
+
+
+async def _load_latest_status_by_case(case_ids: list[int]) -> dict[int, str]:
+    """每个用例最近一次执行状态（按 id 取最新，避免 order_by 全表排序）。"""
+    if not case_ids:
+        return {}
+    conn = connections.get("default")
+    placeholders = ",".join(["%s"] * len(case_ids))
+    sql = f"""
+        SELECT e.case_id, e.status FROM ui_case_execution e
+        INNER JOIN (
+            SELECT case_id, MAX(id) AS max_id
+            FROM ui_case_execution
+            WHERE case_id IN ({placeholders}) AND is_del = 0
+            GROUP BY case_id
+        ) t ON e.id = t.max_id
+    """
+    _, rows = await conn.execute_query(sql, case_ids)
+    return {
+        case_id: status or "no_run"
+        for case_id, status in (
+            (_row_value(row, "case_id", 0), _row_value(row, "status", 1))
+            for row in rows
+        )
+        if case_id is not None
+    }
+
+
+async def _load_steps_count_by_case(case_ids: list[int]) -> dict[int, int]:
+    if not case_ids:
+        return {}
+    conn = connections.get("default")
+    placeholders = ",".join(["%s"] * len(case_ids))
+    sql = f"""
+        SELECT id, COALESCE(JSON_LENGTH(`steps`), 0) AS steps_count
+        FROM `case`
+        WHERE id IN ({placeholders})
+    """
+    _, rows = await conn.execute_query(sql, case_ids)
+    return {
+        case_id: int(steps_count or 0)
+        for case_id, steps_count in (
+            (_row_value(row, "id", 0), _row_value(row, "steps_count", 1))
+            for row in rows
+        )
+        if case_id is not None
+    }
+
+
+def _serialize_case_list_item(
+    case: Case,
+    *,
+    run_count: int,
+    status: str,
+    steps_count: int,
+) -> dict:
+    return {
+        "id": case.id,
+        "name": case.name,
+        "username": case.username,
+        "update_by": case.update_by or case.username,
+        "status": status,
+        "run_count": run_count,
+        "steps_count": steps_count,
+        "level": case.level,
+        "source_functional_case_id": getattr(case, "source_functional_case_id", None),
+        "source_functional_case_title": getattr(case, "source_functional_case_title", None) or "",
+        "catalog_id": case.catalog_id,
+        "create_time": case.create_time.strftime("%Y-%m-%d %H:%M:%S"),
+        "update_time": case.update_time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+async def _build_case_list_items(cases: list[Case]) -> list[dict]:
+    case_ids = [case.id for case in cases]
+    run_count_map = await _load_run_count_by_case(case_ids)
+    status_map = await _load_latest_status_by_case(case_ids)
+    steps_count_map = await _load_steps_count_by_case(case_ids)
+    return [
+        _serialize_case_list_item(
+            case,
+            run_count=run_count_map.get(case.id, 0),
+            status=status_map.get(case.id, "no_run"),
+            steps_count=steps_count_map.get(case.id, 0),
+        )
+        for case in cases
+    ]
 
 
 # 创建测试用例的接口
@@ -146,7 +266,7 @@ async def copy_case(
     user_info: dict = Depends(require_permissions(UI_CASE_EDIT)),
 ):
     """复制用例；可指定 target_project_id 跨项目复制。"""
-    from app.core.cross_project_copy import copy_ui_case_to_project, ensure_target_project, resolve_target_catalog
+    from app.core.shared.cross_project_copy import copy_ui_case_to_project, ensure_target_project, resolve_target_catalog
 
     cases = await Case.get_or_none(id=case_id).prefetch_related("project")
     if not cases:
@@ -336,31 +456,26 @@ async def get_case(project_id: int, page: int = 1, size: int = 10,
         await resolve_catalog(project_id, catalog_id)
         query = await apply_catalog_filter(query, project_id, catalog_id, include_children=include_children)
     query = query.order_by("-create_time")
-    all_cases = await query.all()
-    # 查询用例的执行记录次数，并按 status 过滤
-    result = []
-    for i in all_cases:
-        run_count = await UiCaseExecution.filter(case=i).count()
-        # 获取最近一次执行状态
-        run_record = await UiCaseExecution.filter(case=i).order_by("-id").first()
-        state = run_record.status if run_record else 'no_run'
-        if not _match_case_run_status(state, status):
-            continue
-        result.append({
-            "id": i.id,
-            "name": i.name,
-            "username": i.username,
-            "update_by": i.update_by or i.username,
-            "status": state,
-            "run_count": run_count,
-            "steps_count": len(i.steps),
-            "level": i.level,
-            "source_functional_case_id": getattr(i, "source_functional_case_id", None),
-            "source_functional_case_title": getattr(i, "source_functional_case_title", None) or "",
-            "catalog_id": i.catalog_id,
-            "create_time": i.create_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "update_time": i.update_time.strftime("%Y-%m-%d %H:%M:%S")
-        })
-    total = len(result)
-    data = result[(page - 1) * size: page * size]
+
+    if status:
+        # 按最近执行状态筛选：先取轻量行，再内存分页
+        all_cases = await query.only(*_CASE_LIST_FIELDS).all()
+        status_map = await _load_latest_status_by_case([case.id for case in all_cases])
+        filtered_cases = [
+            case for case in all_cases
+            if _match_case_run_status(status_map.get(case.id, "no_run"), status)
+        ]
+        total = len(filtered_cases)
+        page_cases = filtered_cases[(page - 1) * size: page * size]
+        data = await _build_case_list_items(page_cases)
+        return {"total": total, "data": data}
+
+    total = await query.count()
+    page_cases = await (
+        query.offset((page - 1) * size)
+        .limit(size)
+        .only(*_CASE_LIST_FIELDS)
+        .all()
+    )
+    data = await _build_case_list_items(page_cases)
     return {"total": total, "data": data}

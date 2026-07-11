@@ -4,15 +4,15 @@ from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.core.auth import is_authenticated
-from app.core.dashboard_extra import (
+from app.core.platform.auth import is_authenticated
+from app.core.ops.dashboard_extra import (
     build_case_proportion,
     build_execution_proportion,
     compute_next_run,
     sort_pending_jobs,
     within_hours,
 )
-from app.core.ai_dashboard_stats import (
+from app.modules.ai.ai_dashboard_stats import (
     collect_generate_trend,
     collect_token_stats,
     collect_user_activity_top,

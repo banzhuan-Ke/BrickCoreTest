@@ -5,18 +5,18 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, HTTPException, status
 from tortoise import transactions
 
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.data_tools.inline_tools import ensure_dt_cache
-from app.core.data_tools.tag_service import merge_execution_variables
-from app.core.db_factory_service import run_sql_templates_by_ids
-from app.core.ai_project_settings import resolve_locator_heal_for_execute
-from app.core.app_device_lock import acquire_device_lock, release_device_lock, resolve_exec_lock_holder_id
-from app.core.app_locator_service import expand_locator_refs_in_steps
-from app.core.app_step_expand import FragmentExpandError, expand_fragment_refs
-from app.core.mq_producer import MQProducer
-from app.core.app_execution_stop import stop_case_execution, stop_plan_execution, stop_suite_execution
-from app.core.permissions import APP_CASE_EXECUTE, APP_PLAN_EXECUTE, APP_SUITE_EXECUTE
-from app.core.ui_project_guard import assert_environment_for_project, assert_user_project_member
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.modules.data_tools.inline_tools import ensure_dt_cache
+from app.modules.data_tools.tag_service import merge_execution_variables
+from app.core.db.db_factory_service import run_sql_templates_by_ids
+from app.modules.ai.ai_project_settings import resolve_locator_heal_for_execute
+from app.modules.app.app_device_lock import acquire_device_lock, release_device_lock, resolve_exec_lock_holder_id
+from app.modules.app.app_locator_service import expand_locator_refs_in_steps
+from app.modules.app.app_step_expand import FragmentExpandError, expand_fragment_refs
+from app.core.infra.mq_producer import MQProducer
+from app.modules.app.app_execution_stop import stop_case_execution, stop_plan_execution, stop_suite_execution
+from app.core.platform.permissions import APP_CASE_EXECUTE, APP_PLAN_EXECUTE, APP_SUITE_EXECUTE
+from app.modules.ui.ui_project_guard import assert_environment_for_project, assert_user_project_member
 from app.models.app import (
     AppCase,
     AppCaseExecution,
@@ -27,8 +27,8 @@ from app.models.app import (
     AppSuiteStep,
 )
 from app.models.sys import Device, Environment
-from app.core.app_locator_validate import validate_case_steps_driver_mode_for_project, validate_driver_mode
-from app.core.app_execution_env import build_case_env, normalize_trigger_source
+from app.modules.app.app_locator_validate import validate_case_steps_driver_mode_for_project, validate_driver_mode
+from app.modules.app.app_execution_env import build_case_env, normalize_trigger_source
 from app.schemas.app import AppCaseDebugForm, AppRunForm
 
 router = APIRouter(prefix="/exec", dependencies=[Depends(is_authenticated)], tags=["App执行"])
@@ -433,7 +433,7 @@ async def run_plan(
     user_info: dict = Depends(require_permissions(APP_PLAN_EXECUTE)),
     username: str = Depends(get_current_username),
 ):
-    from app.core.app_plan_runner import execute_app_plan
+    from app.modules.app.app_plan_runner import execute_app_plan
 
     plan = await AppPlan.get_or_none(id=plan_id, is_del=False)
     if not plan:

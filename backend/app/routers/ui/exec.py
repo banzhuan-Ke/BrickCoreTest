@@ -7,13 +7,14 @@ from tortoise import transactions
 
 from app.models.sys import Device, Environment
 from app.models.ui import Suite, Case, Task, UiPlanExecution, UiSuiteExecution, UiCaseExecution
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import UI_CASE_EXECUTE, UI_SUITE_EXECUTE, UI_TASK_EXECUTE
-from app.core.mq_producer import MQProducer
-from app.core.ai_project_settings import resolve_locator_heal_for_execute
-from app.core.ui_execution_stop import stop_plan_execution, stop_suite_execution, stop_case_execution
-from app.core.ui_project_guard import assert_environment_for_project, assert_user_project_member
-from app.core.ui_step_expand import FragmentExpandError, expand_fragment_refs
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import UI_CASE_EXECUTE, UI_SUITE_EXECUTE, UI_TASK_EXECUTE
+from app.core.infra.mq_producer import MQProducer
+from app.modules.ai.ai_project_settings import resolve_locator_heal_for_execute, load_ai_project_settings, resolve_ai_act_for_execute
+from app.modules.ui.ui_execution_stop import stop_plan_execution, stop_suite_execution, stop_case_execution
+from app.modules.ui.ui_device_guard import assert_device_available_for_ui_execution
+from app.modules.ui.ui_project_guard import assert_environment_for_project, assert_user_project_member
+from app.modules.ui.ui_step_expand import FragmentExpandError, expand_fragment_refs
 from app.schemas.ui import RunForm, CaseDebugForm
 
 router = APIRouter(
@@ -37,14 +38,17 @@ class ExecutionService:
         headless: bool,
         project_id: int,
         user_heal_override: Optional[bool] = None,
+        user_act_override: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
-        构建执行环境负载；ai_heal_enabled 由 Backend 项目配置计算，不信任 Runner/前端单独决策。
+        构建执行环境负载；ai_heal_enabled / ai_act_enabled 由 Backend 项目配置计算。
         """
-        from app.core.data_tools.tag_service import merge_execution_variables
-        from app.core.data_tools.inline_tools import ensure_dt_cache
+        from app.modules.data_tools.tag_service import merge_execution_variables
+        from app.modules.data_tools.inline_tools import ensure_dt_cache
 
         ai_heal_enabled = await resolve_locator_heal_for_execute(project_id, user_heal_override)
+        ai_act_enabled = await resolve_ai_act_for_execute(project_id, user_act_override)
+        settings = await load_ai_project_settings(project_id)
         variables = ensure_dt_cache(await merge_execution_variables(project_id, env.id))
         resolved_browser = browser_type if browser_type in ["chromium", "firefox", "webkit"] else "chromium"
         payload = {
@@ -57,6 +61,8 @@ class ExecutionService:
             "env_name": env.name,
             "variables": variables,
             "ai_heal_enabled": ai_heal_enabled,
+            "ai_act_enabled": ai_act_enabled,
+            "ai_act_max_per_case": int(settings.get("ai_act_max_per_case") or 3),
         }
         return payload
 
@@ -73,10 +79,10 @@ class ExecutionService:
         """执行 UI 套件前置 SQL（数据工厂 setup）"""
         if not (suite_.setup_sql_ids or []):
             return
-        from app.core.db_factory_service import run_sql_templates_by_ids
+        from app.core.db.db_factory_service import run_sql_templates_by_ids
         from app.models.sys import Project
 
-        from app.core.data_tools.tag_service import merge_execution_variables
+        from app.modules.data_tools.tag_service import merge_execution_variables
 
         variables = await merge_execution_variables(suite_.project_id, env_id)
         setup_res = await run_sql_templates_by_ids(
@@ -184,9 +190,12 @@ async def run_case(
             item.config,
             case_.project_id,
             item.ai_heal_enabled,
+            item.ai_act_enabled,
         )
         env_payload = ExecutionService.with_trigger_source(env_payload, item.trigger_source)
         env_payload["device_id"] = item.device_id
+
+        await assert_device_available_for_ui_execution(item.device_id)
 
         case_execution = await UiCaseExecution.create(
             case=case_,
@@ -271,10 +280,13 @@ async def debug_case(
             item.config,
             case_.project_id,
             item.ai_heal_enabled,
+            item.ai_act_enabled,
         )
         env_payload["debug_mode"] = True
         env_payload["debug_through_index"] = item.through_index
         env_payload["device_id"] = item.device_id
+
+        await assert_device_available_for_ui_execution(item.device_id)
 
         case_execution = await UiCaseExecution.create(
             case=case_,
@@ -342,9 +354,12 @@ async def run_suite(
             item.config,
             suite_.project_id,
             item.ai_heal_enabled,
+            item.ai_act_enabled,
         )
         env_payload = ExecutionService.with_trigger_source(env_payload, item.trigger_source)
         env_payload["device_id"] = item.device_id
+
+        await assert_device_available_for_ui_execution(item.device_id)
 
         suite_record = await UiSuiteExecution.create(
             suite=suite_,
@@ -424,7 +439,7 @@ async def run_task(
             task_.project_id,
         )
 
-        from app.core.ui_plan_runner import execute_ui_plan
+        from app.modules.ui.ui_plan_runner import execute_ui_plan
 
         devices_payload = [
             {"device_id": d.device_id, "weight": d.weight, "concurrency": d.concurrency}
@@ -440,6 +455,7 @@ async def run_task(
             devices=devices_payload,
             concurrency=item.concurrency,
             ai_heal_enabled=item.ai_heal_enabled,
+            ai_act_enabled=item.ai_act_enabled,
             trigger_source=item.trigger_source,
         )
 

@@ -554,14 +554,6 @@ const formatImpact = (pending) => {
   }
   if (impact.step_count != null) lines.push(`步骤数：${impact.step_count}`)
   if (impact.data_driven != null) lines.push(`数据驱动：${impact.data_driven ? '是' : '否'}`)
-  if (impact.set_name || impact.set_id != null) {
-    lines.push(`问答评测集：${impact.set_name || '未命名'} (set_id=${impact.set_id})`)
-  }
-  if (impact.run_mode_label) lines.push(`评测模式：${impact.run_mode_label}`)
-  if (impact.case_scope_label) lines.push(`用例范围：${impact.case_scope_label}`)
-  if (impact.target_name || impact.target_id != null) {
-    lines.push(`被测 API：${impact.target_name || '未命名'} (target_id=${impact.target_id})`)
-  }
   if (impact.item_count != null) lines.push(`计划项/场景项：${impact.item_count}`)
   if (impact.use_workers != null) lines.push(`分布式 Worker：${impact.use_workers ? '是' : '否'}`)
   if (impact.target_type && impact.target_id != null) {

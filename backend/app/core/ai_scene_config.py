@@ -25,7 +25,6 @@ AI_SCENE_DEFINITIONS: dict[str, tuple[str, str]] = {
     "requirement_test_scheme": ("测试方案生成", "基于测试点生成测试方案文档"),
     "recorder_optimize": ("录制步骤优化", "录制弹窗内 AI 精简步骤并追加断言"),
     "case_steps_optimize": ("用例步骤优化", "用例编辑页 AI 优化步骤并追加断言"),
-    "qa_judge": ("问答准确性评判", "知识库问答评测 LLM 打分"),
     "browser_lab": ("智能浏览器", "browser-use 自然语言驱动浏览器演示/探索"),
     "browser_lab_task_optimize": ("智能浏览器 · 任务描述优化", "将自然语言任务改写为 browser-use 可执行描述"),
 }
@@ -151,14 +150,6 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.2～0.4",
         "tip": "定位器修复需精确输出",
-    },
-    "qa_judge": {
-        "group": "analysis",
-        "recommended_provider": "deepseek",
-        "recommended_model": "deepseek-chat",
-        "temperature_hint": "0.1～0.3",
-        "tip": "建议绑定 DeepSeek 文本模型，并在「参数覆盖」中设置 max_tokens≥16384、timeout≥180",
-        "default_overrides": {"max_tokens": 32768, "temperature": 0.1, "timeout": 300},
     },
     "browser_lab": {
         "group": "generate",

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, status
 
-from app.core.auth import verify_runner_or_internal
-from app.core.device_log_publisher import publish_device_log_line, publish_device_screen
+from app.core.platform.auth import verify_runner_or_internal
+from app.core.infra.device_log_publisher import publish_device_log_line, publish_device_screen
 from app.schemas.runner import (
     RunnerDeviceLogBatchRequest,
     RunnerDeviceLogRequest,

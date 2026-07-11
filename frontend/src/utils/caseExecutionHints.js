@@ -8,7 +8,10 @@ export function parseExecutionIdQuery(raw) {
 export function getStepExecutionHint(executionHints, stepIndex) {
   if (!executionHints?.step_failures?.length) return null
   const idx = Number(stepIndex)
-  return executionHints.step_failures.find((item) => Number(item.step_index) === idx) || null
+  const matches = executionHints.step_failures.filter((item) => Number(item.step_index) === idx)
+  if (!matches.length) return null
+  return matches.find((item) => ['fail', 'failed', 'error'].includes(String(item?.status || '').toLowerCase()))
+    || matches[matches.length - 1]
 }
 
 export function formatExecutionHintStatus(status) {

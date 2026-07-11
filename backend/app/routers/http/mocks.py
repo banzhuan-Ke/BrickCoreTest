@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 from starlette.responses import Response
 from app.models.http import MockApi
 from app.schemas.http import MockApiCreate, MockApiUpdate, MockApiOut, MockApiListResponse
-from app.core.auth import require_permissions, is_authenticated
-from app.core.permissions import API_MOCK_VIEW, API_MOCK_EDIT, AI_TEST_EXECUTE
-from app.core.mock_ai_service import generate_mock_response_body
+from app.core.platform.auth import require_permissions, is_authenticated
+from app.core.platform.permissions import API_MOCK_VIEW, API_MOCK_EDIT, AI_TEST_EXECUTE
+from app.core.llm.mock_ai_service import generate_mock_response_body
 
 router = APIRouter()
 

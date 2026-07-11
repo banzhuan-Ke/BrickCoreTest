@@ -30,7 +30,8 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
 引擎必须使用 **`runner\venv`**，不是系统 Python 或 `runner_client\venv`。
 
 ```powershell
-cd E:\project2026\fastapi_ui_new\runner
+# 进入 BrickCoreRunner 解压目录下的 runner 子目录（开发模式）
+cd <BrickCoreRunner安装目录>\runner
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 

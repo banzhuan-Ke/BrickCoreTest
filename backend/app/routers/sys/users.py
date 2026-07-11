@@ -1,9 +1,9 @@
 import re
-from app.core import auth
+from app.core.platform import auth
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.security import OAuth2PasswordRequestForm
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import USER_VIEW, USER_EDIT
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import USER_VIEW, USER_EDIT
 from app.models.sys import Role
 from app.schemas.sys import UserRoleSchema
 from app.models.sys import User
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/users", tags=["用户管理"])
 
 async def _get_user_permissions(user: User) -> list:
     """获取用户合并后的权限列表（admin/管理员自动拥有全部权限）"""
-    from app.core.permissions import get_user_permissions
+    from app.core.platform.permissions import get_user_permissions
     return await get_user_permissions(user)
 
 
@@ -43,7 +43,7 @@ def _build_user_data(user: User, roles: list = None, permissions: list = None) -
 
 @router.post("/register", summary="用户注册", response_model=RegisterSchemas, status_code=status.HTTP_201_CREATED)
 async def register(item: RegisterForm):
-    from app.core.invite_code_service import validate_and_consume_invite_code
+    from app.core.platform.invite_code_service import validate_and_consume_invite_code
 
     role_ids = await validate_and_consume_invite_code(item.invite_code)
     item.roles = role_ids

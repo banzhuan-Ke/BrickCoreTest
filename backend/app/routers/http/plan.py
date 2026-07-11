@@ -24,13 +24,13 @@ from app.schemas.http import (
     ApiPlanAsyncRunResponse,
     ApiPlanSaveAsTemplateRequest, ApiPlanFromTemplateRequest,
 )
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import API_PLAN_VIEW, API_PLAN_EDIT
-from app.core.notification import NotificationService
-from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import API_PLAN_VIEW, API_PLAN_EDIT
+from app.core.ops.notification import NotificationService
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 from .utils import api_run_result_to_case_display, normalize_plan_item_results
-from app.core.api_report_export import sum_plan_item_results_http_ms
-from app.core.data_tools.inline_tools import ensure_dt_cache
+from app.modules.http.api_report_export import sum_plan_item_results_http_ms
+from app.modules.data_tools.inline_tools import ensure_dt_cache
 
 router = APIRouter(
     tags=["接口测试计划"],
@@ -799,7 +799,7 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
 
     async def _execute_suite_item(item, variables: dict) -> ApiPlanItemRunResult:
         """执行套件类型的 item"""
-        from app.core.api_suite_runner import execute_api_suite_cases
+        from app.modules.http.api_suite_runner import execute_api_suite_cases
 
         item_start = time.time()
         suite = await ApiTestSuite.get_or_none(id=item.suite_id, is_del=False)
@@ -1066,7 +1066,7 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
         bg_item_results: List[ApiPlanItemRunResult] = []
 
         async def _execute_suite_item(item, variables: dict) -> ApiPlanItemRunResult:
-            from app.core.api_suite_runner import execute_api_suite_cases
+            from app.modules.http.api_suite_runner import execute_api_suite_cases
 
             item_start = time.time()
             suite = await ApiTestSuite.get_or_none(id=item.suite_id, is_del=False)
@@ -1353,7 +1353,7 @@ async def batch_delete_plan_records(record_ids: List[int]):
 @router.get("/plan-records/{record_id}/report", summary="导出计划执行报告(HTML)")
 async def export_plan_report(record_id: int):
     """导出计划执行记录为 HTML 报告"""
-    from app.core.api_report_export import generate_api_html_report
+    from app.modules.http.api_report_export import generate_api_html_report
     record = await ApiPlanRunRecord.get_or_none(id=record_id)
     if not record:
         raise HTTPException(status_code=404, detail="记录不存在")

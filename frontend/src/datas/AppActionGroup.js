@@ -8,6 +8,11 @@ const appManageSteps = [
         params: { app_id: '', stop: false },
     },
     {
+        keyword: '启动微信',
+        method: 'launch_wechat',
+        params: { stop: false },
+    },
+    {
         keyword: '停止应用',
         method: 'terminate_app',
         params: { app_id: '' },
@@ -135,6 +140,22 @@ const assertSteps = [
         method: 'assert_not_exists',
         params: {
             locator: { by: 'resource_id', value: '' },
+            timeout: 10,
+        },
+    },
+    {
+        keyword: '断言图像存在',
+        method: 'assert_image_exists',
+        params: {
+            locator: { by: 'image', value: '', threshold: 0.8 },
+            timeout: 10,
+        },
+    },
+    {
+        keyword: '断言图像不存在',
+        method: 'assert_image_not_exists',
+        params: {
+            locator: { by: 'image', value: '', threshold: 0.8 },
             timeout: 10,
         },
     },

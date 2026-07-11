@@ -4,15 +4,21 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.core.auth import get_current_username, require_permissions
-from app.core.permissions import UI_CASE_EDIT, UI_CASE_VIEW
-from app.core.ui_step_expand import FragmentExpandError, expand_fragment_refs
-from app.core.ui_fragment_refs import collect_fragment_references
+from app.core.platform.auth import get_current_username, require_permissions
+from app.core.platform.permissions import UI_CASE_EDIT, UI_CASE_VIEW
+from app.modules.ui.ui_step_expand import FragmentExpandError, expand_fragment_refs
+from app.modules.ui.ui_fragment_refs import collect_fragment_references
+from app.modules.ui.ui_list_query import load_json_array_length
 from app.models.sys import Project
 from app.models.ui import UiStepFragment
 from app.schemas.ai import StandardResponse
 
 router = APIRouter(prefix="/fragments", tags=["UI步骤片段"])
+
+_FRAGMENT_LIST_FIELDS = (
+    "id", "project_id", "name", "description", "tags", "version",
+    "username", "update_by", "create_time", "update_time",
+)
 
 
 def _fragment_to_dict(row: UiStepFragment) -> dict[str, Any]:
@@ -25,6 +31,23 @@ def _fragment_to_dict(row: UiStepFragment) -> dict[str, Any]:
         "tags": row.tags or "",
         "version": row.version,
         "step_count": len(row.steps or []),
+        "username": row.username,
+        "update_by": row.update_by or row.username,
+        "create_time": row.create_time.isoformat() if row.create_time else None,
+        "update_time": row.update_time.isoformat() if row.update_time else None,
+    }
+
+
+def _fragment_list_item(row: UiStepFragment, step_count: int) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "project_id": row.project_id,
+        "name": row.name,
+        "description": row.description or "",
+        "steps": [],
+        "tags": row.tags or "",
+        "version": row.version,
+        "step_count": step_count,
         "username": row.username,
         "update_by": row.update_by or row.username,
         "create_time": row.create_time.isoformat() if row.create_time else None,
@@ -82,13 +105,25 @@ async def list_fragments(
     if tag:
         qs = qs.filter(tags__icontains=tag.strip())
     total = await qs.count()
-    rows = await qs.order_by("-update_time").offset((page - 1) * size).limit(size)
+    rows = await (
+        qs.order_by("-update_time")
+        .offset((page - 1) * size)
+        .limit(size)
+        .only(*_FRAGMENT_LIST_FIELDS)
+        .all()
+    )
+    step_count_map = await load_json_array_length(
+        "ui_step_fragment", [row.id for row in rows], "steps",
+    )
     return StandardResponse(
         data={
             "total": total,
             "page": page,
             "size": size,
-            "items": [_fragment_to_dict(r) for r in rows],
+            "items": [
+                _fragment_list_item(row, step_count_map.get(row.id, 0))
+                for row in rows
+            ],
         }
     )
 

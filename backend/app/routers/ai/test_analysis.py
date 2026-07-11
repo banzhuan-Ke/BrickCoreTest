@@ -12,26 +12,26 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW
-from app.core.ai_prompts import PromptManager, append_extra_instructions
-from app.core.ai_usage_log import log_ai_usage
-from app.core.requirement_document import (
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW
+from app.modules.ai.ai_prompts import PromptManager, append_extra_instructions
+from app.core.llm.ai_usage_log import log_ai_usage
+from app.modules.ai.requirement_document import (
     build_interleaved_content,
     collect_image_indices,
     estimate_scope,
     resolve_sections,
     truncate_scope_text,
 )
-from app.core.requirement_storage import load_images_from_meta
+from app.modules.ai.requirement_storage import load_images_from_meta
 from urllib.parse import quote
 
-from app.core.case_naming import (
+from app.core.case.case_naming import (
     apply_naming_to_cases,
     build_section_context,
     format_naming_rules_for_prompt,
 )
-from app.core.test_analysis import (
+from app.modules.ai.test_analysis import (
     build_echarts_tree,
     build_mindmap_tree,
     build_xmind_bytes,
@@ -51,7 +51,7 @@ from app.core.test_analysis import (
     resolve_mindmap_tree,
     test_points_cases_source_ref,
 )
-from app.core.zentao_bindings import apply_bindings_to_case_fields, build_requirement_case_extra, validate_bindings
+from app.modules.ai.zentao_bindings import apply_bindings_to_case_fields, build_requirement_case_extra, validate_bindings
 from app.models.ai import (
     AiGenerateRecord,
     AiRequirement,
@@ -90,6 +90,8 @@ class GenerateTestPointsRequest(BaseModel):
     replace_all: bool = False
     batch_name: str = ""
     supplement: bool = False
+    knowledge_folder_ids: Optional[list[int]] = Field(default=None, description="引用资料库文件夹")
+    knowledge_document_ids: Optional[list[int]] = Field(default=None, description="引用资料库文档")
 
 
 class UpdateTestPointBody(BaseModel):
@@ -127,6 +129,8 @@ class GenerateCasesFromTestPointsRequest(BaseModel):
         max_length=2000,
         description="用户额外要求，优先于默认 Prompt 规则",
     )
+    knowledge_folder_ids: Optional[list[int]] = Field(default=None, description="引用资料库文件夹")
+    knowledge_document_ids: Optional[list[int]] = Field(default=None, description="引用资料库文档")
 
 
 class SchemeEnvironmentHints(BaseModel):
@@ -149,6 +153,8 @@ class GenerateSchemeRequest(BaseModel):
     title: str = ""
     include_unconfirmed_points: bool = False
     environment_hints: SchemeEnvironmentHints = Field(default_factory=SchemeEnvironmentHints)
+    knowledge_folder_ids: Optional[list[int]] = Field(default=None, description="引用资料库文件夹")
+    knowledge_document_ids: Optional[list[int]] = Field(default=None, description="引用资料库文档")
 
 
 class UpdateSchemeBody(BaseModel):
@@ -231,7 +237,13 @@ async def _get_requirement(req_id: int, project_id: int) -> AiRequirement:
     return req
 
 
-async def _build_scoped_content(req: AiRequirement, scope_section_ids: list[str], vision_config_id: Optional[int]):
+async def _build_scoped_content(
+    req: AiRequirement,
+    scope_section_ids: list[str],
+    vision_config_id: Optional[int],
+    *,
+    username: str = "",
+):
     meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
     blocks = meta.get("blocks") or []
     all_sections = meta.get("sections") or []
@@ -274,6 +286,9 @@ async def _build_scoped_content(req: AiRequirement, scope_section_ids: list[str]
             blocks,
             selected_sections,
             scoped_image_indices,
+            project_id=req.project_id,
+            username=username,
+            requirement_id=req.id,
         )
         vision_report.update(vision_detail)
         total_tokens += v_tokens
@@ -725,7 +740,7 @@ async def generate_test_points(
     batch_ref = _batch_source_ref(body.batch_name)
 
     scoped_content, vision_report, scope_est, selected_sections, total_tokens = await _build_scoped_content(
-        req, body.scope_section_ids, body.vision_config_id
+        req, body.scope_section_ids, body.vision_config_id, username=user_info.get("username", "")
     )
 
     if body.replace_all:
@@ -758,6 +773,16 @@ async def generate_test_points(
             user_prompt += f"\n\n【已有测试点 · 请勿重复】\n{existing_titles}"
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    from app.modules.knowledge.knowledge_context import append_knowledge_context_to_prompt
+
+    user_prompt, _knowledge_meta = await append_knowledge_context_to_prompt(
+        user_prompt,
+        project_id,
+        knowledge_folder_ids=body.knowledge_folder_ids,
+        knowledge_document_ids=body.knowledge_document_ids,
+        scene="test_points",
+    )
 
     try:
         resp = await _call_llm(system_prompt, user_prompt, gen_config, min_timeout=600, max_retries=2)
@@ -959,6 +984,16 @@ async def generate_cases_from_test_points(
         user_prompt = append_extra_instructions(user_prompt, extra_instructions)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    from app.modules.knowledge.knowledge_context import append_knowledge_context_to_prompt
+
+    user_prompt, _knowledge_meta = await append_knowledge_context_to_prompt(
+        user_prompt,
+        project_id,
+        knowledge_folder_ids=body.knowledge_folder_ids,
+        knowledge_document_ids=body.knowledge_document_ids,
+        scene="case_generate",
+    )
 
     try:
         resp = await _call_llm(system_prompt, user_prompt, gen_config, min_timeout=600, max_retries=2)
@@ -1264,6 +1299,16 @@ async def generate_scheme(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    from app.modules.knowledge.knowledge_context import append_knowledge_context_to_prompt
+
+    user_prompt, _knowledge_meta = await append_knowledge_context_to_prompt(
+        user_prompt,
+        project_id,
+        knowledge_folder_ids=body.knowledge_folder_ids,
+        knowledge_document_ids=body.knowledge_document_ids,
+        scene="test_scheme",
+    )
 
     try:
         resp = await _call_llm(system_prompt, user_prompt, gen_config, min_timeout=600, max_retries=2)

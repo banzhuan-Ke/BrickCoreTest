@@ -7,8 +7,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from app.core.assistant_agent import build_assistant_ctx, run_assistant_chat, run_assistant_confirm
-from app.core.assistant_session import (
+from app.modules.assistant.assistant_agent import build_assistant_ctx, run_assistant_chat, run_assistant_confirm
+from app.modules.assistant.assistant_session import (
     clear_session,
     clear_session_messages,
     create_session,
@@ -17,8 +17,8 @@ from app.core.assistant_session import (
     load_session_messages,
     update_session_title,
 )
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import AI_TEST_VIEW
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import AI_TEST_VIEW
 from app.schemas.ai import StandardResponse
 
 logger = logging.getLogger(__name__)
@@ -147,11 +147,6 @@ QUICK_PROMPTS = [
         "message": "列出当前项目的 App 用例和在线 App Runner 设备（含 adb 设备），并说明如何执行单条 App 用例。",
     },
     {
-        "key": "qa_eval",
-        "label": "问答评测",
-        "message": "列出当前项目的问答准确性评测集及被测 API 配置，并说明如何提交跑批。",
-    },
-    {
         "key": "data_factory",
         "label": "数据工厂",
         "message": "列出当前项目的数据工厂数据源和 SQL 模板（setup/teardown），说明各环境配置情况。",
@@ -175,12 +170,7 @@ QUICK_PROMPTS = [
     dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
 )
 async def get_quick_prompts():
-    from app.core.edition import qa_eval_feature_enabled
-
-    items = QUICK_PROMPTS
-    if not qa_eval_feature_enabled():
-        items = [p for p in QUICK_PROMPTS if p.get("key") != "qa_eval"]
-    return StandardResponse(data={"items": items})
+    return StandardResponse(data={"items": QUICK_PROMPTS})
 
 
 @router.get(

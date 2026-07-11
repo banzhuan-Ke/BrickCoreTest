@@ -34,10 +34,12 @@
             <el-radio-group v-model="form.protocol">
               <el-radio-button value="http">HTTP</el-radio-button>
               <el-radio-button value="websocket">WebSocket</el-radio-button>
+              <el-radio-button value="graphql">GraphQL</el-radio-button>
+              <el-radio-button value="grpc">gRPC</el-radio-button>
             </el-radio-group>
           </el-form-item>
         </el-col>
-        <el-col :span="6" v-if="form.protocol !== 'websocket'">
+        <el-col :span="6" v-if="form.protocol === 'http'">
           <el-form-item label="请求方法" prop="method">
             <el-select v-model="form.method" placeholder="Method">
               <el-option label="GET" value="GET"/>
@@ -50,9 +52,9 @@
             </el-select>
           </el-form-item>
         </el-col>
-        <el-col :span="form.protocol === 'websocket' ? 16 : 10">
+        <el-col :span="form.protocol === 'websocket' || form.protocol === 'graphql' || form.protocol === 'grpc' ? 16 : 10">
           <el-form-item label="接口路径" prop="path">
-            <el-input v-model="form.path" :placeholder="form.protocol === 'websocket' ? '/ws/echo 或 ws://host/ws' : '/api/v1/users'"/>
+            <el-input v-model="form.path" :placeholder="pathPlaceholder"/>
           </el-form-item>
         </el-col>
       </el-row>
@@ -146,9 +148,58 @@
         <div class="section-title"><span>默认 WS 步骤（用例可覆盖）</span></div>
         <WsStepsEditor v-model="form.ws_config.steps" />
       </template>
+
+      <template v-if="form.protocol === 'graphql'">
+        <div class="section-title"><span>GraphQL 请求体（query / variables）</span></div>
+        <JsonTextarea
+          v-model="bodyText"
+          :rows="10"
+          placeholder='{"query":"query { ... }","variables":{}}'
+          json-mode
+          show-compact
+        />
+        <div class="field-hint">执行时以 POST JSON 发送到 GraphQL 端点；用例 request_body 可覆盖。</div>
+      </template>
+
+      <template v-if="form.protocol === 'grpc'">
+        <div class="section-title"><span>gRPC 配置</span></div>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="full_method">
+              <el-input v-model="form.grpc_config.full_method" placeholder="/helloworld.Greeter/SayHello" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="6">
+            <el-form-item label="TLS">
+              <el-switch v-model="form.grpc_config.use_tls" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="service">
+              <el-input v-model="form.grpc_config.service" placeholder="helloworld.Greeter（可选）" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="method">
+              <el-input v-model="form.grpc_config.method" placeholder="SayHello（可选）" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <div class="section-title"><span>默认请求 JSON（用例可覆盖）</span></div>
+        <JsonTextarea
+          v-model="bodyText"
+          :rows="8"
+          placeholder='{"name":"world"}'
+          json-mode
+          show-compact
+        />
+        <div class="field-hint">需目标 gRPC 服务开启 Server Reflection；基础 URL 填 host:port。</div>
+      </template>
       
       <!-- 请求体 -->
-      <template v-if="form.protocol !== 'websocket' && ['POST', 'PUT', 'PATCH'].includes(form.method)">
+      <template v-if="form.protocol === 'http' && ['POST', 'PUT', 'PATCH'].includes(form.method)">
         <div class="section-title">
           <span>请求体 (Body)</span>
           <el-radio-group v-model="form.body_type" size="small">
@@ -669,6 +720,26 @@ const loadCatalogTree = async () => {
 
 const isEdit = computed(() => !!props.data)
 
+const pathPlaceholder = computed(() => {
+  switch (form.protocol) {
+    case 'websocket':
+      return '/ws/echo 或 ws://host/ws'
+    case 'graphql':
+      return '/graphql 或完整 HTTP 地址'
+    case 'grpc':
+      return '留空或 /（基础 URL 填 host:port）'
+    default:
+      return '/api/v1/users'
+  }
+})
+
+watch(() => form.protocol, (p) => {
+  if (p === 'websocket') form.method = 'WS'
+  else if (p === 'graphql') form.method = 'POST'
+  else if (p === 'grpc') form.method = 'RPC'
+  else if (form.method === 'WS' || form.method === 'RPC') form.method = 'GET'
+})
+
 const form = reactive({
   name: '',
   catalog_id: null,
@@ -683,6 +754,7 @@ const form = reactive({
   body_type: 'json',
   body_fields: [],
   ws_config: { steps: [] },
+  grpc_config: { full_method: '', service: '', method: '', use_tls: false },
   response_schema: {}
 })
 
@@ -751,6 +823,7 @@ const resetForm = () => {
   form.body_type = 'json'
   form.body_fields = [{ name: '', value: '', field_type: 'text', file_name: '', mime_type: 'application/octet-stream', file_key: '', file_bucket: '', description: '' }]
   form.ws_config = { steps: [] }
+  form.grpc_config = { full_method: '', service: '', method: '', use_tls: false }
   form.response_schema = {}
   bodyText.value = ''
 }
@@ -785,6 +858,12 @@ const fetchApiDetail = async (apiId) => {
       form.ws_config = val.ws_config && Array.isArray(val.ws_config.steps)
         ? { steps: val.ws_config.steps.map(s => ({ ...s })) }
         : { steps: [] }
+      form.grpc_config = {
+        full_method: val.grpc_config?.full_method || '',
+        service: val.grpc_config?.service || '',
+        method: val.grpc_config?.method || '',
+        use_tls: !!val.grpc_config?.use_tls,
+      }
       form.response_schema = val.response_schema || {}
       syncBodyText()
     }
@@ -836,6 +915,12 @@ watch(() => props.data, (val) => {
     form.ws_config = val.ws_config && Array.isArray(val.ws_config.steps)
       ? { steps: val.ws_config.steps.map(s => ({ ...s })) }
       : { steps: [] }
+    form.grpc_config = {
+      full_method: val.grpc_config?.full_method || '',
+      service: val.grpc_config?.service || '',
+      method: val.grpc_config?.method || '',
+      use_tls: !!val.grpc_config?.use_tls,
+    }
     form.response_schema = val.response_schema || {}
     syncBodyText()
   } else {
@@ -895,7 +980,18 @@ const handleSave = async () => {
 
   let parsedBody = null
   const text = (bodyText.value || '').trim()
-  if (form.body_type === 'form-data') {
+  if (form.protocol === 'graphql' || form.protocol === 'grpc') {
+    if (text) {
+      try {
+        parsedBody = JSON.parse(text)
+      } catch {
+        ElMessage.error('请求 JSON 格式错误，请检查')
+        return
+      }
+    } else {
+      parsedBody = {}
+    }
+  } else if (form.body_type === 'form-data') {
     parsedBody = null
   } else if (isStructuredBodyType(form.body_type)) {
     if (text) {

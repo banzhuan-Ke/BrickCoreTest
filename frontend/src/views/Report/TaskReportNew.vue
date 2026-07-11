@@ -6,19 +6,31 @@
         <el-button type="success" :icon="Download" @click="showExportDialog">
           导出报告
         </el-button>
-        <el-button
-          v-if="canAiAnalyze && ((taskRunDetail?.fail || 0) + (taskRunDetail?.error || 0) > 0)"
-          type="warning"
-          :loading="batchAnalyzing"
-          @click="runBatchAnalyze"
-        >
-          批量 AI 分析失败
-        </el-button>
+        <IterationReportShortcut
+          v-if="taskRunDetail?.id"
+          :record-id="taskRunDetail.id"
+          report-type="ui_task"
+          :title="taskRunDetail.task_name"
+        />
+        <ReportKnowledgeBridge
+          v-if="taskRunDetail?.id && proStore.projectInfo?.id"
+          :project-id="proStore.projectInfo.id"
+          report-type="ui_task"
+          :record-id="taskRunDetail.id"
+          :title="taskRunDetail.task_name"
+        />
       </div>
     </template>
     
     <template #main>
       <ReportSummaryPanel report-type="ui_task" :record-id="Number(task_id)" />
+      <ReportFailureBatchBar
+        v-if="canAiAnalyze && ((taskRunDetail?.fail || 0) + (taskRunDetail?.error || 0) > 0)"
+        :project-id="proStore.projectInfo?.id"
+        report-type="ui_task"
+        :record-id="taskRunDetail.id"
+        :record-title="taskRunDetail.task_name"
+      />
       <!-- 任务概览 -->
       <div class="task-overview">
         <div class="task-title">{{ taskRunDetail.task_name }}</div>
@@ -437,7 +449,9 @@ import { UserStore } from "@/stores/module/UserStore.js"
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
-import { aiAnalyzeApi } from '@/api/modules/ai.js'
+import ReportFailureBatchBar from '@/components/ReportFailureBatchBar.vue'
+import ReportKnowledgeBridge from '@/components/ReportKnowledgeBridge.vue'
+import IterationReportShortcut from '@/components/IterationReportShortcut.vue'
 import { fileApi } from '@/api/modules/sys'
 
 const router = useRouter()
@@ -448,25 +462,6 @@ const proStore = ProjectStore()
 const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
 const canEditCase = computed(() => uStore.hasPermission('ui_case:edit'))
 const canEditSuite = computed(() => uStore.hasPermission('ui_suite:edit'))
-const batchAnalyzing = ref(false)
-
-const runBatchAnalyze = async () => {
-  if (!proStore.projectInfo?.id || !task_id) return
-  batchAnalyzing.value = true
-  try {
-    const res = await aiAnalyzeApi.analyzeFailureBatch(
-      { report_type: 'ui_task', record_id: Number(task_id), limit: 5 },
-      proStore.projectInfo.id
-    )
-    if (res.data?.code === 200) {
-      ElMessage.success(res.data.message || '批量分析完成')
-    }
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '批量分析失败')
-  } finally {
-    batchAnalyzing.value = false
-  }
-}
 
 const task_id = route.params.id
 const loading = ref(false)

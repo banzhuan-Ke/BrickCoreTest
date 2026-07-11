@@ -142,6 +142,7 @@
 <script setup>
 import {ProjectStore} from "@/stores/module/ProjectStore"
 import {UserStore} from '@/stores/module/UserStore'
+import { resetMenuExpandedSession } from '@/datas/Menu'
 import {useRouter} from 'vue-router'
 import screenfull from "screenfull"
 import {ref, onMounted, onBeforeUnmount, computed} from 'vue'
@@ -184,6 +185,7 @@ function logout() {
           duration: 1500
         })
         // 彻底清理用户状态和项目状态（保留界面风格偏好）
+        resetMenuExpandedSession()
         uStore.clearSession()
         proStore.$reset()
         localStorage.removeItem('projectStore')

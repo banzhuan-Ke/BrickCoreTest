@@ -10,17 +10,17 @@ from app.models.ui import (
     Task, Suite, Case,
     UiPlanExecution, UiSuiteExecution, UiCaseExecution
 )
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import UI_RECORD_EDIT, UI_RECORD_VIEW
-from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
-from app.core.platform_settings_service import (
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import UI_RECORD_EDIT, UI_RECORD_VIEW
+from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.core.platform.platform_settings_service import (
     delete_ui_case_execution,
     get_ui_case_record_delete_mode,
     restore_ui_case_execution,
 )
-from app.core.report_export import generate_html_report, ImageExportOptions
-from app.core.ui_case_status import apply_ui_case_status_filter
-from app.core.minio_client import minio_client, is_minio_storage
+from app.core.shared.report_export import generate_html_report, ImageExportOptions
+from app.modules.ui.ui_case_status import apply_ui_case_status_filter
+from app.core.shared.media_presign import presign_media_urls_in_result
 from app.schemas.ui import SuiteResultSchemas, TaskResultSchemas
 
 # 异步导出任务缓存（内存，24h TTL）
@@ -49,39 +49,8 @@ EXPORT_DIR = os.path.join(BASE_DIR, "static", "exports")
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
 
-def _presign_media_urls(result_data) -> dict:
-    """将 result_data 中的 MinIO 静态 URL 替换为预签名 URL"""
-    if not result_data or not is_minio_storage():
-        return result_data
-    
-    # 兼容 result_data 为 JSON 字符串的情况
-    if isinstance(result_data, str):
-        try:
-            result_data = json.loads(result_data)
-        except:
-            return result_data
-
-    def presign(url):
-        if not url or not isinstance(url, str):
-            return url
-        # 只处理 MinIO 外部地址的 URL
-        bucket = minio_client.bucket_name
-        marker = f"/{bucket}/"
-        if marker not in url:
-            return url
-        filename = url.split(marker, 1)[-1]
-        signed = minio_client.get_presigned_url(filename, expires=7200)
-        return signed or url
-
-    data = dict(result_data)
-    if "img" in data:
-        data["img"] = presign(data["img"])
-    if "video_url" in data:
-        data["video_url"] = presign(data["video_url"])
-    for step in data.get("steps", []):
-        if isinstance(step, dict) and "screenshot" in step:
-            step["screenshot"] = presign(step["screenshot"])
-    return data
+def _presign_media_urls(result_data):
+    return presign_media_urls_in_result(result_data)
 
 router = APIRouter(
     prefix="/records",

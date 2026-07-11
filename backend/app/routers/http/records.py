@@ -5,15 +5,15 @@ from fastapi import APIRouter, HTTPException, Depends, Query, status
 from fastapi.responses import HTMLResponse
 
 from app.models.http import ApiSuiteRunRecord, ApiRunRecord, ApiPlanRunRecord
-from app.core.auth import is_authenticated, require_permissions
-from app.core.permissions import API_RECORD_VIEW
-from app.core.api_report_export import (
+from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import API_RECORD_VIEW
+from app.modules.http.api_report_export import (
     generate_api_html_report,
     sum_http_response_time_ms,
     sum_plan_item_results_http_ms,
     resolve_http_response_time,
 )
-from app.core.notification import NotificationService
+from app.core.ops.notification import NotificationService
 
 # 导入 schemas
 from pydantic import BaseModel, Field

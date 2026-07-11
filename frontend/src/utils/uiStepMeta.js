@@ -22,6 +22,8 @@ const ASSERTION_METHODS = new Set([
   'kw_assert_editable',
   'kw_assert_focused',
   'kw_assert_element_order',
+  'kw_assert_image',
+  'kw_assert_image_not_exists',
 ])
 
 /** method -> 有序可见参数列表（未列出的 params 字段不展示） */
@@ -46,6 +48,10 @@ export const UI_STEP_PARAM_ORDER = {
   drag_and_drop: ['start_selector', 'end_selector', 'source_position_x', 'source_position_y', 'target_position_x', 'target_position_y', 'timeout'],
   long_click_element: ['locator', 'delay'],
   upload_file: ['locator'],
+  click_by_image: ['template', 'threshold'],
+  wait_for_image: ['template', 'threshold'],
+  kw_assert_image: ['template', 'threshold'],
+  kw_assert_image_not_exists: ['template', 'threshold'],
   mouse_click: ['x', 'y', 'button', 'count'],
   move_mouse: ['x', 'y'],
   mouse_down: ['button'],
@@ -158,6 +164,22 @@ export const UI_STEP_PARAM_TOOLTIPS = {
   drag_and_drop: DRAG_DROP_TOOLTIPS,
   frame_drag_and_drop: DRAG_DROP_TOOLTIPS,
   kw_assert_element_order: ELEMENT_ORDER_TOOLTIPS,
+  click_by_image: {
+    template: 'MinIO 对象键（可上传识别图）；固定 viewport 下匹配小图并点击',
+    threshold: '相似度阈值 0.1～0.99，默认 0.8',
+  },
+  wait_for_image: {
+    template: '等待页面上出现与模板匹配的区域',
+    threshold: '相似度阈值，默认 0.8',
+  },
+  kw_assert_image: {
+    template: '断言当前页面能匹配到模板图像',
+    threshold: '相似度阈值，默认 0.8',
+  },
+  kw_assert_image_not_exists: {
+    template: '断言当前页面不能匹配到模板图像（如弹窗已关闭、图标已消失）',
+    threshold: '相似度阈值，默认 0.8',
+  },
 }
 
 export function isAssertionMethod(method) {

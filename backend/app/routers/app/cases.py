@@ -4,12 +4,12 @@ import copy
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from app.core.auth import get_current_username, is_authenticated, require_permissions
-from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
-from app.core.permissions import APP_CASE_EDIT, APP_CASE_VIEW
-from app.core.ui_project_guard import assert_user_project_member, assert_user_project_viewer
-from app.core.case_execution_hints import build_execution_hints_response, resolve_latest_failure_record
-from app.core.app_locator_validate import validate_case_steps_driver_mode_for_project
+from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
+from app.core.platform.permissions import APP_CASE_EDIT, APP_CASE_VIEW
+from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
+from app.core.case.case_execution_hints import build_execution_hints_response, resolve_latest_failure_record
+from app.modules.app.app_locator_validate import validate_case_steps_driver_mode_for_project
 from app.models.app import AppCase, AppCaseExecution
 from app.models.sys import Project
 from app.schemas.app import AddAppCaseForm, AppCaseSchemas, UpdateAppCaseForm

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from app.core.stream_phase import normalize_perf_mode, STREAM_BURST_MODE
-from app.core.perf_journey import JOURNEY_FIXED_MODE, JOURNEY_LOOP_MODE, normalize_journey_config
+from app.modules.stream_phase import normalize_perf_mode, STREAM_BURST_MODE
+from app.modules.perf.perf_journey import JOURNEY_FIXED_MODE, JOURNEY_LOOP_MODE, normalize_journey_config
 
 
 def normalize_distribution_mode(mode: Optional[str]) -> str:

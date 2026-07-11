@@ -9,9 +9,9 @@ import uuid
 from typing import Dict, Any, List
 from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
-from app.core.minio_client import minio_client, is_minio_storage
-from app.core.auth import is_authenticated
-from app.core.config import AVATAR_DIR
+from app.core.infra.minio_client import minio_client, is_minio_storage
+from app.core.platform.auth import is_authenticated
+from app.core.platform.config import AVATAR_DIR
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/files", tags=["文件管理"])

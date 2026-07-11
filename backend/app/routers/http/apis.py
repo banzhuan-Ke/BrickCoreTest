@@ -20,15 +20,26 @@ from app.schemas.http import (
     CurlImportRequest, CurlImportResponse, CurlParseRequest, CurlParseResponse,
     ApiBodyFileUploadResponse
 )
-from app.core.catalog_utils import apply_catalog_filter, resolve_catalog
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.models.http import ApiTestCase, ApiRunRecord
-from app.core.auth import is_authenticated, require_permissions, get_current_username
-from app.core.permissions import API_MANAGE_VIEW, API_MANAGE_EDIT
-from app.core.minio_client import minio_client
-from app.core.config import API_FILE_BUCKET
+from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.permissions import API_MANAGE_VIEW, API_MANAGE_EDIT
+from app.core.infra.minio_client import minio_client
+from app.core.platform.config import API_FILE_BUCKET
 from app.models.sys import Project, Environment
 
 router = APIRouter(tags=["接口自动化"], dependencies=[Depends(is_authenticated), Depends(require_permissions(API_MANAGE_VIEW))])
+
+
+def _normalize_api_protocol(protocol: Optional[str], method: Optional[str]) -> tuple[str, str]:
+    p = (protocol or "http").lower()
+    if p == "websocket":
+        return p, "WS"
+    if p == "graphql":
+        return p, "POST"
+    if p == "grpc":
+        return p, "RPC"
+    return p, (method or "GET").upper()
 
 
 # ============ 接口管理 ============
@@ -46,12 +57,13 @@ async def create_api(item: ApiDefinitionCreate, username: str = Depends(get_curr
     if item.catalog_id:
         await resolve_catalog(item.project_id, item.catalog_id)
     
+    proto, method = _normalize_api_protocol(item.protocol, item.method)
     api = await ApiDefinition.create(
         name=item.name,
         project_id=item.project_id,
         catalog_id=item.catalog_id,
-        protocol=(item.protocol or "http").lower(),
-        method=item.method.upper() if (item.protocol or "http") != "websocket" else "WS",
+        protocol=proto,
+        method=method,
         path=item.path,
         description=item.description,
         base_url=item.base_url,
@@ -62,6 +74,7 @@ async def create_api(item: ApiDefinitionCreate, username: str = Depends(get_curr
         body_type=item.body_type,
         body_fields=item.body_fields if hasattr(item, 'body_fields') else [],
         ws_config=item.ws_config if item.ws_config else {},
+        grpc_config=item.grpc_config if getattr(item, "grpc_config", None) else {},
         response_schema=item.response_schema,
         create_by=username,
         update_by=username,
@@ -84,8 +97,8 @@ async def copy_api_to_project(
     body: CopyApiRequest,
     user_info: dict = Depends(require_permissions(API_MANAGE_EDIT)),
 ):
-    from app.core.cross_project_copy import copy_api_definition_to_project, ensure_target_project, resolve_target_catalog
-    from app.core.ui_project_guard import assert_user_project_member
+    from app.core.shared.cross_project_copy import copy_api_definition_to_project, ensure_target_project, resolve_target_catalog
+    from app.modules.ui.ui_project_guard import assert_user_project_member
 
     api = await ApiDefinition.get_or_none(id=api_id, is_del=False)
     if not api:
@@ -156,6 +169,7 @@ async def get_apis(
             "body_type": api.body_type,
             "body_fields": api.body_fields or [],
             "ws_config": getattr(api, "ws_config", None) or {},
+            "grpc_config": getattr(api, "grpc_config", None) or {},
             "response_schema": api.response_schema,
             "version": api.version,
             "source": api.source,
@@ -225,6 +239,7 @@ async def get_api_detail(api_id: int):
         "body_type": api.body_type,
         "body_fields": api.body_fields,
         "ws_config": getattr(api, "ws_config", None) or {},
+        "grpc_config": getattr(api, "grpc_config", None) or {},
         "response_schema": api.response_schema,
         "version": api.version,
         "source": api.source,
@@ -259,9 +274,10 @@ async def update_api(api_id: int, item: ApiDefinitionUpdate, username: str = Dep
     })
     
     # 更新字段
+    proto, method = _normalize_api_protocol(item.protocol, item.method)
     api.name = item.name
-    api.protocol = (item.protocol or "http").lower()
-    api.method = item.method.upper() if api.protocol != "websocket" else "WS"
+    api.protocol = proto
+    api.method = method
     api.path = item.path
     api.description = item.description
     api.base_url = item.base_url
@@ -273,6 +289,7 @@ async def update_api(api_id: int, item: ApiDefinitionUpdate, username: str = Dep
     api.body_type = item.body_type
     api.body_fields = item.body_fields if hasattr(item, 'body_fields') else []
     api.ws_config = item.ws_config if item.ws_config else {}
+    api.grpc_config = item.grpc_config if getattr(item, "grpc_config", None) else {}
     api.response_schema = item.response_schema
     api.catalog_id = item.catalog_id
     api.version = api.version + 1
@@ -868,8 +885,8 @@ async def debug_api(item: ApiDebugRequest):
         build_form_data_multipart,
         prepare_httpx_headers,
     )
-    from app.core.variable_resolver import VariableResolver
-    from app.core.header_merge import merge_request_headers
+    from app.core.case.variable_resolver import VariableResolver
+    from app.core.shared.header_merge import merge_request_headers
     from app.models.sys import Environment, Project
     
     try:
@@ -905,7 +922,7 @@ async def debug_api(item: ApiDebugRequest):
                 variables = {**project.global_vars, **variables}
 
         if project_id and item.env_id:
-            from app.core.data_tools.tag_service import merge_execution_variables
+            from app.modules.data_tools.tag_service import merge_execution_variables
             variables = await merge_execution_variables(project_id, item.env_id, variables)
 
         var_resolver = VariableResolver(variables)

@@ -37,30 +37,7 @@
   border-radius: 8px;
   transition: background 0.2s ease;
 
-  &::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 10px;
-    bottom: 10px;
-    width: 3px;
-    border-radius: 0 2px 2px 0;
-    background: var(--el-color-primary);
-    opacity: 0;
-    transform: scaleY(0.6);
-    transition: opacity 0.2s ease, transform 0.2s ease;
-  }
-
-  &.is-expanded.is-current {
-    background: rgba(75, 111, 255, 0.055);
-
-    &::before {
-      opacity: 1;
-      transform: scaleY(1);
-    }
-  }
-
-  &.is-current:not(.is-expanded) .menu-group-header {
+  &.is-current .menu-group-header {
     .group-label {
       color: var(--el-color-primary);
       font-weight: 600;
@@ -136,21 +113,6 @@
   }
 }
 
-.menu-group.is-expanded.is-current .menu-group-header .group-chevron.is-open {
-  color: var(--el-color-primary);
-}
-
-.menu-group.is-expanded.is-current .menu-group-header {
-  .group-icon-wrap,
-  .group-label {
-    color: var(--el-color-primary);
-  }
-
-  .group-label {
-    font-weight: 600;
-  }
-}
-
 .menu-group-panel {
   overflow: hidden;
   transition: max-height 0.26s ease, opacity 0.2s ease, padding 0.2s ease;
@@ -202,7 +164,7 @@
     }
 
     &.is-active {
-      background: transparent;
+      background: rgba(15, 23, 42, 0.05);
       color: var(--el-color-primary);
       font-weight: 500;
       box-shadow: none;
@@ -259,16 +221,12 @@
 }
 
 html.theme-pro {
-  .menu-group.is-expanded.is-current {
-    background: rgba(75, 111, 255, 0.06);
-  }
-
   .menu-group-header:hover {
     background: rgba(0, 0, 0, 0.03);
   }
 
   .menu-group-panel :deep(.el-menu-item.is-active) {
-    background: transparent;
+    background: rgba(15, 23, 42, 0.05);
     color: var(--el-color-primary);
   }
 }

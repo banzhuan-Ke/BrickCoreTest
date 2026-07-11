@@ -51,18 +51,6 @@ git pull
 docker compose up -d nginx
 ```
 
-## 生成文档（docs-site 变更后）
+## 文档内容
 
-```powershell
-python scripts/build_showcase_docs.py
-# 或
-.\scripts\build-showcase-docs.ps1
-```
-
-会从 `docs-site/` + `scripts/ce-stubs/docs-*.md` 导出到 `showcase/docs/content/`。`sync-to-ce.ps1` 结束时也会自动执行。
-
-## 维护（Pro → CE）
-
-1. 改 `showcase/`、`docs-site/` 后运行上一节生成脚本
-2. `.\scripts\sync-to-ce.ps1 -CeRoot E:\project2026\fastapi-ui-ce`
-3. CE push；演示机 `git pull`
+`showcase/docs/content/` 已与 `docs-site/` 内置文档同步打包进仓库，克隆后即可使用，无需额外生成步骤。
