@@ -72,6 +72,7 @@ class MQProducer:
         record_session_id=None,
         case_execution_id=None,
         debug_session_id=None,
+        stop_all_on_device=False,
     ):
         """
         发送停止执行消息到指定设备
@@ -90,6 +91,32 @@ class MQProducer:
             "record_session_id": record_session_id,
             "case_execution_id": case_execution_id,
             "debug_session_id": debug_session_id,
+            "stop_all_on_device": bool(stop_all_on_device),
+        }
+        msg = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        if self.connection is None or self.channel is None or self.connection.is_closed or self.channel.is_closed:
+            self.reconnect()
+        self.channel = self.connection.channel()
+        self.channel.queue_declare(queue=device_id, durable=True)
+        self.channel.basic_publish(exchange='', routing_key=device_id, body=msg,
+                                   properties=pika.BasicProperties(delivery_mode=2))
+
+    def send_record_control(
+        self,
+        device_id,
+        record_session_id,
+        command,
+        *,
+        var_name=None,
+        source="text",
+    ):
+        """发送录制控制消息（暂停/恢复/存变量）"""
+        data = {
+            "action": "record_control",
+            "record_session_id": record_session_id,
+            "command": command,
+            "var_name": var_name,
+            "source": source,
         }
         msg = json.dumps(data, ensure_ascii=False).encode('utf-8')
         if self.connection is None or self.channel is None or self.connection.is_closed or self.channel.is_closed:

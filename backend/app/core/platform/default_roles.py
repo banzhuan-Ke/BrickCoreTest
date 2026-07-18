@@ -9,10 +9,14 @@ from app.core.platform.permissions import (
     USER_VIEW,
     PROJECT_VIEW,
     PROJECT_EDIT,
+    PROJECT_SETTINGS_VIEW,
+    PROJECT_SETTINGS_EDIT,
     ENVIRONMENT_VIEW,
     ENVIRONMENT_EDIT,
     MODULE_VIEW,
     MODULE_EDIT,
+    NOTIFICATION_CONFIG_VIEW,
+    NOTIFICATION_CONFIG_EDIT,
     UI_CASE_VIEW,
     UI_CASE_EDIT,
     UI_CASE_EXECUTE,
@@ -69,6 +73,9 @@ from app.core.platform.permissions import (
     AI_TEST_VIEW,
     AI_TEST_EXECUTE,
     AI_CONFIG_VIEW,
+    KNOWLEDGE_VIEW,
+    KNOWLEDGE_EDIT,
+    KNOWLEDGE_EXECUTE,
     DOCS_VIEW,
     OPERATION_LOG_VIEW,
 )
@@ -101,6 +108,8 @@ _BASE_READ = [
 
 # 各模块只读（普通成员 / 只读观察员共用）
 _VIEWER_PERMISSIONS = _BASE_READ + [
+    PROJECT_SETTINGS_VIEW,
+    NOTIFICATION_CONFIG_VIEW,
     UI_CASE_VIEW,
     UI_SUITE_VIEW,
     UI_TASK_VIEW,
@@ -128,6 +137,7 @@ _VIEWER_PERMISSIONS = _BASE_READ + [
     PERF_RECORD_VIEW,
     AI_TEST_VIEW,
     AI_CONFIG_VIEW,
+    KNOWLEDGE_VIEW,
     DOCS_VIEW,
     OPERATION_LOG_VIEW,
 ]
@@ -148,14 +158,18 @@ DEFAULT_ROLES: list[dict] = [
     {
         "code": "project_manager",
         "name": "项目管理员",
-        "description": "管理项目、环境、测试目录配置",
+        "description": "管理项目、环境、测试目录、项目设置（自愈/录制/失败分析/功能用例）与通知渠道",
         "permissions": [
             PROJECT_VIEW,
             PROJECT_EDIT,
+            PROJECT_SETTINGS_VIEW,
+            PROJECT_SETTINGS_EDIT,
             ENVIRONMENT_VIEW,
             ENVIRONMENT_EDIT,
             MODULE_VIEW,
             MODULE_EDIT,
+            NOTIFICATION_CONFIG_VIEW,
+            NOTIFICATION_CONFIG_EDIT,
             DOCS_VIEW,
         ],
     },
@@ -250,12 +264,27 @@ DEFAULT_ROLES: list[dict] = [
     {
         "code": "ai_tester",
         "name": "AI测试工程师",
-        "description": "AI 测试分析与执行（不含 AI 配置编辑）",
+        "description": "AI 测试分析与执行；可查看项目设置与模型配置，不含编辑",
         "permissions": _BASE_READ
         + [
             AI_TEST_VIEW,
             AI_TEST_EXECUTE,
             AI_CONFIG_VIEW,
+            PROJECT_SETTINGS_VIEW,
+            NOTIFICATION_CONFIG_VIEW,
+            KNOWLEDGE_VIEW,
+            DOCS_VIEW,
+        ],
+    },
+    {
+        "code": "knowledge_tester",
+        "name": "资料库工程师",
+        "description": "迭代资料库全套权限：文档管理、检索问答、报告生成",
+        "permissions": _BASE_READ
+        + [
+            KNOWLEDGE_VIEW,
+            KNOWLEDGE_EDIT,
+            KNOWLEDGE_EXECUTE,
             DOCS_VIEW,
         ],
     },

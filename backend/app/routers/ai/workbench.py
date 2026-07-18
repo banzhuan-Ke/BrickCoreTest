@@ -24,6 +24,7 @@ from app.modules.ai.ai_dashboard_stats import (
     collect_generate_trend,
     collect_token_stats,
     collect_usage_summary,
+    collect_user_token_top,
 )
 from app.models.ui import Case as UiCase
 from app.routers.ai.requirements import _job_to_dict, _requirement_to_dict, _resolve_project_id
@@ -238,6 +239,7 @@ async def workbench_overview(
     token_stats = await collect_token_stats(project_id)
     generate_trend = await collect_generate_trend(project_id, days=7)
     usage_summary = await collect_usage_summary(project_id)
+    user_token_top = await collect_user_token_top(project_id)
 
     return StandardResponse(
         data={
@@ -247,6 +249,7 @@ async def workbench_overview(
             "token_stats": token_stats,
             "generate_trend": generate_trend,
             "usage_summary": usage_summary,
+            "user_token_top": user_token_top,
             "config": config_summary,
             "recent_requirements": recent_requirements,
             "recent_records": recent_records,

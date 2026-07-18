@@ -13,17 +13,12 @@
 
 页面：`docs-site/guide/product-demo.md`
 
-## Gitee Pages 发布（CE 仓库）
+## 文档站构建
 
 ```bash
 cd docs-site
 npm install
 npm run docs:build
-# 将 .vitepress/dist 内容推送到 Gitee Pages 分支，或在 Gitee 仓库设置 → Pages 选择该目录
 ```
 
-CE 仓库若启用 Pages，README 可链接：
-
-`https://banzhuankeorz.gitee.io/brickcore/guide/product-demo.html`
-
-（仓库名大小写以 Gitee 实际为准；若 404 需在 `.vitepress/config.mts` 设置 `base: '/brickcore/'`）
+构建产物位于 `.vitepress/dist`，可由平台文档中心或静态站点托管。

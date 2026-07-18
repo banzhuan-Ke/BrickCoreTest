@@ -44,6 +44,7 @@ BUILTIN_DOC_ENTRIES: dict[str, tuple[str, str]] = {
     "platform-assistant": ("docs-site/guide/platform-assistant.md", "平台内 AI 助手"),
     "mcp-server": ("docs-site/guide/mcp-server.md", "MCP 外部接入"),
     "docker-deploy": ("docs-site/guide/docker-deploy.md", "Docker 部署"),
+    "windows-deploy": ("docs-site/guide/windows-deploy.md", "Windows 部署"),
     "release-notes": ("docs-site/guide/release-notes.md", "版本更新记录"),
     "system-admin": ("docs-site/guide/system-admin.md", "系统管理"),
 }
@@ -96,6 +97,7 @@ BUILTIN_DOC_TREE: list[dict[str, Any]] = [
             {"id": "runner-troubleshooting", "title": "Runner 排查指南", "type": "builtin"},
             {"id": "runner-linux-server", "title": "Linux 无头 Runner", "type": "builtin"},
             {"id": "docker-deploy", "title": "Docker 部署", "type": "builtin"},
+            {"id": "windows-deploy", "title": "Windows 部署", "type": "builtin"},
         ],
     },
     {

@@ -1,4 +1,4 @@
-# CE 演示环境专用（同步时覆盖 docker-services.yml，Pro 私有仓不改）
+# 本地开发用中间件（仅 MySQL/Redis/RabbitMQ/MinIO；勿与全栈 docker-compose 同机混用）
 services:
   mysql:
     image: mysql:8.0

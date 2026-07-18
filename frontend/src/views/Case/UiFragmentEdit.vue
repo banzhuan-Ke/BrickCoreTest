@@ -84,7 +84,12 @@
 
         <FragmentPickerDialog v-model="fragmentPickerVisible" :exclude-fragment-id="isNew ? null : fragmentId" @insert="onFragmentInsert" />
         <UiCaseGenerator v-model="aiDialogVisible" @apply="handleAiApply" />
-        <UiCaseRecorder v-model="recordDialogVisible" @apply="handleAiApply" />
+        <UiCaseRecorder
+          v-model="recordDialogVisible"
+          :existing-step-count="form.steps?.length || 0"
+          :default-apply-mode="form.steps?.length ? 'append' : 'replace'"
+          @apply="handleAiApply"
+        />
 
         <div class="action-bar">
           <el-button type="primary" :loading="saving" @click="save">
@@ -111,6 +116,7 @@ import UiCaseRecorder from '@/views/AI/components/UiCaseRecorder.vue'
 import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
 import { uiFragmentApi } from '@/api/modules/ui'
 import { normalizeRecorderApplyPayload } from '@/utils/caseDescription.js'
+import { mergeRecorderSteps } from '@/utils/recorderStepMerge.js'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
 import ActionGroup from '@/datas/ActionGroup.js'
@@ -131,7 +137,7 @@ const recordDialogVisible = ref(false)
 const fragmentPickerVisible = ref(false)
 const varInsertEnvId = ref(proStore.envList[0]?.id || null)
 provide('varInsertEnvId', varInsertEnvId)
-const activeGroups = ref(['1', '2', '3', '4', '5', '6', '7', '8'])
+const activeGroups = ref(['1', '2', '2b', '3', '4', '5', '6', '7', '8'])
 const fragmentId = computed(() => route.params.id)
 const isNew = computed(() => route.name === 'uiFragmentNew')
 
@@ -231,13 +237,10 @@ function onFragmentInsert(refStep) {
 }
 
 function handleAiApply(payload) {
-  const { steps } = normalizeRecorderApplyPayload(payload)
+  const { steps, applyMode, insertAtIndex } = normalizeRecorderApplyPayload(payload)
   if (!steps?.length) return
-  if (!form.steps?.length) {
-    form.steps = JSON.parse(JSON.stringify(steps))
-  } else {
-    form.steps = [...form.steps, ...JSON.parse(JSON.stringify(steps))]
-  }
+  const mode = form.steps?.length ? (applyMode || 'append') : 'replace'
+  form.steps = mergeRecorderSteps(form.steps, steps, mode, insertAtIndex)
   ElNotification.success(`已应用 ${steps.length} 个步骤`)
 }
 

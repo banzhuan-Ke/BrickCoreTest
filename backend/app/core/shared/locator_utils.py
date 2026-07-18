@@ -7,6 +7,25 @@ from typing import Any
 _HAS_TEXT_INNER_RE = re.compile(r':has-text\("((?:[^"\\]|\\.)*)"\)')
 
 
+def ensure_xpath_engine_prefix(locator: str) -> str:
+    """
+    绝对 XPath（/html/...）必须加 xpath= 前缀。
+    Playwright 的 locator() 对以单个 / 开头的字符串按 CSS 解析，会报 Unexpected token \"/\"。
+    以 // 或 .// 开头的相对 XPath 由 Playwright 自动识别，无需前缀。
+    """
+    s = (locator or "").strip()
+    if not s:
+        return s
+    head = s.split("=", 1)[0].strip().lower()
+    if head in ("xpath", "css", "id", "text", "internal:control", "internal:has-text", "internal:attr"):
+        return s
+    if s.startswith(("//", ".//", "(//", "(/")):
+        return s
+    if s.startswith("/") and not s.startswith("//"):
+        return f"xpath={s}"
+    return s
+
+
 def text_unsafe_for_css_has_text(text: str) -> bool:
     """Playwright 将 :has-text() 走 CSS 解析时，$ 等字符会触发 BADSTRING。"""
     return bool(re.search(r"[\$\\]", text or ""))
@@ -80,7 +99,7 @@ def _coerce_role_shorthand_segment(segment: str) -> str:
 
 def _normalize_chain_segment(segment: str) -> str:
     seg = _coerce_role_shorthand_segment(segment.strip())
-    return _normalize_native_value_segment(seg)
+    return ensure_xpath_engine_prefix(_normalize_native_value_segment(seg))
 
 
 def _normalize_native_locator_segments(locator: str) -> str:
@@ -156,7 +175,7 @@ def normalize_locator(locator: Any) -> str:
         for key in ("selector", "css", "locator", "value"):
             val = locator.get(key)
             if val and isinstance(val, str):
-                return coerce_unsafe_has_text_locator(val.strip())
+                return ensure_xpath_engine_prefix(coerce_unsafe_has_text_locator(val.strip()))
         return str(locator).strip()
 
     s = str(locator).strip()

@@ -114,17 +114,38 @@ class OpenAIStyleClient(BaseLLMClient):
         **kwargs,
     ) -> dict:
         """Vision 模型：文本 + 单张图片"""
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
-        data_url = f"data:{image_mime};base64,{b64}"
+        return await self.chat_with_images(
+            system_prompt=system_prompt,
+            text=text,
+            images=[(image_bytes, image_mime, "")],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body=extra_body,
+            **kwargs,
+        )
+
+    async def chat_with_images(
+        self,
+        system_prompt: str,
+        text: str,
+        images: list[tuple[bytes, str, str]],
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+        extra_body: dict = None,
+        **kwargs,
+    ) -> dict:
+        """Vision 模型：文本 + 多张图片（可选 caption）"""
+        max_tokens = max(1, min(int(max_tokens or 4096), 32768))
+        content: list[dict] = [{"type": "text", "text": text}]
+        for image_bytes, image_mime, caption in images or []:
+            if caption:
+                content.append({"type": "text", "text": caption})
+            b64 = base64.b64encode(image_bytes).decode("utf-8")
+            data_url = f"data:{image_mime};base64,{b64}"
+            content.append({"type": "image_url", "image_url": {"url": data_url}})
         messages = [
             {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": text},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            },
+            {"role": "user", "content": content},
         ]
         resp = await self.client.chat.completions.create(
             model=self.model,
@@ -135,12 +156,13 @@ class OpenAIStyleClient(BaseLLMClient):
             **kwargs,
         )
         msg = resp.choices[0].message
-        content = msg.content or ""
+        content_text = msg.content or ""
         tokens = resp.usage.total_tokens if resp.usage else 0
         logger.info(
-            f"[llm_client.chat_with_image] model={self.model}, content_len={len(content)}, tokens={tokens}"
+            f"[llm_client.chat_with_images] model={self.model}, images={len(images or [])}, "
+            f"content_len={len(content_text)}, tokens={tokens}"
         )
-        return {"content": content, "tokens": tokens}
+        return {"content": content_text, "tokens": tokens}
 
     async def chat_stream(
         self,

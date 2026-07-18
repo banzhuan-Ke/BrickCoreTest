@@ -127,6 +127,16 @@ class PerfWorker(models.Model):
 
     # 能力
     max_concurrent = fields.IntField(default=100, description="最大并发数")
+    agent_kind = fields.CharField(
+        max_length=32,
+        default="",
+        description="来源: perf_slim | runner_client | 空=旧客户端",
+    )
+    engine_version = fields.CharField(
+        max_length=50,
+        default="",
+        description="压测引擎版本（与 RUNNER_VERSION 对齐）",
+    )
 
     # 状态: idle / busy / offline
     status = fields.CharField(max_length=20, default="idle", description="状态")
@@ -162,7 +172,10 @@ class PerfCronJob(models.Model):
 
     # 环境
     env_id = fields.IntField(description="执行环境ID")
-    use_workers = fields.BooleanField(default=False, description="是否使用分布式Worker执行")
+    use_workers = fields.BooleanField(
+        default=True,
+        description="已废弃：施压一律派发 Worker，字段仅兼容旧数据",
+    )
 
     # 执行记录关联
     last_run_record_id = fields.IntField(null=True, description="最后一次执行记录ID")

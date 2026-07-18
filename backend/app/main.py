@@ -27,6 +27,7 @@ from app.routers.sys.platform_settings import router as platform_settings_router
 from app.routers.sys.stream_parser_config import router as stream_parser_config_router
 from app.routers.sys.invite_codes import router as invite_code_router
 from app.routers.sys.project_members import router as project_member_router
+from app.routers.sys.project_settings import router as project_settings_router
 from app.core.platform.project_access_deps import optional_project_access_check
 from app.routers.ui.cases import router as case_router
 from app.routers.ui.fragments import router as ui_fragment_router
@@ -317,6 +318,7 @@ app.include_router(user_router, prefix="/sys")
 app.include_router(role_router, prefix="/sys")
 app.include_router(project_router, prefix="/sys")
 app.include_router(project_member_router, prefix="/sys")
+app.include_router(project_settings_router, prefix="/sys", dependencies=_project_access_dep)
 app.include_router(environment_router, prefix="/sys", dependencies=_project_access_dep)
 app.include_router(catalog_router, prefix="/sys", dependencies=_project_access_dep)
 app.include_router(files_router, prefix="/sys")

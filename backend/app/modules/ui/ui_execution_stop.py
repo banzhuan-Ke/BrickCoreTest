@@ -1,6 +1,7 @@
 """UI 自动化执行停止（MQ 通知 Runner 真正中断）"""
 from __future__ import annotations
 
+import logging
 from typing import Iterable, Optional, Set
 
 from fastapi import HTTPException
@@ -8,6 +9,8 @@ from fastapi import HTTPException
 from app.core.infra.mq_producer import MQProducer
 from app.models.sys import Device
 from app.models.ui import UiCaseExecution, UiPlanExecution, UiSuiteExecution
+
+logger = logging.getLogger(__name__)
 
 STOPPABLE_PLAN_STATUSES = {"执行中", "等待执行"}
 STOPPABLE_SUITE_STATUSES = {"执行中", "等待执行"}
@@ -61,6 +64,7 @@ def _send_stop_to_devices(
     plan_execution_id: Optional[int] = None,
     suite_execution_id: Optional[int] = None,
     case_execution_id: Optional[int] = None,
+    stop_all_on_device: bool = False,
 ) -> int:
     targets = list(device_ids)
     if not targets:
@@ -73,6 +77,7 @@ def _send_stop_to_devices(
                 plan_execution_id=plan_execution_id,
                 suite_execution_id=suite_execution_id,
                 case_execution_id=case_execution_id,
+                stop_all_on_device=stop_all_on_device,
             )
     finally:
         mq.close()
@@ -88,6 +93,10 @@ async def stop_plan_execution(record_id: int) -> dict:
 
     device_ids = await _collect_plan_device_ids(record)
     if not device_ids:
+        logger.warning(
+            "停止计划 #%s 未解析到设备 ID，将向所有在线 Runner 广播 stop",
+            record_id,
+        )
         device_ids = set(await _online_device_ids())
 
     record.status = "已停止"
@@ -100,6 +109,18 @@ async def stop_plan_execution(record_id: int) -> dict:
         is_del=False,
         status__in=list(STOPPABLE_SUITE_STATUSES),
     ).update(status="已停止")
+
+    stopped_suite_ids = await UiSuiteExecution.filter(
+        plan_execution_id=record_id,
+        is_del=False,
+        status="已停止",
+    ).values_list("id", flat=True)
+    if stopped_suite_ids:
+        await UiCaseExecution.filter(
+            suite_execution_id__in=list(stopped_suite_ids),
+            is_del=False,
+            status__in=list(STOPPABLE_CASE_STATUSES),
+        ).update(status="error")
 
     sent = _send_stop_to_devices(device_ids, plan_execution_id=record_id)
     return {"detail": "停止成功，已通知执行器中断", "devices_notified": sent}
@@ -118,6 +139,10 @@ async def stop_suite_execution(record_id: int) -> dict:
     if env.get("device_id"):
         device_ids.add(str(env["device_id"]))
     if not device_ids:
+        logger.warning(
+            "停止套件 #%s 未解析到设备 ID，将向所有在线 Runner 广播 stop",
+            record_id,
+        )
         device_ids = set(await _online_device_ids())
 
     record.status = "已停止"
@@ -151,6 +176,10 @@ async def stop_case_execution(record_id: int) -> dict:
     if env.get("device_id"):
         device_ids.add(str(env["device_id"]))
     if not device_ids:
+        logger.warning(
+            "停止用例 #%s 未解析到设备 ID，将向所有在线 Runner 广播 stop",
+            record_id,
+        )
         device_ids = set(await _online_device_ids())
 
     record.status = "error"
@@ -208,7 +237,7 @@ async def stop_executions_for_device(device_id: str) -> dict:
             await stop_case_execution(case_rec.id)
             cases_stopped += 1
 
-    _send_stop_to_devices([device_id])
+    _send_stop_to_devices([device_id], stop_all_on_device=True)
     return {
         "plans_stopped": plans_stopped,
         "suites_stopped": suites_stopped,

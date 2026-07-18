@@ -17,4 +17,12 @@ export const runnerReleaseApi = {
     const sep = path.includes('?') ? '&' : '?'
     return `${path}${sep}access_token=${encodeURIComponent(token)}`
   },
+  /** @param {'win'|'mac'} platform */
+  perfDownloadUrl(token, platform = 'win') {
+    const base = (import.meta.env.VITE_BASE_API || '').replace(/\/$/, '')
+    const plat = platform === 'mac' ? 'mac' : 'win'
+    let path = `${base}/runner/perf-client-download?platform=${plat}`
+    if (!token) return path
+    return `${path}&access_token=${encodeURIComponent(token)}`
+  },
 }

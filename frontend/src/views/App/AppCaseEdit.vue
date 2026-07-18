@@ -100,6 +100,7 @@
                 <span class="execution-hints-collapse-title">
                   <el-icon color="#f56c6c"><WarningFilled /></el-icon>
                   最近一次执行未通过（点击展开详情）
+                  <el-tag v-if="hasFailureAnalysis" size="small" type="warning" class="ai-analyzed-tag">已 AI 分析</el-tag>
                 </span>
               </template>
               <div class="execution-hints-body">
@@ -110,6 +111,12 @@
                   执行时间：{{ formatTime(executionHints.start_time) }}
                   <span v-if="executionHints.execution_id"> · 记录 #{{ executionHints.execution_id }}</span>
                 </p>
+                <CaseExecutionFailureAi
+                  :execution-id="executionHints.execution_id"
+                  target-type="app"
+                  :project-id="proStore.projectInfo?.id"
+                  @loaded="onFailureAnalysisLoaded"
+                />
               </div>
             </el-collapse-item>
           </el-collapse>
@@ -184,6 +191,7 @@ import AppH5UsageGuide from '@/components/App/AppH5UsageGuide.vue'
 import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
 import UiCaseStepOptimizeDialog from '@/views/AI/components/UiCaseStepOptimizeDialog.vue'
 import AppCaseGenerator from '@/views/AI/components/AppCaseGenerator.vue'
+import CaseExecutionFailureAi from '@/components/CaseExecutionFailureAi.vue'
 import { Document, Edit, Mouse, Clock, Search, MessageBox, MoreFilled, Share, Setting, Rank, WarningFilled, Cpu } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -196,6 +204,7 @@ const formRef = ref()
 const saving = ref(false)
 const executionHints = ref(null)
 const hintsExpanded = ref([])
+const hasFailureAnalysis = ref(false)
 const fragmentPickerVisible = ref(false)
 const optimizeDialogVisible = ref(false)
 const generatorDialogVisible = ref(false)
@@ -336,8 +345,20 @@ async function loadExecutionHints() {
     const res = await appCaseApi.getExecutionHints(caseId, params)
     const payload = res.data?.data ?? res.data
     executionHints.value = payload?.has_failure ? payload : null
+    hasFailureAnalysis.value = false
+    if (executionHints.value) {
+      hintsExpanded.value = ['failure']
+    }
   } catch {
     executionHints.value = null
+    hasFailureAnalysis.value = false
+  }
+}
+
+function onFailureAnalysisLoaded(data) {
+  hasFailureAnalysis.value = !!data?.root_cause
+  if (data?.root_cause) {
+    hintsExpanded.value = ['failure']
   }
 }
 
@@ -476,6 +497,10 @@ watch(
   gap: 8px;
   color: var(--el-color-danger);
   font-weight: 500;
+}
+
+.ai-analyzed-tag {
+  margin-left: 2px;
 }
 
 .execution-hints-body {

@@ -1,18 +1,13 @@
-﻿<template>
-  <PageCard>
+<template>
+  <PageCard class="knowledge-layout">
     <template #title>
       <b>迭代资料库</b>
     </template>
     <template #main>
-      <div class="ce-knowledge-placeholder">
-        <el-alert
-          type="info"
-          :closable="false"
-          show-icon
-          title="暂未开放迭代资料库"
-          description="迭代资料库本期暂不开放。需求测试、功能用例库、Embedding 配置等可正常使用。"
-        />
-      </div>
+      <el-empty description="迭代资料库开发测试中，后续放出">
+        <p class="hint">请先使用 AI 测试、Web 自动化等已开放功能。进度见版本更新记录。</p>
+        <el-button type="primary" @click="$router.push('/ai-testing')">前往 AI 测试</el-button>
+      </el-empty>
     </template>
   </PageCard>
 </template>
@@ -22,8 +17,11 @@ import PageCard from '@/components/PageCard.vue'
 </script>
 
 <style scoped>
-.ce-knowledge-placeholder {
-  max-width: 720px;
-  padding: 8px 0;
+.hint {
+  margin: 8px 0 16px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 420px;
 }
 </style>

@@ -770,18 +770,27 @@ async def import_ui_case_from_task(
     if task.status not in ("done", "failed", "stopped"):
         raise HTTPException(status_code=400, detail="任务尚未结束，无法导入")
 
-    from app.modules.browser_lab.browser_lab_import import convert_browser_lab_to_ui_steps
+    from app.modules.browser_lab.browser_lab_import import (
+        convert_browser_lab_to_ui_steps,
+        steps_match_browser_lab_import,
+    )
     from app.routers.ai.generate import _normalize_ui_steps
 
-    if body.steps:
+    server_steps = convert_browser_lab_to_ui_steps(
+        start_url=task.start_url,
+        task_text=task.task_text,
+        step_log=list(task.step_log or []),
+        include_open_browser=body.include_open_browser,
+    )
+    if body.steps is not None:
+        if not steps_match_browser_lab_import(body.steps, server_steps):
+            raise HTTPException(
+                status_code=422,
+                detail="提交步骤须与本任务的服务端转换结果保持相同步骤结构与顺序，不可注入无关步骤",
+            )
         raw_steps = body.steps
     else:
-        raw_steps = convert_browser_lab_to_ui_steps(
-            start_url=task.start_url,
-            task_text=task.task_text,
-            step_log=list(task.step_log or []),
-            include_open_browser=body.include_open_browser,
-        )
+        raw_steps = server_steps
     steps, errors = _normalize_ui_steps(raw_steps)
     if not steps:
         raise HTTPException(status_code=422, detail="未能生成有效步骤，请检查 Browser Lab 记录是否包含操作")

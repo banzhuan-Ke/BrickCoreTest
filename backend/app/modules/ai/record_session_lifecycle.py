@@ -64,3 +64,22 @@ async def get_active_recording_on_device(device_id: str) -> Optional[AiRecordSes
     if record.status == "recording":
         return record
     return None
+
+
+def serialize_active_recording(record: AiRecordSession, runtime: dict | None = None) -> dict:
+    """供 Runner 客户端 / 内部 API 使用的进行中录制快照。"""
+    runtime = runtime or {}
+    raw = record.raw_actions if isinstance(record.raw_actions, list) else []
+    actions_count = getattr(record, "actions_count", 0) or len(raw)
+    preview = raw[-10:] if len(raw) > 10 else raw
+    return {
+        "record_id": record.id,
+        "status": record.status,
+        "url": record.url or "",
+        "description": record.description or "",
+        "actions_count": actions_count,
+        "raw_actions": preview,
+        "paused": bool(runtime.get("paused")),
+        "create_time": record.create_time.isoformat() if record.create_time else None,
+        "last_control_result": runtime.get("last_control_result"),
+    }

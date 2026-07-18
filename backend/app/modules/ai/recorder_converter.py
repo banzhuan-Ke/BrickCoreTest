@@ -17,6 +17,7 @@ from app.modules.ai.recorder_quality import (
     pick_best_locator,
     should_repick_locator,
 )
+from app.modules.ai.recorder_step_sanitize import sanitize_recorded_steps
 from app.core.shared.ui_keywords import METHOD_TO_KEYWORD
 
 
@@ -31,7 +32,7 @@ ACTION_TO_METHOD = {
     "wait_popup": "wait_for_element",
     "hover": "hover",
     "keydown": "press_key",
-    "scroll": "scroll",
+    "scroll": "scroll_to_height",
     "contextmenu": "mouse_click",
     "file": "upload_file",
     "drag_and_drop": "drag_and_drop",
@@ -43,12 +44,13 @@ METHOD_DEFAULTS = {
     "double_click_ele": {"locator": "", "index": 1, "force": False, "timeout": 20000},
     "fill_value": {"locator": "", "value": "", "timeout": 20000},
     "select_option": {"locator": "", "value": "", "timeout": 20000},
-    "open_url": {"url": "", "wait_until": "load", "timeout": 30000},
+    "open_url": {"url": "", "wait_until": "domcontentloaded", "timeout": 30000},
     "wait_for_time": {"timeout": 2000},
     "wait_for_element": {"locator": "", "timeout": 20000},
     "hover": {"locator": "", "wait_time": 500},
     "press_key": {"key": "", "locator": "", "timeout": 20000},
-    "scroll": {"x": 0, "y": 0},
+    "scroll": {"height": 0},
+    "scroll_to_element": {"locator": "", "index": 1, "timeout": 20000},
     "mouse_click": {"x": 0, "y": 0, "button": "right", "locator": "", "timeout": 20000},
     "upload_file": {"locator": "", "file_path": "", "timeout": 20000},
     "drag_and_drop": {
@@ -63,7 +65,11 @@ METHOD_DEFAULTS = {
 }
 
 
-def convert_actions_to_steps(raw_actions: List[dict]) -> List[dict]:
+def convert_actions_to_steps(
+    raw_actions: List[dict],
+    *,
+    locator_strategy: str = "semantic_first",
+) -> List[dict]:
     """
     将原始录制操作列表转换为平台标准步骤
     
@@ -92,13 +98,11 @@ def convert_actions_to_steps(raw_actions: List[dict]) -> List[dict]:
     # 第四步：转换为平台步骤
     steps = []
     for action in with_popup_waits:
-        step = _action_to_step(action)
+        step = _action_to_step(action, locator_strategy=locator_strategy)
         if step:
             steps.append(step)
 
-    for i, step in enumerate(steps):
-        step.setdefault("meta", {})["rec_step_index"] = i + 1
-
+    steps, _sanitize_stats = sanitize_recorded_steps(steps)
     return steps
 
 
@@ -182,8 +186,8 @@ def _insert_wait_actions(actions: List[dict]) -> List[dict]:
                     "value": "500",
                     "timestamp": prev_time + 100,
                 })
-            # 操作间隔 > 8 秒，插入等待（用户自然停顿）
-            elif gap > 8000:
+            # 操作间隔 > 10 秒，插入等待（用户自然停顿；W-24 提高阈值减少默认 wait）
+            elif gap > 10000:
                 wait_ms = min(gap, 10000)
                 result.append({
                     "action_type": "wait",
@@ -237,9 +241,47 @@ def _insert_popup_wait_actions(actions: List[dict]) -> List[dict]:
     return result
 
 
-def _action_to_step(action: dict) -> dict:
+def _action_to_step(action: dict, *, locator_strategy: str = "semantic_first") -> dict:
     """将单个原始操作转换为平台步骤"""
     action_type = action.get("action_type", "")
+
+    if action_type == "save_variable":
+        var_name = str(action.get("value") or "").strip()
+        meta = dict(action.get("meta") or {})
+        source = str(meta.get("source") or "text").strip().lower()
+        if action.get("timestamp") is not None:
+            meta["timestamp"] = int(action.get("timestamp", 0))
+        meta["saved_from_recording"] = True
+        if source == "value":
+            method = "extract_input_value"
+            keyword = "提取控件值"
+            params = {
+                "locator": action.get("selector", ""),
+                "var_name": var_name,
+                "index": 1,
+                "timeout": 20000,
+            }
+            desc = f"存变量 ${{{var_name}}}（控件值）" if var_name else "存变量"
+        else:
+            method = "extract_text"
+            keyword = "提取元素文本"
+            params = {
+                "locator": action.get("selector", ""),
+                "var_name": var_name,
+                "index": 1,
+                "timeout": 20000,
+            }
+            desc = f"存变量 ${{{var_name}}}" if var_name else "存变量"
+        return assess_step_quality({
+            "id": f"step_{int(time.time() * 1000)}_{hash(action.get('selector', '')) % 1000}",
+            "keyword": keyword,
+            "desc": desc,
+            "method": method,
+            "params": params,
+            "children": [],
+            "meta": meta,
+        })
+
     method = ACTION_TO_METHOD.get(action_type)
 
     if not method:
@@ -254,7 +296,6 @@ def _action_to_step(action: dict) -> dict:
     elif action_type == "fill":
         params["locator"] = action.get("selector", "")
         params["value"] = action.get("value", "")
-        # recorder_engine 中将 placeholder 存到了 element_text 字段
         placeholder = action.get("element_text", "")
         desc = _generate_fill_desc(params["locator"], params["value"], placeholder)
     elif action_type in ("click", "dblclick"):
@@ -290,10 +331,16 @@ def _action_to_step(action: dict) -> dict:
             desc = f"按 {key} 键"
     elif action_type == "scroll":
         scroll_top = int(action.get("value", 0))
-        scroll_left = int(action.get("element_text", 0))
-        params["y"] = scroll_top
-        params["x"] = scroll_left
-        desc = f"滚动页面到 ({scroll_left}, {scroll_top})"
+        selector = action.get("selector", "") or ""
+        if selector:
+            method = "scroll_to_element"
+            params = dict(METHOD_DEFAULTS.get("scroll_to_element", {}))
+            params["locator"] = selector
+            element_text = action.get("element_text", "")
+            desc = f"滚动到 '{element_text}'" if element_text else f"滚动到元素: {selector}"
+        else:
+            params["height"] = scroll_top
+            desc = f"滚动到高度 {scroll_top}"
     elif action_type == "contextmenu":
         params["locator"] = action.get("selector", "")
         params["button"] = "right"
@@ -322,14 +369,31 @@ def _action_to_step(action: dict) -> dict:
         desc = f"执行操作: {action_type}"
 
     meta = dict(action.get("meta", {}))
-    runner_candidates = action.get("candidates") or []
+    if action_type == "fill":
+        for key in ("inputType", "name", "id"):
+            if action.get(key):
+                meta[key] = action.get(key)
+    if action.get("timestamp") is not None:
+        meta["timestamp"] = int(action.get("timestamp", 0))
+    runner_candidates = [
+        str(c).strip() for c in (action.get("candidates") or []) if str(c).strip()
+    ]
     if runner_candidates:
+        # 新 Runner 已按策略排序；标记后转换/评估不得打乱首位
         meta["candidates"] = list(runner_candidates)
-    # 合并 Runner 候选 + meta 字段推导项，避免旧 Runner 或 sparse 上报时前端只有 1 条
-    pre_step = {"meta": meta, "params": params}
-    merged_candidates = collect_step_locator_candidates(pre_step)
-    if merged_candidates:
-        meta["candidates"] = merged_candidates
+        meta["locatorRankedByRunner"] = True
+        pre_step = {"meta": meta, "params": params}
+        merged = collect_step_locator_candidates(pre_step)
+        extras = [c for c in merged if c not in meta["candidates"]]
+        if extras:
+            meta["candidates"] = meta["candidates"] + extras
+    else:
+        # 旧 Runner / 无 candidates：推导候选，交由 pick_best_locator 按 strategy 打分
+        pre_step = {"meta": meta, "params": params}
+        merged_candidates = collect_step_locator_candidates(pre_step)
+        if merged_candidates:
+            meta["candidates"] = merged_candidates
+        meta.pop("locatorRankedByRunner", None)
 
     step = {
         "id": f"step_{int(time.time() * 1000)}_{hash(action.get('selector', '')) % 1000}",
@@ -342,7 +406,11 @@ def _action_to_step(action: dict) -> dict:
     }
     if method in ("click_ele", "double_click_ele", "hover", "fill_value", "wait_for_element") and params.get("locator"):
         if should_repick_locator(step):
-            best, _source, updates = pick_best_locator(step, original_locator=params.get("locator"))
+            best, _source, updates = pick_best_locator(
+                step,
+                original_locator=params.get("locator"),
+                strategy=locator_strategy,
+            )
             if best:
                 step["params"]["locator"] = best
                 meta.update(updates)

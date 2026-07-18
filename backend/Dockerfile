@@ -25,6 +25,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libcairo2 \
     libasound2 \
+    libgomp1 \
+    libgl1 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
     fonts-wqy-zenhei \
     fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
@@ -34,8 +39,9 @@ ENV LANG=zh_CN.UTF-8
 ENV LC_ALL=zh_CN.UTF-8
 
 # 安装 Python 依赖
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+# rapidocr 会拉 opencv-python（需 libGL）；Docker 用 headless + --no-deps，构建时自检 cv2
+COPY backend/requirements.txt backend/docker_install_deps.sh ./
+RUN chmod +x docker_install_deps.sh && ./docker_install_deps.sh
 
 # 使用国内镜像安装 Playwright 浏览器（只装 Chromium，节省空间）
 # 注意：系统依赖已在上面手动安装，不需要 playwright install-deps（Debian Trixie 部分包名不兼容）

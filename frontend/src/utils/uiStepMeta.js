@@ -10,7 +10,12 @@ const ASSERTION_METHODS = new Set([
   'kw_assert_element_text',
   'kw_assert_element_text_contains',
   'kw_assert_text_contains',
+  'kw_assert_text_not_contains',
+  'kw_assert_element_count',
+  'kw_assert_text_length',
   'kw_assert_attribute',
+  'kw_assert_attribute_exists',
+  'kw_assert_attribute_not_exists',
   'kw_assert_visible',
   'kw_assert_hidden',
   'kw_assert_not_exist',
@@ -31,13 +36,18 @@ export const UI_STEP_PARAM_ORDER = {
   open_browser: ['browser_type'],
   open_url: ['url', 'wait_until'],
   scroll_to_height: ['height'],
+  scroll_to_element: ['locator', 'index'],
+  accept_dialog: ['prompt_text'],
+  dismiss_dialog: [],
+  switch_to_latest_page: [],
   execute_script: ['script', 'args'],
   open_new_page: ['tag'],
   switch_to_page: ['tag', 'index', 'title', 'url'],
   close_page: ['tag', 'index', 'title', 'url'],
   save_page_img: ['name'],
   fill_value: ['locator', 'value'],
-  click_ele: ['locator', 'index', 'force'],
+  click_ele: ['locator', 'index', 'force', 'wait_download', 'save_path', 'var_name', 'download_timeout', 'accept_dialog', 'dismiss_dialog', 'dialog_timeout', 'prompt_text'],
+  click_by_text: ['text', 'index', 'exact', 'force', 'wait_download', 'save_path', 'var_name', 'download_timeout', 'accept_dialog', 'dismiss_dialog', 'dialog_timeout', 'prompt_text'],
   double_click_ele: ['locator', 'index', 'force'],
   clear_value: ['locator'],
   set_checked: ['locator'],
@@ -49,6 +59,7 @@ export const UI_STEP_PARAM_ORDER = {
   long_click_element: ['locator', 'delay'],
   upload_file: ['locator'],
   click_by_image: ['template', 'threshold'],
+  fill_by_image: ['template', 'value', 'clear_first', 'threshold'],
   wait_for_image: ['template', 'threshold'],
   kw_assert_image: ['template', 'threshold'],
   kw_assert_image_not_exists: ['template', 'threshold'],
@@ -70,13 +81,24 @@ export const UI_STEP_PARAM_ORDER = {
   set_default_timeout: ['timeout'],
   wait_for_time: ['timeout'],
   wait_for_element: ['locator'],
+  wait_for_element_hidden: ['locator', 'index'],
+  wait_for_element_text_change: ['locator', 'text', 'index'],
+  wait_for_element_text_stable: ['locator', 'stable_ms', 'index'],
+  wait_for_url_contains: ['url', 'use_regex'],
+  wait_for_response: ['url', 'method', 'status'],
+  wait_for_download: ['save_path', 'var_name'],
   kw_assert_page_title: ['title'],
   kw_assert_page_url: ['url'],
   kw_assert_value: ['locator', 'value'],
   kw_assert_element_text: ['locator', 'text', 'match_mode'],
   kw_assert_element_text_contains: ['locator', 'text'],
   kw_assert_text_contains: ['text'],
+  kw_assert_text_not_contains: ['text', 'locator', 'index'],
+  kw_assert_element_count: ['locator', 'count', 'operator'],
+  kw_assert_text_length: ['locator', 'length', 'min_length', 'max_length', 'operator', 'index'],
   kw_assert_attribute: ['locator', 'attr_name', 'value'],
+  kw_assert_attribute_exists: ['locator', 'attr_name', 'index'],
+  kw_assert_attribute_not_exists: ['locator', 'attr_name', 'index'],
   kw_assert_visible: ['locator', 'index'],
   kw_assert_hidden: ['locator', 'index'],
   kw_assert_not_exist: ['locator'],
@@ -90,10 +112,36 @@ export const UI_STEP_PARAM_ORDER = {
   kw_assert_element_order: ['first_locator', 'second_locator', 'order', 'first_index', 'second_index'],
   extract_text: ['locator', 'var_name', 'index'],
   extract_attribute: ['locator', 'attr_name', 'var_name', 'index'],
+  extract_response_field: ['field', 'var_name', 'url', 'method', 'status'],
+  smart_step: ['intent'],
+}
+
+/** 点击类：收进「高级配置」的参数（日常二次确认弹窗请拆两步点击，勿用这些） */
+export const UI_STEP_ADVANCED_PARAM_KEYS = {
+  click_ele: [
+    'wait_download', 'save_path', 'var_name', 'download_timeout',
+    'accept_dialog', 'dismiss_dialog', 'dialog_timeout', 'prompt_text',
+  ],
+  click_by_text: [
+    'wait_download', 'save_path', 'var_name', 'download_timeout',
+    'accept_dialog', 'dismiss_dialog', 'dialog_timeout', 'prompt_text',
+  ],
+}
+
+export function getStepAdvancedParamKeys(method) {
+  return UI_STEP_ADVANCED_PARAM_KEYS[method] || []
+}
+
+export function hasStepAdvancedParams(method) {
+  return getStepAdvancedParamKeys(method).length > 0
 }
 
 /** method + paramKey -> 展示标签（覆盖通用标签） */
 export const UI_STEP_PARAM_LABELS = {
+  fill_by_image: {
+    value: '输入内容',
+    clear_first: '输入前清空',
+  },
   drag_and_drop: {
     source_position_x: '起始落点X(像素)',
     source_position_y: '起始落点Y(像素)',
@@ -112,7 +160,18 @@ export const UI_STEP_PARAM_LABELS = {
   kw_assert_element_text: { text: '预期文本', match_mode: '匹配方式' },
   kw_assert_element_text_contains: { text: '预期包含文本' },
   kw_assert_text_contains: { text: '预期包含文本' },
+  kw_assert_text_not_contains: { text: '不应包含的文本', locator: '元素定位（可选，留空则检查整页）' },
+  kw_assert_element_count: { count: '期望数量', operator: '比较方式(eq/gte/lte)' },
+  kw_assert_text_length: {
+    length: '精确长度',
+    min_length: '最小长度',
+    max_length: '最大长度',
+    operator: '比较方式(eq/gte/lte)',
+    locator: '元素定位（可选）',
+  },
   kw_assert_attribute: { value: '预期属性值', attr_name: '属性名称' },
+  kw_assert_attribute_exists: { attr_name: '属性名称' },
+  kw_assert_attribute_not_exists: { attr_name: '属性名称' },
   kw_assert_visible: { index: '顺序索引' },
   kw_assert_hidden: { index: '顺序索引' },
   kw_assert_not_visible: { index: '顺序索引' },
@@ -128,6 +187,29 @@ export const UI_STEP_PARAM_LABELS = {
     order: '期望顺序',
     first_index: '靠前元素索引',
     second_index: '参照元素索引',
+  },
+  click_ele: {
+    wait_download: '点击后等待文件下载',
+    save_path: '下载保存路径',
+    var_name: '下载路径变量名',
+    download_timeout: '下载超时(毫秒)',
+    accept_dialog: '自动点原生弹窗「确定」',
+    dismiss_dialog: '自动点原生弹窗「取消」',
+    dialog_timeout: '等待原生弹窗超时',
+    prompt_text: 'prompt 弹窗输入内容',
+  },
+  click_by_text: {
+    wait_download: '点击后等待文件下载',
+    save_path: '下载保存路径',
+    var_name: '下载路径变量名',
+    download_timeout: '下载超时(毫秒)',
+    accept_dialog: '自动点原生弹窗「确定」',
+    dismiss_dialog: '自动点原生弹窗「取消」',
+    dialog_timeout: '等待原生弹窗超时',
+    prompt_text: 'prompt 弹窗输入内容',
+  },
+  smart_step: {
+    intent: '步骤意图',
   },
 }
 
@@ -164,8 +246,79 @@ export const UI_STEP_PARAM_TOOLTIPS = {
   drag_and_drop: DRAG_DROP_TOOLTIPS,
   frame_drag_and_drop: DRAG_DROP_TOOLTIPS,
   kw_assert_element_order: ELEMENT_ORDER_TOOLTIPS,
+  click_by_text: {
+    text: '页面上可见的文本内容',
+    exact: '是否精确匹配（默认模糊匹配）',
+    index: '第几个匹配项（从 1 开始）',
+    wait_download:
+      '用于点「导出/下载」按钮后等待浏览器下载完成，不是上传文件。\n'
+      + '页面二次确认请另加一步点击确定，不要用下面的原生弹窗开关。',
+    save_path: '指定保存路径；留空则使用浏览器临时目录',
+    var_name: '将下载文件路径写入用例变量，供后续步骤引用',
+    download_timeout: '等待下载完成的最长时间，默认 60000ms',
+    accept_dialog:
+      '仅处理浏览器系统弹窗（window.alert / confirm / prompt）的「确定」。\n'
+      + '页面自己画的二次确认对话框请拆成两步：先点触发按钮，再点「确定」。',
+    dismiss_dialog:
+      '仅处理浏览器系统 confirm/prompt 的「取消」。\n'
+      + '与「自动点原生弹窗确定」互斥；页面组件弹窗请另加点击步骤。',
+    dialog_timeout: '等待原生系统弹窗出现的最长时间，默认 10000ms',
+    prompt_text: '若是 prompt 输入框，这里填写要自动输入的文本',
+  },
+  click_ele: {
+    force: '元素被遮挡时尝试强制点击',
+    wait_download:
+      '用于点「导出/下载」按钮后等待浏览器下载完成，不是上传文件。\n'
+      + '页面二次确认请另加一步点击确定，不要用下面的原生弹窗开关。',
+    save_path: '指定保存路径；留空则使用浏览器临时目录',
+    var_name: '将下载文件路径写入用例变量，供后续步骤引用',
+    download_timeout: '等待下载完成的最长时间，默认 60000ms',
+    accept_dialog:
+      '仅处理浏览器系统弹窗（window.alert / confirm / prompt）的「确定」。\n'
+      + '页面自己画的二次确认对话框请拆成两步：先点触发按钮，再点「确定」。',
+    dismiss_dialog:
+      '仅处理浏览器系统 confirm/prompt 的「取消」。\n'
+      + '与「自动点原生弹窗确定」互斥；页面组件弹窗请另加点击步骤。',
+    dialog_timeout: '等待原生系统弹窗出现的最长时间，默认 10000ms',
+    prompt_text: '若是 prompt 输入框，这里填写要自动输入的文本',
+  },
+  wait_for_url_contains: {
+    url: '当前页面 URL 应包含的片段；默认按字面子串匹配',
+    use_regex: '开启后将 url 当作正则（默认关闭，避免把普通路径误当正则）',
+  },
+  wait_for_download: {
+    save_path: '独立步骤有漏事件风险；更推荐在点击步骤高级配置里开启「等待文件下载」',
+    var_name: '将下载路径写入变量（可选）',
+  },
+  accept_dialog: {
+    prompt_text:
+      '仅用于浏览器系统 prompt。本步只注册「下一步」的处理器；页面二次确认请用两步点击。',
+  },
+  dismiss_dialog: {},
+  extract_response_field: {
+    field: 'JSON 字段路径，如 data.id、items[0].name',
+    url: '若需重新等待接口，填写 URL 匹配（可选）',
+    var_name: '提取结果写入的变量名',
+  },
+  wait_for_element_text_change: {
+    text: '初始文本（留空则取步骤开始时的当前文本）',
+  },
+  wait_for_element_text_stable: {
+    stable_ms: '文本连续不变多少毫秒后视为稳定，默认 500',
+  },
+  wait_for_response: {
+    url: '接口 URL 子串或正则，如 /api/user 或 login',
+    method: 'HTTP 方法过滤，如 GET/POST（可选）',
+    status: 'HTTP 状态码过滤，如 200（可选）',
+  },
   click_by_image: {
     template: 'MinIO 对象键（可上传识别图）；固定 viewport 下匹配小图并点击',
+    threshold: '相似度阈值 0.1～0.99，默认 0.8',
+  },
+  fill_by_image: {
+    template: '输入框区域模板（建议截 placeholder 或整框）；匹配后点击并键盘输入',
+    value: '要输入的文本，支持 ${{变量名}}',
+    clear_first: '输入前是否先清空（Ctrl/Cmd+A 后 Backspace），默认是',
     threshold: '相似度阈值 0.1～0.99，默认 0.8',
   },
   wait_for_image: {
@@ -180,23 +333,57 @@ export const UI_STEP_PARAM_TOOLTIPS = {
     template: '断言当前页面不能匹配到模板图像（如弹窗已关闭、图标已消失）',
     threshold: '相似度阈值，默认 0.8',
   },
+  smart_step: {
+    intent: '用自然语言描述本步要完成的操作，执行时将调用 AI Act 规划并执行',
+  },
 }
 
 export function isAssertionMethod(method) {
   return ASSERTION_METHODS.has(method)
 }
 
-export function getOrderedVisibleParams(method, params = {}) {
+export function getOrderedVisibleParams(method, params = {}, options = {}) {
+  const scope = options.scope || 'basic'
   const order = UI_STEP_PARAM_ORDER[method]
-  if (!order) return { ...params }
+  if (!order) {
+    if (scope === 'advanced') return {}
+    return { ...params }
+  }
+  const advancedKeySet = new Set(getStepAdvancedParamKeys(method))
   const optionalDragKeys = new Set([
     'source_position_x',
     'source_position_y',
     'target_position_x',
     'target_position_y',
   ])
+  const clickDownloadKeys = new Set(['save_path', 'var_name', 'download_timeout'])
+  const clickDialogKeys = new Set(['dialog_timeout', 'prompt_text'])
   const result = {}
   for (const key of order) {
+    if (scope === 'basic' && advancedKeySet.has(key)) continue
+    if (scope === 'advanced' && !advancedKeySet.has(key)) continue
+    if (
+      (method === 'click_ele' || method === 'click_by_text')
+      && clickDownloadKeys.has(key)
+      && !params.wait_download
+    ) {
+      continue
+    }
+    if (
+      (method === 'click_ele' || method === 'click_by_text')
+      && clickDialogKeys.has(key)
+      && !params.accept_dialog
+      && !params.dismiss_dialog
+    ) {
+      continue
+    }
+    if (
+      (method === 'click_ele' || method === 'click_by_text')
+      && key === 'prompt_text'
+      && !params.accept_dialog
+    ) {
+      continue
+    }
     if (Object.prototype.hasOwnProperty.call(params, key)) {
       result[key] = params[key]
     } else if (
@@ -206,6 +393,31 @@ export function getOrderedVisibleParams(method, params = {}) {
       result[key] = ''
     } else if (key === 'match_mode' && method === 'kw_assert_element_text') {
       result[key] = 'exact'
+    } else if (key === 'wait_download' && (method === 'click_ele' || method === 'click_by_text')) {
+      result[key] = params[key] ?? false
+    } else if (
+      (key === 'accept_dialog' || key === 'dismiss_dialog' || key === 'use_regex')
+      && (method === 'click_ele' || method === 'click_by_text' || method === 'wait_for_url_contains')
+    ) {
+      result[key] = params[key] ?? false
+    } else if (
+      (method === 'click_ele' || method === 'click_by_text')
+      && clickDownloadKeys.has(key)
+      && params.wait_download
+    ) {
+      result[key] = key === 'download_timeout' ? (params[key] ?? 60000) : (params[key] ?? '')
+    } else if (
+      (method === 'click_ele' || method === 'click_by_text')
+      && key === 'dialog_timeout'
+      && (params.accept_dialog || params.dismiss_dialog)
+    ) {
+      result[key] = params[key] ?? 10000
+    } else if (
+      (method === 'click_ele' || method === 'click_by_text')
+      && key === 'prompt_text'
+      && params.accept_dialog
+    ) {
+      result[key] = params[key] ?? ''
     } else if (key === 'index' && order.includes('index')) {
       result[key] = params[key] ?? 1
     } else if (key === 'order' && method === 'kw_assert_element_order') {
@@ -226,6 +438,86 @@ export function getParamLabel(method, key, fallbackLabel) {
 
 export function getParamTooltip(method, key) {
   return UI_STEP_PARAM_TOOLTIPS[method]?.[key] || ''
+}
+
+/** 易误用步骤：新增/编辑弹窗内展示的使用说明 */
+export const UI_STEP_USAGE_GUIDES = {
+  accept_dialog: {
+    title: '接受原生弹窗',
+    type: 'warning',
+    paragraphs: [
+      '只处理浏览器系统弹窗（alert/confirm/prompt），不是页面自己画的二次确认框。',
+      '本步只注册「下一步」处理器：请放在触发弹窗的点击之前；下一步未触发会自动清除。',
+      '日常删除确认等页面弹窗：请拆成两步点击（点删除 → 点确定），不要用本步骤。',
+    ],
+    example:
+      '系统 confirm：接受弹窗 → 点击触发按钮\n'
+      + '页面 Dialog：点击删除 → 点击确定',
+  },
+  dismiss_dialog: {
+    title: '取消原生弹窗',
+    type: 'warning',
+    paragraphs: [
+      '只处理浏览器系统 confirm/prompt 的「取消」。',
+      '放在触发点击之前；页面组件弹窗请另加一步点击「取消」。',
+    ],
+  },
+  wait_for_download: {
+    title: '等待下载',
+    type: 'warning',
+    paragraphs: [
+      '独立步骤有时序风险；更推荐在「点击元素」→ 高级配置里开启「点击后等待文件下载」。',
+      '本步仅对紧随下一步生效，未触发下载会自动清除。',
+    ],
+  },
+  wait_for_url_contains: {
+    title: '等待 URL 包含',
+    type: 'info',
+    paragraphs: [
+      '默认按字面子串匹配（填 /dashboard 即可）。',
+      '需要正则时再打开 use_regex，避免把普通路径当成正则一直等。',
+    ],
+  },
+  wait_for_response: {
+    title: '等待接口响应',
+    type: 'info',
+    paragraphs: [
+      '放在触发 Ajax 的操作之后，等待匹配 URL 的响应并缓存，供「提取接口响应字段」使用。',
+    ],
+    example:
+      '1. 点击保存\n'
+      + '2. 等待接口响应 { url: "/api/save" }\n'
+      + '3. 提取接口响应字段 { field: "data.id", var_name: "new_id" }',
+  },
+  extract_response_field: {
+    title: '提取接口响应字段',
+    type: 'info',
+    paragraphs: [
+      '从最近一次「等待接口响应」的 JSON 中取值写入变量；也可用 url 让本步重新等待一次。',
+    ],
+  },
+  click_ele: {
+    title: '点击高级选项说明',
+    type: 'info',
+    paragraphs: [
+      '日常二次确认（页面 Dialog）：拆成两步点击即可，不要开「原生弹窗」。',
+      '浏览器系统弹窗（少见）：在高级配置里开「自动点确定/取消」。',
+      '点下载/导出按钮：在高级配置里开「点击后等待文件下载」（不是上传文件）。',
+    ],
+  },
+  click_by_text: {
+    title: '按文本点击 — 高级说明',
+    type: 'info',
+    paragraphs: [
+      '页面二次确认请两步点击；系统弹窗/文件下载选项在高级配置里。',
+      'exact：是否精确匹配文本，默认模糊。',
+    ],
+  },
+}
+
+export function getStepUsageGuide(method) {
+  if (!method) return null
+  return UI_STEP_USAGE_GUIDES[method] || null
 }
 
 export function isDragDropMethod(method) {

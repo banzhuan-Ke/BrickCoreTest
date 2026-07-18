@@ -331,6 +331,10 @@
         </template>
         <p class="ui-run-act-hint">开启后，定位器自愈仍失败时，将按步骤 intent/操作名称由 AI 重新规划并执行一步。</p>
       </el-form-item>
+      <UiRunFailureAnalysisField
+        v-model="runParams.failure_analysis_on_report"
+        :options="healRunOptions"
+      />
       <el-form-item label="执行设备" required>
         <el-select v-model="runParams.device_id" placeholder="请选择执行设备" style="width: 100%">
           <el-option
@@ -441,6 +445,7 @@ import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 import BatchCatalogDialog from '@/components/BatchCatalogDialog.vue'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
 import UiRunAiActDisabledTip from '@/components/UiRunAiActDisabledTip.vue'
+import UiRunFailureAnalysisField from '@/components/UiRunFailureAnalysisField.vue'
 import {UserStore} from "@/stores/module/UserStore.js"
 import CopyToProjectDialog from '@/components/CopyToProjectDialog.vue'
 import { useAssetFavorites } from '@/composables/useAssetFavorites'
@@ -634,6 +639,7 @@ const loadHealRunOptions = async () => {
       healRunOptions.value = res.data.data || null
       runParams.ai_heal_enabled = healRunOptions.value?.locator_heal_default_on_execute ?? true
       runParams.ai_act_enabled = healRunOptions.value?.ai_act_default_on_execute ?? false
+      runParams.failure_analysis_on_report = healRunOptions.value?.failure_analysis_default_on_report ?? true
     }
   } catch {
     healRunOptions.value = null
@@ -662,6 +668,7 @@ const runParams = reactive({
   headless: false,
   ai_heal_enabled: true,
   ai_act_enabled: false,
+  failure_analysis_on_report: true,
 })
 
 const clickRun = async (case_id) => {
@@ -674,6 +681,7 @@ const clickRun = async (case_id) => {
   runParams.headless = false
   runParams.ai_heal_enabled = true
   runParams.ai_act_enabled = false
+  runParams.failure_analysis_on_report = true
   await loadHealRunOptions()
   // 获取设备列表
   await getDeviceList()
@@ -711,6 +719,9 @@ async function runCase() {
     }
     if (healRunOptions.value?.ai_act_enabled && healRunOptions.value?.ai_act_allow_run_override) {
       payload.ai_act_enabled = runParams.ai_act_enabled
+    }
+    if (healRunOptions.value?.failure_analysis_allow_run_override) {
+      payload.failure_analysis_on_report = runParams.failure_analysis_on_report
     }
     const response = await http.runnerApi.runCase(payload.case_id, payload)
     showRunDlg.value = false

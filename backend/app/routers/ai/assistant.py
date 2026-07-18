@@ -147,6 +147,11 @@ QUICK_PROMPTS = [
         "message": "列出当前项目的 App 用例和在线 App Runner 设备（含 adb 设备），并说明如何执行单条 App 用例。",
     },
     {
+        "key": "qa_eval",
+        "label": "问答评测",
+        "message": "列出当前项目的问答准确性评测集及被测 API 配置，并说明如何提交跑批。",
+    },
+    {
         "key": "data_factory",
         "label": "数据工厂",
         "message": "列出当前项目的数据工厂数据源和 SQL 模板（setup/teardown），说明各环境配置情况。",
@@ -170,7 +175,12 @@ QUICK_PROMPTS = [
     dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
 )
 async def get_quick_prompts():
-    return StandardResponse(data={"items": QUICK_PROMPTS})
+    from app.core.platform.edition import qa_eval_feature_enabled
+
+    items = QUICK_PROMPTS
+    if not qa_eval_feature_enabled():
+        items = [p for p in QUICK_PROMPTS if p.get("key") != "qa_eval"]
+    return StandardResponse(data={"items": items})
 
 
 @router.get(

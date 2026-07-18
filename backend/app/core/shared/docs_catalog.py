@@ -29,6 +29,8 @@ BUILTIN_DOC_ENTRIES: dict[str, tuple[str, str]] = {
     "project-setup": ("docs-site/guide/project-setup.md", "项目与环境"),
     "test-catalog": ("docs-site/guide/test-catalog.md", "测试目录"),
     "ui-automation": ("docs-site/guide/ui-automation.md", "Web 自动化"),
+    "web-recording-playback": ("docs-site/guide/web-recording-playback.md", "Web 录制与稳定回放"),
+    "web-troubleshooting": ("docs-site/guide/web-troubleshooting.md", "Web 失败类型与排障"),
     "app-automation": ("docs-site/guide/app-automation.md", "App 自动化"),
     "runner-install-guide": ("docs-site/guide/runner-install-guide.md", "执行器安装指南"),
     "runner-client": ("docs-site/guide/runner-client.md", "执行器使用说明"),
@@ -45,6 +47,7 @@ BUILTIN_DOC_ENTRIES: dict[str, tuple[str, str]] = {
     "platform-assistant": ("docs-site/guide/platform-assistant.md", "平台内 AI 助手"),
     "mcp-server": ("docs-site/guide/mcp-server.md", "MCP 外部接入"),
     "docker-deploy": ("docs-site/guide/docker-deploy.md", "Docker 部署"),
+    "windows-deploy": ("docs-site/guide/windows-deploy.md", "Windows 部署"),
     "release-notes": ("docs-site/guide/release-notes.md", "版本更新记录"),
     "system-admin": ("docs-site/guide/system-admin.md", "系统管理"),
 }
@@ -75,6 +78,8 @@ BUILTIN_DOC_TREE: list[dict[str, Any]] = [
         "type": "group",
         "children": [
             {"id": "ui-automation", "title": "Web 自动化", "type": "builtin"},
+            {"id": "web-recording-playback", "title": "Web 录制与稳定回放", "type": "builtin"},
+            {"id": "web-troubleshooting", "title": "Web 失败类型与排障", "type": "builtin"},
             {"id": "app-automation", "title": "App 自动化", "type": "builtin"},
             {"id": "api-automation", "title": "接口自动化", "type": "builtin"},
             {"id": "data-factory", "title": "数据工厂", "type": "builtin"},
@@ -98,6 +103,7 @@ BUILTIN_DOC_TREE: list[dict[str, Any]] = [
             {"id": "runner-troubleshooting", "title": "Runner 排查指南", "type": "builtin"},
             {"id": "runner-linux-server", "title": "Linux 无头 Runner", "type": "builtin"},
             {"id": "docker-deploy", "title": "Docker 部署", "type": "builtin"},
+            {"id": "windows-deploy", "title": "Windows 部署", "type": "builtin"},
         ],
     },
     {

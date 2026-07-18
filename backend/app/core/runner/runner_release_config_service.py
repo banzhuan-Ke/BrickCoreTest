@@ -47,6 +47,16 @@ async def enrich_release_info(info: dict[str, Any], request_base_url: str = "") 
     else:
         info["runner_client_download_url"] = ""
 
+    base = (request_base_url or settings.BASE_URL or "").rstrip("/")
+    if info.get("perf_package_available") and base:
+        info["perf_package_download_url"] = f"{base}/runner/perf-client-download?platform=win"
+    else:
+        info["perf_package_download_url"] = ""
+    if info.get("perf_package_mac_available") and base:
+        info["perf_package_mac_download_url"] = f"{base}/runner/perf-client-download?platform=mac"
+    else:
+        info["perf_package_mac_download_url"] = ""
+
     return info
 
 
@@ -54,14 +64,27 @@ async def get_runner_release_config_for_admin() -> dict[str, Any]:
     row = await SystemRunnerReleaseConfig.first()
     local_path = runner_package_path()
     local_available = local_path.is_file()
+    from app.core.runner.runner_release import perf_package_path
+
+    perf_win = perf_package_path("win")
+    perf_mac = perf_package_path("mac")
+    perf_win_ok = perf_win.is_file()
+    perf_mac_ok = perf_mac.is_file()
+    common = {
+        "platform_package_available": local_available,
+        "platform_package_size_bytes": local_path.stat().st_size if local_available else 0,
+        "perf_package_available": perf_win_ok,
+        "perf_package_size_bytes": perf_win.stat().st_size if perf_win_ok else 0,
+        "perf_package_mac_available": perf_mac_ok,
+        "perf_package_mac_size_bytes": perf_mac.stat().st_size if perf_mac_ok else 0,
+    }
     if not row:
         env_url = (settings.RUNNER_CLIENT_DOWNLOAD_URL or "").strip()
         return {
             "external_download_url": env_url,
             "external_download_label": "网盘下载",
             "using_env_fallback": bool(env_url),
-            "platform_package_available": local_available,
-            "platform_package_size_bytes": local_path.stat().st_size if local_available else 0,
+            **common,
             "update_by": "",
             "update_time": "",
         }
@@ -70,8 +93,7 @@ async def get_runner_release_config_for_admin() -> dict[str, Any]:
         "external_download_url": row.external_download_url or "",
         "external_download_label": row.external_download_label or "网盘下载",
         "using_env_fallback": False,
-        "platform_package_available": local_available,
-        "platform_package_size_bytes": local_path.stat().st_size if local_available else 0,
+        **common,
         "update_by": row.update_by or "",
         "update_time": row.update_time.strftime("%Y-%m-%d %H:%M:%S") if row.update_time else "",
     }

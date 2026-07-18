@@ -8,7 +8,7 @@ export const UI_THEMES = {
 
 export const UI_THEME_OPTIONS = [
     { value: UI_THEMES.classic, label: '经典风格', desc: '原有界面风格，支持暗黑模式' },
-    { value: UI_THEMES.pro, label: '清新 Pro', desc: '柔和蓝紫渐变，圆角卡片布局' },
+    { value: UI_THEMES.pro, label: '清新简约', desc: '柔和蓝紫渐变，圆角卡片布局' },
     { value: UI_THEMES.compact, label: '紧凑经典', desc: '侧栏与表格更紧凑，适合大屏专业场景' },
 ]
 

@@ -63,6 +63,13 @@
         :has-image-locator="appFormHasImageLocator"
         :title="appStepGuideTitle"
       />
+
+      <UiStepUsageGuide
+        v-if="showUiStepUsageGuide && !hasParams"
+        :method="form.method"
+        show-label
+        class="ui-step-usage-guide-standalone"
+      />
       
       <!-- 数据库断言（专用表单） -->
       <el-form-item label="库断言" v-if="isDbAssertStep">
@@ -122,7 +129,13 @@
       </el-form-item>
 
       <!-- 参数配置 -->
-      <el-form-item :label="paramsSectionLabel" v-if="hasParams && !isDbAssertStep">
+      <el-form-item v-if="hasParams && !isDbAssertStep">
+        <template #label>
+          <span class="params-section-label">
+            {{ paramsSectionLabel }}
+            <UiStepUsageGuide v-if="showUiStepUsageGuide" :method="form.method" />
+          </span>
+        </template>
         <div class="params-container">
           <el-alert
             v-if="isDragDropStep"
@@ -136,6 +149,20 @@
             <p class="drag-position-example">
               例：把「拖拽目录2」插到「拖拽目录1」前面 →
               起始=<code>目录2</code>，结束=<code>目录1</code>，目标 X=<code>20</code>，目标 Y=<code>5</code>
+            </p>
+          </el-alert>
+          <el-alert
+            v-if="isSmartStep"
+            type="info"
+            :closable="false"
+            show-icon
+            class="drag-position-hint"
+          >
+            <template #title>智能步骤</template>
+            <p>用自然语言描述本步要完成的操作；执行时由 AI 结合当前页面规划并执行。</p>
+            <p class="drag-position-example">
+              多步可写编号列表，保存时自动拆成多条智能步骤，例如：
+              <code>1. 在搜索框输入订单号</code>、<code>2、点击查询按钮</code>
             </p>
           </el-alert>
           <el-alert
@@ -285,6 +312,16 @@
                 >AI 自愈</el-button>
               </div>
             </template>
+            <template v-else-if="isFillValueParam(key)">
+              <div class="param-input-row">
+                <FillValueInput v-model="form.params[key]" style="flex: 1" />
+                <VarInsertButton
+                  v-if="isFillValueFixedMode(form.params[key])"
+                  :env-id="varInsertEnvId"
+                  label="变量"
+                />
+              </div>
+            </template>
             <template v-else-if="isLongTextKey(key)">
               <div class="param-input-row">
                 <el-input
@@ -299,7 +336,11 @@
               </div>
             </template>
             <template v-else-if="isNumber(value)">
-              <el-input-number v-model="form.params[key]" style="width: 100%" :controls-position="'right'" />
+              <el-input-number
+                v-model="form.params[key]"
+                :style="{ width: compactNumberWidth(key) }"
+                controls-position="right"
+              />
             </template>
             <template v-else-if="isSelect(key)">
               <el-select v-model="form.params[key]" style="width: 100%">
@@ -335,28 +376,114 @@
       </el-form-item>
       
       <!-- 高级配置（App 步骤使用 params 内超时，不展示此项） -->
-      <el-form-item label="高级配置" v-if="!isConditionBranch && !isAppStep">
-        <div class="advanced-box">
-          <div class="advanced-header" @click="showAdvanced = !showAdvanced">
-            <span class="advanced-title">超时与重试</span>
+      <el-form-item v-if="!isConditionBranch && !isAppStep" label-width="0" class="advanced-form-item">
+        <div class="advanced-panel">
+          <button type="button" class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+            <span class="advanced-toggle-main">
+              <span class="advanced-toggle-title">高级配置</span>
+              <span class="advanced-toggle-hint">{{ advancedToggleHint }}</span>
+              <el-tag v-if="advancedActiveCount > 0" size="small" type="warning" effect="plain" round>
+                已启用 {{ advancedActiveCount }} 项
+              </el-tag>
+            </span>
             <el-icon class="advanced-arrow" :class="{ 'is-open': showAdvanced }"><ArrowDown /></el-icon>
-          </div>
-          <div class="advanced-content" v-show="showAdvanced">
-            <div class="advanced-row">
-              <span class="advanced-label">超时时间</span>
-              <el-input-number 
-                v-model="form.config.timeout" 
-                :min="1000" 
-                :step="1000" 
-                :controls-position="'right'"
-                style="width: 140px"
-              />
-              <span class="advanced-unit">ms</span>
-            </div>
-            <div class="advanced-row">
-              <span class="advanced-label">失败重试</span>
-              <el-switch v-model="form.config.retry" />
-            </div>
+          </button>
+
+          <div v-show="showAdvanced" class="advanced-body">
+            <section class="advanced-section">
+              <div class="advanced-section-head">
+                <h4>超时与重试</h4>
+              </div>
+              <div class="advanced-grid">
+                <div class="advanced-field">
+                  <span class="advanced-field-label">超时时间</span>
+                  <div class="advanced-field-control">
+                    <el-input-number
+                      v-model="form.config.timeout"
+                      :min="1000"
+                      :step="1000"
+                      controls-position="right"
+                      style="width: 140px"
+                    />
+                    <span class="advanced-unit">ms</span>
+                  </div>
+                </div>
+                <div class="advanced-field">
+                  <span class="advanced-field-label">执行前等待</span>
+                  <div class="advanced-field-control">
+                    <el-input-number
+                      v-model="form.config.pre_wait_ms"
+                      :min="0"
+                      :max="600000"
+                      :step="100"
+                      controls-position="right"
+                      style="width: 140px"
+                    />
+                    <span class="advanced-unit">ms</span>
+                  </div>
+                </div>
+                <div class="advanced-field">
+                  <span class="advanced-field-label">失败重试</span>
+                  <el-switch v-model="form.config.retry" />
+                </div>
+              </div>
+            </section>
+
+            <section v-if="hasClickAdvanced" class="advanced-section">
+              <div class="advanced-section-head">
+                <h4>原生弹窗 / 文件下载</h4>
+                <UiStepUsageGuide :method="form.method" />
+              </div>
+              <p class="advanced-section-desc">
+                页面二次确认（自己画的 Dialog）：请拆成「点删除 → 点确定」两步。
+                以下仅用于浏览器系统弹窗，或点击触发的文件下载（不是上传）。
+              </p>
+              <div class="params-container advanced-params">
+                <div
+                  class="param-item"
+                  v-for="(value, key) in advancedParams"
+                  :key="'adv-' + key"
+                >
+                  <div class="param-label">
+                    <span>{{ resolveParamLabel(key) }}</span>
+                    <el-tooltip
+                      v-if="resolveParamTooltip(key)"
+                      placement="top"
+                      :show-after="200"
+                      popper-class="param-tip-popper"
+                    >
+                      <template #content>
+                        <div class="param-tip-content">{{ resolveParamTooltip(key) }}</div>
+                      </template>
+                      <el-icon class="param-tip-icon"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </div>
+                  <template v-if="isBoolean(key)">
+                    <el-switch
+                      v-model="form.params[key]"
+                      @change="(val) => onClickAdvancedSwitch(key, val)"
+                    />
+                  </template>
+                  <template v-else-if="isNumber(value)">
+                    <el-input-number
+                      v-model="form.params[key]"
+                      :style="{ width: compactNumberWidth(key) }"
+                      controls-position="right"
+                    />
+                  </template>
+                  <template v-else>
+                    <div class="param-input-row">
+                      <el-input
+                        v-model="form.params[key]"
+                        :placeholder="isRequiredParam(key) ? '必填' : '可选'"
+                        style="flex: 1"
+                      />
+                      <VarInsertButton v-if="canInsertVar(key)" :env-id="varInsertEnvId" label="变量" />
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
       </el-form-item>
@@ -405,7 +532,8 @@ import { ref, computed, watch, inject } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import ConditionEdit from './ConditionEdit.vue'
+import FillValueInput from '@/components/StepEditor/FillValueInput.vue'
+import { FILL_VALUE_INPUT_METHODS, isFillValueFixedMode } from '@/utils/fillValueMode.js'
 import LocatorSelector from '@/components/LocatorSelector.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
@@ -416,10 +544,13 @@ import UiTestMultiFilePicker from './UiTestMultiFilePicker.vue'
 import UiTestFolderPicker from './UiTestFolderPicker.vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { insertVarRef } from '@/utils/varInsert.js'
-import { getOrderedVisibleParams, getParamLabel, getParamTooltip, isDragDropMethod, isElementOrderMethod, isAssertionMethod } from '@/utils/uiStepMeta.js'
+import { getOrderedVisibleParams, getParamLabel, getParamTooltip, getStepUsageGuide, hasStepAdvancedParams, isDragDropMethod, isElementOrderMethod, isAssertionMethod } from '@/utils/uiStepMeta.js'
+import { splitSmartStepIntents } from '@/utils/smartStepSplit.js'
+import { generateStepId } from '@/utils/stepHelper.js'
 import { getAppOrderedVisibleParams, getAppParamLabel, getAppParamTooltip, isAppMethod, isAppRequiredParam, getAppSelectOptions, validateAppStepParams, validateAppBranchConditions, getAppLocatorByOptions, isWebviewLocator, isImageLocator, isAppLocatorFilled, APP_LOCATOR_CONTEXT_NATIVE, applyDefaultAppIdToStepParams, getProjectDefaultAppId, prepareAppLocatorForEdit, serializeAppLocatorForSave, normalizeAppLocator } from '@/utils/appStepMeta.js'
 import { presignTemplateKeys, resolveTemplatePreviewUrl } from '@/utils/appTemplatePresign.js'
 import AppH5UsageGuide from '@/components/App/AppH5UsageGuide.vue'
+import UiStepUsageGuide from './UiStepUsageGuide.vue'
 import { appElementApi } from '@/api/modules/app.js'
 import { aiGenerateApi } from '@/api/modules/ai.js'
 
@@ -481,7 +612,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['update:visible', 'save', 'cancel'])
+const emit = defineEmits(['update:visible', 'save', 'save-multiple', 'cancel'])
 
 const formRef = ref()
 const form = ref({
@@ -491,7 +622,7 @@ const form = ref({
   intent: '',
   method: '',
   params: {},
-  config: { timeout: 30000, retry: false }
+  config: { timeout: 30000, retry: false, pre_wait_ms: 0 }
 })
 const showAdvanced = ref(false)
 const healingLocator = ref(false)
@@ -545,7 +676,7 @@ const isDbAssertStep = computed(() => form.value.method === 'kw_db_assert')
 
 const isUploadFileStep = computed(() => form.value.method === 'upload_file')
 
-const WEB_VISION_METHODS = new Set(['click_by_image', 'wait_for_image', 'kw_assert_image', 'kw_assert_image_not_exists'])
+const WEB_VISION_METHODS = new Set(['click_by_image', 'fill_by_image', 'wait_for_image', 'kw_assert_image', 'kw_assert_image_not_exists'])
 const isWebVisionStep = computed(
   () => !isAppStep.value && WEB_VISION_METHODS.has(form.value.method),
 )
@@ -562,7 +693,49 @@ const uploadMode = computed({
 
 const isDragDropStep = computed(() => isDragDropMethod(form.value.method))
 
+const isSmartStep = computed(() => form.value.method === 'smart_step')
+
 const isElementOrderStep = computed(() => isElementOrderMethod(form.value.method))
+
+const showUiStepUsageGuide = computed(() => {
+  if (isAppStep.value || isDbAssertStep.value) return false
+  // 点击类说明放在高级配置分区标题旁，避免主表单被打扰
+  if (hasStepAdvancedParams(form.value.method)) return false
+  return !!getStepUsageGuide(form.value.method)
+})
+
+const hasClickAdvanced = computed(() => hasStepAdvancedParams(form.value.method))
+
+const advancedParams = computed(() => {
+  if (!hasClickAdvanced.value) return {}
+  const raw = { ...(form.value.params || {}) }
+  return getOrderedVisibleParams(form.value.method, raw, { scope: 'advanced' })
+})
+
+const advancedActiveCount = computed(() => {
+  if (!hasClickAdvanced.value) return 0
+  const p = form.value.params || {}
+  let n = 0
+  if (p.wait_download) n += 1
+  if (p.accept_dialog) n += 1
+  if (p.dismiss_dialog) n += 1
+  return n
+})
+
+const advancedToggleHint = computed(() => {
+  if (hasClickAdvanced.value) return '超时 · 重试 · 原生弹窗 / 下载'
+  return '超时 · 重试'
+})
+
+function onClickAdvancedSwitch(key, val) {
+  if (!form.value.params) form.value.params = {}
+  if (key === 'accept_dialog' && val) {
+    form.value.params.dismiss_dialog = false
+  }
+  if (key === 'dismiss_dialog' && val) {
+    form.value.params.accept_dialog = false
+  }
+}
 
 const paramsSectionLabel = computed(() =>
   isAssertionMethod(form.value.method) ? '断言参数' : '配置参数'
@@ -596,7 +769,7 @@ const filteredParams = computed(() => {
   if (isAppStep.value) {
     return getAppOrderedVisibleParams(form.value.method, raw)
   }
-  return getOrderedVisibleParams(form.value.method, raw)
+  return getOrderedVisibleParams(form.value.method, raw, { scope: 'basic' })
 })
 
 // 是否有参数
@@ -648,7 +821,13 @@ function isRequiredParam(key) {
     return assertionRequired[method].includes(key)
   }
   if (WEB_VISION_METHODS.has(method)) {
+    if (method === 'fill_by_image') {
+      return key === 'template' || key === 'value'
+    }
     return key === 'template'
+  }
+  if (method === 'smart_step') {
+    return key === 'intent'
   }
   const requiredParams = ['selector', 'condition', 'locator', 'var_name', 'attr_name', 'url', 'value', 'text']
   return requiredParams.includes(key)
@@ -711,12 +890,19 @@ const paramLabelMap = {
   // 文件上传
   file_path: '文件绝对路径',
   
-  // 强制点击
-  force: '强制点击(绕过遮挡)'
+  // 强制点击 / 点击高级（标签以 uiStepMeta 为准，此处兜底）
+  force: '强制点击(绕过遮挡)',
+  wait_download: '点击后等待文件下载',
+  accept_dialog: '自动点原生弹窗「确定」',
+  dismiss_dialog: '自动点原生弹窗「取消」',
+  dialog_timeout: '等待原生弹窗超时',
+  use_regex: '使用正则匹配',
+  save_path: '下载保存路径',
+  download_timeout: '下载超时(毫秒)',
 }
 
 // 长文本类型的key
-const longTextKeys = ['url', 'selector', 'script', 'condition', 'text', 'value', 'path', 'download_path']
+const longTextKeys = ['url', 'selector', 'script', 'condition', 'text', 'value', 'path', 'download_path', 'intent']
 
 function repairWebStepParams(params) {
   if (!params || typeof params !== 'object') return params || {}
@@ -763,7 +949,13 @@ watch(() => props.step, (newStep) => {
     form.value = {
       ...stepData,
       params: baseParams,
-      config: { timeout: 30000, retry: false, ...newStep.config },
+      config: {
+        timeout: 30000,
+        retry: false,
+        pre_wait_ms: 0,
+        ...newStep.config,
+        pre_wait_ms: newStep.config?.pre_wait_ms ?? newStep.pre_wait_ms ?? 0,
+      },
       branches: newStep.branches ? JSON.parse(JSON.stringify(newStep.branches)) : undefined
     }
     if (isAppStep.value && isAppMethod(form.value.method)) {
@@ -783,6 +975,10 @@ watch(() => props.step, (newStep) => {
 watch(() => props.visible, (open) => {
   if (open && !varInsertEnvId.value && proStore.envList.length) {
     varInsertEnvId.value = proStore.envList[0].id
+  }
+  if (open) {
+    const p = form.value.params || {}
+    showAdvanced.value = !!(p.wait_download || p.accept_dialog || p.dismiss_dialog)
   }
   if (open && isAppStep.value) {
     loadAppElementOptions().then(() => {
@@ -811,6 +1007,10 @@ const visible = computed({
   set: (val) => emit('update:visible', val)
 })
 
+function isFillValueParam(key) {
+  return key === 'value' && FILL_VALUE_INPUT_METHODS.has(form.value.method) && !isAppStep.value
+}
+
 // 判断是否为长文本key
 function isLongTextKey(key) {
   return longTextKeys.includes(key)
@@ -825,6 +1025,15 @@ function isLongText(value) {
 // 判断是否为数字
 function isNumber(value) {
   return typeof value === 'number'
+}
+
+/** 索引/计数/超时等短数字，避免拉满整行 */
+function compactNumberWidth(key) {
+  const tiny = new Set([
+    'index', 'first_index', 'second_index', 'count', 'length', 'min_length', 'max_length',
+  ])
+  if (tiny.has(key)) return '120px'
+  return '168px'
 }
 
 // 判断是否为下拉选择
@@ -1151,7 +1360,8 @@ async function confirmHeal() {
 
 // 判断是否为布尔值
 function isBoolean(key) {
-  const booleanKeys = ['force']
+  if (form.value.method === 'fill_by_image' && key === 'clear_first') return true
+  const booleanKeys = ['force', 'wait_download', 'exact', 'accept_dialog', 'dismiss_dialog', 'use_regex']
   return booleanKeys.includes(key)
 }
 
@@ -1162,8 +1372,8 @@ function getOptions(key) {
   }
   const options = {
     wait_until: [
-      { label: '页面加载完成', value: 'load' },
       { label: 'DOM就绪', value: 'domcontentloaded' },
+      { label: '页面加载完成', value: 'load' },
       { label: '网络空闲', value: 'networkidle' }
     ],
     browser_type: [
@@ -1256,6 +1466,13 @@ async function handleSave() {
       for (const key of Object.keys(filteredParams.value)) {
         if (isRequiredParam(key)) {
           const value = form.value.params[key]
+          if (isFillValueParam(key)) {
+            if (value == null || value === '') {
+              ElMessage.warning(`请填写${resolveParamLabel(key)}`)
+              return
+            }
+            continue
+          }
           if (!value || (typeof value === 'string' && value.trim() === '')) {
             ElMessage.warning(`请填写${resolveParamLabel(key)}`)
             return
@@ -1279,6 +1496,14 @@ async function handleSave() {
     keyword: form.value.keyword,
     method: form.value.method || form.value.keyword,
     params: { ...(form.value.params || {}) },
+  }
+  delete savedStep.pre_wait_ms
+  if (savedStep.config && typeof savedStep.config === 'object') {
+    const rawWait = savedStep.config.pre_wait_ms
+    const parsed = parseInt(rawWait, 10)
+    savedStep.config.pre_wait_ms = Number.isFinite(parsed)
+      ? Math.max(0, Math.min(600_000, parsed))
+      : 0
   }
   const intent = (savedStep.intent || '').trim()
   if (intent) {
@@ -1319,6 +1544,39 @@ async function handleSave() {
       ]
     }
   }
+
+  if (savedStep.method === 'smart_step') {
+    const intentRaw = (savedStep.params?.intent || '').trim()
+    if (!intentRaw) {
+      ElMessage.warning('请填写步骤意图')
+      return
+    }
+    const intents = splitSmartStepIntents(intentRaw)
+    if (intents.length === 0) {
+      ElMessage.warning('请填写步骤意图')
+      return
+    }
+    if (intents.length > 1) {
+      const steps = intents.map((intent, index) => {
+        const desc = intent.length > 40 ? `${intent.slice(0, 40)}...` : intent
+        return {
+          ...savedStep,
+          id: index === 0 ? (savedStep.id || generateStepId()) : generateStepId(),
+          desc,
+          params: { ...(savedStep.params || {}), intent },
+        }
+      })
+      emit('save-multiple', steps)
+      return
+    }
+    if (intents.length === 1) {
+      savedStep.params = { ...(savedStep.params || {}), intent: intents[0] }
+      if (!savedStep.desc || savedStep.desc === '智能步骤') {
+        const intent = intents[0]
+        savedStep.desc = intent.length > 40 ? `${intent.slice(0, 40)}...` : intent
+      }
+    }
+  }
   
   emit('save', savedStep)
 }
@@ -1337,7 +1595,7 @@ function handleClose() {
     intent: '',
     method: '',
     params: {},
-    config: { timeout: 30000, retry: false }
+    config: { timeout: 30000, retry: false, pre_wait_ms: 0 }
   }
   showAdvanced.value = false
 }
@@ -1349,6 +1607,17 @@ function handleClose() {
   flex-direction: column;
   gap: 16px;
   width: 100%;
+}
+
+.params-section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ui-step-usage-guide-standalone {
+  display: inline-flex;
+  margin: 0 0 8px 100px;
 }
 
 .drag-position-hint {
@@ -1404,67 +1673,136 @@ function handleClose() {
   }
 }
 
-// 高级配置样式 - 新的卡片式设计
-.advanced-box {
-  border: 1px solid var(--el-border-color);
-  border-radius: 6px;
-  background: var(--el-fill-color-light);
-  overflow: hidden;
-}
+// 高级配置
+.advanced-form-item {
+  margin-bottom: 8px;
 
-.advanced-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  cursor: pointer;
-  background: var(--el-bg-color);
-  transition: background 0.2s;
-  
-  &:hover {
-    background: var(--el-fill-color);
+  :deep(.el-form-item__content) {
+    margin-left: 0 !important;
+    width: 100%;
   }
 }
 
-.advanced-title {
+.advanced-panel {
+  width: 100%;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-bg-color);
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.advanced-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 0;
+  background: linear-gradient(180deg, var(--el-fill-color-blank) 0%, var(--el-fill-color-light) 100%);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.2s;
+
+  &:hover {
+    background: var(--el-fill-color-light);
+  }
+}
+
+.advanced-toggle-main {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.advanced-toggle-title {
   font-size: 14px;
-  color: var(--el-text-color-regular);
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.advanced-toggle-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .advanced-arrow {
   font-size: 14px;
   color: var(--el-text-color-secondary);
-  transition: transform 0.3s;
-  
+  transition: transform 0.25s;
+  flex-shrink: 0;
+
   &.is-open {
     transform: rotate(180deg);
   }
 }
 
-.advanced-content {
-  padding: 16px;
+.advanced-body {
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--el-border-color-extra-light);
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  background: var(--el-bg-color);
+  gap: 14px;
 }
 
-.advanced-row {
+.advanced-section {
+  padding-top: 12px;
+}
+
+.advanced-section-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
+  margin-bottom: 8px;
+
+  h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--el-text-color-regular);
+  }
 }
 
-.advanced-label {
-  width: 80px;
-  font-size: 14px;
-  color: var(--el-text-color-regular);
-  flex-shrink: 0;
+.advanced-section-desc {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--el-text-color-secondary);
+}
+
+.advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px 16px;
+}
+
+.advanced-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.advanced-field-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.advanced-field-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .advanced-unit {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.advanced-params {
+  gap: 12px;
 }
 
 .app-locator-row {

@@ -12,7 +12,7 @@ export function isVarEntryObject(value) {
 }
 
 /** 系统保留键（项目 global_vars 内嵌套配置，非表格变量） */
-const RESERVED_KEYS = new Set(['ai_settings', 'zentao_export'])
+const RESERVED_KEYS = new Set(['ai_settings', 'zentao_export', '__default_start_url'])
 
 export function parseVarEntry(key, value) {
   if (RESERVED_KEYS.has(key) && typeof value === 'object' && value !== null && !isVarEntryObject(value)) {
@@ -92,6 +92,24 @@ export function getVarValue(globalVars, key) {
   return entry ?? ''
 }
 
+/** 执行/预览用：扁平化为 { 变量名: 值字符串 }，跳过系统保留键 */
+export function flattenGlobalVars(globalVars) {
+  if (!globalVars || typeof globalVars !== 'object' || Array.isArray(globalVars)) {
+    return {}
+  }
+  const out = {}
+  for (const [key, value] of Object.entries(globalVars)) {
+    const k = String(key).trim()
+    if (!k || RESERVED_KEYS.has(k)) continue
+    if (isVarEntryObject(value)) {
+      out[k] = value.value === null || value.value === undefined ? '' : String(value.value)
+    } else if (value !== null && typeof value !== 'object') {
+      out[k] = String(value)
+    }
+  }
+  return out
+}
+
 /**
  * @returns {{ ok: boolean, error?: string, duplicates?: string[] }}
  */
@@ -134,12 +152,21 @@ export function validateVarsObject(obj) {
 }
 
 export function formatVarsPreview(globalVars, maxKeys = 4) {
-  const rows = varsObjectToList(globalVars).filter((r) => !r._rawObject)
+  const rows = userVarRows(globalVars)
   if (!rows.length) return '（空）'
   const keys = rows.map((r) => r.key)
   const shown = keys.slice(0, maxKeys).join(', ')
   const more = keys.length > maxKeys ? ` 等 ${keys.length} 项` : `（共 ${keys.length} 项）`
   return keys.length <= maxKeys ? `${shown}（${keys.length} 项）` : `${shown}${more}`
+}
+
+/** 用户可见的环境变量行（排除系统保留键） */
+export function userVarRows(globalVars) {
+  return varsObjectToList(globalVars).filter((r) => !r._rawObject && !RESERVED_KEYS.has(r.key))
+}
+
+export function countUserVars(globalVars) {
+  return userVarRows(globalVars).length
 }
 
 export const BUILTIN_VAR_HINTS = [

@@ -171,39 +171,40 @@
               失败请求两种模式均保留最多 50 条详情；详细模式另采集最多 500 条成功请求。高并发时可能略增内存与收尾耗时，不改变已测得的性能指标。
             </div>
           </el-form-item>
-          <el-form-item label="分布式">
+          <el-form-item label="执行器">
             <div style="width: 100%;">
-              <el-switch
-                v-model="runForm.useWorkers"
-                active-text="使用分布式 Worker 执行"
-                inactive-text="本机执行"
+              <el-alert
+                type="info"
+                :closable="false"
+                show-icon
+                title="压测施压由在线 Worker 执行（后端不再本机直跑）"
+                style="margin-bottom: 10px;"
               />
-              <div v-if="runForm.useWorkers" style="margin-top: 10px;">
-                <el-alert
-                  v-if="workerList.length === 0"
-                  type="warning"
-                  :closable="false"
-                  show-icon
-                >
-                  <template #title>暂无在线执行机</template>
-                  <template #default>
-                    <div style="font-size: 12px; line-height: 1.6;">
-                      请使用 <strong>BrickCoreRunner v1.3.14+</strong> 客户端（压测时在客户端切换执行角色）上线，或运行 runner 目录的 perf_worker.py；<code>--project-id</code> / 客户端压测项目须与当前项目（{{ proStore.projectInfo?.id }}）一致。
-                    </div>
-                  </template>
-                </el-alert>
-                <el-alert
-                  v-else
-                  :title="`当前在线 ${workerList.length} 个执行机，总并发能力 ${workerTotalConcurrent} 用户`"
-                  type="success"
-                  :closable="false"
-                  show-icon
-                />
-                <div v-if="workerList.length > 0" style="margin-top: 8px; font-size: 12px; color: #606266;">
-                  <div v-for="w in workerList" :key="w.id" style="display: flex; justify-content: space-between; padding: 2px 0;">
-                    <span>{{ w.name }} ({{ w.host }})</span>
-                    <span>并发: {{ w.max_concurrent }}</span>
+              <el-alert
+                v-if="workerList.length === 0"
+                type="warning"
+                :closable="false"
+                show-icon
+              >
+                <template #title>暂无在线执行机，无法启动</template>
+                <template #default>
+                  <div style="font-size: 12px; line-height: 1.6;">
+                    任选其一：<strong>BrickCoreRunner</strong>（压测角色上线），或精简包 <strong>BrickCorePerf</strong>；开发可用 <code>runner/perf_worker.py</code>。
+                    项目 ID 须与当前项目（{{ proStore.projectInfo?.id }}）一致。
                   </div>
+                </template>
+              </el-alert>
+              <el-alert
+                v-else
+                :title="`当前在线 ${workerList.length} 个执行机，总并发能力 ${workerTotalConcurrent} 用户`"
+                type="success"
+                :closable="false"
+                show-icon
+              />
+              <div v-if="workerList.length > 0" style="margin-top: 8px; font-size: 12px; color: #606266;">
+                <div v-for="w in workerList" :key="w.id" style="display: flex; justify-content: space-between; gap: 12px; padding: 2px 0;">
+                  <span>{{ w.name }} ({{ w.host }}) · {{ agentKindShort(w.agent_kind) }}</span>
+                  <span>并发: {{ w.max_concurrent }}</span>
                 </div>
               </div>
             </div>
@@ -225,7 +226,7 @@ import { Search, Plus, Edit, Delete, VideoPlay, QuestionFilled, CopyDocument } f
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import { perfSceneApi, perfExecApi, perfWorkerApi } from '@/api'
-import { parseWorkerList, filterOnlineWorkers } from './perfWorkerUtils'
+import { parseWorkerList, filterOnlineWorkers, agentKindShort } from './perfWorkerUtils'
 import { envApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
@@ -317,7 +318,7 @@ const handleRun = async (row) => {
     sceneName: row.name,
     envId: null,
     config: row.config || {},
-    useWorkers: false,
+    useWorkers: true,
     requestDetailLevel: 'brief'
   }
   // 加载环境列表
@@ -355,12 +356,16 @@ const confirmRun = async () => {
     ElMessage.warning('请选择执行环境')
     return
   }
+  if (!workerList.value.length) {
+    ElMessage.warning('暂无在线压测 Worker，请先上线执行器')
+    return
+  }
   runLoading.value = true
   try {
     const res = await perfExecApi.start(
       runForm.value.sceneId,
       runForm.value.envId,
-      runForm.value.useWorkers,
+      true,
       runForm.value.requestDetailLevel
     )
     ElMessage.success('性能测试已启动')

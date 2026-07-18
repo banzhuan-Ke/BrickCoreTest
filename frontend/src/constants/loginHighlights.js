@@ -11,7 +11,7 @@ export const LOGIN_HIGHLIGHTS = {
     { title: '功能→Web 闭环', desc: 'AI 串联功能用例到 Web 自动化，减少手工转写' },
     { title: 'Web 自动化', desc: '智能录制、元素自愈，Playwright 套件与计划执行' },
     {
-      title: 'App 自动化（Pro）',
+      title: 'App 自动化',
       desc: 'Android 真机 / WiFi / 模拟器：u2 原生、图像模板、H5 探查、计划与定时任务',
     },
     { title: '接口自动化', desc: '用例编排、套件计划与自动化报告' },

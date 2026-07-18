@@ -1,6 +1,6 @@
 # Docker 部署（腾讯云 · OpenCloudOS 示例）
 
-> 根目录 **[README.md](../../README.md)** 有精简版命令；**本文按腾讯云 CVM + OpenCloudOS 9 从零跟做即可**（你当前的 `VM-xx-opencloudos` 即此类环境）。
+> 根目录 **[README.md](../../README.md)** 有精简版命令；**本文按腾讯云 CVM + OpenCloudOS 9 从零跟做即可**（OpenCloudOS 9 云主机示例）。
 
 使用仓库根目录 **`docker-compose.yml`** 一次性部署全栈：MySQL、Redis、RabbitMQ、MinIO、后端、Nginx 前端。
 
@@ -17,7 +17,7 @@
 | 规格 | 2 核+，**8GB+** 内存，**50GB+** 系统盘（首次 `docker compose build` 较久） |
 | Docker | 20.10.9+（OpenCloudOS 官方要求），推荐 24+ 且带 **Compose V2** |
 | Node.js | **18+**（OpenCloudOS 源里一般为 18 LTS，用于 `npm run build`） |
-| 网络 | 能访问 Gitee、Docker Hub（慢可配镜像加速） |
+| 网络 | 能访问 Git 仓库、Docker Hub（慢可配镜像加速） |
 
 ---
 
@@ -243,7 +243,7 @@ Test-NetConnection <公网IP> -Port 26379
 Test-NetConnection <公网IP> -Port 9200
 ```
 
-详见 [执行器使用说明](runner-client.md)、[执行器打包](runner-packaging.md)（Pro 仓 `docs/其他文档/CE同步与发布手册.md` 有 Pro→CE 发布流程）。
+详见 [执行器使用说明](runner-client.md)、[执行器打包](runner-packaging.md)。
 
 ---
 
@@ -282,7 +282,7 @@ docker compose up -d --build
 
 Docker 只部署**平台**。Web 自动化、分布式 Worker 需在 **Windows** 安装 **BrickCoreRunner.zip**（约 800MB）：
 
-1. **网盘下载**：见仓库 [README](../../README.md#执行器下载windows--约-800mb)；或登录演示环境 **设备管理 → 网盘下载**
+1. **网盘下载**：登录平台 **Web 自动化 → 设备管理 → 网盘下载**（或 **平台下载**）
 2. 解压运行 `BrickCoreRunner.exe`，服务器填 **`http://43.142.83.156`**（自建填你的地址），演示账号 `admin` 登录并 **上线**
 3. **设备管理** 中确认在线  
 
@@ -322,6 +322,8 @@ Docker 只部署**平台**。Web 自动化、分布式 Worker 需在 **Windows**
 与 OpenCloudOS 步骤相同；Node 可尝试 `dnf module install nodejs:20`，或直接 `dnf install nodejs npm`。Docker 仍用 `linux/centos/docker-ce.repo`。
 
 ## 附录 B：本机开发（不要用 docker-compose.yml 全栈）
+
+**Windows 请直接看：[Windows 部署与本机开发](windows-deploy.md)。** 以下为 Linux / macOS 示例：
 
 ```bash
 docker compose -f docker-services.yml up -d

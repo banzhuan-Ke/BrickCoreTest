@@ -27,6 +27,8 @@ class VariableResolver:
         "random_address",
         "random_company",
         "random_int",
+        "random_str",
+        "timestamp",
         "now_time",
         "today",
     )
@@ -134,6 +136,7 @@ class VariableResolver:
             "random_address": lambda: self._faker.address(),
             "random_company": lambda: self._faker.company(),
             "random_int": lambda: self._faker.random_int(min=1000, max=9999),
+            "timestamp": lambda: str(int(time.time())),
             "now_time": lambda: time.strftime("%Y-%m-%d %H:%M:%S"),
             "today": lambda: time.strftime("%Y-%m-%d"),
         }
@@ -146,6 +149,8 @@ class VariableResolver:
             import random
 
             return random.randint(1000, 9999)
+        if key == "timestamp":
+            return str(int(time.time()))
         if key == "now_time":
             return time.strftime("%Y-%m-%d %H:%M:%S")
         if key == "today":

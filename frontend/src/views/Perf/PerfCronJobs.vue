@@ -213,11 +213,10 @@
           <el-switch v-model="form.state" />
         </el-form-item>
 
-        <el-form-item label="分布式 Worker">
-          <el-switch v-model="form.use_workers" />
+        <el-form-item label="压测 Worker">
+          <el-switch v-model="form.use_workers" disabled />
           <div style="margin-top: 6px; color: #909399; font-size: 12px; line-height: 1.6;">
-            开启后优先分发到在线 Worker 执行；若无可用 Worker 则自动回退本机。
-            适合 Backend 配置较弱的服务器。
+            压测施压一律由在线 Runner Worker 执行；后端不再本机直跑。请确保任务触发时有可用执行机。
           </div>
         </el-form-item>
       </el-form>
@@ -345,7 +344,7 @@ const form = reactive({
   run_date: '',
   crontabStr: '0 2 * * *',
   state: true,
-  use_workers: false
+  use_workers: true
 })
 
 const rules = {
@@ -466,7 +465,7 @@ const resetForm = () => {
     run_date: '',
     crontabStr: '0 2 * * *',
     state: true,
-    use_workers: false
+    use_workers: true
   })
   isEdit.value = false
   currentId.value = null

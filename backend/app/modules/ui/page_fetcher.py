@@ -8,12 +8,28 @@ import json
 import logging
 import asyncio
 import os
+import re
 from datetime import datetime
 from typing import Any, Optional
 from app.core.shared.locator_utils import normalize_locator, prefer_popup_elements, resolve_locator_on_page
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if text in ('', '0', 'false', 'no', 'off'):
+        return False
+    if text in ('1', 'true', 'yes', 'on'):
+        return True
+    return default
 
 # 最大返回元素数量
 MAX_ELEMENTS = 100
@@ -995,6 +1011,41 @@ class SmartPageExplorer:
             elif method == "scroll_to_height":
                 height = params.get("height", 0)
                 await self.page.evaluate(f"window.scrollTo(0, {height})")
+
+            elif method == "scroll_to_element":
+                locator = params.get("locator", "")
+                if locator:
+                    loc = self.page.locator(locator)
+                    await loc.first.scroll_into_view_if_needed(timeout=params.get("timeout", 20000))
+
+            elif method == "click_by_text":
+                text = params.get("text", "")
+                exact = _coerce_bool(params.get("exact", False))
+                index = max(int(params.get("index", 1)) - 1, 0)
+                if text:
+                    loc = self.page.get_by_text(text, exact=exact).nth(index)
+                    await loc.click(timeout=params.get("timeout", 20000))
+
+            elif method == "wait_for_element_hidden":
+                locator = params.get("locator", "")
+                ms = params.get("timeout", 20000)
+                if locator:
+                    loc = self.page.locator(locator)
+                    await loc.first.wait_for(state="hidden", timeout=ms)
+
+            elif method == "wait_for_url_contains":
+                fragment = params.get("url", "")
+                ms = params.get("timeout", 20000)
+                use_regex = _coerce_bool(params.get("use_regex", False))
+                if fragment:
+                    frag = str(fragment)
+                    pattern = re.compile(frag) if use_regex else re.compile(re.escape(frag))
+                    await self.page.wait_for_url(pattern, timeout=ms)
+
+            elif method == "switch_to_latest_page":
+                pages = self.context.pages
+                if pages:
+                    self.page = pages[-1]
 
             elif method == "execute_script":
                 script = params.get("script", "")

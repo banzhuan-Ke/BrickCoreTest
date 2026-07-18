@@ -10,27 +10,16 @@ from app.core.platform.permissions import AI_CONFIG_VIEW, AI_CONFIG_EDIT, AI_TES
 from app.core.platform.encryption import encrypt_value, decrypt_value, mask_key
 from app.core.llm.llm_client import LLMClientFactory
 from app.core.llm.ai_usage_log import log_ai_usage
-from app.modules.ai.ai_project_settings import load_ai_project_settings, save_ai_project_settings
 from app.modules.ai.ai_scene_config import list_scene_bindings, save_scene_bindings, apply_scene_recommendations
 from app.models.ai import AiConfig
-from app.routers.ai.requirements import _resolve_project_id
 from app.schemas.ai import (
     AiConfigCreate,
     AiConfigUpdate,
     StandardResponse,
 )
+from app.schemas.project_settings import AiExecutionSettingsBody
 
 router = APIRouter(prefix="/configs", tags=["AI配置"])
-
-
-class AiExecutionSettingsBody(BaseModel):
-    locator_heal_enabled: bool = Field(True, description="项目是否允许 Runner 定位器自愈")
-    locator_heal_default_on_execute: bool = Field(True, description="执行时默认是否开启自愈")
-    locator_heal_allow_run_override: bool = Field(True, description="是否允许运行弹窗单次覆盖自愈")
-    ai_act_enabled: bool = Field(False, description="项目是否允许 AI Act 兜底")
-    ai_act_default_on_execute: bool = Field(False, description="执行时默认是否开启 AI Act")
-    ai_act_allow_run_override: bool = Field(True, description="是否允许运行弹窗单次覆盖 AI Act")
-    ai_act_max_per_case: int = Field(3, ge=1, le=10, description="单用例 AI Act 最大次数")
 
 
 def _mask_config(config: AiConfig) -> dict:
@@ -128,21 +117,23 @@ async def list_config_select_options(
 
 @router.get(
     "/execution-settings",
-    summary="获取项目 AI 执行设置（定位器自愈等）",
+    summary="[兼容] 获取项目执行设置 → 请改用 GET /sys/project-settings/execution",
+    deprecated=True,
+    dependencies=[Depends(require_permissions(AI_CONFIG_VIEW))],
 )
 async def get_execution_settings(
     project_id: Optional[int] = Query(None),
     user_info: dict = Depends(is_authenticated),
 ):
-    """配置页与运行弹窗均可读取；写入见 PUT /execution-settings"""
-    pid = _resolve_project_id(user_info, project_id)
-    settings = await load_ai_project_settings(pid)
-    return StandardResponse(data=settings)
+    """兼容旧客户端；正式入口：GET /sys/project-settings/execution"""
+    from app.routers.sys.project_settings import get_project_execution_settings
+    return await get_project_execution_settings(project_id=project_id, user_info=user_info)
 
 
 @router.put(
     "/execution-settings",
-    summary="保存项目 AI 执行设置",
+    summary="[兼容] 保存项目执行设置 → 请改用 PUT /sys/project-settings/execution",
+    deprecated=True,
     dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))],
 )
 async def update_execution_settings(
@@ -150,12 +141,11 @@ async def update_execution_settings(
     project_id: Optional[int] = Query(None),
     user_info: dict = Depends(is_authenticated),
 ):
-    pid = _resolve_project_id(user_info, project_id)
-    try:
-        saved = await save_ai_project_settings(pid, body.model_dump())
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return StandardResponse(data=saved, message="执行设置已保存")
+    """兼容旧客户端；正式入口：PUT /sys/project-settings/execution"""
+    from app.routers.sys.project_settings import update_project_execution_settings
+    return await update_project_execution_settings(
+        body=body, project_id=project_id, user_info=user_info
+    )
 
 
 class SceneBindingItem(BaseModel):

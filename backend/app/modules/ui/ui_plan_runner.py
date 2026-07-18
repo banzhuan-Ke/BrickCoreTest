@@ -5,13 +5,15 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, status
 
-from app.modules.ui.ui_device_guard import assert_device_available_for_ui_execution
+from app.modules.ui.ui_device_guard import assert_device_available_for_ui_execution, lock_device_row
 from app.modules.ui.ui_task_dispatch import (
     device_weight_pairs,
     distribute_suite_indices_by_weight,
     max_device_concurrency,
     normalize_device_assignments,
 )
+from tortoise import transactions
+
 from app.models.sys import Device, Environment
 from app.models.ui import Suite, Task, UiCaseExecution, UiPlanExecution, UiSuiteExecution
 
@@ -98,6 +100,7 @@ async def execute_ui_plan(
     concurrency: int = 1,
     ai_heal_enabled: Optional[bool] = None,
     ai_act_enabled: Optional[bool] = None,
+    failure_analysis_on_report: Optional[bool] = None,
     trigger_source: Optional[str] = None,
     cronjob_id: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -128,8 +131,10 @@ async def execute_ui_plan(
         device_assignments = [device_assignments[0]]
 
     await _validate_online_devices(device_assignments)
-    for dev_id, _, _ in device_assignments:
-        await assert_device_available_for_ui_execution(dev_id)
+    async with transactions.in_transaction():
+        for dev_id, _, _ in device_assignments:
+            await lock_device_row(dev_id)
+            await assert_device_available_for_ui_execution(dev_id)
 
     env_payload = await ExecutionService.build_env_payload(
         env,
@@ -138,6 +143,7 @@ async def execute_ui_plan(
         task_.project_id,
         ai_heal_enabled,
         ai_act_enabled,
+        failure_analysis_on_report,
     )
     env_payload = ExecutionService.with_trigger_source(env_payload, trigger_source)
     if task_.parallel or max_device_concurrency(device_assignments) > 1:
@@ -225,10 +231,12 @@ async def execute_ui_plan(
                 suite_, suite_record, cases, plan_record
             )
             try:
-                await assert_device_available_for_ui_execution(
-                    dev_id,
-                    exclude_plan_id=plan_record.id,
-                )
+                async with transactions.in_transaction():
+                    await lock_device_row(dev_id)
+                    await assert_device_available_for_ui_execution(
+                        dev_id,
+                        exclude_plan_id=plan_record.id,
+                    )
             except HTTPException as exc:
                 suite_record.status = "执行完成"
                 suite_record.error = case_count

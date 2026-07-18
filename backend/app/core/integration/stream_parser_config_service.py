@@ -10,7 +10,7 @@ from app.modules.stream_phase.registry import get_parser, list_parsers, parse_st
 from app.models.sys import SystemStreamParserConfig
 
 BUILTIN_QA_SSE_CODE = "builtin_qa_sse_v1"
-BUILTIN_RULE_KCF_CODE = "builtin_rule_kcf_v1"
+BUILTIN_RULE_QA_CODE = "builtin_rule_qa_v1"
 
 
 def _default_success_rule(parser_id: str) -> dict[str, Any]:
@@ -43,10 +43,10 @@ async def ensure_builtin_stream_parser_configs() -> None:
     seeds = [
         {
             "code": BUILTIN_QA_SSE_CODE,
-            "name": "问答流式 v1（KCF 默认）",
+            "name": "问答接口（默认）",
             "description": (
-                "适用于 KCF `/api/v1/qa` 标准 SSE 协议：think / output_text / eof references。\n\n"
-                "压测「流式阶段」与接口流式调试均可选用。"
+                "适用于问答接口标准 SSE 协议：think / output_text / eof references。\n\n"
+                "问答准确性评测与压测「流式阶段」均可选用。"
             ),
             "parser_id": "qa_sse_v1",
             "parser_options": {},
@@ -54,10 +54,10 @@ async def ensure_builtin_stream_parser_configs() -> None:
             "sort_order": 10,
         },
         {
-            "code": BUILTIN_RULE_KCF_CODE,
-            "name": "KCF 规则版（可自定义阶段）",
+            "code": BUILTIN_RULE_QA_CODE,
+            "name": "问答接口规则版（可自定义阶段）",
             "description": (
-                "基于「规则配置」解析器，预置 KCF 问答 SSE 阶段匹配规则。\n\n"
+                "基于「规则配置」解析器，预置问答接口 SSE 阶段匹配规则。\n\n"
                 "当被测接口字段与默认 v1 不一致时，可在此配置副本上调整 phases / derived 规则。"
             ),
             "parser_id": "rule_based",
@@ -71,10 +71,36 @@ async def ensure_builtin_stream_parser_configs() -> None:
             name=spec["name"],
             is_del=False,
         )
+        if not row:
+            # 兼容历史内置行：按解析器类型 + 内置标记对齐并改名
+            candidates = await SystemStreamParserConfig.filter(
+                parser_id=spec["parser_id"],
+                is_builtin=True,
+                is_del=False,
+            ).order_by("sort_order", "id")
+            for cand in candidates:
+                if cand.name == spec["name"]:
+                    row = cand
+                    break
+            if not row and candidates:
+                row = candidates[0]
         if row:
+            dirty = False
+            if row.name != spec["name"]:
+                row.name = spec["name"]
+                dirty = True
+            if (row.description or "") != spec["description"]:
+                row.description = spec["description"]
+                dirty = True
             if row.is_builtin and row.parser_id != spec["parser_id"]:
                 row.parser_id = spec["parser_id"]
-                await row.save(update_fields=["parser_id", "update_time"])
+                dirty = True
+            if row.sort_order != spec["sort_order"]:
+                row.sort_order = spec["sort_order"]
+                dirty = True
+            if dirty:
+                row.update_by = "system"
+                await row.save()
             continue
         await SystemStreamParserConfig.create(
             name=spec["name"],
@@ -211,7 +237,7 @@ def extract_qa_fields_from_parse_result(result: dict[str, Any]) -> dict[str, Any
     }
 
 
-def parse_sse_lines_for_stream_qa(
+def parse_sse_lines_for_qa_eval(
     lines: list[str],
     *,
     parser_id: str,
@@ -219,7 +245,7 @@ def parse_sse_lines_for_stream_qa(
     success_rule: dict | None = None,
     started: float | None = None,
 ) -> dict[str, Any]:
-    """统一 SSE 解析入口（流式接口调试 / 压测）。"""
+    """统一 SSE 解析入口（流式接口调试 / 压测；问答评测复用同一解析器）。"""
     from app.modules.stream_phase.parsers.qa_sse_v1 import is_qa_sse_v1_parser, parse_qa_sse_v1
 
     if is_qa_sse_v1_parser(parser_id):
@@ -252,7 +278,7 @@ async def test_stream_parser_config(
     if not get_parser(parser_id):
         raise ValueError(f"未知解析器: {parser_id}")
     started = time.perf_counter()
-    qa_fields = parse_sse_lines_for_stream_qa(
+    qa_fields = parse_sse_lines_for_qa_eval(
         lines,
         parser_id=parser_id,
         parser_options=parser_options,

@@ -8,9 +8,10 @@
         <template #title>大安装包（约 800MB）建议放网盘/OSS</template>
         在此填写外链后，设备管理页会显示「网盘下载」按钮；也可继续将 zip 放到服务器
         <code>static/runner/</code> 使用「平台下载」。环境变量 <code>RUNNER_CLIENT_DOWNLOAD_URL</code> 在未保存平台配置时作为兜底。
+        精简压测包 <code>BrickCorePerf.zip</code> / <code>BrickCorePerf-mac.zip</code> 同目录上传后即可被平台检测。
       </el-alert>
 
-      <el-form :model="form" label-width="140px" style="max-width: 760px; margin-top: 16px">
+      <el-form :model="form" label-width="160px" style="max-width: 800px; margin-top: 16px">
         <el-form-item label="网盘/OSS 链接：">
           <el-input
             v-model="form.external_download_url"
@@ -22,11 +23,23 @@
         <el-form-item label="按钮文案：">
           <el-input v-model="form.external_download_label" placeholder="网盘下载" maxlength="20" />
         </el-form-item>
-        <el-form-item label="服务器本地包：">
+        <el-form-item label="完整执行器：">
           <span v-if="form.platform_package_available">
             已就绪（{{ formatSize(form.platform_package_size_bytes) }}）
           </span>
           <span v-else class="text-muted">未上传 — 将 BrickCoreRunner.zip 放到 static/runner/</span>
+        </el-form-item>
+        <el-form-item label="精简压测包 Win：">
+          <span v-if="form.perf_package_available">
+            已就绪（{{ formatSize(form.perf_package_size_bytes) }}）
+          </span>
+          <span v-else class="text-muted">未上传 — 将 BrickCorePerf.zip 放到 static/runner/</span>
+        </el-form-item>
+        <el-form-item label="精简压测包 Mac：">
+          <span v-if="form.perf_package_mac_available">
+            已就绪（{{ formatSize(form.perf_package_mac_size_bytes) }}）
+          </span>
+          <span v-else class="text-muted">未上传 — 将 BrickCorePerf-mac.zip 放到 static/runner/</span>
         </el-form-item>
         <el-form-item v-if="form.using_env_fallback" label="当前来源：">
           <el-tag type="warning" size="small">环境变量兜底</el-tag>
@@ -60,6 +73,10 @@ const form = reactive({
   external_download_label: '网盘下载',
   platform_package_available: false,
   platform_package_size_bytes: 0,
+  perf_package_available: false,
+  perf_package_size_bytes: 0,
+  perf_package_mac_available: false,
+  perf_package_mac_size_bytes: 0,
   using_env_fallback: false,
   update_by: '',
   update_time: ''

@@ -402,7 +402,9 @@
               <el-tag size="small" :type="getExecTagType(row.type)" effect="dark">{{ row.type }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="run_by" label="执行人" width="80" />
+          <el-table-column label="执行人" min-width="130" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.run_by_display || row.run_by || '—' }}</template>
+          </el-table-column>
           <el-table-column prop="start_time" label="执行时间" width="135" />
           <el-table-column label="指标" width="100" align="center">
             <template #default="{ row }">

@@ -30,8 +30,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
 引擎必须使用 **`runner\venv`**，不是系统 Python 或 `runner_client\venv`。
 
 ```powershell
-# 进入 BrickCoreRunner 解压目录下的 runner 子目录（开发模式）
-cd <BrickCoreRunner安装目录>\runner
+cd <平台仓库>\runner
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
@@ -54,11 +53,16 @@ cd <BrickCoreRunner安装目录>\runner
 
 仍不准时：录前看蓝框文案；导入前改「质量」为风险的步骤；关键按钮加 `data-testid`。
 
+**用户手册**（录前 checklist、步骤维护、交互调试、批量 vs 计划）：
+
+- [Web 录制与稳定回放](../guide/web-recording-playback.md)
+- [Web 失败类型与排障](../guide/web-troubleshooting.md)
+
 ## 六、客户端版本过低
 
 平台 `.env` 可设 `RUNNER_CLIENT_VERSION_MIN`。设备管理列表会标「需升级」。请下载与 `RUNNER_CLIENT_VERSION_LATEST` 一致的 zip（当前 **1.3.15**）。
 
-## 六、App adb（WiFi / 模拟器）
+## 七、App adb（WiFi / 模拟器）
 
 | 现象 | 处理 |
 |------|------|
@@ -69,8 +73,10 @@ cd <BrickCoreRunner安装目录>\runner
 
 完整步骤见 [执行器安装指南 → App 自动化](runner-install-guide.md#二app-自动化仅-windows)。
 
-## 七、相关文档
+## 八、相关文档
 
 - [执行器使用说明](runner-client.md)
 - [打包与版本](runner-packaging.md)
-- 仓库内 `docs/其他文档/RUNNER_TROUBLESHOOTING.md`（详细版）
+- [Web 录制与稳定回放](web-recording-playback.md)
+- [Web 失败类型与排障](web-troubleshooting.md)
+- [Web 失败类型与排障](web-troubleshooting.md)

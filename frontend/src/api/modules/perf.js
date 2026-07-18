@@ -67,10 +67,11 @@ export const perfSceneApi = {
 // ========== 性能测试执行 ==========
 export const perfExecApi = {
     // 启动压测
-    async start(scene_id, env_id, use_workers = false, request_detail_level = 'brief') {
+    async start(scene_id, env_id, _use_workers = true, request_detail_level = 'brief') {
+        // use_workers 已废弃：后端施压一律派发 Worker，不再传可切换本机直跑
         const level = request_detail_level === 'full' ? 'full' : 'brief'
         return await http.post(
-            `/perf/exec/${scene_id}?env_id=${env_id}&use_workers=${use_workers}&request_detail_level=${level}`
+            `/perf/exec/${scene_id}?env_id=${env_id}&request_detail_level=${level}`
         )
     },
     // 停止压测

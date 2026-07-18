@@ -177,4 +177,26 @@ QWidget#headerCard {
     border: 1px solid #fed7aa;
     border-radius: 12px;
 }
+
+QGroupBox#recordingPanel {
+    margin-top: 12px;
+    min-width: 260px;
+}
+
+QLabel#recordingStatus {
+    color: #374151;
+    font-size: 12px;
+}
+
+QLabel#recordingStats {
+    color: #6b7280;
+    font-size: 11px;
+}
+
+QListWidget#recordingActionsList {
+    background-color: #fafafa;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 11px;
+}
 """

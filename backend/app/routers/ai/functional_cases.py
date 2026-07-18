@@ -152,11 +152,6 @@ async def _fetch_all_functional_cases(
     return await _apply_list_order(q, sort_by, sort_order).all()
 
 
-async def _fetch_cases_for_export(q) -> list:
-    """导出 XLSX：按生成顺序（id 升序），与需求自上而下生成一致"""
-    return await q.order_by("id").all()
-
-
 def _resolve_project_id(user_info: dict, project_id: Optional[int] = None) -> int:
     pid = project_id or user_info.get("project_id") or user_info.get("current_project_id")
     if not pid:
@@ -639,9 +634,9 @@ async def export_xlsx(
     import_batch: Optional[str] = None,
     sort_by: Optional[str] = Query(
         None,
-        description="已废弃：导出固定按生成顺序（id 升序），与列表排序无关",
+        description="排序字段：zentao_case_id / create_time / update_time，默认与列表一致",
     ),
-    sort_order: Optional[str] = Query("desc", description="已废弃"),
+    sort_order: Optional[str] = Query("desc", description="asc 或 desc"),
     project_id: Optional[int] = None,
     user_info: dict = Depends(is_authenticated),
 ):
@@ -651,7 +646,7 @@ async def export_xlsx(
         id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
         if id_list:
             q = q.filter(id__in=id_list)
-        cases = await _fetch_cases_for_export(q)
+        cases = await _fetch_all_functional_cases(q, sort_by=sort_by, sort_order=sort_order)
     else:
         q = _apply_functional_case_filters(
             q,
@@ -672,7 +667,7 @@ async def export_xlsx(
                 status_code=400,
                 detail=f"筛选结果共 {total} 条，超过单次导出上限 {MAX_EXPORT_ROWS} 条，请缩小筛选范围",
             )
-        cases = await _fetch_cases_for_export(q)
+        cases = await _fetch_all_functional_cases(q, sort_by=sort_by, sort_order=sort_order)
 
     if not cases:
         raise HTTPException(status_code=400, detail="没有可导出的用例")

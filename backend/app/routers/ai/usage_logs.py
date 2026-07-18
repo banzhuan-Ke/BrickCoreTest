@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from tortoise.functions import Count, Sum
 
-from app.modules.ai.ai_scene_config import AI_SCENE_DEFINITIONS
+from app.modules.ai.ai_scene_config import AI_SCENE_DEFINITIONS, resolve_scene_label
 from app.core.platform.auth import require_permissions
 from app.core.platform.permissions import AI_TEST_VIEW
 from app.models.ai import AiUsageLog
@@ -22,7 +22,21 @@ EXPORT_MAX_ROWS = 5000
 
 
 def _scene_label(scene: str) -> str:
-    return AI_SCENE_DEFINITIONS.get(scene, (scene, ""))[0]
+    return resolve_scene_label(scene)
+
+
+async def _enrich_username_display(items: list[dict]) -> list[dict]:
+    from app.modules.ai.ai_dashboard_stats import format_usernames_display
+
+    usernames = [(i.get("username") or "").strip() for i in items]
+    display_map = await format_usernames_display([u for u in usernames if u])
+    for item in items:
+        raw = (item.get("username") or "").strip()
+        if raw:
+            item["username_display"] = display_map.get(raw, raw)
+        else:
+            item["username_display"] = "系统（后台任务）"
+    return items
 
 
 def _build_usage_queryset(
@@ -54,7 +68,7 @@ def _row_to_dict(row: AiUsageLog) -> dict:
     return {
         "id": row.id,
         "scene": row.scene,
-        "scene_label": row.scene_label or _scene_label(row.scene),
+        "scene_label": resolve_scene_label(row.scene, row.scene_label or ""),
         "user_id": row.user_id,
         "username": row.username,
         "project_id": row.project_id,
@@ -233,7 +247,7 @@ async def export_usage_logs(
         writer.writerow(
             [
                 row.create_time.strftime("%Y-%m-%d %H:%M:%S") if row.create_time else "",
-                row.scene_label or _scene_label(row.scene),
+                resolve_scene_label(row.scene, row.scene_label or ""),
                 row.username,
                 row.project_name or (str(row.project_id) if row.project_id else ""),
                 row.model,
@@ -284,6 +298,7 @@ async def list_usage_logs(
     total = await qs.count()
     rows = await qs.order_by("-id").offset((page - 1) * size).limit(size)
     items = await _enrich_project_names([_row_to_dict(row) for row in rows])
+    items = await _enrich_username_display(items)
     scene_keys = {k for k in AI_SCENE_DEFINITIONS}
     if date_from:
         db_scenes = await qs.distinct().values_list("scene", flat=True)

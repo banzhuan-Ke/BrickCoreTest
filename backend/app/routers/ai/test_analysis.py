@@ -1,6 +1,7 @@
 """
 AI 测试分析：测试点（思维导图）+ 测试方案
 """
+import asyncio
 import json
 import logging
 import os
@@ -14,6 +15,13 @@ from pydantic import BaseModel, Field
 
 from app.core.platform.auth import is_authenticated, require_permissions
 from app.core.platform.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW
+from app.models.ai import AiRequirementGenerateJob
+from app.modules.ai.test_point_batch import (
+    GenerateTestPointsBatchRequest,
+    PlanTestPointsBatchRequest,
+    execute_single_test_point_batch,
+    plan_test_point_batches,
+)
 from app.modules.ai.ai_prompts import PromptManager, append_extra_instructions
 from app.core.llm.ai_usage_log import log_ai_usage
 from app.modules.ai.requirement_document import (
@@ -67,12 +75,14 @@ from app.routers.ai.requirements import (
     _extract_json_object,
     _format_existing_cases_for_prompt,
     _get_ai_config,
+    _job_to_dict,
     _merge_test_point_keywords,
     _normalize_cases,
     _normalize_keywords_text,
     _requirement_to_dict,
     _resolve_naming_template,
     _resolve_project_id,
+    _run_generate_job_task,
 )
 from app.schemas.ai import StandardResponse
 
@@ -119,7 +129,7 @@ class GenerateCasesFromTestPointsRequest(BaseModel):
     case_gen_config_id: Optional[int] = None
     test_point_ids: list[int] = Field(default_factory=list, description="指定测试点 ID，空则按状态筛选")
     include_unconfirmed_points: bool = False
-    count: int = Field(default=20, ge=1, le=50)
+    count: int = Field(default=20, ge=1, le=100, description="目标条数；实际上限受项目 fixed_count_hard_max 约束")
     batch_name: str = Field(default="", description="写入用例 source_ref=test_points:batch:名称")
     replace_existing: bool = Field(default=False, description="替换同 source_ref 的已有用例")
     supplement: bool = False
@@ -727,6 +737,83 @@ async def import_test_points_xmind(
     )
 
 
+@router.post(
+    "/requirements/{req_id}/test-points/plan-batches",
+    summary="预览测试点批量拆分方案",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def plan_test_points_batches_api(
+    req_id: int,
+    body: PlanTestPointsBatchRequest,
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await _get_requirement(req_id, project_id)
+    try:
+        batches = plan_test_point_batches(
+            req,
+            body.scope_section_ids,
+            default_count=body.default_count,
+            max_tokens_per_batch=body.max_tokens_per_batch,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return StandardResponse(
+        message=f"已规划 {len(batches)} 批",
+        data={"batches": batches, "total_batches": len(batches)},
+    )
+
+
+async def _create_test_points_generate_job(
+    req_id: int,
+    body: GenerateTestPointsBatchRequest,
+    project_id: int,
+    user_info: dict,
+) -> StandardResponse:
+    req = await _get_requirement(req_id, project_id)
+    running = await AiRequirementGenerateJob.filter(
+        requirement_id=req_id,
+        project_id=project_id,
+        status__in=["pending", "running"],
+    ).first()
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该需求已有进行中的生成任务（#{running.id}），请等待完成后再试",
+        )
+    username = user_info.get("username") or user_info.get("sub") or "system"
+    payload = {**body.model_dump(), "job_kind": "test_points"}
+    job = await AiRequirementGenerateJob.create(
+        requirement_id=req_id,
+        project_id=project_id,
+        status="pending",
+        total_batches=len(body.batches),
+        payload=payload,
+        create_by=username,
+    )
+    asyncio.create_task(_run_generate_job_task(job.id))
+    return StandardResponse(
+        message=f"测试点生成任务已提交，共 {len(body.batches)} 批",
+        data=_job_to_dict(job),
+    )
+
+
+@router.post(
+    "/requirements/{req_id}/test-points/generate-batch",
+    summary="按批次队列异步生成测试点",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def generate_test_points_batch(
+    req_id: int,
+    body: GenerateTestPointsBatchRequest,
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    return await _create_test_points_generate_job(req_id, body, project_id, user_info)
+
+
 @router.post("/requirements/{req_id}/test-points/generate", summary="AI 生成测试点", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
 async def generate_test_points(
     req_id: int,
@@ -736,114 +823,44 @@ async def generate_test_points(
 ):
     project_id = _resolve_project_id(user_info, project_id)
     req = await _get_requirement(req_id, project_id)
-    start_time = time.time()
-    batch_ref = _batch_source_ref(body.batch_name)
 
-    scoped_content, vision_report, scope_est, selected_sections, total_tokens = await _build_scoped_content(
-        req, body.scope_section_ids, body.vision_config_id, username=user_info.get("username", "")
-    )
+    running = await AiRequirementGenerateJob.filter(
+        requirement_id=req_id,
+        project_id=project_id,
+        status__in=["pending", "running"],
+    ).first()
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该需求已有进行中的生成任务（#{running.id}），请等待完成后再试",
+        )
 
     if body.replace_all:
         await AiRequirementTestPoint.filter(requirement_id=req_id, is_del=False).update(is_del=True)
-    elif body.replace_existing and batch_ref:
-        await AiRequirementTestPoint.filter(
-            requirement_id=req_id, source_ref=batch_ref, is_del=False
-        ).update(is_del=True)
 
-    existing_titles = ""
-    if body.supplement and batch_ref:
-        existing = await AiRequirementTestPoint.filter(
-            requirement_id=req_id, source_ref=batch_ref, is_del=False
-        ).order_by("id")
-        if existing:
-            existing_titles = "\n".join(f"- {p.title}" for p in existing[:60])
-
-    gen_config = await _get_ai_config(body.text_config_id)
     try:
-        system_prompt, user_prompt = await PromptManager.render(
-            "requirement_doc_to_test_points",
-            {
-                "requirement_name": req.name,
-                "scoped_content": scoped_content,
-                "scope_section_titles": format_scope_section_titles(selected_sections),
-                "count": body.count,
-            },
+        data = await execute_single_test_point_batch(
+            req,
+            project_id,
+            user_info,
+            vision_config_id=body.vision_config_id,
+            text_config_id=body.text_config_id,
+            scope_section_ids=body.scope_section_ids,
+            count=body.count,
+            batch_name=body.batch_name,
+            replace_existing=body.replace_existing,
+            supplement=body.supplement,
+            knowledge_folder_ids=body.knowledge_folder_ids,
+            knowledge_document_ids=body.knowledge_document_ids,
         )
-        if body.supplement and existing_titles:
-            user_prompt += f"\n\n【已有测试点 · 请勿重复】\n{existing_titles}"
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    from app.modules.knowledge.knowledge_context import append_knowledge_context_to_prompt
-
-    user_prompt, _knowledge_meta = await append_knowledge_context_to_prompt(
-        user_prompt,
-        project_id,
-        knowledge_folder_ids=body.knowledge_folder_ids,
-        knowledge_document_ids=body.knowledge_document_ids,
-        scene="test_points",
-    )
-
-    try:
-        resp = await _call_llm(system_prompt, user_prompt, gen_config, min_timeout=600, max_retries=2)
+    except HTTPException:
+        raise
     except Exception as e:
-        duration_ms = int((time.time() - start_time) * 1000)
-        await log_ai_usage(
-            gen_config,
-            "requirement_test_point",
-            user_info=user_info,
-            project_id=project_id,
-            tokens_used=total_tokens,
-            duration_ms=duration_ms,
-            status="failed",
-            input_summary=f"需求#{req_id} {req.name}"[:500],
-            output_summary=str(e)[:500],
-            requirement_id=req_id,
-        )
         logger.error("[test_analysis] 测试点生成失败: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"AI 生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"AI 生成失败: {str(e)}") from e
 
-    raw_response = resp.get("content", "") or ""
-    total_tokens += resp.get("tokens", 0)
-    default_section_ids = [s.get("id") for s in selected_sections if s.get("id")]
-    normalized = normalize_test_points(_extract_json_array(raw_response), section_ids=default_section_ids)
-    for item in normalized:
-        mapped = map_point_section_titles(item, _requirement_sections(req))
-        if mapped:
-            item["section_ids"] = mapped
-
+    report = data.get("generate_report") or {}
     username = user_info.get("username") or user_info.get("sub") or "system"
-    created = []
-    for idx, item in enumerate(normalized):
-        pt = await AiRequirementTestPoint.create(
-            requirement_id=req_id,
-            project_id=project_id,
-            title=item["title"],
-            description=item.get("description"),
-            test_type=item.get("test_type", "正向"),
-            priority=item.get("priority", "P2"),
-            module_path=item.get("module_path", ""),
-            main_module=item.get("main_module", ""),
-            sub_module=item.get("sub_module", ""),
-            acceptance_ref=item.get("acceptance_ref"),
-            section_ids=item.get("section_ids") or default_section_ids,
-            source_ref=batch_ref or None,
-            status="draft",
-            sort_order=idx,
-            extra=item.get("extra") or {},
-            create_by=username,
-        )
-        created.append(_point_to_dict(pt))
-
-    duration_ms = int((time.time() - start_time) * 1000)
-    report = {
-        "vision": vision_report,
-        "scope_estimate": scope_est,
-        "parsed_count": len(created),
-        "requested_count": body.count,
-        "model": gen_config.model,
-        "config_name": gen_config.name,
-    }
     await AiGenerateRecord.create(
         project_id=project_id,
         generate_type="requirement_test_point",
@@ -852,28 +869,19 @@ async def generate_test_points(
             "scope_section_ids": body.scope_section_ids,
             "batch_name": body.batch_name,
         },
-        output_content={"created_count": len(created), "report": report},
+        output_content={"created_count": data["created_count"], "report": report},
         status="imported",
-        ai_config_id=gen_config.id,
-        tokens_used=total_tokens,
-        duration_ms=duration_ms,
+        tokens_used=data.get("tokens_used", 0),
+        duration_ms=data.get("duration_ms", 0),
         create_by=username,
     )
-    await log_ai_usage(
-        gen_config,
-        "requirement_test_point",
-        user_info=user_info,
-        project_id=project_id,
-        tokens_used=total_tokens,
-        duration_ms=duration_ms,
-        input_summary=f"需求#{req_id} {req.name}, count={body.count}"[:500],
-        output_summary=f"生成 {len(created)} 条测试点",
-        requirement_id=req_id,
-        batch_name=body.batch_name,
-    )
     return StandardResponse(
-        message=f"成功生成 {len(created)} 条测试点",
-        data={"created_count": len(created), "points": created, "generate_report": report},
+        message=f"成功生成 {data['created_count']} 条测试点",
+        data={
+            "created_count": data["created_count"],
+            "points": data.get("points") or [],
+            "generate_report": report,
+        },
     )
 
 
@@ -910,6 +918,15 @@ async def generate_cases_from_test_points(
     project_id = _resolve_project_id(user_info, project_id)
     req = await _get_requirement(req_id, project_id)
     start_time = time.time()
+
+    from app.modules.ai.ai_project_settings import load_requirement_case_settings
+    rc_settings = await load_requirement_case_settings(project_id)
+    hard_max = int(rc_settings.get("fixed_count_hard_max") or 50)
+    if body.count > hard_max:
+        raise HTTPException(
+            status_code=422,
+            detail=f"目标条数不能超过项目上限 {hard_max}（AI 配置 → 功能用例生成 → 参考条数硬上限）",
+        )
 
     qs = AiRequirementTestPoint.filter(requirement_id=req_id, is_del=False)
     if body.test_point_ids:

@@ -19,14 +19,16 @@ zip 约 **800MB**（含 Chromium）。解压后目录需包含 `BrickCoreRunner.
 3. 填写 **网盘/OSS 链接** 与按钮文案（如「百度网盘下载」）→ 保存
 4. 用户在 **设备管理** 点击对应按钮跳转网盘
 
-可选环境变量（Backend `.env`）：
+可选环境变量（`docker-compose.yml` 的 `backend.environment`，或 Backend `.env`）：
 
 | 变量 | 说明 |
 |------|------|
-| `RUNNER_CLIENT_VERSION_LATEST` | 与 zip 内 `VERSION.txt` 一致，供客户端检查更新 |
-| `RUNNER_CLIENT_VERSION_MIN` | 低于此版本的客户端将被拒绝上线 |
+| `PLATFORM_VERSION` | 平台页脚 / `/runner/version` 展示版本（与执行器版本独立） |
+| `RUNNER_CLIENT_VERSION_LATEST` | 推荐执行器版本，与 zip 内 `VERSION.txt` 一致，供客户端检查更新 |
+| `RUNNER_CLIENT_VERSION_MIN` | 低于此版本的客户端将被拒绝上线（临时兼容旧包时可调低） |
+| `RUNNER_ENGINE_VERSION` | 引擎版本号（下发给客户端参考） |
 | `RUNNER_CLIENT_DOWNLOAD_URL` | 未配置「执行器发布」时的网盘外链兜底 |
-| `RUNNER_MQ_PUBLIC_HOST` 等 | Windows 客户端连接 MQ/Redis 的对外地址 |
+| `RUNNER_MQ_PUBLIC_HOST` / `RUNNER_REDIS_PUBLIC_HOST` 等 | Windows 客户端连接 MQ/Redis 的对外地址；未设时可能从 `MINIO_PUBLIC_ENDPOINT` 推导主机 |
 
 ## 服务器地址与安全组（自建 Docker 部署）
 

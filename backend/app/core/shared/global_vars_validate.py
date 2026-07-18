@@ -4,8 +4,13 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
+from app.core.shared.start_url import validate_default_start_url
+
 # 项目 global_vars 中的系统配置键（非用例变量，执行时跳过）
 RESERVED_PROJECT_GLOBAL_VAR_KEYS = frozenset({"ai_settings", "zentao_export"})
+
+# 环境 global_vars 中的 UI 元数据键（非用例变量，执行时跳过）
+RESERVED_ENV_GLOBAL_VAR_KEYS = frozenset({"__default_start_url"})
 
 _SECRET_KEY_PATTERN = re.compile(
     r"password|passwd|secret|token|api[_-]?key|authorization|credential|private",
@@ -75,6 +80,13 @@ def normalize_global_vars(raw: Any) -> Dict[str, Any]:
             raise ValueError("变量名不能为空")
         if k in out:
             raise ValueError(f"变量名重复：{k}")
+        if k in RESERVED_ENV_GLOBAL_VAR_KEYS:
+            url = validate_default_start_url(
+                extract_var_value(value) if isinstance(value, dict) and "value" in value else (value or "")
+            )
+            if url:
+                out[k] = url
+            continue
         if isinstance(value, dict) and "value" not in value:
             raise ValueError(f"变量「{k}」的值格式无效，需包含 value 字段或使用字符串")
         out[k] = normalize_var_entry(k, value)
@@ -91,7 +103,7 @@ def flatten_global_vars(raw: Any) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for key, value in raw.items():
         k = str(key).strip()
-        if not k or k in RESERVED_PROJECT_GLOBAL_VAR_KEYS:
+        if not k or k in RESERVED_PROJECT_GLOBAL_VAR_KEYS or k in RESERVED_ENV_GLOBAL_VAR_KEYS:
             continue
         if isinstance(value, dict):
             if "value" in value:

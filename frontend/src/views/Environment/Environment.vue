@@ -61,6 +61,14 @@
         <el-input v-model="addEnvForm.host" placeholder="https://api.example.com"/>
         <div class="field-hint">保存前可点击「校验」确认变量格式；引用语法 <code v-pre>${{变量名}}</code></div>
       </el-form-item>
+      <el-form-item label="默认起始 URL">
+        <el-input
+          v-model="addEnvForm.default_start_url"
+          placeholder="https://app.example.com/login"
+          clearable
+        />
+        <div class="field-hint">Web 录制 / 交互调试预填；优先于项目默认，低于用例步骤中的 open_url</div>
+      </el-form-item>
       <el-form-item label="环境变量">
         <GlobalVarsEditor ref="globalVarsEditorRef" v-model="addEnvForm.global_vars" json-height="260px"/>
         <el-collapse class="env-tips-collapse">
@@ -95,7 +103,13 @@ import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import GlobalVarsEditor from '@/components/GlobalVarsEditor.vue'
 import { UserStore } from '@/stores/module/UserStore.js'
-import { formatVarsPreview, validateVarsObject, varsObjectToList } from '@/utils/globalVars.js'
+import { formatVarsPreview, validateVarsObject, countUserVars, userVarRows } from '@/utils/globalVars.js'
+import {
+  getEnvDefaultStartUrl,
+  globalVarsForEditor,
+  mergeEnvDefaultStartUrl,
+  validateDefaultStartUrl,
+} from '@/utils/caseDescription.js'
 
 const uStore = UserStore()
 const proStore = ProjectStore()
@@ -104,7 +118,7 @@ proStore.getEnvironmentList()
 const globalVarsEditorRef = ref(null)
 
 function varKeyCount(globalVars) {
-  return varsObjectToList(globalVars).filter((r) => !r._rawObject).length
+  return countUserVars(globalVars)
 }
 
 function truncateText(text, max = 48) {
@@ -114,7 +128,7 @@ function truncateText(text, max = 48) {
 }
 
 function varsTooltip(globalVars) {
-  const rows = varsObjectToList(globalVars).filter((r) => !r._rawObject)
+  const rows = userVarRows(globalVars)
   if (!rows.length) return ''
   return rows
     .map((r) => (r.description ? `${r.key}：${truncateText(r.description)}` : r.key))
@@ -149,6 +163,7 @@ const addEnvForm = reactive({
   name: '测试环境',
   username: uStore.userInfo.username,
   host: 'http://',
+  default_start_url: '',
   global_vars: {},
   default_headers: [],
 })
@@ -160,6 +175,7 @@ const ClickAdd = () => {
   addEnvForm.name = '测试环境'
   addEnvForm.username = uStore.userInfo.username
   addEnvForm.host = 'http://'
+  addEnvForm.default_start_url = ''
   addEnvForm.global_vars = {}
   addEnvForm.default_headers = []
 }
@@ -179,9 +195,22 @@ function preparePayload() {
     ElMessage.error(check.error)
     return null
   }
+  const { default_start_url, ...rest } = addEnvForm
+  const urlCheck = validateDefaultStartUrl(default_start_url)
+  if (!urlCheck.ok) {
+    ElMessage.error(urlCheck.error)
+    return null
+  }
+  let globalVars
+  try {
+    globalVars = mergeEnvDefaultStartUrl(vars ?? addEnvForm.global_vars ?? {}, default_start_url)
+  } catch (e) {
+    ElMessage.error(e.message || '默认起始 URL 无效')
+    return null
+  }
   return {
-    ...addEnvForm,
-    global_vars: vars ?? addEnvForm.global_vars ?? {},
+    ...rest,
+    global_vars: globalVars,
     project_id: proStore.projectInfo?.id || addEnvForm.project_id,
   }
 }
@@ -220,8 +249,10 @@ const clickEdit = (env) => {
   addEnvForm.name = env.name
   addEnvForm.username = env.username
   addEnvForm.host = env.host
-  addEnvForm.global_vars =
+  addEnvForm.default_start_url = getEnvDefaultStartUrl(env.global_vars)
+  addEnvForm.global_vars = globalVarsForEditor(
     env.global_vars && typeof env.global_vars === 'object' ? { ...env.global_vars } : {}
+  )
   addEnvForm.default_headers = Array.isArray(env.default_headers) ? env.default_headers.map((h) => ({ ...h })) : []
 }
 
@@ -233,8 +264,10 @@ const clickCopy = (env) => {
   addEnvForm.name = suggestCopyName(env.name)
   addEnvForm.username = uStore.userInfo.username
   addEnvForm.host = env.host
-  addEnvForm.global_vars =
+  addEnvForm.default_start_url = getEnvDefaultStartUrl(env.global_vars)
+  addEnvForm.global_vars = globalVarsForEditor(
     env.global_vars && typeof env.global_vars === 'object' ? JSON.parse(JSON.stringify(env.global_vars)) : {}
+  )
   addEnvForm.default_headers = Array.isArray(env.default_headers)
     ? env.default_headers.map((h) => ({ ...h }))
     : []
@@ -257,6 +290,7 @@ async function UpdateEnv(elForm) {
 }
 
 function onDialogClosed() {
+  addEnvForm.default_start_url = ''
   addEnvForm.global_vars = {}
   addEnvForm.default_headers = []
 }

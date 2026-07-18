@@ -73,6 +73,25 @@ def _compress_image(data: bytes, mime: str) -> tuple[bytes, str]:
         return data, mime
 
 
+def make_image_thumbnail(data: bytes, mime: str, max_edge: int = 240) -> tuple[bytes, str]:
+    """生成列表缩略图，避免预览接口返回过大 payload。"""
+    try:
+        img = Image.open(io.BytesIO(data))
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        img.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        fmt = "PNG" if mime == "image/png" else "JPEG"
+        save_mime = "image/png" if fmt == "PNG" else "image/jpeg"
+        if fmt == "JPEG" and img.mode == "RGBA":
+            img = img.convert("RGB")
+        img.save(out, format=fmt, quality=82, optimize=True)
+        return out.getvalue(), save_mime
+    except Exception as e:
+        logger.warning("[document_loader] 缩略图生成失败: %s", e)
+        return data, mime or "image/jpeg"
+
+
 def _load_pdf(content: bytes, file_name: str) -> DocumentLoadResult:
     import fitz  # pymupdf
 

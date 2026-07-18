@@ -96,7 +96,7 @@
         <el-form-item label="并发用户数" prop="config.concurrent_users" v-if="form.config.mode !== 'stepping'">
           <el-slider v-model="form.config.concurrent_users" :min="1" :max="form.config.mode === 'sse_burst' ? 1000 : 1000" show-stops show-input />
           <div class="field-tip" v-if="isStreamBurst">
-            同时发起的流式虚拟用户数，每人只发送 1 次请求；高并发建议勾选分布式 Worker 执行
+            同时发起的流式虚拟用户数，每人只发送 1 次请求；高并发请先上线压测 Worker（BrickCoreRunner 或 BrickCorePerf）
           </div>
           <div class="field-tip" v-else>
             同时发起请求的虚拟用户数，建议不超过 500；超过 500 请确保服务器有足够 CPU 和网络带宽

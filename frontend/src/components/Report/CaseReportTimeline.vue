@@ -192,7 +192,7 @@
                   <div v-if="step.screenshot || step.image" class="vision-compare-item">
                     <div class="vision-compare-label">
                       实际截图
-                      <span v-if="hasClickMarker(step)" class="click-marker-hint">（红圈为点击位置）</span>
+                      <span v-if="hasClickMarker(step)" class="click-marker-hint">（红框标注操作元素）</span>
                     </div>
                     <el-image
                       :src="step.screenshot || step.image"
@@ -207,7 +207,13 @@
                   <el-tag size="small" type="warning">AI 自愈</el-tag>
                   <code class="heal-locator">{{ step.locator_healed.original || '—' }}</code>
                   <span class="heal-arrow">→</span>
-                  <code class="heal-locator new">{{ step.locator_healed.new }}</code>
+                  <code class="heal-locator">{{ step.locator_healed.new || step.locator_healed }}</code>
+                  <el-tag
+                    v-if="step.heal_retry_status === 'fail'"
+                    size="small"
+                    type="danger"
+                    effect="plain"
+                  >重试仍失败</el-tag>
                   <el-button
                     v-if="caseIdForWriteback"
                     size="small"
@@ -216,6 +222,31 @@
                     :loading="applyingStepIndex === index"
                     @click="applyHealedToCase(step, index)"
                   >写回用例</el-button>
+                </div>
+                <div
+                  v-if="isFailedStep(step) && getFailureContextScreenshots(index).length"
+                  class="failure-context-shots"
+                >
+                  <div class="vision-compare-label">失败上下文截图（含前序步骤）</div>
+                  <div class="failure-context-row">
+                    <div
+                      v-for="shot in getFailureContextScreenshots(index)"
+                      :key="`${index}-${shot.stepNo}`"
+                      class="vision-compare-item"
+                    >
+                      <div class="vision-compare-label">
+                        第 {{ shot.stepNo }} 步
+                        <el-tag v-if="shot.isFail" size="small" type="danger" effect="plain">失败</el-tag>
+                      </div>
+                      <el-image
+                        :src="shot.url"
+                        :preview-src-list="getFailureContextScreenshots(index).map(s => s.url)"
+                        fit="contain"
+                        class="vision-compare-img"
+                        :preview-teleported="true"
+                      />
+                    </div>
+                  </div>
                 </div>
                 <div v-if="step.ai_act_used && step.ai_act" class="step-heal-info">
                   <el-tag size="small" type="success">AI Act 兜底</el-tag>
@@ -235,6 +266,7 @@
                   v-if="(step.screenshot || step.image) && !(isAppProfile && (step.template_image || step.template_image_key))"
                   @click.stop
                 >
+                  <div v-if="hasClickMarker(step)" class="step-screenshot-marker-hint">红框标注操作元素</div>
                   <el-image 
                     :src="step.screenshot || step.image" 
                     :preview-src-list="[step.screenshot || step.image]"
@@ -291,6 +323,7 @@
               <div class="screenshot-info">
                 <span class="screenshot-step">步骤 {{ screenshot.stepIndex + 1 }}</span>
                 <span class="screenshot-desc">{{ screenshot.desc }}</span>
+                <span v-if="screenshot.hasMarker" class="screenshot-marker-hint">红框标注操作元素</span>
               </div>
             </div>
           </el-carousel-item>
@@ -784,6 +817,25 @@ async function applyAllHealedToCase() {
   if (ok) ElMessage.success(`已写回 ${ok} 处定位器`)
 }
 
+function isFailedStep(step) {
+  return ['fail', 'failed', 'error'].includes(String(step?.status || '').toLowerCase())
+}
+
+function getFailureContextScreenshots(failIndex) {
+  const list = steps.value || []
+  const shots = []
+  const start = Math.max(0, failIndex - 2)
+  const end = Math.min(list.length - 1, failIndex + 2)
+  for (let i = start; i <= end; i++) {
+    const s = list[i]
+    const url = s?.screenshot || s?.image
+    if (url) {
+      shots.push({ stepNo: i + 1, url, isFail: i === failIndex })
+    }
+  }
+  return shots
+}
+
 // 判断是否有数据
 const hasData = computed(() => {
   const info = processedRunInfo.value
@@ -940,7 +992,8 @@ const screenshots = computed(() => {
       list.push({
         url: screenshot,
         stepIndex: index,
-        desc: step.keyword || step.name || `步骤 ${index + 1}`
+        desc: step.keyword || step.name || `步骤 ${index + 1}`,
+        hasMarker: hasClickMarker(step),
       })
     }
   })
@@ -1061,6 +1114,39 @@ const handleScreenshotChange = (index) => {
           color: var(--el-text-color-secondary);
         }
 
+        .failure-context-shots {
+          margin-top: 10px;
+
+          .failure-context-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+          }
+
+          .vision-compare-item {
+            flex: 1;
+            min-width: 140px;
+            max-width: 220px;
+          }
+
+          .vision-compare-label {
+            font-size: 12px;
+            color: var(--el-text-color-secondary);
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+          }
+
+          .vision-compare-img {
+            width: 100%;
+            max-height: 220px;
+            border-radius: 6px;
+            border: 1px solid var(--el-border-color-lighter);
+            background: #111;
+          }
+        }
+
         .step-vision-compare {
           display: flex;
           flex-wrap: wrap;
@@ -1099,6 +1185,12 @@ const handleScreenshotChange = (index) => {
 
         .step-screenshot-preview {
           margin-top: 8px;
+
+          .step-screenshot-marker-hint {
+            font-size: 12px;
+            color: var(--el-color-danger);
+            margin-bottom: 4px;
+          }
           
           .screenshot-thumb {
             width: 120px;
@@ -1175,6 +1267,12 @@ const handleScreenshotChange = (index) => {
           white-space: nowrap;
           color: var(--el-text-color-regular);
           font-size: 13px;
+        }
+
+        .screenshot-marker-hint {
+          flex-shrink: 0;
+          font-size: 12px;
+          color: var(--el-color-danger);
         }
       }
     }

@@ -89,13 +89,15 @@
         </el-select>
         <el-button type="primary" icon="Search" @click="loadUsageLogs">查询</el-button>
         <el-button icon="Download" :loading="usageExporting" @click="exportUsageCsv">导出 CSV</el-button>
-        <el-button link type="primary" @click="$router.push('/ai-config')">AI 模型配置</el-button>
+        <el-button link type="primary" @click="$router.push({ path: '/platform-config', query: { tab: 'ai' } })">平台配置 → AI 模型</el-button>
       </div>
 
       <el-table :data="usageList" stripe border v-loading="usageLoading" style="width: 100%;">
         <el-table-column prop="create_time" label="时间" width="160" />
         <el-table-column prop="scene_label" label="场景" width="140" show-overflow-tooltip />
-        <el-table-column prop="username" label="用户" width="100" />
+        <el-table-column label="用户" min-width="130" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.username_display || row.username || '—' }}</template>
+        </el-table-column>
         <el-table-column prop="project_name" label="项目" width="120" show-overflow-tooltip>
           <template #default="{ row }">{{ row.project_name || (row.project_id ? `#${row.project_id}` : '—') }}</template>
         </el-table-column>
@@ -136,7 +138,7 @@
         <el-descriptions v-if="usageDetail" :column="2" border size="small">
           <el-descriptions-item label="时间">{{ usageDetail.create_time }}</el-descriptions-item>
           <el-descriptions-item label="场景">{{ usageDetail.scene_label }}</el-descriptions-item>
-          <el-descriptions-item label="用户">{{ usageDetail.username }}</el-descriptions-item>
+          <el-descriptions-item label="用户">{{ usageDetail.username_display || usageDetail.username || '—' }}</el-descriptions-item>
           <el-descriptions-item label="项目">{{ usageDetail.project_name || '—' }}</el-descriptions-item>
           <el-descriptions-item label="模型">{{ usageDetail.model }}</el-descriptions-item>
           <el-descriptions-item label="供应商">{{ providerMap[usageDetail.provider] || usageDetail.provider }}</el-descriptions-item>

@@ -9,7 +9,7 @@
         :closable="false"
         show-icon
         title="配置说明"
-        description="清新 Pro 推荐使用简约抽象背景（方案 1~4，默认方案 3）；经典风格独立配置。支持上传自定义图片；可配置登录页星星/光点/积木漂浮动效数量。"
+        description="清新简约风格推荐使用简约抽象背景（方案 1~4，默认方案 3）；经典风格独立配置。支持上传自定义图片；可配置登录页星星/光点/积木漂浮动效数量。"
         style="margin-bottom: 20px; max-width: 960px;"
       />
 
@@ -65,7 +65,7 @@
           </el-col>
         </el-row>
 
-        <el-divider content-position="left">清新 Pro 背景</el-divider>
+        <el-divider content-position="left">清新简约背景</el-divider>
         <p class="section-tip">简约抽象风格，不含登录框/UI 元素，避免与真实表单重叠</p>
         <div class="bg-grid">
           <div
@@ -87,7 +87,7 @@
             :class="{ active: form.pro_bg_key === 'custom' }"
           >
             <div class="upload-preview" @click="form.pro_bg_key = 'custom'">
-              <img v-if="form.pro_bg_url" :src="resolveStaticUrl(form.pro_bg_url)" alt="自定义 Pro" />
+              <img v-if="form.pro_bg_url" :src="resolveStaticUrl(form.pro_bg_url)" alt="自定义背景" />
               <div v-else class="upload-placeholder">
                 <el-icon :size="28"><UploadFilled /></el-icon>
                 <span>自定义上传</span>
@@ -95,7 +95,7 @@
             </div>
             <div class="bg-card__meta">
               <b>自定义图片</b>
-              <span>上传本地背景（Pro）</span>
+              <span>上传本地背景</span>
             </div>
             <div class="bg-card__actions" @click.stop>
               <input
@@ -251,7 +251,7 @@ const loadConfig = async () => {
 
 const saveConfig = async () => {
   if (form.pro_bg_key === 'custom' && !form.pro_bg_url) {
-    ElMessage.warning('请先上传 Pro 自定义背景，或选择内置方案')
+    ElMessage.warning('请先上传自定义背景，或选择内置方案')
     return
   }
   if (form.classic_bg_key === 'custom' && !form.classic_bg_url) {

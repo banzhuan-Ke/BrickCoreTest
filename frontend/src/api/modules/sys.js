@@ -113,6 +113,25 @@ export const inviteCodeApi = {
     },
 }
 
+// ========== 项目设置（执行与自愈 / 功能用例策略等，项目级） ==========
+export const projectSettingsApi = {
+    async getOverview(projectId) {
+        return await http.get('/sys/project-settings', {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async getExecutionSettings(projectId) {
+        return await http.get('/sys/project-settings/execution', {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async updateExecutionSettings(projectId, data) {
+        return await http.put('/sys/project-settings/execution', data, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+}
+
 // ========== 项目管理 ==========
 export const projectApi = {
     // 获取项目列表

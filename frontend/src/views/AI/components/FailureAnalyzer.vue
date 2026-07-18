@@ -8,8 +8,17 @@
   >
     <div v-loading="loading" class="failure-analyzer">
       <div class="toolbar">
+        <div v-if="targetType === 'ui' || targetType === 'app'" class="vision-toggle-row">
+          <el-switch
+            v-model="useVision"
+            active-text="截图识图"
+            inactive-text="纯文本"
+            size="small"
+          />
+          <span class="vision-hint">{{ useVision ? '结合失败截图，费用较高' : '仅分析步骤与日志，推荐' }}</span>
+        </div>
         <el-select
-          v-if="targetType === 'ui' || targetType === 'app'"
+          v-if="useVision && (targetType === 'ui' || targetType === 'app')"
           v-model="visionConfigId"
           clearable
           placeholder="Vision 模型（自动）"
@@ -43,11 +52,6 @@
         </div>
       </div>
 
-      <KnowledgeRefSelector
-        v-model="knowledgeRefs"
-        hint="可选：引用 Bug 导出、测试计划等资料，辅助分析失败根因"
-      />
-
       <el-alert
         v-if="result?.vision_used"
         type="success"
@@ -57,13 +61,11 @@
         style="margin-bottom: 12px;"
       />
       <el-alert
-        v-else-if="targetType === 'ui' || targetType === 'app'"
+        v-else-if="(targetType === 'ui' || targetType === 'app') && result"
         type="info"
         :closable="false"
         show-icon
-        :title="targetType === 'app'
-          ? '未使用 Vision：无 App 失败截图或未配置 Vision 模型，将依据步骤、match_score 与日志分析'
-          : '未使用 Vision：无截图或未配置 Vision 模型，仅依据步骤与日志分析'"
+        :title="'未使用 Vision：本次为纯文本分析，或无可读截图'"
         style="margin-bottom: 12px;"
       />
 
@@ -129,7 +131,6 @@ import { ElMessage } from 'element-plus'
 import { aiAnalyzeApi, aiConfigApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
-import KnowledgeRefSelector from '@/modules/knowledge/components/KnowledgeRefSelector.vue'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -147,8 +148,8 @@ const result = ref(null)
 const parseFailed = ref(false)
 const textConfigId = ref(null)
 const visionConfigId = ref(null)
+const useVision = ref(false)
 const configList = ref([])
-const knowledgeRefs = ref({ folder_ids: [], document_ids: [] })
 
 const visible = computed({
   get: () => props.modelValue,
@@ -197,22 +198,15 @@ const loadCached = async () => {
     if (res.data?.code === 200 && res.data.data?.root_cause) {
       result.value = res.data.data
       parseFailed.value = false
+      if (props.targetType === 'ui' || props.targetType === 'app') {
+        useVision.value = !!res.data.data.vision_used
+      }
       return true
     }
   } catch {
     /* ignore */
   }
   return false
-}
-
-const knowledgePayload = () => {
-  const folderIds = (knowledgeRefs.value?.folder_ids || []).filter(Boolean)
-  const docIds = (knowledgeRefs.value?.document_ids || []).filter(Boolean)
-  if (!folderIds.length && !docIds.length) return {}
-  return {
-    knowledge_folder_ids: folderIds.length ? folderIds : undefined,
-    knowledge_document_ids: docIds.length ? docIds : undefined
-  }
 }
 
 const runAnalyze = async (force = false) => {
@@ -232,9 +226,9 @@ const runAnalyze = async (force = false) => {
         target_type: props.targetType,
         target_id: props.targetId,
         ai_config_id: textConfigId.value || undefined,
-        vision_config_id: visionConfigId.value || undefined,
-        force_refresh: force,
-        ...knowledgePayload()
+        vision_config_id: useVision.value ? (visionConfigId.value || undefined) : undefined,
+        use_vision: useVision.value,
+        force_refresh: force
       },
       projectId.value
     )
@@ -275,7 +269,8 @@ const copyResult = async () => {
 const handleClosed = () => {
   result.value = null
   parseFailed.value = false
-  knowledgeRefs.value = { folder_ids: [], document_ids: [] }
+  useVision.value = false
+  visionConfigId.value = null
 }
 
 watch(
@@ -294,11 +289,19 @@ watch(
 .failure-analyzer {
   min-height: 200px;
 }
-.knowledge-ref-selector {
-  margin-bottom: 12px;
-}
 .toolbar {
   margin-bottom: 16px;
+}
+.vision-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.vision-hint {
+  font-size: 12px;
+  color: #909399;
 }
 .toolbar-actions {
   display: flex;

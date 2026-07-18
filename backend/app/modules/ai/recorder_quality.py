@@ -1,17 +1,21 @@
 """
-录制步骤质量评估与 AI 优化后 locator 保护
+录制步骤质量评估与 AI 优化后 locator 保护。
+
+- 新 Runner：meta.locatorRankedByRunner=True 时信任 candidates 顺序（排序 SOT 在 Runner）
+- 旧 Runner / 旧数据：无排序标记时用本模块 _score_locator（含 strategy）做转换兜底
 """
 from __future__ import annotations
 
 import re
 from typing import Any, Optional
 
-# 与录制引擎 / 前端 LocatorSelector 保持一致
+from app.modules.ai.ai_project_settings import normalize_recording_locator_strategy
 COMMON_SHORT_TEXTS = frozenset({
     "登入", "登录", "确定", "取消", "提交", "保存", "新增", "删除", "编辑",
     "搜索", "查询", "重置", "下一步", "上一步", "完成", "关闭", "返回",
     "更多", "展开", "收起", "详情", "操作", "管理", "设置", "首页", "退出",
     "导入", "导出", "下载", "上传", "预览", "复制", "粘贴", "全选", "清空",
+    "运行", "报告", "查看", "启用", "禁用", "刷新", "同步", "发布",
 })
 
 
@@ -33,7 +37,7 @@ GENERIC_CLASS_HINTS = (
 )
 
 _DYNAMIC_ID_RE = re.compile(
-    r"^(ng-|_ngcontent-|ember\d+|jsx-|css-|radix-|:r\d+|\d+$)",
+    r"^(ng-|_ngcontent-|ember\d+|jsx-|css-|radix-|:r\d+|el-id-|el-popover-|\d+$)",
     re.I,
 )
 
@@ -139,7 +143,29 @@ def _build_candidates_from_meta(meta: dict) -> list[str]:
             opts.insert(0, f'//tr[contains(.,"{row_key}")]//input[@type="checkbox"]')
             opts.insert(0, f'//tr[contains(.,"{row_key}")]//span[contains(@class,"checkbox")]')
         if text and len(text) < 40:
-            opts.insert(0, f'//tr[contains(.,"{row_key}")]//*[contains(.,"{text[:32]}")]')
+            # 勿用 contains(., text)：短词如「运行」会命中「运行错误」等状态列
+            t = text[:32].replace('"', "")
+            if role == "button" or tag == "button":
+                opts.insert(0, f'//tr[contains(.,"{row_key}")]//button[normalize-space()="{t}"]')
+            opts.insert(0, f'//tr[contains(.,"{row_key}")]//*[@role="button"][normalize-space()="{t}"]')
+            opts.insert(0, f'//tr[contains(.,"{row_key}")]//*[normalize-space()="{t}"]')
+    structure = (meta.get("structurePath") or "").strip()
+    css_path = (meta.get("cssPath") or "").strip()
+    if css_path:
+        opts.insert(0, css_path)
+    if structure and structure != css_path:
+        opts.append(structure)
+    table_xpath = (meta.get("tableXPath") or "").strip()
+    if table_xpath:
+        opts.insert(0, table_xpath)
+    dropdown_xpath = (meta.get("dropdownXPath") or "").strip()
+    if dropdown_xpath:
+        opts.insert(0, dropdown_xpath)
+    abs_xpath = (meta.get("absoluteXPath") or "").strip()
+    if abs_xpath:
+        if abs_xpath.startswith("/") and not abs_xpath.startswith("//"):
+            abs_xpath = f"xpath={abs_xpath}"
+        opts.append(abs_xpath)
     return _dedupe_candidates(opts)
 
 
@@ -154,8 +180,76 @@ def collect_step_locator_candidates(step: dict) -> list[str]:
     return _dedupe_candidates(merged)
 
 
-def _score_locator(candidate: str, step: dict, ai_suggested: Optional[str] = None) -> float:
-    """为候选定位打分，越高越适合作为默认 locator。"""
+def _apply_strategy_score_adjustment(candidate: str, score: float, strategy: str) -> float:
+    """旧 Runner / 无排序标记时的策略加分（与 Runner recorder_locator_rank 对齐）。"""
+    strategy = normalize_recording_locator_strategy(strategy)
+    is_structure = "nth-of-type(" in candidate or " > " in candidate
+    is_rich_css = is_structure and any(
+        tok in candidate for tok in (".el-", ".ant-", ".nz-", ".ui-", "__", "--")
+    )
+    is_abs_xpath = (
+        candidate.startswith("xpath=")
+        or candidate.startswith("/html")
+        or (candidate.startswith("/") and not candidate.startswith("//") and not candidate.startswith("(/"))
+    )
+    is_table_xpath = "el-table" in candidate or "ant-table" in candidate or "//tbody/tr[" in candidate
+    is_dropdown_xpath = (
+        candidate.startswith(("//", "(//"))
+        and (
+            "el-select-dropdown__item" in candidate
+            or "ant-select-item" in candidate
+            or "ui-env-option" in candidate
+            or ("normalize-space()" in candidate and ("li[" in candidate or "@role='option'" in candidate))
+        )
+    )
+    is_weak_xpath = (
+        candidate.startswith("//") and "contains" in candidate
+        and not is_table_xpath and not is_dropdown_xpath
+    )
+
+    if strategy == "structure_path_first":
+        if is_rich_css:
+            score += 110
+        elif is_structure:
+            score += 95
+        elif is_table_xpath or is_dropdown_xpath:
+            score += 100
+        elif is_abs_xpath and not is_weak_xpath:
+            score += 40
+    elif strategy == "xpath_first":
+        if is_table_xpath or is_dropdown_xpath:
+            score += 100
+        elif is_abs_xpath and not is_weak_xpath:
+            score += 85
+        elif is_rich_css:
+            score += 70
+        elif is_structure:
+            score += 45
+    else:
+        if is_dropdown_xpath:
+            score += 90
+        if is_table_xpath:
+            score += 82
+        if is_rich_css:
+            score += 70
+        elif is_structure:
+            score += 12
+        if is_abs_xpath and (candidate.count("/") > 5 or candidate.startswith("xpath=")):
+            score -= 55
+    return score
+
+
+def _score_locator(
+    candidate: str,
+    step: dict,
+    ai_suggested: Optional[str] = None,
+    *,
+    strategy: str = "semantic_first",
+) -> float:
+    """
+    兼容兜底打分：用于旧 Runner / 旧录制（无 locatorRankedByRunner）。
+    含策略加分，避免静默退回「无策略启发式」。
+    """
     meta = step.get("meta") or {}
     accessible = (meta.get("accessibleName") or meta.get("text") or "").strip()
     desc = step.get("desc") or ""
@@ -205,7 +299,18 @@ def _score_locator(candidate: str, step: dict, ai_suggested: Optional[str] = Non
             score -= 25
 
     cand_lower = candidate.lower()
-    if any(h in cand_lower for h in GENERIC_CLASS_HINTS):
+    looks_like_xpath = (
+        candidate.startswith("/")
+        or candidate.startswith("(")
+        or candidate.startswith("xpath=")
+    )
+    is_shallow_class = bool(re.match(r"^[a-z]+\.[a-zA-Z0-9_-]+$", candidate))
+    if (
+        not looks_like_xpath
+        and is_shallow_class
+        and " > " not in candidate
+        and any(h in cand_lower for h in GENERIC_CLASS_HINTS)
+    ):
         score -= 35
 
     if candidate.startswith("get_by_role=") and accessible and accessible not in COMMON_SHORT_TEXTS:
@@ -223,43 +328,83 @@ def _score_locator(candidate: str, step: dict, ai_suggested: Optional[str] = Non
     if ai_suggested and candidate == ai_suggested:
         score += 12
 
-    return score
+    return _apply_strategy_score_adjustment(candidate, score, strategy)
+
+
+def _candidates_ranked_by_runner(meta: dict) -> bool:
+    return bool(meta.get("locatorRankedByRunner"))
 
 
 def pick_best_locator(
     step: dict,
     ai_locator: Optional[str] = None,
     original_locator: Optional[str] = None,
+    *,
+    strategy: str = "semantic_first",
 ) -> tuple[str, str, dict[str, Any]]:
     """
-    从候选池智能选择默认 locator。
-    返回 (locator, source, meta_updates)，source: ai | rule | unchanged
+    选择默认 locator。
+    - 新 Runner（meta.locatorRankedByRunner）：信任 candidates 顺序
+    - 旧 Runner / 旧数据：用含 strategy 的 _score_locator 重新排序
     """
+    strategy = normalize_recording_locator_strategy(strategy)
+    current = (step.get("params") or {}).get("locator") or original_locator or ""
+    meta = step.get("meta") or {}
+
+    runner_candidates = [
+        str(c).strip() for c in (meta.get("candidates") or []) if str(c).strip()
+    ]
+    if runner_candidates and _candidates_ranked_by_runner(meta):
+        best = runner_candidates[0]
+        if ai_locator and ai_locator == best:
+            if ai_locator == current:
+                return ai_locator, "unchanged", {}
+            updates: dict[str, Any] = {
+                "locator_pick_source": "ai",
+                "locator_ai_chosen": ai_locator,
+            }
+            if original_locator and original_locator != ai_locator:
+                updates["locator_original"] = original_locator
+            return ai_locator, "ai", updates
+        if best == current:
+            return best, "unchanged", {}
+        updates = {"locator_pick_source": "rule", "locator_rule_chosen": best}
+        if ai_locator and ai_locator != best:
+            updates["locator_ai_suggested"] = ai_locator
+        if original_locator and original_locator != best:
+            updates["locator_original"] = original_locator
+        return best, "rule", updates
+
     allowed = collect_step_locator_candidates(step)
     if original_locator:
         allowed = _dedupe_candidates(allowed + [original_locator])
-
-    current = (step.get("params") or {}).get("locator") or original_locator or ""
     if not allowed:
         return current, "unchanged", {}
 
+    def _key(c: str) -> float:
+        return _score_locator(
+            c,
+            step,
+            ai_suggested=ai_locator if ai_locator in allowed else None,
+            strategy=strategy,
+        )
+
     if ai_locator and ai_locator in allowed:
-        rule_best = max(allowed, key=lambda c: _score_locator(c, step))
-        ai_score = _score_locator(ai_locator, step, ai_suggested=ai_locator)
-        rule_score = _score_locator(rule_best, step)
+        rule_best = max(allowed, key=_key)
+        ai_score = _score_locator(ai_locator, step, ai_suggested=ai_locator, strategy=strategy)
+        rule_score = _score_locator(rule_best, step, strategy=strategy)
         if ai_score > rule_score:
             if ai_locator == current:
                 return ai_locator, "unchanged", {}
-            updates: dict[str, Any] = {"locator_pick_source": "ai", "locator_ai_chosen": ai_locator}
+            updates = {"locator_pick_source": "ai", "locator_ai_chosen": ai_locator}
             if original_locator and original_locator != ai_locator:
                 updates["locator_original"] = original_locator
             return ai_locator, "ai", updates
 
-    best = max(allowed, key=lambda c: _score_locator(c, step, ai_suggested=ai_locator if ai_locator in allowed else None))
+    best = max(allowed, key=_key)
     if best == current:
         return best, "unchanged", {}
-
-    updates: dict[str, Any] = {"locator_pick_source": "rule", "locator_rule_chosen": best}
+    updates = {"locator_pick_source": "rule", "locator_rule_chosen": best}
     if ai_locator and ai_locator != best:
         updates["locator_ai_suggested"] = ai_locator
     if original_locator and original_locator != best:
@@ -344,9 +489,19 @@ def assess_step_quality(step: dict) -> dict[str, Any]:
     match_index = int(meta.get("matchIndex") or 0)
 
     if method in ("click_ele", "double_click_ele", "hover", "fill_value"):
-        all_candidates = collect_step_locator_candidates(step)
-        if all_candidates:
+        existing = [
+            str(c).strip() for c in (meta.get("candidates") or []) if str(c).strip()
+        ]
+        if existing and _candidates_ranked_by_runner(meta):
+            # Runner SOT：保留排序，仅追加推导出的新候选
+            merged = collect_step_locator_candidates(step)
+            extras = [c for c in merged if c not in existing]
+            all_candidates = existing + extras
             meta["candidates"] = all_candidates
+        else:
+            all_candidates = collect_step_locator_candidates(step)
+            if all_candidates:
+                meta["candidates"] = all_candidates
         if not meta.get("dataTestid") and len(all_candidates) <= 2:
             reasons.append("无 data-testid 且候选较少，建议前端为关键按钮添加 data-testid")
         if not locator:
@@ -490,7 +645,12 @@ def _find_original_for_optimized(
     return None, None
 
 
-def resolve_locators_after_optimize(optimized_steps: list, original_steps: list) -> dict[str, int]:
+def resolve_locators_after_optimize(
+    optimized_steps: list,
+    original_steps: list,
+    *,
+    strategy: str = "semantic_first",
+) -> dict[str, int]:
     """
     AI 优化后：合并 meta，并从候选池智能选择 params.locator（允许 AI 在候选内重选）。
     open_url 的 url 仍强制与原始一致。
@@ -579,7 +739,12 @@ def resolve_locators_after_optimize(optimized_steps: list, original_steps: list)
             stats["unchanged"] += 1
             continue
 
-        best, source, meta_updates = pick_best_locator(opt, ai_locator=ai_loc, original_locator=orig_loc)
+        best, source, meta_updates = pick_best_locator(
+            opt,
+            ai_locator=ai_loc,
+            original_locator=orig_loc,
+            strategy=strategy,
+        )
         if best:
             opt_params["locator"] = best
         if meta_updates:

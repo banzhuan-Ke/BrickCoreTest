@@ -50,27 +50,44 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue'])
 
-const inputValue = ref(props.modelValue || '')
+/** 绝对 XPath 必须以 xpath= 交给 Playwright，否则会当 CSS 解析报 Unexpected token "/" */
+function ensureLocatorEngine(value) {
+  const v = String(value || '').trim()
+  if (!v) return v
+  if (v.startsWith('xpath=') || v.startsWith('css=') || v.startsWith('text=')) return v
+  if (v.startsWith('/') && !v.startsWith('//')) return `xpath=${v}`
+  return v
+}
+
+const inputValue = ref(ensureLocatorEngine(props.modelValue || ''))
 
 watch(
   () => props.modelValue,
   (val) => {
-    if (val !== inputValue.value) {
-      inputValue.value = val || ''
+    const next = ensureLocatorEngine(val || '')
+    if (next !== inputValue.value) {
+      inputValue.value = next
+    }
+    if (next !== (val || '')) {
+      emit('update:modelValue', next)
     }
   }
 )
 
 function commitValue() {
-  emit('update:modelValue', inputValue.value || '')
+  const next = ensureLocatorEngine(inputValue.value || '')
+  inputValue.value = next
+  emit('update:modelValue', next)
 }
 
 function handleSelect(item) {
-  inputValue.value = item.value
-  emit('update:modelValue', item.value)
+  const next = ensureLocatorEngine(item.value)
+  inputValue.value = next
+  emit('update:modelValue', next)
 }
 
 watch(inputValue, (val) => {
+  // 输入过程不强制改写，失焦/选择时再加 xpath=
   emit('update:modelValue', val || '')
 })
 
@@ -85,6 +102,7 @@ const COMMON_SHORT_TEXTS = new Set([
   '搜索', '查询', '重置', '下一步', '上一步', '完成', '关闭', '返回',
   '更多', '展开', '收起', '详情', '操作', '管理', '设置', '首页', '退出',
   '导入', '导出', '下载', '上传', '预览', '复制', '粘贴', '全选', '清空',
+  '运行', '报告', '查看', '启用', '禁用', '刷新', '同步', '发布',
 ])
 
 const DEFAULT_TEMPLATES = [
@@ -98,14 +116,27 @@ const DEFAULT_TEMPLATES = [
 ]
 
 function labelForCandidate(cand) {
+  const raw = cand
+  cand = ensureLocatorEngine(cand)
   if (cand.startsWith('[data-testid=')) return `testid 定位: ${cand}`
   if (cand.startsWith('#')) return `ID 定位: ${cand}`
+  if (cand.includes('el-select-dropdown__item') || cand.includes('ui-env-option') || cand.includes('ant-select-item')) {
+    return `下拉选项: ${cand}`
+  }
+  if (cand.includes('el-table') || cand.includes('ant-table') || cand.includes('//tbody/tr[')) {
+    return `表格定位: ${cand}`
+  }
+  if ((cand.includes('nth-of-type(') || cand.includes(' > ')) && (cand.includes('.el-') || cand.includes('.ant-') || cand.includes('.ui-'))) {
+    return `组件路径: ${cand}`
+  }
+  if (cand.includes('nth-of-type(') && cand.includes(' > ')) return `结构路径: ${cand}`
+  if (cand.startsWith('xpath=/html') || cand.startsWith('/html')) return `绝对 XPath: ${cand}`
   if (cand.startsWith('get_by_role=')) return `角色定位: ${cand}`
   if (cand.startsWith('get_by_text=')) return `文本定位: ${cand}`
   if (cand.startsWith('get_by_label=')) return `标签定位: ${cand}`
   if (cand.startsWith('get_by_placeholder=')) return `placeholder 定位: ${cand}`
-  if (cand.startsWith('//')) return `XPath: ${cand}`
-  if (cand.includes('.')) return `class 定位: ${cand}`
+  if (cand.startsWith('//') || cand.startsWith('(//')) return `XPath: ${cand}`
+  if (cand.includes('.')) return `class 定位: ${raw}`
   return `定位: ${cand}`
 }
 
@@ -180,9 +211,16 @@ function buildMetaFallbackOptions(m) {
       })
     }
     if (text && text.length < 40) {
+      const t = text.slice(0, 32).replace(/"/g, '')
+      if (role === 'button' || tag === 'button') {
+        opts.push({
+          label: `表格行按钮: //tr[contains(.,"${rowKey}")]//button[normalize-space()="${t}"]`,
+          value: `//tr[contains(.,"${rowKey}")]//button[normalize-space()="${t}"]`,
+        })
+      }
       opts.push({
-        label: `表格行文本: //tr[contains(.,"${rowKey}")]//*[contains(.,"${text.slice(0, 32)}")]`,
-        value: `//tr[contains(.,"${rowKey}")]//*[contains(.,"${text.slice(0, 32)}")]`,
+        label: `表格行精确文本: //tr[contains(.,"${rowKey}")]//*[normalize-space()="${t}"]`,
+        value: `//tr[contains(.,"${rowKey}")]//*[normalize-space()="${t}"]`,
       })
     }
   }
@@ -208,6 +246,27 @@ function buildMetaFallbackOptions(m) {
       value: `get_by_text=${text}`
     })
   }
+  const structurePath = (m.structurePath || '').trim()
+  const cssPath = (m.cssPath || '').trim()
+  if (cssPath) {
+    opts.push({ label: `组件路径: ${cssPath}`, value: cssPath })
+  }
+  if (structurePath && structurePath !== cssPath) {
+    opts.push({ label: `结构路径: ${structurePath}`, value: structurePath })
+  }
+  const tableXPath = (m.tableXPath || '').trim()
+  if (tableXPath) {
+    opts.push({ label: `表格定位: ${tableXPath}`, value: tableXPath })
+  }
+  const dropdownXPath = (m.dropdownXPath || '').trim()
+  if (dropdownXPath) {
+    opts.push({ label: `下拉选项: ${dropdownXPath}`, value: dropdownXPath })
+  }
+  const absoluteXPath = (m.absoluteXPath || '').trim()
+  if (absoluteXPath) {
+    const absVal = ensureLocatorEngine(absoluteXPath)
+    opts.push({ label: `绝对 XPath: ${absVal}`, value: absVal })
+  }
   return opts
 }
 
@@ -217,9 +276,10 @@ const candidateOptions = computed(() => {
   const opts = []
 
   const pushOpt = (label, value) => {
-    if (!value || seen.has(value)) return
-    seen.add(value)
-    opts.push({ label, value })
+    const normalized = ensureLocatorEngine(value)
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    opts.push({ label: label || labelForCandidate(normalized), value: normalized })
   }
 
   ;(m.candidates || []).forEach((cand) => {

@@ -135,6 +135,12 @@
             <template #default="scope">
               <el-button type="primary" link @click="goToSuiteReportByCase(scope.row)">套件报告</el-button>
               <el-button
+                v-if="isUiFailed(scope.row.status) && canEditCase && resolveCaseId(scope.row)"
+                type="success"
+                link
+                @click="goDebugCase(scope.row)"
+              >交互调试</el-button>
+              <el-button
                 v-if="canEditCase && resolveCaseId(scope.row)"
                 type="primary"
                 link
@@ -446,7 +452,9 @@ import ExecutionLogScroller from '@/components/Report/ExecutionLogScroller.vue'
 import dateTools from '@/tools/dateTools'
 import chart from '@/tools/chart'
 import { UserStore } from "@/stores/module/UserStore.js"
+import { resolveFailedStepIndexFromResult } from '@/utils/caseExecutionHints.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
+import { useFailureAnalysisGate } from '@/composables/useFailureAnalysisGate.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
 import ReportFailureBatchBar from '@/components/ReportFailureBatchBar.vue'
@@ -459,11 +467,12 @@ const route = useRoute()
 const isDark = useDark()
 const uStore = UserStore()
 const proStore = ProjectStore()
-const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
+const task_id = route.params.id
+const taskRunDetail = ref(null)
+const { canShowFailureAnalysis, loadExecSettings } = useFailureAnalysisGate(taskRunDetail, { syncProject: true })
+const canAiAnalyze = canShowFailureAnalysis
 const canEditCase = computed(() => uStore.hasPermission('ui_case:edit'))
 const canEditSuite = computed(() => uStore.hasPermission('ui_suite:edit'))
-
-const task_id = route.params.id
 const loading = ref(false)
 // 根据 query 参数设置初始视图：normal=表格视图, chart=时间轴视图(默认)
 const showTimeline = ref(route.query.mode === 'chart' || !route.query.mode)
@@ -475,7 +484,6 @@ let chart1Instance = null
 let chart2Instance = null
 
 // 数据
-const taskRunDetail = ref(null)
 const taskEnvDisplayName = computed(() => {
   const env = taskRunDetail.value?.env
   if (!env || typeof env !== 'object') return '-'
@@ -608,6 +616,7 @@ const getTaskReport = async () => {
   const response = await http.resultApi.getTaskRecordDetail(task_id)
   if (response.status === 200) {
     taskRunDetail.value = response.data
+    await loadExecSettings(proStore.projectInfo?.id)
     nextTick(() => initCharts())
   }
 }
@@ -675,6 +684,20 @@ const goEditCase = (row) => {
   const query = {}
   if (row?.id && isUiFailed(row.status)) {
     query.execution_id = row.id
+  }
+  router.push({ name: 'editCase', params: { id: caseId }, query })
+}
+
+const goDebugCase = (row) => {
+  const caseId = resolveCaseId(row)
+  if (!caseId) return
+  const query = {}
+  if (row?.id && isUiFailed(row.status)) {
+    query.execution_id = row.id
+  }
+  const failIdx = resolveFailedStepIndexFromResult(row?.result_data)
+  if (failIdx != null) {
+    query.debugFromStep = String(failIdx)
   }
   router.push({ name: 'editCase', params: { id: caseId }, query })
 }

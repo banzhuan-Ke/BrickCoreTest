@@ -35,6 +35,8 @@ class WorkerRegisterRequest(BaseModel):
     port: Optional[int] = 0
     max_concurrent: int = 100
     token: str
+    agent_kind: Optional[str] = ""
+    engine_version: Optional[str] = ""
 
 
 class WorkerHeartbeatRequest(BaseModel):
@@ -42,6 +44,8 @@ class WorkerHeartbeatRequest(BaseModel):
     token: str
     status: Optional[str] = None  # idle / busy
     current_record_id: Optional[int] = None
+    agent_kind: Optional[str] = None
+    engine_version: Optional[str] = None
 
 
 class WorkerUnregisterRequest(BaseModel):
@@ -164,6 +168,8 @@ async def register_worker(req: WorkerRegisterRequest, project_id: int = Query(..
         existing.name = req.name
         existing.port = req.port or 0
         existing.max_concurrent = req.max_concurrent
+        existing.agent_kind = (req.agent_kind or existing.agent_kind or "").strip()[:32]
+        existing.engine_version = (req.engine_version or existing.engine_version or "").strip()[:50]
         existing.status = "idle"
         # 执行中重连时不要清 current_record_id，否则平台会误判任务已结束并提前 finalize
         if not was_executing:
@@ -184,6 +190,8 @@ async def register_worker(req: WorkerRegisterRequest, project_id: int = Query(..
         port=req.port or 0,
         token=req.token,
         max_concurrent=req.max_concurrent,
+        agent_kind=(req.agent_kind or "").strip()[:32],
+        engine_version=(req.engine_version or "").strip()[:50],
         status="idle",
         project_id=project_id,
         last_heartbeat=now,
@@ -205,6 +213,10 @@ async def worker_heartbeat(req: WorkerHeartbeatRequest):
         worker.status = req.status
     if req.current_record_id is not None:
         worker.current_record_id = req.current_record_id
+    if req.agent_kind is not None and str(req.agent_kind).strip():
+        worker.agent_kind = str(req.agent_kind).strip()[:32]
+    if req.engine_version is not None and str(req.engine_version).strip():
+        worker.engine_version = str(req.engine_version).strip()[:50]
     await worker.save()
 
     return {"message": "心跳成功"}
@@ -290,6 +302,8 @@ async def get_workers(
             "host": w.host,
             "max_concurrent": w.max_concurrent,
             "status": dynamic_status,
+            "agent_kind": getattr(w, "agent_kind", "") or "",
+            "engine_version": getattr(w, "engine_version", "") or "",
             "last_heartbeat": w.last_heartbeat.strftime("%Y-%m-%d %H:%M:%S") if w.last_heartbeat else "-",
             "current_record_id": w.current_record_id,
             "create_time": w.create_time.strftime("%Y-%m-%d %H:%M:%S")

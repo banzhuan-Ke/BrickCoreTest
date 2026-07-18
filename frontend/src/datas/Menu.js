@@ -28,6 +28,16 @@ export const MenuGroups = [
                 permission: 'project:view'
             },
             {
+                name: '项目设置',
+                path: '/project-settings',
+                icon: 'Tools',
+                anyPermissions: [
+                    'project_settings:view',
+                    'ai_config:view',
+                    'notification_config:view'
+                ]
+            },
+            {
                 name: '环境配置',
                 path: '/environment',
                 icon: 'OfficeBuilding',
@@ -233,49 +243,49 @@ export const MenuGroups = [
                 name: '资料检索',
                 path: '/ai-knowledge/search',
                 icon: 'Search',
-                permission: 'ai_test:view'
+                permission: 'knowledge:view'
             },
             {
                 name: '资料问答',
                 path: '/ai-knowledge/qa',
                 icon: 'ChatDotRound',
-                permission: 'ai_test:view'
+                permission: 'knowledge:view'
             },
             {
                 name: '迭代文件夹',
                 path: '/ai-knowledge/folders',
                 icon: 'FolderOpened',
-                permission: 'ai_test:view'
+                permission: 'knowledge:view'
             },
             {
                 name: '输出模板',
                 path: '/ai-knowledge/templates',
                 icon: 'Document',
-                permission: 'ai_test:view'
+                permission: 'knowledge:view'
             },
             {
                 name: '模板变量',
                 path: '/ai-knowledge/variables',
                 icon: 'Tickets',
-                permission: 'ai_test:view'
+                permission: 'knowledge:view'
             },
             {
                 name: '报告向导',
                 path: '/ai-knowledge/reports',
                 icon: 'EditPen',
-                permission: 'ai_test:view'
+                permission: 'knowledge:view'
             },
             {
                 name: '生成记录',
                 path: '/ai-knowledge/records',
                 icon: 'List',
-                permission: 'ai_test:view'
+                permission: 'knowledge:view'
             },
             {
                 name: '生成配置',
                 path: '/ai-knowledge/settings',
                 icon: 'Setting',
-                permission: 'ai_test:view'
+                permission: 'knowledge:view'
             },
         ]
     },
@@ -300,6 +310,12 @@ export const MenuGroups = [
                 name: '功能用例库',
                 path: '/ai-functional-cases',
                 icon: 'DocumentChecked',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '问答准确性评测',
+                path: '/ai-qa-eval',
+                icon: 'ChatLineRound',
                 permission: 'ai_test:view'
             },
             {
@@ -410,9 +426,9 @@ export const MenuGroups = [
                 anyPermissions: [
                     'ai_config:view',
                     'smtp_config:view',
-                    'notification_config:view',
                     'mcp_config:view',
                     'login_page_config:view',
+                    'platform_settings:view',
                     'device:edit'
                 ]
             },

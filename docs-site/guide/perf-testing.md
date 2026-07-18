@@ -69,21 +69,31 @@
 
 ## 执行机（Worker）
 
-**路径**：**性能测试 → 执行机**
+压测施压由**在线 Worker**执行（后端不再本机直跑）。**二选一即可**，不必两个都装。
 
-### 方式一：BrickCoreRunner 客户端（推荐）
+### 方式一：BrickCoreRunner 完整客户端（含 GUI）
 
-1. 安装 **BrickCoreRunner v1.3.14+**（见 [执行器说明](./runner-client.md)）
+1. 安装 **BrickCoreRunner**（见 [执行器说明](./runner-client.md)）
 2. 登录平台 → 执行角色选 **仅压测执行机** 或 **UI + 压测**
 3. 选择 **压测项目**（须与平台顶部项目一致）→ 点击 **上线**
-4. 在 **性能测试 → 执行机** 确认节点 **在线**
-5. 场景执行时勾选 **使用分布式 Worker**
+4. 在 **性能测试 → 执行机** 确认节点 **在线**（来源一般为「完整客户端」）
 
 客户端会在 **当前会话日志** 实时显示压测进度（秒级 QPS、RT、错误率等），完整日志写入 `runner/logs/perf_worker.log`。下线时会自动向平台注销，无需等待心跳超时。
 
-### 方式二：命令行脚本（高级 / CI）
+### 方式二：BrickCorePerf 精简压测包（CLI，体积小）
 
-仍支持在 `runner` 目录手动启动（与客户端内置引擎相同）：
+适合服务器常驻或本机只要压测、不要浏览器引擎：
+
+1. 从 **设备管理** 下载 **精简压测包 Win/Mac**，或管理员将 zip 放到 `static/runner/`
+2. 解压 → 复制 `.env.example` 为 `.env`，填写 `PERF_MASTER_URL` / `PERF_TOKEN` / `PERF_PROJECT_ID`
+3. 运行 `start-perf.bat`（Windows）或 `./start-perf.sh`（macOS）
+4. 执行机列表应显示来源「精简包」
+
+说明与冒烟清单见包内 `README-PERF.md`（仓库：`docs/其他文档/README-PERF.md`）。**勿将 Windows 包拷到 Mac 使用。**
+
+### 方式三：命令行源码（开发 / CI）
+
+仍支持在 `runner` 目录手动启动（与上述引擎相同）：
 
 ```bash
 cd runner
@@ -91,22 +101,23 @@ python perf_worker.py --master http://后端地址 \
   --token my-local-token \
   --name "压测机-01" \
   --max-concurrent 200 \
-  --project-id 当前项目ID
+  --project-id 当前项目ID \
+  --agent-kind runner_client
 ```
 
 - `--project-id` 须与顶部 **项目 ID** 一致
 - `--master` 与浏览器访问平台地址一致（生产一般不带 `:8000`）
 - 脚本方式日志在终端输出，同时写入 `runner/logs/perf_worker.log`
 
-### 客户端 vs 脚本
+### 对比
 
-| 对比 | BrickCoreRunner | 命令行脚本 |
-|------|-----------------|------------|
-| 压测引擎 | 同一 `perf_worker.py` | 同一 `perf_worker.py` |
-| 报告与指标 | 完全一致 | 完全一致 |
-| 项目 / Token | GUI 选择，自动绑定 | 手动传参 |
-| 下线注销 | 自动调用 `/perf/workers/unregister` | 需手动停止进程，约 2 分钟后平台显示离线 |
-| 日志 | 客户端会话区 + 日志文件 | 终端 + 日志文件 |
+| 对比 | BrickCoreRunner | BrickCorePerf | 命令行源码 |
+|------|-----------------|---------------|------------|
+| 压测引擎 | 同一 `perf_worker.py` | 同左 | 同左 |
+| 浏览器 / GUI | 有 | 无 | 无 |
+| 报告与指标 | 一致 | 一致 | 一致 |
+| 项目 / Token | GUI | `.env` | 手动传参 |
+| 典型来源标识 | `runner_client` | `perf_slim` | 自定 / 空=兼容 |
 
 ### 何时需要 Worker
 

@@ -77,7 +77,7 @@ TORTOISE_ORM = {
     "timezone": "Asia/Shanghai",
     'apps': {
         'models': {
-            'models': ['aerich.models', 'app.models.sys', 'app.models.ui', 'app.models.app', 'app.models.http', 'app.models.schedule', 'app.models.perf', 'app.models.ai'],
+            'models': ['aerich.models', 'app.models.sys', 'app.models.ui', 'app.models.app', 'app.models.http', 'app.models.schedule', 'app.models.perf', 'app.models.ai', 'app.models.knowledge'],
             'default_connection': 'default'
         },
     }
@@ -92,11 +92,13 @@ ALGORITHM = "HS256"
 TOKEN_TIMEOUT = 60 * 60 * 24 * 1
 # Runner 客户端会话 token 有效期（秒），默认 7 天
 RUNNER_TOKEN_TIMEOUT = int(os.getenv("RUNNER_TOKEN_TIMEOUT", str(60 * 60 * 24 * 7)))
-RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.0.2")
+RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.0.3")
+# 定位策略打分（recorder_locator_rank）所需最低引擎版本
+RUNNER_ENGINE_VERSION_MIN = os.getenv("RUNNER_ENGINE_VERSION_MIN", "1.0.3")
 RUNNER_CLIENT_VERSION_MIN = os.getenv("RUNNER_CLIENT_VERSION_MIN", "1.3.8")
-RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.4.0")
+RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.4.5")
 # 平台产品版本（页脚、/runner/version 展示，与 Runner 客户端版本独立）
-PLATFORM_VERSION = os.getenv("PLATFORM_VERSION", "1.3.0")
+PLATFORM_VERSION = os.getenv("PLATFORM_VERSION", "1.4.0")
 # Runner 客户端安装包下载地址（zip 或文档页）；为空时客户端根据平台地址推导
 RUNNER_CLIENT_DOWNLOAD_URL = os.getenv("RUNNER_CLIENT_DOWNLOAD_URL", "").strip()
 # Phase 6：connect 下发按设备隔离的 MQ/Redis 凭证（需 RabbitMQ Management + Redis ACL）

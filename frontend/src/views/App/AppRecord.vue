@@ -41,7 +41,7 @@
               @click="showDetail(row)"
             >详情</el-button>
             <el-button
-              v-if="viewMode === 'active' && recordType === 'case' && isUiFailed(row.status) && canAiAnalyze"
+              v-if="viewMode === 'active' && recordType === 'case' && isUiFailed(row.status) && canAnalyzeRecord(row)"
               type="warning"
               plain
               size="small"
@@ -189,7 +189,7 @@
           <el-table-column label="操作" width="200">
             <template #default="{ row }">
               <el-button
-                v-if="isUiFailed(row.status) && canAiAnalyze"
+                v-if="isUiFailed(row.status) && canAnalyzeRecord(row)"
                 type="warning"
                 link
                 @click="openAiAnalyze(row.id)"
@@ -207,7 +207,7 @@
     </div>
     <template #footer>
       <el-button
-        v-if="detail && recordType === 'case' && isUiFailed(detail.status) && canAiAnalyze"
+        v-if="detail && recordType === 'case' && isUiFailed(detail.status) && canAnalyzeRecord(detail)"
         type="warning"
         @click="openAiAnalyze(detail.id)"
       >AI 分析</el-button>
@@ -224,7 +224,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
@@ -234,11 +234,10 @@ import AppReportEnvSummary from '@/views/App/components/AppReportEnvSummary.vue'
 import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
 import { appRecordApi, appExecApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
-import { UserStore } from '@/stores/module/UserStore'
+import { useFailureAnalysisGate } from '@/composables/useFailureAnalysisGate.js'
 import dateTools from '@/tools/dateTools.js'
 
 const proStore = ProjectStore()
-const uStore = UserStore()
 const router = useRouter()
 const records = ref([])
 const recordType = ref('plan')
@@ -250,7 +249,8 @@ const detailLoading = ref(false)
 const aiAnalyzeVisible = ref(false)
 const aiAnalyzeTargetId = ref(null)
 
-const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
+const { canAnalyzeExecution } = useFailureAnalysisGate(ref(null), { syncProject: true })
+const canAnalyzeRecord = (row) => canAnalyzeExecution(row)
 
 function openAiAnalyze(recordId) {
   aiAnalyzeTargetId.value = recordId

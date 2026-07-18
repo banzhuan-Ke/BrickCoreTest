@@ -13,7 +13,7 @@ const pageSteps = [
         method: "open_url",
         params: {
             url: '',
-            wait_until: 'load',
+            wait_until: 'domcontentloaded',
             timeout: 30000
         }
     },
@@ -56,6 +56,11 @@ const pageSteps = [
         }
     },
     {
+        keyword: '切换到最新页面',
+        method: "switch_to_latest_page",
+        params: {}
+    },
+    {
         keyword: '关闭页面',
         method: "close_page",
         params: {
@@ -85,6 +90,27 @@ const pageSteps = [
         }
     },
     {
+        keyword: '滚动到元素',
+        method: "scroll_to_element",
+        params: {
+            locator: '',
+            index: 1,
+            timeout: 20000
+        }
+    },
+    {
+        keyword: '接受弹窗',
+        method: "accept_dialog",
+        params: {
+            prompt_text: ''
+        }
+    },
+    {
+        keyword: '取消弹窗',
+        method: "dismiss_dialog",
+        params: {}
+    },
+    {
         keyword: '执行JavaScript脚本',
         method: "execute_script",
         params: {
@@ -111,7 +137,15 @@ const elementSteps = [
             locator: "",
             index: 1,
             force: false,
-            timeout: 20000
+            timeout: 20000,
+            wait_download: false,
+            save_path: '',
+            var_name: '',
+            download_timeout: 60000,
+            accept_dialog: false,
+            dismiss_dialog: false,
+            dialog_timeout: 10000,
+            prompt_text: ''
         }
     },
     {
@@ -194,6 +228,25 @@ const elementSteps = [
             locator: "",
             delay: 0.1,
         }
+    },
+    {
+        keyword: '按文本点击元素',
+        method: "click_by_text",
+        params: {
+            text: '',
+            index: 1,
+            exact: false,
+            force: false,
+            timeout: 20000,
+            wait_download: false,
+            save_path: '',
+            var_name: '',
+            download_timeout: 60000,
+            accept_dialog: false,
+            dismiss_dialog: false,
+            dialog_timeout: 10000,
+            prompt_text: ''
+        }
     }
 ]
 // 2.5、图像定位（Canvas/纯图标兜底）
@@ -205,6 +258,17 @@ const visionSteps = [
             template: '',
             threshold: 0.8,
             timeout: 20000,
+        },
+    },
+    {
+        keyword: '图像模板输入',
+        method: 'fill_by_image',
+        params: {
+            template: '',
+            value: '',
+            threshold: 0.8,
+            timeout: 20000,
+            clear_first: true,
         },
     },
     {
@@ -411,6 +475,62 @@ const waitSteps = [
             locator: "",
             timeout: 20000
         }
+    },
+    {
+        keyword: '等待元素消失',
+        method: "wait_for_element_hidden",
+        params: {
+            locator: "",
+            index: 1,
+            timeout: 20000
+        }
+    },
+    {
+        keyword: '等待元素文本变化',
+        method: "wait_for_element_text_change",
+        params: {
+            locator: "",
+            text: '',
+            index: 1,
+            timeout: 20000
+        }
+    },
+    {
+        keyword: '等待元素文本稳定',
+        method: "wait_for_element_text_stable",
+        params: {
+            locator: "",
+            stable_ms: 500,
+            index: 1,
+            timeout: 20000
+        }
+    },
+    {
+        keyword: '等待URL包含',
+        method: "wait_for_url_contains",
+        params: {
+            url: '',
+            use_regex: false,
+            timeout: 20000
+        }
+    },
+    {
+        keyword: '等待接口响应',
+        method: "wait_for_response",
+        params: {
+            url: '',
+            method: '',
+            status: '',
+            timeout: 30000
+        }
+    },
+    {
+        keyword: '等待下载完成',
+        method: "wait_for_download",
+        params: {
+            save_path: '',
+            var_name: ''
+        }
     }
 ]
 // 6、断言处理 - 统一使用 kw_assert_* 命名风格（与淘宝源码 except_to_be_* 区分）
@@ -462,12 +582,62 @@ const assertSteps = [
         }
     },
     {
+        keyword: '断言文本不包含',
+        method: "kw_assert_text_not_contains",
+        params: {
+            text: "",
+            locator: "",
+            index: 1,
+            timeout: 5000
+        }
+    },
+    {
+        keyword: '断言元素数量',
+        method: "kw_assert_element_count",
+        params: {
+            locator: "",
+            count: 1,
+            operator: 'eq'
+        }
+    },
+    {
+        keyword: '断言文本长度',
+        method: "kw_assert_text_length",
+        params: {
+            locator: "",
+            length: '',
+            min_length: '',
+            max_length: '',
+            operator: 'eq',
+            index: 1
+        }
+    },
+    {
         keyword: '断言元素属性值',
         method: "kw_assert_attribute",
         params: {
             locator: "",
             attr_name: "",
             value: ""
+        }
+    },
+    {
+        keyword: '断言元素属性存在',
+        method: "kw_assert_attribute_exists",
+        params: {
+            locator: "",
+            attr_name: "",
+            index: 1,
+            timeout: 5000
+        }
+    },
+    {
+        keyword: '断言元素属性不存在',
+        method: "kw_assert_attribute_not_exists",
+        params: {
+            locator: "",
+            attr_name: "",
+            index: 1
         }
     },
     {
@@ -576,6 +746,13 @@ const assertSteps = [
 // 7、其他操作
 const otherSteps = [
     {
+        keyword: '智能步骤',
+        method: 'smart_step',
+        params: {
+            intent: ''
+        }
+    },
+    {
         keyword: 'input文件上传',
         method: "upload_file",
         params: {
@@ -619,6 +796,18 @@ const otherSteps = [
         method: "extract_page_url",
         params: {
             var_name: ''
+        }
+    },
+    {
+        keyword: '提取接口响应字段',
+        method: "extract_response_field",
+        params: {
+            field: '',
+            var_name: '',
+            url: '',
+            method: '',
+            status: '',
+            timeout: 30000
         }
     }
 ]

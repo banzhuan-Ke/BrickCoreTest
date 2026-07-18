@@ -8,23 +8,16 @@
         type="info"
         :closable="false"
         show-icon
-        title="统一配置入口"
-        description="聚合 AI 模型、邮件 SMTP、项目通知渠道、MCP Server、执行器发布与登录页等品牌配置。各 Tab 权限与原先独立菜单一致。"
+        title="全站统一配置"
+        description="本页仅包含平台级配置（AI 模型、SMTP、MCP、执行器、登录页等）。自愈 / AI Act / 功能用例软区间 / 项目通知渠道请到「项目配置 → 项目设置」。"
         style="margin-bottom: 16px;"
       />
       <el-tabs v-model="activeTab" type="border-card" @tab-change="onTabChange">
         <el-tab-pane v-if="canTab('ai')" label="AI 模型" name="ai" lazy>
           <AiConfig embedded />
         </el-tab-pane>
-        <el-tab-pane v-if="canTab('notify')" label="邮件与通知" name="notify" lazy>
-          <el-tabs v-model="notifySubTab" type="card" class="notify-sub-tabs">
-            <el-tab-pane v-if="canTab('smtp')" label="SMTP 发信" name="smtp" lazy>
-              <SmtpConfig embedded />
-            </el-tab-pane>
-            <el-tab-pane v-if="canTab('notification')" label="项目通知渠道" name="channels" lazy>
-              <NotificationConfig embedded />
-            </el-tab-pane>
-          </el-tabs>
+        <el-tab-pane v-if="canTab('smtp')" label="邮件 SMTP" name="notify" lazy>
+          <SmtpConfig embedded />
         </el-tab-pane>
         <el-tab-pane v-if="canTab('mcp')" label="MCP Server" name="mcp" lazy>
           <McpConfig embedded />
@@ -59,12 +52,10 @@ import RunnerReleaseConfig from '@/views/System/RunnerReleaseConfig.vue'
 import LoginPageConfig from '@/views/System/LoginPageConfig.vue'
 import DataRetentionConfig from '@/views/System/DataRetentionConfig.vue'
 import StreamParserConfig from '@/views/System/StreamParserConfig.vue'
-import NotificationConfig from '@/views/Project/NotificationConfig.vue'
 
 const TAB_PERMISSIONS = {
   ai: 'ai_config:view',
   smtp: 'smtp_config:view',
-  notification: 'notification_config:view',
   mcp: 'mcp_config:view',
   runner: 'device:edit',
   login: 'login_page_config:view',
@@ -76,8 +67,7 @@ const TOP_TAB_ALIASES = {
   'ai-config': 'ai',
   smtp: 'notify',
   'smtp-config': 'notify',
-  notification: 'notify',
-  'notification-config': 'notify',
+  notify: 'notify',
   mcp: 'mcp',
   'mcp-config': 'mcp',
   runner: 'runner',
@@ -96,7 +86,6 @@ const router = useRouter()
 const uStore = UserStore()
 
 const activeTab = ref('ai')
-const notifySubTab = ref('smtp')
 
 const canTab = (key) => {
   const perm = TAB_PERMISSIONS[key]
@@ -106,7 +95,6 @@ const canTab = (key) => {
 const hasAnyTab = computed(() =>
   canTab('ai') ||
   canTab('smtp') ||
-  canTab('notification') ||
   canTab('mcp') ||
   canTab('runner') ||
   canTab('login') ||
@@ -117,7 +105,7 @@ const hasAnyTab = computed(() =>
 const resolveTopTab = (raw) => {
   const key = (raw || '').toLowerCase()
   const mapped = TOP_TAB_ALIASES[key] || key
-  if (mapped === 'notify' && (canTab('smtp') || canTab('notification'))) return 'notify'
+  if (mapped === 'notify' && canTab('smtp')) return 'notify'
   if (mapped === 'ai' && canTab('ai')) return 'ai'
   if (mapped === 'mcp' && canTab('mcp')) return 'mcp'
   if (mapped === 'runner' && canTab('runner')) return 'runner'
@@ -125,7 +113,7 @@ const resolveTopTab = (raw) => {
   if (mapped === 'data' && canTab('data')) return 'data'
   if (mapped === 'stream-parser' && canTab('streamParser')) return 'stream-parser'
   if (canTab('ai')) return 'ai'
-  if (canTab('smtp') || canTab('notification')) return 'notify'
+  if (canTab('smtp')) return 'notify'
   if (canTab('mcp')) return 'mcp'
   if (canTab('runner')) return 'runner'
   if (canTab('login')) return 'login'
@@ -134,43 +122,34 @@ const resolveTopTab = (raw) => {
   return 'ai'
 }
 
-const applyRouteTab = () => {
-  const tab = route.query.tab
-  const sub = route.query.sub
-  activeTab.value = resolveTopTab(tab)
-  if (activeTab.value === 'notify') {
-    if (sub === 'channels' && canTab('notification')) {
-      notifySubTab.value = 'channels'
-    } else if (canTab('smtp')) {
-      notifySubTab.value = 'smtp'
-    } else if (canTab('notification')) {
-      notifySubTab.value = 'channels'
-    }
+const redirectLegacyProjectSettings = () => {
+  const tab = String(route.query.tab || '').toLowerCase()
+  const sub = String(route.query.sub || '').toLowerCase()
+  // 旧：「平台配置 → 邮件与通知 → 项目通知渠道」
+  if (
+    sub === 'channels' ||
+    tab === 'notification' ||
+    tab === 'notification-config'
+  ) {
+    router.replace({ path: '/project-settings', query: { tab: 'notify' } })
+    return true
   }
+  // 旧：平台 AI 下执行与自愈
+  if (sub === 'execution' || tab === 'execution') {
+    router.replace({ path: '/project-settings', query: { tab: 'execution' } })
+    return true
+  }
+  return false
 }
 
-watch(() => route.query.tab, applyRouteTab, { immediate: true })
+const applyRouteTab = () => {
+  if (redirectLegacyProjectSettings()) return
+  activeTab.value = resolveTopTab(route.query.tab)
+}
+
+watch(() => [route.query.tab, route.query.sub], applyRouteTab, { immediate: true })
 
 const onTabChange = (name) => {
-  const query = { tab: name }
-  if (name === 'notify') {
-    query.sub = notifySubTab.value
-  }
-  router.replace({ path: '/platform-config', query })
+  router.replace({ path: '/platform-config', query: { tab: name } })
 }
-
-watch(notifySubTab, (sub) => {
-  if (activeTab.value === 'notify') {
-    router.replace({ path: '/platform-config', query: { tab: 'notify', sub } })
-  }
-})
 </script>
-
-<style scoped>
-.notify-sub-tabs {
-  margin-top: 4px;
-}
-.notify-sub-tabs :deep(.el-tabs__header) {
-  margin-bottom: 12px;
-}
-</style>

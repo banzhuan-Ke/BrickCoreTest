@@ -157,6 +157,9 @@
           <el-button size="small" :loading="locatorBusy" :disabled="!canLocatorAction" @click="highlightSelectedStep">
             高亮定位器
           </el-button>
+          <el-button size="small" :loading="locatorBusy" :disabled="!canRun" @click="clearHighlight">
+            取消高亮
+          </el-button>
           <el-button size="small" :loading="locatorBusy" :disabled="!canLocatorAction" @click="verifySelectedStep">
             验证定位器
           </el-button>
@@ -205,7 +208,7 @@
 
         class="stale-alert"
 
-        title="编辑器步骤与会话快照不一致。执行前建议同步，否则 Runner 仍使用打开会话时的步骤。"
+        title="编辑器步骤与会话快照不一致。请先点「同步最新步骤」；否则浏览器内工具条高亮/验证/执行仍用旧步骤（平台侧高亮会自动同步）。"
 
       />
 
@@ -277,23 +280,61 @@
 
     </div>
 
-    <el-dialog v-model="pickDialogVisible" title="拾取元素 — 回填定位器" width="640px" destroy-on-close>
-      <p class="pick-dialog-tip">将拾取到的定位器应用到当前选中步骤（步骤 {{ selectedStepIndex + 1 }}）</p>
+    <el-dialog v-model="pickDialogVisible" title="拾取元素 — 回填定位器" width="680px" destroy-on-close>
+      <p class="pick-dialog-tip">选择定位器用途：替换某个步骤，或在指定位置新增一步。</p>
       <p v-if="pickPreview.frame" class="pick-frame-hint">iframe：{{ pickPreview.frame }}</p>
-      <el-input v-model="pickPreview.locator" type="textarea" :rows="3" readonly />
+
+      <div class="pick-apply-form">
+        <div class="pick-form-row">
+          <span class="pick-form-label">应用方式</span>
+          <el-radio-group v-model="pickApplyMode" size="small">
+            <el-radio-button value="replace">替换已有步骤</el-radio-button>
+            <el-radio-button value="insert">新增步骤</el-radio-button>
+          </el-radio-group>
+        </div>
+        <div class="pick-form-row">
+          <span class="pick-form-label">{{ pickApplyMode === 'insert' ? '插入位置' : '目标步骤' }}</span>
+          <el-select v-model="pickTargetStepIndex" size="small" style="width: 100%" filterable>
+            <el-option
+              v-for="(step, idx) in (steps || [])"
+              :key="step.id || idx"
+              :label="`步骤 ${idx + 1} · ${step.desc || step.keyword || step.method || '未命名'}`"
+              :value="idx"
+            />
+            <el-option
+              v-if="pickApplyMode === 'insert'"
+              :label="`末尾（第 ${(steps?.length || 0) + 1} 步）`"
+              :value="steps?.length || 0"
+            />
+          </el-select>
+        </div>
+        <div v-if="pickApplyMode === 'insert'" class="pick-form-row">
+          <span class="pick-form-label">新步骤类型</span>
+          <el-select v-model="pickInsertMethod" size="small" style="width: 220px">
+            <el-option label="点击元素" value="click_ele" />
+            <el-option label="元素输入" value="fill_value" />
+            <el-option label="悬停元素" value="hover" />
+          </el-select>
+        </div>
+      </div>
+
+      <el-input v-model="pickPreview.locator" type="textarea" :rows="3" class="pick-locator-input" />
       <div v-if="pickPreview.candidates?.length" class="pick-candidates">
-        <span class="pick-label">候选定位器：</span>
+        <span class="pick-label">候选定位器（点击选用）：</span>
         <el-tag
           v-for="(item, idx) in pickPreview.candidates"
           :key="idx"
           size="small"
+          :type="item === pickPreview.locator ? 'primary' : 'info'"
           class="pick-tag"
           @click="selectPickCandidate(item)"
         >{{ item }}</el-tag>
       </div>
       <template #footer>
         <el-button @click="pickDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="confirmApplyPick">应用到选中步</el-button>
+        <el-button type="primary" @click="confirmApplyPick">
+          {{ pickApplyMode === 'insert' ? '新增并写入定位器' : '应用到选中步' }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -305,7 +346,7 @@
 
 <script setup>
 
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 
@@ -323,9 +364,9 @@ import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 
 import { buildDebugRunningHints, buildDebugExecutionHints, mergeDebugExecutionHints, formatDebugStepStatus, formatIdleRemaining, buildSessionToEditorMap, mapSessionStepResultsToEditor, mergeDebugRunStepResults, groupContiguousStepIndices } from '@/utils/debugSession.js'
 
-import { extractOpenUrlFromSteps } from '@/utils/caseDescription.js'
+import { resolveDefaultStartUrl } from '@/utils/caseDescription.js'
 
-import { formatLocatorActionSummary, splitCombinedLocator, stepHasLocator } from '@/utils/debugLocator.js'
+import { formatLocatorActionSummary, pickResultKey, splitCombinedLocator, stepHasLocator, suggestPickStepTemplate } from '@/utils/debugLocator.js'
 
 
 
@@ -376,6 +417,12 @@ const pickModeLoading = ref(false)
 const pickDialogVisible = ref(false)
 const pickPreview = reactive({ locator: '', frame: '', element_locator: '', candidates: [], meta: {} })
 const pickPollTimer = ref(null)
+const pickApplyMode = ref('replace')
+const pickTargetStepIndex = ref(0)
+const pickInsertMethod = ref('click_ele')
+const ignoredPickKey = ref('')
+const handledPickKey = ref('')
+const handledFeedbackKey = ref('')
 const staleCheckTimer = ref(null)
 const mergedLastResult = ref(null)
 const lastEditorMap = ref([])
@@ -483,6 +530,8 @@ const locatorActionType = computed(() => {
 
   if (result?.type === 'highlight') return result.status === 'success' ? 'success' : 'error'
 
+  if (result?.type === 'clear_highlight') return 'info'
+
   if (result?.type === 'pick') return 'success'
 
   return 'info'
@@ -548,21 +597,12 @@ const lastResultSteps = computed(() => {
 
 
 
-const previewInitialUrl = computed(() => {
-
-  const openUrl = extractOpenUrlFromSteps(props.steps)
-
-  if (openUrl) return openUrl
-
-  const env = proStore.envList?.find((e) => e.id === openForm.env_id)
-
-  const host = (env?.host || '').trim()
-
-  if (!host) return ''
-
-  return host.startsWith('http') ? host : `https://${host}`
-
-})
+const previewInitialUrl = computed(() => resolveDefaultStartUrl({
+  steps: props.steps,
+  envId: openForm.env_id,
+  envList: proStore.envList,
+  projectInfo: proStore.projectInfo,
+}))
 
 
 
@@ -579,11 +619,24 @@ const debugHints = computed(() => {
 
 
 
-watch(session, (val) => {
+const lastSyncedSelectKey = ref('')
+let selectStepSyncTimer = null
+
+watch(session, (val, oldVal) => {
 
   emit('session-change', val)
 
-  if (val?.id && val?.status === 'ready') {
+  if (val?.id !== oldVal?.id) {
+    lastSyncedSelectKey.value = ''
+  }
+
+  const becameReady = val?.id && val?.status === 'ready' && oldVal?.status !== 'ready'
+  if (becameReady) {
+
+    scheduleCheckStepsStale()
+    scheduleSyncSelectedStepToRunner(props.selectedStepIndex)
+
+  } else if (val?.id && val?.status === 'ready') {
 
     scheduleCheckStepsStale()
 
@@ -610,6 +663,12 @@ watch(() => props.steps, () => {
   }
 
 }, { deep: true })
+
+watch(() => props.selectedStepIndex, (idx) => {
+  if (session.value?.status === 'ready') {
+    scheduleSyncSelectedStepToRunner(idx)
+  }
+})
 
 
 
@@ -693,6 +752,36 @@ function parseSessionResponse(res) {
 
   return body?.data ?? body
 
+}
+
+
+
+function resolveDebugCloseNotice(data) {
+  if (!data || data.status !== 'closed') return null
+  const closed = data.last_result?.type === 'closed' ? data.last_result : null
+  const message = closed?.message || data.error || '调试浏览器已关闭'
+  const reason = closed?.reason || ''
+  return { message, reason }
+}
+
+
+
+function notifyDebugSessionClosed(data) {
+  const notice = resolveDebugCloseNotice(data)
+  if (!notice) return
+  if (notice.reason === 'browser_closed_by_user') {
+    ElNotification.warning(notice.message)
+    return
+  }
+  if (notice.reason === 'idle_timeout' || notice.reason === '空闲超时自动关闭' || notice.reason === 'runner_idle_timeout') {
+    ElNotification.info(notice.message)
+    return
+  }
+  if (notice.reason === 'force_closed' || (notice.reason && notice.reason.includes('关闭超时'))) {
+    ElNotification.warning(notice.message)
+    return
+  }
+  ElNotification.info(notice.message)
 }
 
 
@@ -1148,9 +1237,11 @@ async function closeSession() {
 
       }
 
-    }
+    } else if (status !== 'closed') {
 
-    ElNotification.info('调试浏览器已关闭')
+      ElNotification.info('调试浏览器已关闭')
+
+    }
 
   } catch (e) {
 
@@ -1166,6 +1257,58 @@ async function closeSession() {
 
 
 
+function consumePickResultFromSession() {
+  const result = session.value?.last_result
+  if (result?.type !== 'pick' || !result.locator) return false
+  const key = pickResultKey(result)
+  if (!key || key === ignoredPickKey.value || key === handledPickKey.value) return false
+  if (pickDialogVisible.value) return false
+  handledPickKey.value = key
+  ignoredPickKey.value = key
+  pickModeActive.value = false
+  stopPickPolling()
+  openPickDialog(result)
+  return true
+}
+
+function locatorFeedbackKey(result) {
+  if (!result?.type) return ''
+  return [
+    result.type,
+    result.status || '',
+    result.step_index ?? '',
+    result.message || '',
+    result.locator || '',
+  ].join('|')
+}
+
+function markLocatorFeedbackHandled(result) {
+  const key = locatorFeedbackKey(result)
+  if (key) handledFeedbackKey.value = key
+}
+
+function surfaceLocatorFeedbackFromSession() {
+  const result = session.value?.last_result
+  if (!result?.type) return
+  if (!['highlight', 'verify', 'clear_highlight'].includes(result.type)) return
+  const key = locatorFeedbackKey(result)
+  if (!key || key === handledFeedbackKey.value) return
+  handledFeedbackKey.value = key
+  const msg = formatLocatorActionSummary(result) || result.message
+  if (!msg) return
+  if (result.type === 'clear_highlight') {
+    ElMessage.info(msg)
+    return
+  }
+  if (result.status === 'success') {
+    ElMessage.success(msg)
+  } else if (result.status === 'ambiguous') {
+    ElMessage.warning(msg)
+  } else {
+    ElMessage.error(msg)
+  }
+}
+
 async function refreshSession() {
 
   if (!session.value?.id) return
@@ -1180,6 +1323,8 @@ async function refreshSession() {
 
     if (session.value?.status === 'closed') {
 
+      notifyDebugSessionClosed(session.value)
+
       stopPolling()
 
       session.value = null
@@ -1190,6 +1335,12 @@ async function refreshSession() {
 
       stopPolling()
 
+    } else {
+      consumePickResultFromSession()
+      // 平台侧主动 await 的高亮/验证会自行弹消息，避免重复；仅工具条/闲时轮询补提示
+      if (!locatorBusy.value) {
+        surfaceLocatorFeedbackFromSession()
+      }
     }
 
   } catch (e) {
@@ -1234,13 +1385,67 @@ async function waitForLocatorResult(timeoutMs = 60000) {
   return null
 }
 
+async function clearHighlight() {
+  if (!session.value?.id || !canRun.value) return
+  locatorBusy.value = true
+  try {
+    await uiDebugApi.clearHighlight(session.value.id)
+    const result = await waitForLocatorResult()
+    markLocatorFeedbackHandled(result)
+    ElMessage.success('已取消高亮')
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '取消高亮失败')
+  } finally {
+    locatorBusy.value = false
+  }
+}
+
+function scheduleSyncSelectedStepToRunner(editorIndex = props.selectedStepIndex) {
+  if (selectStepSyncTimer) {
+    clearTimeout(selectStepSyncTimer)
+    selectStepSyncTimer = null
+  }
+  selectStepSyncTimer = setTimeout(() => {
+    selectStepSyncTimer = null
+    syncSelectedStepToRunner(editorIndex)
+  }, 120)
+}
+
+async function syncSelectedStepToRunner(editorIndex = props.selectedStepIndex) {
+  if (!session.value?.id || session.value.status !== 'ready') return
+  try {
+    const sessionIndex = await resolveEditorStepSessionIndex(editorIndex)
+    const key = `${session.value.id}:${sessionIndex}`
+    if (key === lastSyncedSelectKey.value) return
+    lastSyncedSelectKey.value = key
+    await uiDebugApi.selectStep(session.value.id, { step_index: sessionIndex })
+  } catch {
+    // 同步选中步失败不阻断操作；允许下次重试
+    lastSyncedSelectKey.value = ''
+  }
+}
+
 async function highlightSelectedStep() {
   if (!session.value?.id || !canLocatorAction.value) return
   locatorBusy.value = true
   try {
+    // 高亮/验证必须用编辑器最新定位器；步骤已变更时先同步
+    if (stepsStale.value) {
+      const synced = await syncStepsFromEditor()
+      if (!synced) {
+        ElMessage.warning('请先同步步骤后再高亮')
+        return
+      }
+    }
     const sessionIndex = await resolveEditorStepSessionIndex(props.selectedStepIndex)
     await uiDebugApi.highlightStep(session.value.id, { step_index: sessionIndex })
-    await waitForLocatorResult()
+    const result = await waitForLocatorResult()
+    markLocatorFeedbackHandled(result)
+    if (result?.type === 'highlight' && result.status !== 'success') {
+      ElMessage.error(result.message || '高亮失败')
+    } else if (result?.type === 'highlight') {
+      ElMessage.success(formatLocatorActionSummary(result) || '高亮成功')
+    }
   } catch (e) {
     ElMessage.error(e?.response?.data?.detail || e?.message || '高亮失败')
   } finally {
@@ -1252,9 +1457,25 @@ async function verifySelectedStep() {
   if (!session.value?.id || !canLocatorAction.value) return
   locatorBusy.value = true
   try {
+    if (stepsStale.value) {
+      const synced = await syncStepsFromEditor()
+      if (!synced) {
+        ElMessage.warning('请先同步步骤后再验证')
+        return
+      }
+    }
     const sessionIndex = await resolveEditorStepSessionIndex(props.selectedStepIndex)
     await uiDebugApi.verifyLocator(session.value.id, { step_index: sessionIndex })
-    await waitForLocatorResult()
+    const result = await waitForLocatorResult()
+    markLocatorFeedbackHandled(result)
+    const msg = formatLocatorActionSummary(result) || result?.message
+    if (result?.status === 'success') {
+      ElMessage.success(msg || '验证成功')
+    } else if (result?.status === 'ambiguous') {
+      ElMessage.warning(msg || '定位器匹配多个元素')
+    } else {
+      ElMessage.error(msg || '验证失败')
+    }
   } catch (e) {
     ElMessage.error(e?.response?.data?.detail || e?.message || '验证失败')
   } finally {
@@ -1285,8 +1506,13 @@ function openPickDialog(payload) {
   pickPreview.locator = payload.locator || ''
   pickPreview.frame = payload.frame || ''
   pickPreview.element_locator = payload.element_locator || ''
-  pickPreview.candidates = payload.candidates || []
+  pickPreview.candidates = payload.candidates || payload.meta?.candidates || []
   pickPreview.meta = payload.meta || {}
+  pickApplyMode.value = 'replace'
+  const sel = Number(props.selectedStepIndex)
+  pickTargetStepIndex.value = Number.isFinite(sel) && sel >= 0 ? sel : 0
+  const suggested = suggestPickStepTemplate(payload.meta || payload.element || {})
+  pickInsertMethod.value = suggested.method || 'click_ele'
   pickDialogVisible.value = true
 }
 
@@ -1294,11 +1520,8 @@ function startPickPolling() {
   stopPickPolling()
   pickPollTimer.value = setInterval(async () => {
     await refreshSession()
-    const result = session.value?.last_result
-    if (result?.type === 'pick' && result.locator) {
-      stopPickPolling()
-      pickModeActive.value = false
-      openPickDialog(result)
+    if (consumePickResultFromSession()) {
+      // refreshSession 内已处理；此处再调一次无副作用（已 handled）
     }
   }, 1200)
 }
@@ -1321,6 +1544,12 @@ async function togglePickMode() {
   }
   pickModeLoading.value = true
   try {
+    await refreshSession()
+    // 忽略会话里上一次拾取结果，避免再次开启就立刻弹窗
+    const stale = session.value?.last_result
+    if (stale?.type === 'pick') {
+      ignoredPickKey.value = pickResultKey(stale)
+    }
     await uiDebugApi.setPickMode(session.value.id, { enabled: true })
     await waitUntilReady()
     pickModeActive.value = true
@@ -1333,22 +1562,90 @@ async function togglePickMode() {
   }
 }
 
-function confirmApplyPick() {
+function pickInsertTemplate() {
+  if (pickInsertMethod.value === 'fill_value') {
+    return {
+      keyword: '元素输入',
+      method: 'fill_value',
+      params: { locator: '', value: '', timeout: 20000 },
+    }
+  }
+  if (pickInsertMethod.value === 'hover') {
+    return {
+      keyword: '鼠标悬停到元素上方',
+      method: 'hover',
+      params: { locator: '', timeout: 20000 },
+    }
+  }
+  return {
+    keyword: '点击元素',
+    method: 'click_ele',
+    params: {
+      locator: '',
+      index: 1,
+      force: false,
+      timeout: 20000,
+      wait_download: false,
+      save_path: '',
+      var_name: '',
+      download_timeout: 60000,
+      accept_dialog: false,
+      dismiss_dialog: false,
+      dialog_timeout: 10000,
+      prompt_text: '',
+    },
+  }
+}
+
+async function confirmApplyPick() {
   if (!pickPreview.locator) {
     ElMessage.warning('定位器为空')
     return
   }
-  emit('apply-locator', {
-    stepIndex: props.selectedStepIndex,
-    locator: pickPreview.locator,
-    frame: pickPreview.frame,
-    element_locator: pickPreview.element_locator,
-    match_index: pickPreview.meta?.matchIndex || 1,
-    candidates: pickPreview.candidates,
-    meta: pickPreview.meta,
-  })
+  const stepCount = props.steps?.length || 0
+  let stepIndex = Number(pickTargetStepIndex.value)
+  if (pickApplyMode.value === 'replace') {
+    if (!Number.isFinite(stepIndex) || stepIndex < 0 || stepIndex >= stepCount) {
+      ElMessage.warning('请选择有效的目标步骤')
+      return
+    }
+    emit('apply-locator', {
+      mode: 'replace',
+      stepIndex,
+      locator: pickPreview.locator,
+      frame: pickPreview.frame,
+      element_locator: pickPreview.element_locator,
+      match_index: pickPreview.meta?.matchIndex || 1,
+      candidates: pickPreview.candidates,
+      meta: pickPreview.meta,
+    })
+  } else {
+    if (!Number.isFinite(stepIndex) || stepIndex < 0) stepIndex = stepCount
+    stepIndex = Math.min(Math.max(0, stepIndex), stepCount)
+    emit('apply-locator', {
+      mode: 'insert',
+      insertAt: stepIndex,
+      template: pickInsertTemplate(),
+      locator: pickPreview.locator,
+      frame: pickPreview.frame,
+      element_locator: pickPreview.element_locator,
+      match_index: pickPreview.meta?.matchIndex || 1,
+      candidates: pickPreview.candidates,
+      meta: pickPreview.meta,
+    })
+  }
   pickDialogVisible.value = false
-  ElNotification.success(`已回填到步骤 ${props.selectedStepIndex + 1}`)
+  // 工具条高亮/验证读的是 Runner 会话快照；拾取回填后必须同步，否则浏览器内操作条仍用旧步骤
+  await nextTick()
+  if (session.value?.status === 'ready') {
+    lastSyncedSelectKey.value = ''
+    const synced = await syncStepsFromEditor()
+    if (synced) {
+      await syncSelectedStepToRunner(props.selectedStepIndex)
+    } else {
+      ElMessage.warning('定位器已回填，但同步到调试会话失败；请点「同步最新步骤」后再用工具条高亮')
+    }
+  }
 }
 
 
@@ -1361,6 +1658,16 @@ async function resumeActiveSession() {
     if (!data?.id || ['closed', 'error'].includes(data.status)) return
     session.value = data
     syncIdleBaseline(data)
+    // 恢复会话时忽略历史拾取/高亮结果，避免立刻弹出旧窗或刷提示
+    const stale = data.last_result
+    if (stale?.type === 'pick') {
+      const key = pickResultKey(stale)
+      ignoredPickKey.value = key
+      handledPickKey.value = key
+    }
+    if (stale && ['highlight', 'verify', 'clear_highlight'].includes(stale.type)) {
+      markLocatorFeedbackHandled(stale)
+    }
     pickModeActive.value = false
     stopPickPolling()
     startPolling()
@@ -1401,6 +1708,11 @@ onBeforeUnmount(() => {
 
   stopPickPolling()
 
+  if (selectStepSyncTimer) {
+    clearTimeout(selectStepSyncTimer)
+    selectStepSyncTimer = null
+  }
+
   if (staleCheckTimer.value) clearTimeout(staleCheckTimer.value)
 
   if (idleCountdownTimer) clearInterval(idleCountdownTimer)
@@ -1420,6 +1732,8 @@ defineExpose({
   runFromStartThrough,
 
   runSelectedSteps,
+
+  syncSelectedStepToRunner,
 
   session,
 
@@ -1581,6 +1895,25 @@ defineExpose({
   color: var(--el-text-color-secondary);
   font-size: 13px;
 }
+.pick-apply-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.pick-form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.pick-form-label {
+  flex: 0 0 72px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+.pick-locator-input {
+  margin-top: 4px;
+}
 .pick-candidates {
   margin-top: 12px;
   display: flex;
@@ -1594,6 +1927,11 @@ defineExpose({
 }
 .pick-tag {
   cursor: pointer;
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+  line-height: 1.4;
+  padding: 4px 8px;
 }
 
 .stale-alert {

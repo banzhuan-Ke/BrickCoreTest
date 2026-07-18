@@ -4,13 +4,22 @@
 # BrickCore - 快速重启脚本
 # 适用：服务器上拉取最新代码后快速更新前后端
 # 用法：./restart.sh [backend|frontend|nginx|all]
-# 环境变量：GIT_BRANCH=master 可覆盖自动检测的远程分支
+#
+# 环境变量：
+#   GIT_BRANCH=main          覆盖自动检测的远程分支
+#   AUTO_AERICH=1            后端启动后自动执行 aerich upgrade
 # ============================================================
+
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
 MODE="${1:-all}"
+AUTO_AERICH="${AUTO_AERICH:-0}"
+
+OLD_HEAD=""
+NEW_HEAD=""
 
 # 检查参数
 if [[ "$MODE" != "backend" && "$MODE" != "frontend" && "$MODE" != "nginx" && "$MODE" != "all" ]]; then
@@ -19,8 +28,14 @@ if [[ "$MODE" != "backend" && "$MODE" != "frontend" && "$MODE" != "nginx" && "$M
     echo "  frontend - 只构建前端并重启 Nginx（服务器内存不足时可能失败）"
     echo "  nginx    - 只重启 Nginx"
     echo "  all      - 完整更新前后端（默认）"
+    echo ""
+    echo "环境变量: AUTO_AERICH=1 GIT_BRANCH=..."
     exit 1
 fi
+
+log_info() { echo "      $*"; }
+log_warn() { echo "[WARN] $*"; }
+log_error() { echo "[ERROR] $*"; }
 
 echo "=========================================="
 echo "  模式: $MODE"
@@ -28,10 +43,9 @@ echo "  开始更新并重启服务"
 echo "=========================================="
 
 # 1. 拉取最新代码（nginx 模式可跳过）
-# 部署机与远程不一致时（如 force-push），用 fetch + reset 对齐远程默认分支
 if [ "$MODE" != "nginx" ]; then
-    echo "[1/3] 拉取最新代码..."
-    git checkout -- deploy.sh restart.sh 2>/dev/null
+    echo "[1] 拉取最新代码..."
+    git checkout -- deploy.sh restart.sh 2>/dev/null || true
     OLD_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "")
 
     GIT_BRANCH="${GIT_BRANCH:-}"
@@ -47,87 +61,86 @@ if [ "$MODE" != "nginx" ]; then
             GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
         fi
     fi
-    echo "      远程分支: $GIT_BRANCH"
+    log_info "远程分支: $GIT_BRANCH"
 
     if ! git fetch origin "$GIT_BRANCH"; then
-        echo "[ERROR] git fetch origin $GIT_BRANCH 失败，已中止，未重启服务"
-        echo "       可尝试: git fetch origin && git branch -r"
+        log_error "git fetch origin $GIT_BRANCH 失败，已中止，未重启服务"
         exit 1
     fi
     if ! git reset --hard "origin/$GIT_BRANCH"; then
-        echo "[ERROR] 无法同步到 origin/$GIT_BRANCH，已中止，未重启服务"
+        log_error "无法同步到 origin/$GIT_BRANCH，已中止，未重启服务"
         exit 1
     fi
     NEW_HEAD=$(git rev-parse HEAD)
-    echo "      当前版本: $(git rev-parse --short HEAD) $(git log -1 --format='%s')"
+    log_info "当前版本: $(git rev-parse --short HEAD) $(git log -1 --format='%s')"
     if [ -n "$OLD_HEAD" ] && [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
         echo "      本次更新涉及文件:"
         git diff --name-status "$OLD_HEAD" "$NEW_HEAD" | while IFS= read -r line; do
             echo "        $line"
         done
-        echo "      提交说明:"
-        git log --oneline "$OLD_HEAD..$NEW_HEAD" | while IFS= read -r line; do
-            echo "        $line"
-        done
     else
-        echo "      代码已是最新，无文件变更"
+        log_info "代码已是最新，无文件变更"
     fi
-    # 仓库内脚本应带可执行位；若历史提交未标记 +x，拉取后在此自愈
-    chmod +x restart.sh deploy.sh 2>/dev/null
+    chmod +x restart.sh deploy.sh 2>/dev/null || true
 fi
 
-# 2. 构建前端（backend / nginx 模式跳过）
+# 2. 构建前端
 if [ "$MODE" == "frontend" ] || [ "$MODE" == "all" ]; then
-    echo "[2/3] 构建前端..."
+    echo "[2] 构建前端..."
     cd frontend
     npm install
 
-    # 检查服务器内存，如果小于 2G 且没有 swap，提示可能构建失败
     memory_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
     swap_kb=$(grep SwapTotal /proc/meminfo | awk '{print $2}')
     if [ "$memory_kb" -lt 2097152 ] && [ "$swap_kb" -eq 0 ]; then
-        echo "[WARN] 服务器内存不足 2G 且没有 swap，npm run build 可能会被系统杀死。"
-        echo "       建议先在本地 Windows 构建 dist 目录后上传到服务器覆盖。"
-        echo "       或者先执行以下命令增加 swap："
-        echo "         dd if=/dev/zero of=/swapfile bs=1M count=2048"
-        echo "         chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile"
+        log_warn "服务器内存不足 2G 且没有 swap，npm run build 可能会被系统杀死。"
+        log_warn "建议本地构建 dist 后上传，或增加 swap。"
     fi
 
     npm run build
-    if [ $? -ne 0 ]; then
-        echo "[ERROR] 前端构建失败，请检查上面的错误信息。"
-        echo "        如果是 'Killed'，说明内存不足，请参考上面的建议。"
-        exit 1
-    fi
     cd ..
 fi
 
-# 3. 重启后端（frontend / nginx 模式跳过）
+# 3. 重启后端
 if [ "$MODE" == "backend" ] || [ "$MODE" == "all" ]; then
-    echo "[3/3] 重启后端..."
-    if ! docker compose up -d --build backend; then
-        echo "[ERROR] 后端容器启动失败"
+    echo "[3] 重建并重启后端..."
+    BUILD_NO_CACHE=""
+    if [ -n "$OLD_HEAD" ] && [ -n "$NEW_HEAD" ] && [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
+        if git diff --name-only "$OLD_HEAD" "$NEW_HEAD" | grep -qE '^backend/requirements.txt$|^backend/Dockerfile$|^backend/docker_install_deps.sh$'; then
+            log_info "检测到依赖/Dockerfile 变更，使用 --no-cache 重建（仅此情况全量重建）"
+            BUILD_NO_CACHE="--no-cache"
+        else
+            log_info "仅代码变更，使用缓存增量构建（省时间）"
+        fi
+    fi
+
+    if ! docker compose build $BUILD_NO_CACHE backend; then
+        log_error "后端镜像构建失败"
         exit 1
     fi
-    echo "      建议执行数据库迁移: docker compose exec backend aerich upgrade"
+    if ! docker compose up -d --force-recreate backend; then
+        log_error "后端容器启动失败"
+        exit 1
+    fi
+
+    if [ "$AUTO_AERICH" = "1" ]; then
+        echo "      执行数据库迁移..."
+        docker compose exec -T backend aerich upgrade || log_warn "aerich upgrade 失败，请手动检查"
+    else
+        log_info "如需迁移: AUTO_AERICH=1 ./restart.sh backend  或 docker compose exec backend aerich upgrade"
+    fi
 fi
 
-# 4. 重启 Nginx（backend 模式跳过）
+# 4. 重启 Nginx
 if [ "$MODE" == "frontend" ] || [ "$MODE" == "nginx" ] || [ "$MODE" == "all" ]; then
-    echo "[3/3] 重启 Nginx..."
+    echo "[4] 重启 Nginx..."
     docker compose restart nginx
-fi
-
-# 5. 清理悬空镜像（backend 重建后释放磁盘，避免 <none> 镜像堆积）
-if [ "$MODE" == "backend" ] || [ "$MODE" == "all" ]; then
-    echo "清理悬空 Docker 镜像..."
-    docker image prune -f
 fi
 
 echo ""
 echo "=========================================="
 echo "  重启完成"
 echo "=========================================="
-echo "  前端: http://$(curl -s ifconfig.me || echo '你的服务器IP')"
-echo "  后端: http://$(curl -s ifconfig.me || echo '你的服务器IP'):8000"
+echo "  前端: http://$(curl -s --max-time 3 ifconfig.me 2>/dev/null || echo '你的服务器IP')"
+echo "  后端: http://$(curl -s --max-time 3 ifconfig.me 2>/dev/null || echo '你的服务器IP'):8000"
 echo "=========================================="

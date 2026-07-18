@@ -5,13 +5,33 @@
       <b>通知配置</b>
     </template>
     <template #main>
-      <!-- 项目选择 -->
-      <div style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
-        <span>选择项目：</span>
-        <el-select v-model="selectedProjectId" placeholder="请选择项目" clearable style="width: 220px;" @change="onProjectChange">
-          <el-option v-for="item in projectList" :key="item.id" :label="item.name" :value="item.id"/>
-        </el-select>
-        <el-button type="primary" @click="openAddDialog" :disabled="!selectedProjectId" icon="Plus">添加配置</el-button>
+      <div style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <template v-if="embedded">
+          <span v-if="boundProjectName" style="color: #606266; font-size: 13px;">
+            当前项目：<b>{{ boundProjectName }}</b>
+          </span>
+          <el-tag v-else type="warning" size="small">请先在顶栏选择项目</el-tag>
+        </template>
+        <template v-else>
+          <span>选择项目：</span>
+          <el-select
+            v-model="selectedProjectId"
+            placeholder="请选择项目"
+            clearable
+            style="width: 220px;"
+            @change="onProjectChange"
+          >
+            <el-option v-for="item in projectList" :key="item.id" :label="item.name" :value="item.id"/>
+          </el-select>
+        </template>
+        <el-button
+          v-if="canEditResolved"
+          type="primary"
+          @click="openAddDialog"
+          :disabled="!selectedProjectId"
+          icon="Plus"
+        >添加配置</el-button>
+        <el-tag v-else type="info" size="small">只读：无「通知渠道-编辑」权限</el-tag>
       </div>
 
       <!-- 配置列表 -->
@@ -57,14 +77,22 @@
         </el-table-column>
         <el-table-column prop="enabled" label="启用状态" width="100">
           <template #default="scope">
-            <el-switch v-model="scope.row.enabled" @change="toggleEnabled(scope.row)" active-text=""/>
+            <el-switch
+              v-model="scope.row.enabled"
+              :disabled="!canEditResolved"
+              @change="toggleEnabled(scope.row)"
+              active-text=""
+            />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="260">
           <template #default="scope">
-            <el-button link type="primary" @click="openEditDialog(scope.row)" icon="Edit">编辑</el-button>
-            <el-button link type="primary" @click="handleTest(scope.row.id)" icon="Promotion">测试</el-button>
-            <el-button link type="danger" @click="handleDelete(scope.row.id)" icon="Delete">删除</el-button>
+            <template v-if="canEditResolved">
+              <el-button link type="primary" @click="openEditDialog(scope.row)" icon="Edit">编辑</el-button>
+              <el-button link type="primary" @click="handleTest(scope.row.id)" icon="Promotion">测试</el-button>
+              <el-button link type="danger" @click="handleDelete(scope.row.id)" icon="Delete">删除</el-button>
+            </template>
+            <span v-else style="color: #909399; font-size: 12px;">—</span>
           </template>
         </el-table-column>
       </el-table>
@@ -154,20 +182,31 @@
 
 <script setup>
 import ConfigShell from '@/components/ConfigShell.vue'
-
-defineProps({
-  embedded: { type: Boolean, default: false }
-})
-
-import { ref, reactive, onMounted, watch } from 'vue'
-import { Bell, Plus, Edit, Promotion, Delete, Check, QuestionFilled } from '@element-plus/icons-vue'
+import { computed, ref, reactive, onMounted, watch } from 'vue'
+import { Bell, Plus, Edit, Promotion, Delete, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '@/api/index'
+import { ProjectStore } from '@/stores/module/ProjectStore.js'
+import { UserStore } from '@/stores/module/UserStore.js'
 
+const props = defineProps({
+  /** 嵌入「项目设置」时：锁定顶栏当前项目，不可再选其他项目 */
+  embedded: { type: Boolean, default: false },
+  /** 未传时按 notification_config:edit 推断 */
+  canEdit: { type: Boolean, default: undefined },
+})
+
+const uStore = UserStore()
+const proStore = ProjectStore()
 const projectList = ref([])
 const selectedProjectId = ref(null)
 const configList = ref([])
 const loading = ref(false)
+const boundProjectName = computed(() => proStore.projectInfo?.name || '')
+const canEditResolved = computed(() => {
+  if (typeof props.canEdit === 'boolean') return props.canEdit
+  return uStore.hasPermission('notification_config:edit')
+})
 
 const dialogVisible = ref(false)
 const isEdit = ref(false)
@@ -207,9 +246,30 @@ watch(() => formData.channel_type, (val) => {
   }
 })
 
-onMounted(() => {
-  getProjectList()
+const syncEmbeddedProject = async () => {
+  const pid = proStore.projectInfo?.id || null
+  selectedProjectId.value = pid
+  await getConfigList()
+}
+
+onMounted(async () => {
+  if (props.embedded) {
+    await syncEmbeddedProject()
+    return
+  }
+  await getProjectList()
+  if (!selectedProjectId.value && proStore.projectInfo?.id) {
+    selectedProjectId.value = proStore.projectInfo.id
+    await getConfigList()
+  }
 })
+
+watch(
+  () => (props.embedded ? proStore.projectInfo?.id : null),
+  async () => {
+    if (props.embedded) await syncEmbeddedProject()
+  }
+)
 
 const getProjectList = async () => {
   const res = await http.projectApi.getProjectList({ page: 1, size: 1000 })
@@ -244,6 +304,10 @@ const formatRecipients = (list) => {
 }
 
 const openAddDialog = () => {
+  if (!canEditResolved.value) {
+    ElMessage.warning('无编辑权限')
+    return
+  }
   isEdit.value = false
   currentEditId.value = null
   formData.channel_type = 'email'
@@ -274,6 +338,10 @@ const openEditDialog = (row) => {
 }
 
 const submitForm = async () => {
+  if (!canEditResolved.value) {
+    ElMessage.warning('无编辑权限')
+    return
+  }
   if (formData.channel_type === 'email') {
     const list = recipientsText.value.split(/[,，\n]/).map(s => s.trim()).filter(Boolean)
     if (list.length === 0) {
@@ -310,6 +378,7 @@ const submitForm = async () => {
       }
     }
   } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || '保存失败')
     console.error('保存失败:', error)
   }
 }

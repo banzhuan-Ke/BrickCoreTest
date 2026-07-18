@@ -104,7 +104,11 @@ ROLE_EDIT = "role:edit"
 OPERATION_LOG_VIEW = "operation_log:view"
 OPERATION_LOG_EDIT = "operation_log:edit"
 
-# 通知配置
+# 项目设置（自愈 / 录制 / 失败分析 / 功能用例等项目级策略）
+PROJECT_SETTINGS_VIEW = "project_settings:view"
+PROJECT_SETTINGS_EDIT = "project_settings:edit"
+
+# 通知配置（项目级渠道；SMTP 仍为平台级）
 NOTIFICATION_CONFIG_VIEW = "notification_config:view"
 NOTIFICATION_CONFIG_EDIT = "notification_config:edit"
 
@@ -147,6 +151,11 @@ AI_TEST_EXECUTE = "ai_test:execute"
 AI_CONFIG_VIEW = "ai_config:view"
 AI_CONFIG_EDIT = "ai_config:edit"
 
+# 迭代资料库
+KNOWLEDGE_VIEW = "knowledge:view"
+KNOWLEDGE_EDIT = "knowledge:edit"
+KNOWLEDGE_EXECUTE = "knowledge:execute"
+
 
 # 按模块分组，供前端渲染权限树使用
 PERMISSIONS = [
@@ -155,10 +164,14 @@ PERMISSIONS = [
         "children": [
             {"label": "项目管理-查看", "value": PROJECT_VIEW},
             {"label": "项目管理-编辑", "value": PROJECT_EDIT},
+            {"label": "项目设置-查看", "value": PROJECT_SETTINGS_VIEW},
+            {"label": "项目设置-编辑", "value": PROJECT_SETTINGS_EDIT},
             {"label": "环境配置-查看", "value": ENVIRONMENT_VIEW},
             {"label": "环境配置-编辑", "value": ENVIRONMENT_EDIT},
             {"label": "测试目录-查看", "value": MODULE_VIEW},
             {"label": "测试目录-编辑", "value": MODULE_EDIT},
+            {"label": "通知渠道-查看", "value": NOTIFICATION_CONFIG_VIEW},
+            {"label": "通知渠道-编辑", "value": NOTIFICATION_CONFIG_EDIT},
         ]
     },
     {
@@ -239,8 +252,16 @@ PERMISSIONS = [
         "children": [
             {"label": "AI 测试-查看", "value": AI_TEST_VIEW},
             {"label": "AI 测试-执行", "value": AI_TEST_EXECUTE},
-            {"label": "AI 配置-查看", "value": AI_CONFIG_VIEW},
-            {"label": "AI 配置-编辑", "value": AI_CONFIG_EDIT},
+            {"label": "AI 模型配置-查看", "value": AI_CONFIG_VIEW},
+            {"label": "AI 模型配置-编辑", "value": AI_CONFIG_EDIT},
+        ]
+    },
+    {
+        "label": "迭代资料库",
+        "children": [
+            {"label": "资料库-查看", "value": KNOWLEDGE_VIEW},
+            {"label": "资料库-编辑", "value": KNOWLEDGE_EDIT},
+            {"label": "资料库-执行", "value": KNOWLEDGE_EXECUTE},
         ]
     },
     {
@@ -252,8 +273,6 @@ PERMISSIONS = [
             {"label": "角色管理-编辑", "value": ROLE_EDIT},
             {"label": "操作日志-查看", "value": OPERATION_LOG_VIEW},
             {"label": "操作日志-编辑", "value": OPERATION_LOG_EDIT},
-            {"label": "通知配置-查看", "value": NOTIFICATION_CONFIG_VIEW},
-            {"label": "通知配置-编辑", "value": NOTIFICATION_CONFIG_EDIT},
             {"label": "SMTP配置-查看", "value": SMTP_CONFIG_VIEW},
             {"label": "SMTP配置-编辑", "value": SMTP_CONFIG_EDIT},
             {"label": "MCP配置-查看", "value": MCP_CONFIG_VIEW},
@@ -273,6 +292,7 @@ PERMISSIONS = [
 # 全部权限码列表
 ALL_PERMISSIONS = [
     PROJECT_VIEW, PROJECT_EDIT,
+    PROJECT_SETTINGS_VIEW, PROJECT_SETTINGS_EDIT,
     ENVIRONMENT_VIEW, ENVIRONMENT_EDIT,
     MODULE_VIEW, MODULE_EDIT,
     UI_CASE_VIEW, UI_CASE_EDIT, UI_CASE_EXECUTE,
@@ -311,6 +331,7 @@ ALL_PERMISSIONS = [
     PERF_RECORD_VIEW,
     AI_TEST_VIEW, AI_TEST_EXECUTE,
     AI_CONFIG_VIEW, AI_CONFIG_EDIT,
+    KNOWLEDGE_VIEW, KNOWLEDGE_EDIT, KNOWLEDGE_EXECUTE,
 ]
 
 async def get_user_permissions(user) -> list:

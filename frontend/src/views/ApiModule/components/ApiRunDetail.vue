@@ -137,7 +137,7 @@
             </span>
             <span class="case-meta" v-if="caseItem.response_status">HTTP {{ caseItem.response_status }}</span>
             <el-button
-              v-if="isApiFailed(caseItem) && canAiAnalyze"
+              v-if="isApiFailed(caseItem) && canAnalyzeRecord(caseItem)"
               link
               type="warning"
               size="small"
@@ -173,7 +173,7 @@
               HTTP {{ item.response_status }}
             </span>
             <el-button
-              v-if="isApiFailed(item) && canAiAnalyze"
+              v-if="isApiFailed(item) && canAnalyzeRecord(item)"
               link
               type="warning"
               size="small"
@@ -206,13 +206,12 @@ import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
 import ReportFailureBatchBar from '@/components/ReportFailureBatchBar.vue'
 import ReportKnowledgeBridge from '@/components/ReportKnowledgeBridge.vue'
 import IterationReportShortcut from '@/components/IterationReportShortcut.vue'
-import { UserStore } from '@/stores/module/UserStore.js'
+import { useFailureAnalysisGate } from '@/composables/useFailureAnalysisGate.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { getHttpResponseMs, sumHttpResponseMs, sumHttpFromPlanItems } from '../utils/runTiming'
 
-const uStore = UserStore()
 const proStore = ProjectStore()
-const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
+const { canShowFailureAnalysis: canAiAnalyze, loadExecSettings, canAnalyzeExecution } = useFailureAnalysisGate(ref(null), { syncProject: true })
 const projectId = computed(() => proStore.projectInfo?.id)
 
 const props = defineProps({
@@ -228,6 +227,7 @@ const props = defineProps({
 
 const loading = ref(false)
 const record = ref(null)
+const canAnalyzeRecord = (row) => canAnalyzeExecution(row, record.value?.env)
 const caseResults = ref([])
 const activeNames = ref([0])
 const isPlanRecord = ref(false)

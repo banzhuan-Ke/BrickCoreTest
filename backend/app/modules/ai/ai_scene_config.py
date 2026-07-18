@@ -1,4 +1,4 @@
-"""AI 场景与 LLM 配置绑定"""
+﻿"""AI 场景与 LLM 配置绑定"""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -6,7 +6,7 @@ from typing import Any, Optional
 from fastapi import HTTPException
 
 from app.models.ai import AiConfig, AiSceneBinding
-from app.core.platform.edition import KNOWLEDGE_PACK_PROMPT_SCENES, knowledge_digitech_pack_enabled
+from app.core.platform.edition import KNOWLEDGE_PACK_PROMPT_SCENES, knowledge_pack_addon_enabled
 
 # scene -> (label, description)
 AI_SCENE_DEFINITIONS: dict[str, tuple[str, str]] = {
@@ -31,24 +31,37 @@ AI_SCENE_DEFINITIONS: dict[str, tuple[str, str]] = {
     "knowledge_digest_merge": ("资料摘要合并", "长文档 Reduce：合并分块提炼"),
     "knowledge_qa": ("资料库智能问答", "资料问答智能模式：检索片段 + 一次 LLM 回答"),
     "knowledge_embed": ("资料库向量 Embedding", "资料分块向量化（Embedding API）"),
-    "digitech_scheme_narrative": ("定制测试方案", "迭代计划+测试计划 → 方案叙述与风险"),
-    "digitech_report_narrative": ("定制测试报告", "Bug 统计+执行记录 → 报告结论"),
+    "knowledge_pack_scheme_narrative": ("资料库测试方案", "迭代计划+测试计划 → 方案叙述与风险"),
+    "knowledge_pack_report_narrative": ("资料库测试报告", "Bug 统计+执行记录 → 报告结论"),
     "requirement_test_point": ("需求测试点生成", "从需求文档 AI 提取测试点"),
     "requirement_test_point_case": ("测试点→用例生成", "基于测试点批量生成功能用例"),
     "requirement_test_scheme": ("测试方案生成", "基于测试点生成测试方案文档"),
     "recorder_optimize": ("录制步骤优化", "录制弹窗内 AI 精简步骤并追加断言"),
     "case_steps_optimize": ("用例步骤优化", "用例编辑页 AI 优化步骤并追加断言"),
+    "qa_judge": ("问答准确性评判", "知识库问答评测 LLM 打分"),
     "browser_lab": ("智能浏览器", "browser-use 自然语言驱动浏览器演示/探索"),
     "browser_lab_task_optimize": ("智能浏览器 · 任务描述优化", "将自然语言任务改写为 browser-use 可执行描述"),
     "requirement_doc_understand": ("需求文档读图", "需求用例生成前 Vision 解析文档内图片"),
+    "knowledge_doc_image_vision": ("资料库文档读图", "资料库文档内图片 Vision 解析与 OCR"),
     "prompt_test": ("Prompt 模板测试", "Prompt 管理页调试模板效果"),
     "config_test": ("模型连通性测试", "AI 配置页测试 API Key 与模型可用性"),
 }
 
 
+def resolve_scene_label(scene: str, stored_label: str = "") -> str:
+    """优先使用场景定义表中的中文名；历史记录可能存了原始 scene key。"""
+    defined = AI_SCENE_DEFINITIONS.get(scene or "")
+    if defined:
+        return defined[0]
+    sl = (stored_label or "").strip()
+    if sl and sl != scene:
+        return sl
+    return scene or "unknown"
+
+
 def visible_scene_definitions() -> dict[str, tuple[str, str]]:
-    """未启用 Pro 定制包时，不向 CE / 未配置环境暴露关联场景。"""
-    if knowledge_digitech_pack_enabled():
+    """未启用行业资料库扩展包时，不暴露关联场景。"""
+    if knowledge_pack_addon_enabled():
         return AI_SCENE_DEFINITIONS
     return {k: v for k, v in AI_SCENE_DEFINITIONS.items() if k not in KNOWLEDGE_PACK_PROMPT_SCENES}
 
@@ -227,19 +240,19 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "temperature_hint": "—",
         "tip": "资料库向量 Embedding；默认通义 text-embedding-v3，也可在项目生成配置中覆盖",
     },
-    "digitech_scheme_narrative": {
+    "knowledge_pack_scheme_narrative": {
         "group": "analysis",
         "recommended_provider": "deepseek",
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.3～0.5",
-        "tip": "定制测试方案 AI 段落；需求与进度来自 Excel 解析",
+        "tip": "资料库测试方案 AI 段落；需求与进度来自 Excel 解析",
     },
-    "digitech_report_narrative": {
+    "knowledge_pack_report_narrative": {
         "group": "analysis",
         "recommended_provider": "deepseek",
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.3～0.5",
-        "tip": "定制测试报告 AI 段落；Bug 统计由专用解析器注入",
+        "tip": "资料库测试报告 AI 段落；Bug 统计由专用解析器注入",
     },
     "failure_analysis_vision": {
         "group": "vision",
@@ -261,6 +274,14 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.2～0.4",
         "tip": "自愈失败后的步骤重规划；建议与定位器自愈使用同档文本模型",
+    },
+    "qa_judge": {
+        "group": "analysis",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-chat",
+        "temperature_hint": "0.1～0.3",
+        "tip": "建议绑定 DeepSeek 文本模型，并在「参数覆盖」中设置 max_tokens≥16384、timeout≥180",
+        "default_overrides": {"max_tokens": 32768, "temperature": 0.1, "timeout": 300},
     },
     "browser_lab": {
         "group": "generate",
