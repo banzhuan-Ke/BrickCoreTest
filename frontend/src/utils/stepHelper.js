@@ -76,6 +76,28 @@ export function updateStepAtPath(steps, path, updatedStep) {
   return copy
 }
 
+/** 将路径上的单步替换为多条步骤（如智能步骤编号拆分） */
+export function replaceStepAtPathWithMultiple(steps, path, newSteps) {
+  const copy = JSON.parse(JSON.stringify(steps || []))
+  if (!isValidStepPath(path) || !Array.isArray(newSteps) || newSteps.length === 0) return copy
+  const replaceAt = (arr, p, replacements) => {
+    if (p.length === 1) {
+      arr.splice(p[0], 1, ...replacements)
+      return true
+    }
+    const step = arr[p[0]]
+    const branch = step?.branches?.[p[1]]
+    if (!branch?.steps) return false
+    if (p.length === 3) {
+      branch.steps.splice(p[2], 1, ...replacements)
+      return true
+    }
+    return replaceAt(branch.steps, p.slice(2), replacements)
+  }
+  replaceAt(copy, path, newSteps)
+  return copy
+}
+
 export function updateStepLocatorAtPath(steps, path, locator) {
   const step = getStepAtPath(steps, path)
   if (!step || !isValidStepPath(path)) {
@@ -204,7 +226,7 @@ export function buildStepFromKeyword(rawData) {
     method: rawData.method || '',
     params: rawData.params ? JSON.parse(JSON.stringify(rawData.params)) : {},
     children: [],
-    config: { timeout: 30000, retry: false },
+    config: { timeout: 30000, retry: false, pre_wait_ms: 0 },
   }
   if (rawData.method === 'condition_branch' || rawData.is_container) {
     newStep.is_container = true

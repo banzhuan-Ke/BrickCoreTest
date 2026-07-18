@@ -125,7 +125,7 @@
                 定位失败
               </el-button>
               <el-button
-                v-if="isUiFailed(scope.row.status) && canAiAnalyze"
+                v-if="isUiFailed(scope.row.status) && canAnalyzeRecord(scope.row)"
                 type="warning"
                 size="small"
                 title="AI 分析"
@@ -181,11 +181,11 @@ import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
 import { ElMessageBox, ElMessage, ElNotification } from 'element-plus'
 import dateTools from '@/tools/dateTools.js'
 import { fileApi } from '@/api/modules/sys'
-import { UserStore } from '@/stores/module/UserStore.js'
+import { useFailureAnalysisGate } from '@/composables/useFailureAnalysisGate.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 
-const uStore = UserStore()
-const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
+const { canAnalyzeExecution } = useFailureAnalysisGate(ref(null), { syncProject: true })
+const canAnalyzeRecord = (row) => canAnalyzeExecution(row)
 const aiAnalyzeVisible = ref(false)
 const aiAnalyzeTargetId = ref(null)
 

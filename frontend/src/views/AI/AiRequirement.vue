@@ -479,6 +479,9 @@
                     约 {{ scopeEstimate.char_count }} 字 ·
                     {{ scopeEstimate.image_count }} 张图 ·
                     预估输入 ~{{ scopeEstimate.estimated_input_tokens }} tokens
+                    <template v-if="scopeEstimate.recommended_count">
+                      · <b>建议用例 {{ scopeEstimate.recommended_count }} 条</b>
+                    </template>
                   </p>
                 </div>
                 <div class="scope-actions">
@@ -530,7 +533,7 @@
           </el-card>
 
           <!-- 章节覆盖检查 -->
-          <el-card v-if="sectionCoverage?.total" shadow="never" class="coverage-card">
+          <el-card v-if="showCoverageCard" shadow="never" class="coverage-card">
             <template #header>
               <div class="report-header">
                 <b>章节覆盖检查</b>
@@ -586,11 +589,28 @@
                   </el-button>
                 </template>
               </el-table-column>
+              <el-table-column width="88" align="center">
+                <template #header>
+                  <span class="label-with-tip">
+                    <span>AI自定</span>
+                    <el-tooltip content="开启后本批不传精确条数，按软区间覆盖生成" placement="top">
+                      <el-icon class="title-tip-icon"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                </template>
+                <template #default="{ row }">
+                  <el-switch
+                    :model-value="row.count_mode === 'auto'"
+                    size="small"
+                    @change="(v) => { row.count_mode = v ? 'auto' : 'fixed' }"
+                  />
+                </template>
+              </el-table-column>
               <el-table-column width="120" align="center" class-name="batch-count-col">
                 <template #header>
                   <span class="label-with-tip">
                     <span>参考条数</span>
-                    <el-tooltip content="本批 Prompt 参考目标，实际入库可能略多/略少" placement="top">
+                    <el-tooltip content="本批 Prompt 参考目标；AI 自定模式下忽略" placement="top">
                       <el-icon class="title-tip-icon"><QuestionFilled /></el-icon>
                     </el-tooltip>
                   </span>
@@ -599,10 +619,11 @@
                   <el-input-number
                     v-model="row.count"
                     :min="1"
-                    :max="50"
+                    :max="fixedCountHardMax"
                     size="small"
                     controls-position="right"
                     class="batch-count-input"
+                    :disabled="row.count_mode === 'auto'"
                   />
                 </template>
               </el-table-column>
@@ -622,6 +643,23 @@
               <el-table-column width="76" align="center">
                 <template #header>
                   <span class="label-with-tip">
+                    <span>替换</span>
+                    <el-tooltip content="勾选后：生成前删除同批次名已有用例" placement="top">
+                      <el-icon class="title-tip-icon"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                </template>
+                <template #default="{ row }">
+                  <el-switch
+                    v-model="row.replace"
+                    size="small"
+                    @change="(v) => onBatchReplaceChange(row, v)"
+                  />
+                </template>
+              </el-table-column>
+              <el-table-column width="76" align="center">
+                <template #header>
+                  <span class="label-with-tip">
                     <span>补充</span>
                     <el-tooltip content="勾选后：批量生成时读取同批次名已有用例并追加" placement="top">
                       <el-icon class="title-tip-icon"><QuestionFilled /></el-icon>
@@ -629,7 +667,11 @@
                   </span>
                 </template>
                 <template #default="{ row }">
-                  <el-switch v-model="row.supplement" size="small" />
+                  <el-switch
+                    v-model="row.supplement"
+                    size="small"
+                    @change="(v) => onBatchSupplementChange(row, v)"
+                  />
                 </template>
               </el-table-column>
               <el-table-column label="已有" width="52" align="center">
@@ -768,41 +810,130 @@
                   />
                 </el-select>
               </el-form-item>
-              <el-form-item v-if="!batchQueue.length">
+              <el-form-item>
+                <template #label>
+                  <span class="label-with-tip">
+                    <span>AI 自定条数</span>
+                    <el-tooltip
+                      content="开启后不传精确条数，由模型按功能点覆盖生成，受项目配置的软区间约束；可在 AI 模型配置里调整上下限"
+                      placement="top"
+                    >
+                      <el-icon class="title-tip-icon"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                </template>
+                <el-switch
+                  :model-value="isAutoCountMode"
+                  @change="(v) => { genForm.count_mode = v ? 'auto' : 'fixed' }"
+                />
+              </el-form-item>
+              <el-form-item v-if="!batchQueue.length && !isAutoCountMode">
                 <template #label>
                   <span class="label-with-tip">
                     <span>参考条数</span>
                     <el-tooltip
-                      content="写入 Prompt 的参考目标，非精确上限；实际条数见生成报告"
+                      content="写入 Prompt 的参考目标，非精确上限；实际条数见生成报告。条数偏少时模型会优先输出各模块主路径核心用例。"
                       placement="top"
                     >
                       <el-icon class="title-tip-icon"><QuestionFilled /></el-icon>
                     </el-tooltip>
                   </span>
                 </template>
-                <el-input-number v-model="genForm.count" :min="1" :max="50" />
+                <div class="count-with-recommend">
+                  <el-input-number v-model="genForm.count" :min="1" :max="fixedCountHardMax" />
+                  <template v-if="recommendedCaseCount">
+                    <el-tag size="small" type="info" class="count-recommend-tag">
+                      建议 {{ recommendedCaseCount }}
+                    </el-tag>
+                    <el-button
+                      link
+                      type="primary"
+                      size="small"
+                      @click="applyRecommendedCount"
+                    >采用建议</el-button>
+                  </template>
+                </div>
               </el-form-item>
-              <el-form-item v-else>
+              <el-form-item v-else-if="batchQueue.length && !isAutoCountMode">
                 <template #label>
                   <span class="label-with-tip">
                     <span>入队参考条数</span>
                     <el-tooltip
-                      content="仅新加入队列时使用；各批次以表格「条数」为准参与批量生成，不与本处相加"
+                      content="新入队批次默认用当前勾选范围的建议条数；表格「条数」可再改。若批次开了 AI 自定则忽略本值。"
                       placement="top"
                     >
                       <el-icon class="title-tip-icon"><QuestionFilled /></el-icon>
                     </el-tooltip>
                   </span>
                 </template>
-                <el-input-number v-model="genForm.count" :min="1" :max="50" />
+                <div class="count-with-recommend">
+                  <el-input-number v-model="genForm.count" :min="1" :max="fixedCountHardMax" />
+                  <template v-if="recommendedCaseCount">
+                    <el-tag size="small" type="info" class="count-recommend-tag">
+                      建议 {{ recommendedCaseCount }}
+                    </el-tag>
+                    <el-button
+                      link
+                      type="primary"
+                      size="small"
+                      @click="applyRecommendedCount"
+                    >采用建议</el-button>
+                  </template>
+                </div>
               </el-form-item>
-              <el-form-item>
+              <el-alert
+                v-if="isAutoCountMode && softMinCount && softMaxCount"
+                type="info"
+                :closable="false"
+                show-icon
+                class="count-auto-alert"
+                :title="`AI 自定 · 软区间约 ${softMinCount}～${softMaxCount} 条`"
+                :description="softRangeExplain || '区间由当前勾选范围建议条数与项目配置计算'"
+              />
+              <p
+                v-else-if="scopeEstimate?.recommend_reason && !isAutoCountMode"
+                class="count-recommend-hint"
+              >{{ scopeEstimate.recommend_reason }}</p>
+              <el-form-item v-if="!batchQueue.length">
                 <template #label>
                   <span class="label-with-tip">
                     <span>替换已有</span>
                     <el-tooltip
-                      v-if="batchQueue.length"
-                      content="批量生成开始前清空本需求下全部旧用例"
+                      content="生成前清空本需求下全部旧用例，再写入本次结果"
+                      placement="top"
+                    >
+                      <el-icon class="title-tip-icon"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                </template>
+                <el-switch
+                  v-model="genForm.replace_existing"
+                  @change="onSingleGenReplaceChange"
+                />
+              </el-form-item>
+              <el-form-item v-if="!batchQueue.length">
+                <template #label>
+                  <span class="label-with-tip">
+                    <span>补充本批</span>
+                    <el-tooltip
+                      content="按当前勾选推断的批次名，读取同批已有用例后追加生成；与「替换已有」互斥"
+                      placement="top"
+                    >
+                      <el-icon class="title-tip-icon"><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </span>
+                </template>
+                <el-switch
+                  v-model="genForm.supplement"
+                  @change="onSingleGenSupplementChange"
+                />
+              </el-form-item>
+              <el-form-item v-else>
+                <template #label>
+                  <span class="label-with-tip">
+                    <span>批量前清空</span>
+                    <el-tooltip
+                      content="批量生成开始前清空本需求下全部旧用例（各批次「替换本批」仅删除同批次名用例）"
                       placement="top"
                     >
                       <el-icon class="title-tip-icon"><QuestionFilled /></el-icon>
@@ -934,9 +1065,11 @@
                       <span class="report-meta">{{ batchReportSectionSummary(row) }}</span>
                     </template>
                   </el-table-column>
-                  <el-table-column label="模式" width="72" align="center">
+                  <el-table-column label="模式" width="100" align="center">
                     <template #default="{ row }">
                       <el-tag v-if="row.supplement" type="warning" size="small">补充</el-tag>
+                      <el-tag v-else-if="row.replace" type="danger" size="small">替换</el-tag>
+                      <el-tag v-else-if="row.count_mode === 'auto'" type="success" size="small">AI自定</el-tag>
                       <el-tag v-else size="small" type="info">新建</el-tag>
                     </template>
                   </el-table-column>
@@ -947,10 +1080,15 @@
                       </el-tag>
                     </template>
                   </el-table-column>
-                  <el-table-column prop="requested_count" label="参考" width="56" align="center" />
-                  <el-table-column label="实际入库" width="88" align="center">
+                  <el-table-column label="条数" width="120" align="center">
                     <template #default="{ row }">
-                      {{ row.parsed_count ?? row.created_count ?? 0 }}
+                      <template v-if="row.count_mode === 'auto'">
+                        {{ row.soft_min_count || '?' }}～{{ row.soft_max_count || '?' }}
+                        <div v-if="row.partial_truncated" class="report-meta">已截断</div>
+                      </template>
+                      <template v-else>
+                        参考 {{ row.requested_count ?? '-' }} / 实际 {{ row.parsed_count ?? row.created_count ?? 0 }}
+                      </template>
                     </template>
                   </el-table-column>
                   <el-table-column label="条数说明" min-width="200" show-overflow-tooltip>
@@ -980,6 +1118,19 @@
                   </el-table-column>
                   <el-table-column prop="tokens_used" label="Token" width="80" align="center" />
                   <el-table-column prop="error" label="错误信息" min-width="160" show-overflow-tooltip />
+                  <el-table-column label="操作" width="96" align="center" fixed="right">
+                    <template #default="{ row, $index }">
+                      <el-button
+                        v-if="!row.success && !generateReport.in_progress"
+                        link
+                        type="primary"
+                        size="small"
+                        :loading="retryingBatchIndex === (row.index ?? $index)"
+                        :disabled="batchGenerating || generating || (retryingBatchIndex != null && retryingBatchIndex !== (row.index ?? $index))"
+                        @click="handleRetryFailedBatch(row, row.index ?? $index)"
+                      >重新生成</el-button>
+                    </template>
+                  </el-table-column>
                 </el-table>
               </el-collapse-item>
               <el-collapse-item
@@ -1053,14 +1204,57 @@
                     {{ generateReport.case_gen.config_name }} ({{ generateReport.case_gen.model }})
                   </span>
                 </template>
-                <p class="report-line">
+                <p class="report-line" v-if="generateReport.case_gen?.aggregated || generateReport.batch_mode">
+                  <el-tag type="info" size="small" style="margin-right: 8px;">批量汇总</el-tag>
+                  <el-tag
+                    v-if="generateReport.case_gen?.count_mode === 'mixed'"
+                    type="warning"
+                    size="small"
+                    style="margin-right: 8px;"
+                  >混合模式（{{ (generateReport.case_gen.modes || []).join('/') }}）</el-tag>
+                  <el-tag
+                    v-else-if="generateReport.case_gen?.count_mode === 'auto'"
+                    type="success"
+                    size="small"
+                    style="margin-right: 8px;"
+                  >
+                    AI 自定
+                    <template v-if="generateReport.case_gen.soft_min_count != null">
+                      ·
+                      <template v-if="(generateReport.case_gen.batch_success_count || 0) > 1">合计 </template>
+                      {{ generateReport.case_gen.soft_min_count }}～{{ generateReport.case_gen.soft_max_count }}
+                    </template>
+                  </el-tag>
+                  <el-tag v-if="generateReport.case_gen?.partial_truncated" type="danger" size="small" style="margin-right: 8px;">
+                    含截断批次
+                  </el-tag>
+                  成功 {{ generateReport.case_gen?.batch_success_count ?? batchSuccessCount }}/{{ generateReport.case_gen?.batch_total ?? batchResultsDoneCount }} 批
+                  · 合计入库 {{ generateReport.case_gen?.actual_created_count ?? generateReport.case_gen?.parsed_count ?? 0 }} 条
+                  <span class="report-sub"> · 各批条数语义见「批量执行」</span>
+                  <span v-if="generateReport.case_gen?.tokens"> · Token {{ generateReport.case_gen.tokens }}</span>
+                </p>
+                <p class="report-line" v-else>
                   <el-tag v-if="generateReport.case_gen?.supplement_mode" type="warning" size="small" style="margin-right: 8px;">
                     补充 · {{ generateReport.case_gen.supplement_batch_name }}
                     <template v-if="generateReport.case_gen.existing_cases_count != null">
                       （原有 {{ generateReport.case_gen.existing_cases_count }} 条）
                     </template>
                   </el-tag>
-                  参考目标 {{ generateReport.case_gen?.requested_count }} 条 · 本次新增入库 {{ generateReport.case_gen?.parsed_count }} 条
+                  <el-tag v-if="generateReport.case_gen?.count_mode === 'auto'" type="success" size="small" style="margin-right: 8px;">
+                    AI 自定 · {{ generateReport.case_gen.soft_min_count }}～{{ generateReport.case_gen.soft_max_count }}
+                  </el-tag>
+                  <el-tag v-if="generateReport.case_gen?.partial_truncated" type="danger" size="small" style="margin-right: 8px;">
+                    已截断
+                  </el-tag>
+                  <template v-if="generateReport.case_gen?.count_mode === 'auto'">
+                    入库 {{ generateReport.case_gen?.parsed_count }} 条
+                    <span v-if="generateReport.case_gen?.range_explain" class="report-sub">
+                      · {{ generateReport.case_gen.range_explain }}
+                    </span>
+                  </template>
+                  <template v-else>
+                    参考目标 {{ generateReport.case_gen?.requested_count }} 条 · 本次新增入库 {{ generateReport.case_gen?.parsed_count }} 条
+                  </template>
                   <el-tag
                     v-if="caseCountVarianceTag"
                     :type="caseCountVarianceTag.type"
@@ -1189,11 +1383,19 @@
             <template #title>筛选说明</template>
             <p class="cases-filter-hint-body">{{ caseFilterHint }}</p>
           </el-alert>
+          <div
+            class="cases-panel"
+            v-loading="casesLoading"
+            element-loading-text="正在加载用例…"
+          >
           <div class="cases-toolbar">
             <span>
-              共 {{ caseList.length }} 条用例
-              <template v-if="caseFilterSectionId || caseFilterSourceRef || caseFilterPointId || caseFilterLibraryStatus || sessionFilterOnly">
-                （筛选后 {{ filteredCaseList.length }} 条）
+              <template v-if="casesLoading">正在加载用例…</template>
+              <template v-else>
+                共 {{ caseList.length }} 条用例
+                <template v-if="caseFilterSectionId || caseFilterSourceRef || caseFilterPointId || caseFilterLibraryStatus || sessionFilterOnly">
+                  （筛选后 {{ filteredCaseList.length }} 条）
+                </template>
               </template>
             </span>
             <div class="cases-filters">
@@ -1286,7 +1488,6 @@
 
           <el-table
             :data="flatCaseRows"
-            v-loading="casesLoading || generating || batchGenerating"
             border
             stripe
             max-height="520"
@@ -1353,9 +1554,15 @@
               </template>
             </el-table-column>
           </el-table>
+          </div>
           </template>
         </div>
-        <div v-else-if="embedMode" v-loading="true" class="embed-loading-holder" />
+        <div
+          v-else-if="embedMode"
+          v-loading="true"
+          element-loading-text="正在加载需求…"
+          class="embed-loading-holder"
+        />
       </TestingEmbedShell>
 
       <!-- 编辑用例 -->
@@ -1445,6 +1652,10 @@ import {
   formatCaseSourceRefLabel,
   isCaseInLibraryCopy
 } from '@/utils/aiCaseSource.js'
+import {
+  applyPendingSectionProjection,
+  computeSectionCoverage
+} from '@/utils/sectionCoverage.js'
 import KnowledgeRefSelector from '@/modules/knowledge/components/KnowledgeRefSelector.vue'
 import { knowledgeApi } from '@/api/modules/knowledge.js'
 
@@ -1537,8 +1748,9 @@ const detailUsageTooltip = `
 · <b>单次生成</b>：仅对当前树勾选范围生成一批<br/>
 · <b>批量生成</b>：按队列逐批调用 AI（每批独立参考条数，不与底部条数相加）<br/>
 · 文档含图：请选择 Vision 模型；用例正文选文本模型（如 DeepSeek）<br/>
-· 「替换已有」：生成前清空本需求下旧用例<br/>
-· <b>补充某批次</b>：在队列/表格点「补充」，按<b>批次名称</b>匹配已有用例（source_ref）发给模型后追加；批次名须与首次生成时一致<br/><br/>
+· 「替换已有」：生成前清空本需求下全部旧用例（单次生成）<br/>
+· 「补充本批」：单次生成时按推断批次名读取同批已有用例后追加<br/>
+· 批量各批可单独勾选「替换」（删同批旧用例）或「补充」（读同批追加）；「批量前清空」可一次删掉全部旧用例<br/><br/>
 <b>⑤ 结果与导出</b><br/>
 用例表可按「来源章节」「批次」筛选；查看「AI 生成报告」后编辑并「导出 XLSX」导入禅道。
 `
@@ -1580,9 +1792,21 @@ const genForm = reactive({
   vision_config_id: null,
   case_gen_config_id: null,
   count: 15,
+  count_mode: 'fixed', // fixed | auto
   replace_existing: false,
+  supplement: false,
   extra_instructions: ''
 })
+const reqCaseSettings = reactive({
+  auto_count_enabled_default: false,
+  auto_count_min_floor: 4,
+  auto_count_max_cap: 30,
+  auto_count_min_ratio: 0.7,
+  auto_count_max_ratio: 1.5,
+  fixed_count_hard_max: 50
+})
+const fixedCountHardMax = computed(() => Number(reqCaseSettings.fixed_count_hard_max) || 50)
+const isAutoCountMode = computed(() => genForm.count_mode === 'auto')
 const knowledgeRefs = ref({ folder_ids: [], document_ids: [] })
 
 const projectZentao = reactive({ export_profile: 'zentao', product: '', module: '', related_story: '' })
@@ -1632,6 +1856,27 @@ const exportTemplateName = ref('禅道默认模板')
 const docSections = ref([])
 const selectedSectionIds = ref([])
 const scopeEstimate = ref(null)
+
+const softMinCount = computed(() => Number(scopeEstimate.value?.soft_min_count) || null)
+const softMaxCount = computed(() => Number(scopeEstimate.value?.soft_max_count) || null)
+const softRangeExplain = computed(() => scopeEstimate.value?.range_explain || '')
+
+const recommendedCaseCount = computed(() => {
+  const n = Number(scopeEstimate.value?.recommended_count)
+  return Number.isFinite(n) && n > 0 ? n : null
+})
+
+const applyRecommendedCount = () => {
+  if (!recommendedCaseCount.value) return
+  genForm.count = recommendedCaseCount.value
+  ElMessage.success(`已采用建议条数 ${recommendedCaseCount.value}`)
+}
+
+const resolveCountForNewBatch = () => {
+  // 入队优先用当前范围建议条数，避免默认 15 一刀切
+  if (recommendedCaseCount.value) return recommendedCaseCount.value
+  return genForm.count
+}
 const sectionTreeRef = ref(null)
 const reparsing = ref(false)
 const selectingUncovered = ref(false)
@@ -1641,6 +1886,7 @@ let batchKeySeq = 0
 const batchQueue = ref([])
 const activeBatchKey = ref(null)
 const batchGenerating = ref(false)
+const retryingBatchIndex = ref(null)
 const batchProgress = ref(null)
 const batchJobProgress = ref(null)
 const batchJobId = ref(null)
@@ -1664,7 +1910,19 @@ const batchResultsDoneCount = computed(() => generateReport.value?.batch_results
 
 const caseCountVarianceTag = computed(() => {
   const cg = generateReport.value?.case_gen
-  if (!cg || cg.requested_count == null || cg.parsed_count == null) return null
+  if (!cg || cg.parsed_count == null) return null
+  // 批量汇总/混合模式不做单批偏差提示
+  if (cg.aggregated || cg.count_mode === 'mixed' || generateReport.value?.batch_mode) return null
+  if (cg.count_mode === 'auto') {
+    const lo = cg.soft_min_count
+    const hi = cg.soft_max_count
+    const got = cg.parsed_count
+    if (lo != null && got < lo) return { type: 'warning', text: `低于软下限 ${lo}` }
+    if (hi != null && got > hi) return { type: 'warning', text: `高于软上限 ${hi}` }
+    if (cg.partial_truncated) return { type: 'danger', text: '已截断' }
+    return { type: 'success', text: '落在软区间' }
+  }
+  if (cg.requested_count == null) return null
   const req = cg.requested_count
   const got = cg.parsed_count
   if (got === req) return { type: 'success', text: '与参考一致' }
@@ -1744,6 +2002,11 @@ const leafOnlySectionIds = (sections, ids) => {
 const sectionTreeData = computed(() => buildSectionTree(docSections.value))
 
 const sectionCoverage = ref(null)
+const showCoverageCard = computed(() => {
+  if (!sectionCoverage.value?.total) return false
+  if (props.embedMode && props.embedSection === 'cases' && casesLoading.value) return false
+  return true
+})
 const caseFilterSectionId = ref('')
 const caseFilterSourceRef = ref('')
 const caseFilterLibraryStatus = ref('')
@@ -2099,11 +2362,17 @@ const jobHistoryLabel = (job) => {
 const applyGenerateJobRecord = (job) => {
   if (!job) return
   selectedReportJobId.value = job.id
-  applyGenerateReport(job.generate_report, {
-    time: formatJobTime(job),
-    duration_ms: job.duration_ms,
-    tokens_used: job.tokens_used
-  })
+  applyGenerateReport(
+    {
+      ...(job.generate_report || {}),
+      job_id: job.id
+    },
+    {
+      time: formatJobTime(job),
+      duration_ms: job.duration_ms,
+      tokens_used: job.tokens_used
+    }
+  )
 }
 
 const loadGenerateJobHistory = async (reqId) => {
@@ -2274,11 +2543,30 @@ const countCasesForBatch = (name) => {
   return caseList.value.filter(c => c.source_ref === ref).length
 }
 
+const onSingleGenReplaceChange = (val) => {
+  if (val) genForm.supplement = false
+}
+
+const onSingleGenSupplementChange = (val) => {
+  if (val) genForm.replace_existing = false
+}
+
+const onBatchReplaceChange = (row, val) => {
+  if (val) row.supplement = false
+}
+
+const onBatchSupplementChange = (row, val) => {
+  if (val) row.replace = false
+}
+
 const buildGeneratePayload = (row, { supplement = false } = {}) => {
   const batchName = (row.name || '').trim()
+  const mode = row.count_mode === 'auto' ? 'auto' : 'fixed'
   const payload = {
-    count: row.count ?? genForm.count,
+    count_mode: mode,
+    count: mode === 'auto' ? undefined : (row.count ?? row.requested_count ?? genForm.count),
     replace_existing: false,
+    batch_name: batchName || undefined,
     case_gen_config_id: genForm.case_gen_config_id || undefined,
     vision_config_id: genForm.vision_config_id || undefined,
     scope_section_ids: row.scope_section_ids,
@@ -2299,28 +2587,38 @@ const buildGeneratePayload = (row, { supplement = false } = {}) => {
   return payload
 }
 
-const createBatchItem = (scopeIds, name = '') => ({
+const createBatchItem = (scopeIds, name = '', count = null) => ({
   _key: ++batchKeySeq,
   name: name || inferBatchName(scopeIds),
   scope_section_ids: [...scopeIds],
-  count: genForm.count,
+  count: count ?? resolveCountForNewBatch(),
+  count_mode: genForm.count_mode || 'fixed',
   supplement: false,
+  replace: false,
   useCustomZentao: false,
   product: '',
   module: '',
   related_story: ''
 })
 
-const addToBatchQueue = () => {
+const addToBatchQueue = async () => {
   if (!selectedSectionIds.value.length) {
     ElMessage.warning('请先在左侧勾选章节')
     return
   }
-  const item = createBatchItem(selectedSectionIds.value)
+  if (!scopeEstimate.value?.recommended_count) {
+    await refreshScopeEstimate()
+  }
+  const count = resolveCountForNewBatch()
+  genForm.count = count
+  const item = createBatchItem(selectedSectionIds.value, '', count)
   batchQueue.value.push(item)
   activeBatchKey.value = item._key
   refreshSectionCoverage()
-  ElMessage.success(`已加入队列：${item.name}`)
+  const tip = recommendedCaseCount.value
+    ? `（建议条数 ${count}）`
+    : `（条数 ${count}）`
+  ElMessage.success(`已加入队列：${item.name}${tip}`)
 }
 
 const addEmptyBatchRow = () => {
@@ -2409,7 +2707,7 @@ const loadExportTemplate = async () => {
   }
 }
 
-const loadDocumentStructure = async () => {
+const loadDocumentStructure = async ({ lightweight = false } = {}) => {
   if (!currentReq.value?.id || !proStore.projectInfo?.id) return
   try {
     const res = await aiRequirementApi.getDocumentStructure(
@@ -2418,12 +2716,16 @@ const loadDocumentStructure = async () => {
     )
     if (res.data?.code === 200) {
       docSections.value = res.data.data?.sections || []
+      if (lightweight) {
+        refreshSectionCoverage()
+        return
+      }
       const ids = docSections.value.map(s => s.id)
       selectedSectionIds.value = [...ids]
       await syncTreeCheckedKeys(sectionTreeRef.value, ids)
       scopeEstimate.value = res.data.data?.estimate_all || null
       if (ids.length) await refreshScopeEstimate()
-      await refreshSectionCoverage()
+      refreshSectionCoverage()
     }
   } catch (e) {
     console.error(e)
@@ -2454,17 +2756,27 @@ const refreshSectionCoverage = async () => {
     sectionCoverage.value = null
     return
   }
+  const pending = pendingQueueSectionIds.value
+  if (!pending.length) {
+    sectionCoverage.value = computeSectionCoverage(docSections.value, caseList.value)
+    return
+  }
   try {
     const res = await aiRequirementApi.getSectionCoverage(
       currentReq.value.id,
       proStore.projectInfo.id,
-      pendingQueueSectionIds.value.length ? pendingQueueSectionIds.value : null
+      pending.length ? pending : null
     )
     if (res.data?.code === 200) {
       sectionCoverage.value = res.data.data
     }
   } catch (e) {
     console.error(e)
+    sectionCoverage.value = applyPendingSectionProjection(
+      computeSectionCoverage(docSections.value, caseList.value),
+      docSections.value,
+      pending
+    )
   }
 }
 
@@ -2906,6 +3218,23 @@ const loadConfigs = async () => {
   }
 }
 
+const loadReqCaseSettings = async () => {
+  const pid = proStore.projectInfo?.id
+  if (!pid) return
+  try {
+    const res = await aiConfigApi.getExecutionSettings(pid)
+    if (res.data?.code === 200 && res.data.data?.requirement_case) {
+      Object.assign(reqCaseSettings, res.data.data.requirement_case)
+      // 始终按当前项目默认重置，避免跨项目残留 auto/fixed
+      genForm.count_mode = reqCaseSettings.auto_count_enabled_default ? 'auto' : 'fixed'
+    } else {
+      genForm.count_mode = 'fixed'
+    }
+  } catch (e) {
+    console.error(e)
+  }
+}
+
 const loadList = async () => {
   if (!ensureProject()) return
   listLoading.value = true
@@ -3006,14 +3335,7 @@ const handleUpload = async () => {
   }
 }
 
-const openDetail = async (row) => {
-  stopBatchJobPolling()
-  batchJobId.value = null
-  batchJobProgress.value = null
-  await loadConfigs()
-  await loadExportTemplate()
-  currentReq.value = row
-  detailVisible.value = true
+const resetDetailState = () => {
   batchQueue.value = []
   activeBatchKey.value = null
   batchProgress.value = null
@@ -3026,6 +3348,28 @@ const openDetail = async (row) => {
   sessionFilterOnly.value = false
   generateJobHistory.value = []
   selectedReportJobId.value = null
+  // 条数模式由随后的 loadReqCaseSettings 按当前项目默认覆盖；先置 fixed 避免跨项目残留 auto
+  genForm.count_mode = 'fixed'
+}
+
+const openDetail = async (row) => {
+  stopBatchJobPolling()
+  batchJobId.value = null
+  batchJobProgress.value = null
+  currentReq.value = row
+  detailVisible.value = true
+  resetDetailState()
+
+  const embedCasesOnly = props.embedMode && props.embedSection === 'cases'
+  if (embedCasesOnly) {
+    await loadCases(row.id)
+    loadDocumentStructure({ lightweight: true })
+    return
+  }
+
+  await loadConfigs()
+  await loadReqCaseSettings()
+  await loadExportTemplate()
   await loadZentaoBindings()
   await loadCaseNaming()
   await loadDocumentStructure()
@@ -3042,6 +3386,7 @@ const openDetail = async (row) => {
     || enabled[0]?.id
     || null
   await loadCases(row.id)
+  refreshSectionCoverage()
   await loadGenerateJobHistory(row.id)
   const resumed = await resumeLatestGenerateJob(row.id)
   if (!resumed) {
@@ -3109,6 +3454,7 @@ const applyBatchJobFinish = async (job, silent = false) => {
   updateBatchJobProgress(job)
   if (currentReq.value) {
     await loadCases(currentReq.value.id)
+    refreshSectionCoverage()
     await loadZentaoBindings()
     await loadList()
     const updated = reqList.value.find(r => r.id === currentReq.value.id)
@@ -3173,6 +3519,7 @@ const resumeLatestGenerateJob = async (reqId) => {
     const res = await aiRequirementApi.getLatestGenerateJob(reqId, proStore.projectInfo.id)
     const job = res.data?.data
     if (!job || !['pending', 'running'].includes(job.status)) return false
+    if ((job.payload || {}).job_kind === 'test_points') return false
     batchGenerating.value = true
     generating.value = true
     batchProgress.value = { title: '恢复进行中的批量生成任务…', failed: false }
@@ -3192,7 +3539,6 @@ const loadCases = async (reqId) => {
     const res = await aiRequirementApi.getCases(reqId, proStore.projectInfo.id)
     if (res.data?.code === 200) {
       caseList.value = res.data.data?.list || []
-      await refreshSectionCoverage()
     }
   } finally {
     casesLoading.value = false
@@ -3246,6 +3592,7 @@ const handleSupplementBatch = async (row) => {
     if (res.data?.code === 200) {
       ElMessage.success(res.data.message || `批次「${batchName}」补充完成`)
       await loadCases(currentReq.value.id)
+      refreshSectionCoverage()
       applyGenerateReport(res.data.data?.generate_report, {
         time: new Date().toLocaleString('zh-CN', { hour12: false }),
         duration_ms: res.data.data?.duration_ms,
@@ -3259,6 +3606,109 @@ const handleSupplementBatch = async (row) => {
     ElMessage.error(apiErrorMsg(e, '补充生成失败'))
   } finally {
     generating.value = false
+  }
+}
+
+const scopedImageCountForSectionIds = (scopeIds) => {
+  if (!scopeIds?.length) return 0
+  let n = 0
+  for (const sid of scopeIds) {
+    const sec = docSections.value.find(s => s.id === sid)
+    if (sec?.image_indices?.length) n += sec.image_indices.length
+  }
+  return n
+}
+
+const handleRetryFailedBatch = async (row, batchIndex) => {
+  if (!currentReq.value || !ensureProject()) return
+  const jobId = selectedReportJobId.value || generateReport.value?.job_id
+  if (!jobId) {
+    ElMessage.warning('无法定位生成任务，请从生成记录下拉框选择对应任务后重试')
+    return
+  }
+  if (!exportBindingsReady.value) {
+    ElMessage.warning('请先在「禅道导入配置」填写完整')
+    return
+  }
+  if (!row.scope_section_ids?.length) {
+    ElMessage.warning('该批次缺少章节范围，请手动勾选章节后单批生成')
+    return
+  }
+  if (scopedImageCountForSectionIds(row.scope_section_ids) > 0 && !genForm.vision_config_id) {
+    ElMessage.warning('本批范围含图片，请选择 Vision 模型')
+    return
+  }
+  const batchName = (row.name || '').trim() || `批次${batchIndex + 1}`
+  const existing = countCasesForBatch(batchName)
+  if (existing > 0) {
+    let confirmMsg = ''
+    if (row.supplement) {
+      confirmMsg = `批次「${batchName}」已有 ${existing} 条用例，将按原「补充」语义追加，不会删除已有用例。是否继续？`
+    } else if (row.replace) {
+      confirmMsg = `批次「${batchName}」已有 ${existing} 条用例，将按原「替换本批」语义先删除再重新生成。是否继续？`
+    } else {
+      confirmMsg = `批次「${batchName}」已有 ${existing} 条用例，重试将先清空该批再重新生成，避免重复入库。是否继续？`
+    }
+    try {
+      await ElMessageBox.confirm(confirmMsg, '重新生成', { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  retryingBatchIndex.value = batchIndex
+  try {
+    const retryCountMode = row.count_mode === 'auto' ? 'auto' : 'fixed'
+    const res = await aiRequirementApi.retryGenerateBatchJob(
+      jobId,
+      {
+        batch_index: batchIndex,
+        count_mode: retryCountMode,
+        count: retryCountMode === 'fixed'
+          ? (row.requested_count ?? genForm.count)
+          : undefined,
+        vision_config_id: genForm.vision_config_id || undefined,
+        case_gen_config_id: genForm.case_gen_config_id || undefined,
+        extra_instructions: (genForm.extra_instructions || '').trim() || undefined
+      },
+      proStore.projectInfo.id
+    )
+    if (res.data?.code === 200) {
+      ElMessage.success(res.data.message || '重新生成成功')
+      const job = res.data.data?.job
+      if (job) {
+        const idx = generateJobHistory.value.findIndex(j => j.id === job.id)
+        if (idx >= 0) generateJobHistory.value[idx] = job
+        else generateJobHistory.value.unshift(job)
+        applyGenerateJobRecord(job)
+      } else if (res.data.data?.batch_result && generateReport.value?.batch_results) {
+        generateReport.value.batch_results[batchIndex] = res.data.data.batch_result
+      }
+      if (res.data.data?.cases) {
+        caseList.value = res.data.data.cases
+      } else {
+        await loadCases(currentReq.value.id)
+      }
+      syncSessionFromReport(generateReport.value, caseList.value, { autoFilter: false })
+      await refreshSectionCoverage()
+      await loadList()
+    } else {
+      ElMessage.error(res.data?.message || '重新生成失败')
+    }
+  } catch (e) {
+    ElMessage.error(apiErrorMsg(e, '重新生成失败'))
+    try {
+      const jRes = await aiRequirementApi.getGenerateJob(jobId, proStore.projectInfo.id)
+      if (jRes.data?.code === 200 && jRes.data.data) {
+        const refreshed = jRes.data.data
+        const hi = generateJobHistory.value.findIndex(j => j.id === jobId)
+        if (hi >= 0) generateJobHistory.value[hi] = refreshed
+        applyGenerateJobRecord(refreshed)
+      }
+    } catch {
+      /* 忽略刷新失败 */
+    }
+  } finally {
+    retryingBatchIndex.value = null
   }
 }
 
@@ -3284,11 +3734,34 @@ const handleGenerate = async () => {
     ElMessage.warning('选中范围含图片，请选择读图用的 Vision 模型')
     return
   }
+  const batchName = inferBatchName(selectedSectionIds.value) || undefined
+  if (genForm.supplement && !batchName) {
+    ElMessage.warning('无法推断批次名，请先勾选章节')
+    return
+  }
+  if (genForm.supplement && genForm.replace_existing) {
+    ElMessage.warning('「补充本批」与「替换已有」不能同时开启')
+    return
+  }
+  const existing = batchName ? countCasesForBatch(batchName) : 0
+  if (genForm.supplement && existing === 0) {
+    try {
+      await ElMessageBox.confirm(
+        `批次「${batchName}」下尚无已生成用例，补充模式将把本次结果记入该批次名；是否继续？`,
+        '补充生成',
+        { type: 'info' }
+      )
+    } catch {
+      return
+    }
+  }
   generating.value = true
   try {
     const payload = {
-      count: genForm.count,
-      replace_existing: genForm.replace_existing,
+      count_mode: genForm.count_mode || 'fixed',
+      count: genForm.count_mode === 'auto' ? undefined : genForm.count,
+      replace_existing: genForm.replace_existing && !genForm.supplement,
+      supplement_batch_name: genForm.supplement ? batchName : undefined,
       case_gen_config_id: genForm.case_gen_config_id || undefined,
       vision_config_id: genForm.vision_config_id || undefined,
       extra_instructions: (genForm.extra_instructions || '').trim() || undefined,
@@ -3298,7 +3771,7 @@ const handleGenerate = async () => {
         related_story: reqZentao.related_story
       },
       scope_section_ids: selectedSectionIds.value,
-      batch_name: inferBatchName(selectedSectionIds.value) || undefined,
+      batch_name: batchName,
       ...knowledgeRefsPayload()
     }
     const res = await aiRequirementApi.generateCases(
@@ -3308,8 +3781,14 @@ const handleGenerate = async () => {
     )
     if (res.data?.code === 200) {
       ElMessage.success(res.data.message || '生成成功')
+      const gr = res.data.data?.generate_report
+      if (gr?.case_gen?.partial_truncated) {
+        ElMessage.warning(
+          `返回用例超过项目绝对上限，已仅保留前 ${gr.case_gen.parsed_count} 条入库（可在 AI 配置中上调上限）`
+        )
+      }
       caseList.value = res.data.data?.cases || []
-      applyGenerateReport(res.data.data?.generate_report, {
+      applyGenerateReport(gr, {
         time: new Date().toLocaleString('zh-CN', { hour12: false }),
         duration_ms: res.data.data?.duration_ms,
         tokens_used: res.data.data?.tokens_used
@@ -3360,6 +3839,10 @@ const handleBatchGenerate = async () => {
       ElMessage.warning(`批次「${item.name}」未选择章节`)
       return
     }
+    if (item.supplement && item.replace) {
+      ElMessage.warning(`批次「${item.name}」不能同时开启补充与替换`)
+      return
+    }
     if (exportProfile.value === 'zentao' && item.useCustomZentao) {
       const ok = item.product?.trim() && item.module?.trim() && item.related_story?.trim()
       if (!ok) {
@@ -3379,11 +3862,14 @@ const handleBatchGenerate = async () => {
   initInProgressBatchReport(batchQueue.value.length)
   try {
     const batches = batchQueue.value.map(b => {
+      const mode = b.count_mode === 'auto' ? 'auto' : 'fixed'
       const row = {
         name: (b.name || '').trim() || '未命名批次',
         scope_section_ids: b.scope_section_ids,
-        count: b.count,
-        supplement: !!b.supplement
+        count_mode: mode,
+        count: mode === 'auto' ? undefined : b.count,
+        supplement: !!b.supplement,
+        replace: !!b.replace
       }
       const hasBatchZentao =
         b.useCustomZentao ||
@@ -3459,6 +3945,7 @@ const deleteCasesByIds = async (caseIds, confirmMsg) => {
       ElMessage.success('删除成功')
       selectedCaseIds.value = []
       await loadCases(currentReq.value.id)
+      refreshSectionCoverage()
       await loadList()
     }
   } catch (e) {
@@ -3637,7 +4124,10 @@ const openDetailById = async (reqId) => {
       if (res.data?.code === 200) row = res.data.data
     } catch (e) { /* ignore */ }
   }
-  if (row) await openDetail(row)
+  if (!row) return
+  currentReq.value = row
+  detailVisible.value = true
+  await openDetail(row)
 }
 
 const applyRouteCaseFilters = () => {
@@ -3930,6 +4420,25 @@ onUnmounted(() => {
   font-size: 12px;
   color: #909399;
 }
+.count-with-recommend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.count-recommend-tag {
+  margin-left: 0;
+}
+.count-recommend-hint {
+  margin: -4px 0 10px 88px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.4;
+}
+.count-auto-alert {
+  margin: 0 0 12px;
+  width: 100%;
+}
 .gen-card {
   margin: 12px 0;
 }
@@ -4163,8 +4672,11 @@ onUnmounted(() => {
 .requirement-embed-host :deep(.embed-hidden-card > .el-card__body) {
   padding: 0;
 }
+.cases-panel {
+  min-height: 280px;
+}
 .embed-loading-holder {
-  min-height: 160px;
+  min-height: 280px;
 }
 .naming-template-form :deep(.el-form-item__label) {
   white-space: nowrap;

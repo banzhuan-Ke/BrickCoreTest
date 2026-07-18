@@ -64,6 +64,7 @@ _EXECUTE_CAPABILITY_PHRASES = (
     "我是说",
     "会执行",
 )
+_QA_EVAL_HINTS = ("问答评测", "问答准确性", "qa eval", "qa_eval", "评测集", "问答准确")
 _PERF_HINTS = ("压测", "性能", "perf", "Perf", "TPS", "QPS", "并发")
 _RECORD_HINTS = ("执行记录", "跑测", "运行记录", "最近执行", "测试记录", "报告")
 _API_PLAN_HINTS = ("测试计划", "接口计划", "编排计划", "api计划")
@@ -77,8 +78,8 @@ SYSTEM_PROMPT = """你是 BrickCore 测试平台助手。根据用户问题与�
 若某工具返回 permission_denied 或 user_hint，请原样转告用户权限不足原因及 user_hint，不要尝试绕过权限。
 若 JSON 含 _truncated 或 _truncated_note，说明列表被截断，回答时注明「仅展示部分数据」。
 回答使用 Markdown；段落之间最多空一行，列表项之间不要插入空行。
-提及平台实体时请使用可识别格式便于跳转，例如：api_id=5、suite_id=12、plan_id=4、case_id=6（接口用例）、ui_case_id=8（Web UI 用例）、app_case_id=3、app_suite_id=2、app_plan_id=1、task_id=8、requirement_id=3、perf_scene_id=2、template_id=7；列表项可写 id=数字（须放在对应 App/Web/接口 小节下）。
-你具备发起测试执行的能力：单条接口/Web UI/App 用例，接口/UI/App 套件与计划，压测场景等；流程为先 preview 再展示 pending_confirm 确认卡片，用户点击「确认执行」后才真正跑测。
+提及平台实体时请使用可识别格式便于跳转，例如：api_id=5、suite_id=12、plan_id=4、case_id=6（接口用例）、ui_case_id=8（Web UI 用例）、app_case_id=3、app_suite_id=2、app_plan_id=1、task_id=8、requirement_id=3、perf_scene_id=2、template_id=7、set_id=2；列表项可写 id=数字（须放在对应 App/Web/接口 小节下）。
+你具备发起测试执行的能力：单条接口/Web UI/App 用例，接口/UI/App 套件与计划，压测场景，问答评测等；流程为先 preview 再展示 pending_confirm 确认卡片，用户点击「确认执行」后才真正跑测。
 若用户询问「能否/可不可以执行用例」，应明确回答「可以」，说明需指定用例/套件/计划 ID 与环境 ID（Web/App UI 还需 Runner device_id），并给出示例说法；可结合 list_environments、list_online_devices 等数据辅助说明。
 禁止因本次 JSON 未含 preview 结果、或无执行按钮字段，就声称「无法执行任何用例」——未调用 preview 仅表示尚未发起执行，不等于平台无执行能力。
 危险操作（执行测试、批量生成、失败分析）需用户在前端点击确认后才会真正执行；若返回了 pending_confirm，请简要说明影响并提示用户确认。"""
@@ -100,9 +101,10 @@ TOOL_SELECT_PROMPT = """你是 BrickCore 平台工具规划器。根据用户问
 - 执行单条 Web UI 用例用 preview_run_ui_case（case_id 或 case_name + env_id + device_id）
 - 执行单条 App 用例用 preview_run_app_case（需在线 App Runner + adb 设备）
 - 执行 App 套件用 preview_run_app_suite；App 测试计划用 preview_run_app_plan（均需 env_id、device_id）
+- 问答准确性评测：支持「跑评测集 2 第 1-10 题」自动解析 range；需 target_id
 - Web UI 执行前可先 list_online_devices 获取在线 Runner 的 device_id；App 执行需 App Runner 及 app_udid
 - 执行 UI 测试计划用 preview_run_ui_task；Web UI 套件用 preview_run_ui_suite（均需 env_id、device_id）
-- 启动压测场景用 preview_run_perf_scene（需 env_id，可选 use_workers）
+- 启动压测场景用 preview_run_perf_scene（需 env_id；施压必须有在线 Worker，不再支持本机直跑）
 - 查单条执行详情用 get_execution_record（record_type: api_suite/api_plan/ui_plan/ui_case/app_plan/app_suite/app_case/perf）
 - 用户明确要求执行/生成/分析时，调用对应的 preview_* 工具（不要直接 confirm）
 - **执行能力咨询**（如「你能执行用例吗」「可以直接帮我跑吗」，且未给用例/套件 ID）：调用 list_environments，涉及 UI/App 时加 list_online_devices；涉及接口时加 list_api_test_cases；涉及 Web UI 时加 list_ui_cases；**不要**仅查执行记录 list_*_run_records / get_execution_record
@@ -295,7 +297,23 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
-def _safe_int(value: Any) -> int | None:
+def _parse_qa_eval_range(text: str) -> tuple[int, int] | None:
+    """从自然语言解析评测序号区间，如「第 1-10 题」「序号 1 到 10」。"""
+    patterns = (
+        r"第?\s*(\d+)\s*[～~\-—至到]\s*(\d+)\s*[题号]?",
+        r"序号\s*(\d+)\s*[～~\-—至到]\s*(\d+)",
+        r"(\d+)\s*到\s*(\d+)\s*题",
+    )
+    for pat in patterns:
+        m = re.search(pat, text or "")
+        if m:
+            start, end = int(m.group(1)), int(m.group(2))
+            if start <= end:
+                return start, end
+    return None
+
+
+def _format_page_context_hint(page_context: dict[str, Any] | None) -> str:
     if not page_context:
         return ""
     label = page_context.get("page_label") or page_context.get("page") or ""
@@ -314,6 +332,7 @@ def _safe_int(value: Any) -> int | None:
         ("ui_suite_run_id", "UI 套件执行记录 ID"),
         ("template_id", "SQL 模板 ID"),
         ("datasource_id", "数据源 ID"),
+        ("set_id", "问答评测集 ID"),
     ):
         val = page_context.get(key)
         if val:
@@ -414,7 +433,8 @@ def _plan_tools_from_page_context(
         add("list_sql_templates", {"project_id": pid, "page": 1, "size": 20})
     elif page_hint == "mock_apis":
         add("list_mock_apis", {"project_id": pid, "page": 1, "size": 20})
-
+    elif page_hint == "qa_eval":
+        add("list_qa_eval_sets", {"project_id": pid})
     elif page_hint == "online_devices":
         add("list_online_devices", {"project_id": pid})
     elif page_hint == "api_plans":
@@ -637,11 +657,22 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
         scene_id = _extract_id(text, ("场景", "scene", "压测"))
         env_id = _extract_id(text, ("环境", "env"))
         case_id = _extract_id(text, ("用例", "case"))
+        set_id = _extract_id(text, ("评测集", "set"))
         is_ui_exec = any(h in text for h in _UI_HINTS) and not is_api_ctx and not is_app_ctx
         is_app_exec = is_app_ctx and not is_api_ctx
         is_perf_exec = any(h in text for h in _PERF_HINTS)
-
-        if case_id and is_app_exec and "套件" not in text:
+        is_qa_eval = any(h in text for h in _QA_EVAL_HINTS)
+        if is_qa_eval and set_id and any(h in text for h in _EXECUTE_HINTS):
+            target_id = _extract_id(text, ("被测", "target", "api"))
+            qa_args: dict[str, Any] = {"project_id": pid, "set_id": set_id}
+            if target_id:
+                qa_args["target_id"] = target_id
+            qa_range = _parse_qa_eval_range(text)
+            if qa_range:
+                qa_args["case_scope"] = "range"
+                qa_args["range_start"], qa_args["range_end"] = qa_range
+            add("preview_run_qa_eval", qa_args)
+        elif case_id and is_app_exec and not is_qa_eval and "套件" not in text:
             add(
                 "preview_run_app_case",
                 {
@@ -651,7 +682,7 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
                     "device_id": "",
                 },
             )
-        if case_id and is_ui_exec and "套件" not in text:
+        elif case_id and is_ui_exec and not is_qa_eval and "套件" not in text:
             add(
                 "preview_run_ui_case",
                 {
@@ -661,7 +692,7 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
                     "device_id": "",
                 },
             )
-        if case_id and is_api_ctx and "套件" not in text:
+        elif case_id and is_api_ctx and not is_qa_eval and "套件" not in text:
             add(
                 "preview_run_api_case",
                 {"project_id": pid, "case_id": case_id, "env_id": env_id or 0},
@@ -716,6 +747,9 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
             add("list_api_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
         else:
             add("list_api_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
+
+    if any(h in text for h in _QA_EVAL_HINTS) and not any(h in text for h in _EXECUTE_HINTS):
+        add("list_qa_eval_sets", {"project_id": pid})
 
     if any(k in text for k in ("runner", "device_id", "执行设备", "执行器", "在线设备")) and (
         any(h in text for h in _UI_HINTS) or is_app_ctx

@@ -212,7 +212,7 @@ watch(() => suiteInfo.suite_type, (type) => {
 })
 
 // 默认展开所有分组
-const activeGroups = ref(['1', '2', '3', '4', '5', '6', '7', '8'])
+const activeGroups = ref(['1', '2', '2b', '3', '4', '5', '6', '7', '8'])
 
 // 图标映射
 const iconMap = {

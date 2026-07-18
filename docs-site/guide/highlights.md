@@ -9,7 +9,7 @@ BrickCore 将 **Web 自动化、App 自动化、接口自动化、性能测试�
 | 分类 | 文档 |
 |------|------|
 | **快速开始** | [使用说明](#home) · [平台概览](#quick-start) · [亮点功能](#highlights) · [项目与环境](#project-setup) · [测试目录](#test-catalog) |
-| **Web 自动化** | [Web 自动化](#ui-automation) · [执行器使用说明](#runner-client) · [执行器获取与发布](#runner-packaging) |
+| **Web 自动化** | [Web 自动化](#ui-automation) · [录制与稳定回放](#web-recording-playback) · [失败排障](#web-troubleshooting) · [执行器使用说明](#runner-client) |
 | **App 自动化** | [App 自动化](#app-automation) · [执行器安装指南](#runner-install-guide) · [执行器使用说明](#runner-client) |
 | **接口与数据** | [接口自动化](#api-automation) · [数据工厂](#data-factory) · [Token 授权](#api-auth) |
 | **性能测试** | [性能测试](#perf-testing) |

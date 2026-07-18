@@ -239,6 +239,10 @@ class RunForm(BaseModel):
         default=None,
         description="本次执行是否启用 AI Act 兜底（自愈失败后再调 LLM）；不传则使用项目默认",
     )
+    failure_analysis_on_report: Optional[bool] = Field(
+        default=None,
+        description="本次执行报告是否展示失败 AI 分析；不传则使用项目默认",
+    )
     trigger_source: Optional[str] = Field(
         default=None,
         description="触发来源：manual / assistant / cron 等，写入执行 env",

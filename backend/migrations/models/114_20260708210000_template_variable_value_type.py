@@ -2,9 +2,16 @@ from tortoise import BaseDBAsyncClient
 
 
 async def upgrade(db: BaseDBAsyncClient) -> str:
-    # CE 不含资料库建表迁移，demo/公开版无 ai_knowledge_template_variable 表，跳过。
-    return "SELECT 1;"
+    return """
+        ALTER TABLE `ai_knowledge_template_variable`
+            ADD COLUMN `value_type` VARCHAR(20) NOT NULL DEFAULT 'text' COMMENT '变量值类型' AFTER `category`,
+            ADD COLUMN `value_schema` JSON NULL COMMENT '表格等结构化类型配置' AFTER `value_type`;
+    """
 
 
 async def downgrade(db: BaseDBAsyncClient) -> str:
-    return "SELECT 1;"
+    return """
+        ALTER TABLE `ai_knowledge_template_variable`
+            DROP COLUMN `value_schema`,
+            DROP COLUMN `value_type`;
+    """

@@ -22,7 +22,7 @@ defineProps({
   },
   description: {
     type: String,
-    default: '请在 AI 测试 → AI 模型配置 → 执行与自愈 中开启「AI Act 总开关」后，方可在此选择是否在自愈仍失败时启用 AI 兜底。',
+    default: '请在 项目配置 → 项目设置 → 自愈与 AI Act 中开启「启用 AI Act」后，方可在此选择是否在自愈仍失败时启用 AI 兜底。',
   },
 })
 

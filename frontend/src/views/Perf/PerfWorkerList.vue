@@ -5,7 +5,7 @@
     </template>
     <template #main>
       <el-alert
-        title="分布式压测执行机"
+        title="分布式压测执行机（二选一）"
         type="info"
         :closable="false"
         style="margin-bottom: 16px;"
@@ -13,15 +13,14 @@
         <template #default>
           <div style="font-size: 13px; line-height: 1.8;">
             <div>
-              <strong>推荐</strong>：使用 <strong>BrickCoreRunner v1.3.14+</strong>，登录后默认 UI 执行器；压测时在客户端切换为「仅压测执行机」或「UI + 压测」，选择压测项目后点「上线」。压测引擎与下方脚本相同，报告指标一致。
+              <strong>方式 A · 完整执行器</strong>：安装 <strong>BrickCoreRunner</strong>，登录后切换为「仅压测执行机」或「UI + 压测」，选择压测项目后点「上线」。
             </div>
             <div style="margin-top: 8px;">
-              执行压测时在场景弹窗勾选「使用分布式 Worker 执行」。客户端「当前会话日志」会实时显示秒级 QPS / RT；完整日志见本机 <code>runner/logs/perf_worker.log</code>。
+              <strong>方式 B · 精简压测包</strong>：下载 <strong>BrickCorePerf</strong>（Win / Mac 分包），解压后运行 <code>start-perf</code>；终端会记住上次配置，回车启动或按 <code>C</code> 修改。无浏览器 / GUI，适合服务器常驻。
             </div>
-            <div style="margin-top: 12px;">
-              <strong>备选：命令行脚本</strong>（<code>--project-id</code> 须与当前项目 <b>{{ proStore.projectInfo?.id || '未选择' }}</b> 一致）：
+            <div style="margin-top: 8px;">
+              施压一律由在线执行机完成。上线后本页应出现节点；完整日志见执行机本机工作目录（完整客户端为 <code>runner/logs/</code>，精简包为 <code>engine</code> 目录）。
             </div>
-            <pre class="cmd-block">{{ startCommand }}</pre>
           </div>
         </template>
       </el-alert>
@@ -43,6 +42,18 @@
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="name" label="节点名称" min-width="120" />
         <el-table-column prop="host" label="IP/主机" width="140" />
+        <el-table-column label="来源" min-width="150" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" class="agent-kind-tag" :type="agentKindTagType(row.agent_kind)">
+              {{ agentKindLabel(row.agent_kind) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="engine_version" label="引擎版本" width="100" align="center">
+          <template #default="{ row }">
+            {{ row.engine_version || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="max_concurrent" label="最大并发" width="100" align="center" />
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
@@ -74,7 +85,7 @@
         <template #description>
           <div style="color: #909399;">暂无执行机</div>
           <div style="font-size: 13px; color: #606266; margin-top: 8px;">
-            推荐使用 BrickCoreRunner 客户端（压测模式上线），或运行 runner 目录的 perf_worker.py
+            请用 BrickCoreRunner（压测角色）或 BrickCorePerf 按上方说明上线
           </div>
         </template>
       </el-empty>
@@ -83,28 +94,18 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import { perfWorkerApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
-import { parseWorkerList } from './perfWorkerUtils'
+import { parseWorkerList, agentKindLabel, agentKindTagType } from './perfWorkerUtils'
 
 const proStore = ProjectStore()
 const loading = ref(false)
 const tableData = ref([])
 const projectMismatchHint = ref('')
-
-const backendUrl = computed(() => {
-  const base = import.meta.env.VITE_BASE_API || ''
-  return base.replace(/\/api$/, '')
-})
-
-const startCommand = computed(() => {
-  const pid = proStore.projectInfo?.id || 1
-  return `cd runner\npython -u perf_worker.py --master ${backendUrl.value} --token my-local-token --name "我的电脑" --max-concurrent 200 --project-id ${pid}`
-})
 
 const getStatusType = (status) => {
   const map = { online: 'success', idle: 'success', busy: 'warning', offline: 'info' }
@@ -174,14 +175,11 @@ onMounted(() => {
   gap: 10px;
   margin-bottom: 16px;
 }
-.cmd-block {
-  margin: 8px 0 0;
-  padding: 10px 12px;
-  background: #f5f7fa;
-  border-radius: 6px;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
+.agent-kind-tag {
+  max-width: none;
+  height: auto;
+  white-space: nowrap;
+  line-height: 1.4;
+  padding: 0 8px;
 }
 </style>

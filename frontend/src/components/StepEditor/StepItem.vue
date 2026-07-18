@@ -1,7 +1,12 @@
 <template>
   <div class="step-item-wrapper" :style="{marginLeft: depth > 0 ? '20px' : '0'}">
-    <div class="step" :class="stepClasses">
+    <div class="step" :class="stepClasses" @click="handleSelectForDebug">
       <div class="line1">
+        <span
+          class="step-drag-handle"
+          title="拖拽排序"
+          @click.stop
+        >⋮⋮</span>
         <el-checkbox
           v-if="selectable"
           :model-value="selected"
@@ -10,7 +15,7 @@
           @change="handleToggleSelect"
         />
         <!--步骤序号-->
-        <span class="step-index" @click="handleSelectForDebug">步骤 {{ index + 1 }}</span>
+        <span class="step-index" @click.stop="handleSelectForDebug">步骤 {{ index + 1 }}</span>
         <!--图标-->
         <el-icon class="header-icon" size="18px" :color="stepIconColor">
           <Collection v-if="step.method === 'fragment_ref'" />
@@ -43,8 +48,21 @@
               size="small"
               type="warning"
               :icon="VideoPlay"
-              @click="handleInteractiveRun"
+              @click.stop="handleInteractiveRun"
             >执行本步</el-button>
+          </el-tooltip>
+          <el-tooltip
+            v-if="depth === 0"
+            content="自动回放前置步后在当前页接录（需交互调试）"
+            placement="top"
+          >
+            <el-button
+              plain
+              size="small"
+              type="warning"
+              :icon="VideoCamera"
+              @click.stop="handleRecordFromStep"
+            >从这里开始录制</el-button>
           </el-tooltip>
           <el-tooltip
             v-if="depth === 0"
@@ -59,15 +77,15 @@
                 type="success"
                 :icon="VideoPlay"
                 :disabled="!debugEnabled"
-                @click="handleDebug"
+                @click.stop="handleDebug"
               >调试到此步</el-button>
             </span>
           </el-tooltip>
-          <el-button plain size="small" type="primary" :icon="Edit" @click='handleEdit'>
+          <el-button plain size="small" type="primary" :icon="Edit" @click.stop="handleEdit">
             {{ step.method === 'fragment_ref' ? '配置' : '编辑' }}
           </el-button>
-          <el-button plain size="small" type="info" :icon="CopyDocument" @click="handleCopy">复制</el-button>
-          <el-button plain size="small" type="danger" :icon="Delete" @click='handleDelete'>删除</el-button>
+          <el-button plain size="small" type="info" :icon="CopyDocument" @click.stop="handleCopy">复制</el-button>
+          <el-button plain size="small" type="danger" :icon="Delete" @click.stop="handleDelete">删除</el-button>
         </div>
       </div>
       
@@ -184,7 +202,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch, inject } from 'vue'
-import { Operation, Share, ArrowDown, ArrowRight, ArrowUp, Edit, Delete, Plus, VideoPlay, Collection, CopyDocument } from '@element-plus/icons-vue'
+import { Operation, Share, ArrowDown, ArrowRight, ArrowUp, Edit, Delete, Plus, VideoPlay, Collection, CopyDocument, VideoCamera } from '@element-plus/icons-vue'
 import { uiFragmentApi } from '@/api/modules/ui'
 import { appFragmentApi } from '@/api/modules/app'
 import { ProjectStore } from '@/stores/module/ProjectStore'
@@ -235,7 +253,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug', 'copy', 'expand-fragment', 'toggle-select', 'debug-select'])
+const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug', 'record-from-step', 'copy', 'expand-fragment', 'toggle-select', 'debug-select'])
 
 const fragmentRefEdit = inject('fragmentRefEdit', null)
 const expandFragmentStep = inject('expandFragmentStep', null)
@@ -365,6 +383,10 @@ function handleEdit() {
 
 function handleDebug() {
   emit('debug', props.index)
+}
+
+function handleRecordFromStep() {
+  emit('record-from-step', props.index)
 }
 
 function handleInteractiveRun() {
@@ -526,6 +548,22 @@ function getParamsDisplay(params) {
   display: flex;
   align-items: center;
   gap: 8px;
+
+  .step-drag-handle {
+    flex-shrink: 0;
+    width: 18px;
+    text-align: center;
+    color: var(--el-text-color-placeholder);
+    cursor: grab;
+    user-select: none;
+    font-size: 12px;
+    line-height: 1;
+    letter-spacing: -2px;
+
+    &:active {
+      cursor: grabbing;
+    }
+  }
 
   .step-select-box {
     flex-shrink: 0;

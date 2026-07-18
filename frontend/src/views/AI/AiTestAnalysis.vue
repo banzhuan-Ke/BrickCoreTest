@@ -66,7 +66,15 @@
                 </el-tooltip>
                 <el-input-number v-model="genForm.count" :min="5" :max="100" style="width: 110px;" />
                 <el-checkbox v-model="genForm.replace_batch">替换本批次</el-checkbox>
-                <el-button type="primary" :loading="generating" @click="handleGeneratePoints">生成测试点</el-button>
+                <el-button type="primary" :loading="generating && !batchGenerating" :disabled="batchGenerating" @click="handleGeneratePoints">单批生成</el-button>
+                <el-button @click="addToPointBatchQueue">加入队列</el-button>
+                <el-button @click="autoSplitToPointBatchQueue">自动拆分</el-button>
+                <el-button
+                  type="success"
+                  :loading="batchGenerating"
+                  :disabled="!pointBatchQueue.length"
+                  @click="handleBatchGeneratePoints"
+                >批量生成（{{ pointBatchQueue.length }} 批）</el-button>
                 <el-button @click="openXmindImport">导入 XMind</el-button>
                 <el-button @click="loadMindmap">刷新导图</el-button>
               </div>
@@ -83,7 +91,22 @@
                 </el-tag>
               </div>
               <el-alert v-if="scopeHint" :title="scopeHint" type="warning" show-icon :closable="false" style="margin: 8px 0;" />
+              <el-alert
+                v-if="batchPointProgress"
+                :title="batchPointProgress.title"
+                :type="batchPointProgress.failed ? 'warning' : 'info'"
+                show-icon
+                :closable="false"
+                style="margin: 8px 0;"
+              />
+              <el-progress
+                v-if="batchGenerating && batchPointJobProgress"
+                :percentage="batchPointJobProgress.percent"
+                :status="batchPointJobProgress.failed ? 'exception' : undefined"
+                style="margin-bottom: 8px;"
+              />
               <div class="mindmap-layout">
+                <div class="side-column">
                 <div class="section-panel">
                   <div class="panel-head">
                     <b>章节范围</b>
@@ -100,6 +123,32 @@
                     default-expand-all
                     class="section-tree"
                   />
+                </div>
+                <div class="batch-panel">
+                  <div class="panel-head">
+                    <b>生成队列</b>
+                    <el-tag size="small" type="info">{{ pointBatchQueue.length }}</el-tag>
+                    <el-button v-if="pointBatchQueue.length" link type="danger" @click="clearPointBatchQueue">清空</el-button>
+                  </div>
+                  <el-empty v-if="!pointBatchQueue.length" description="勾选章节后「加入队列」或「自动拆分」" :image-size="48" />
+                  <div v-else class="batch-queue-list">
+                    <div
+                      v-for="(item, idx) in pointBatchQueue"
+                      :key="item._key"
+                      class="batch-queue-item"
+                      :class="{ active: activePointBatchKey === item._key }"
+                      @click="activePointBatchKey = item._key"
+                    >
+                      <div class="batch-queue-title">
+                        <span class="batch-idx">{{ idx + 1 }}</span>
+                        <el-input v-model="item.name" size="small" placeholder="批次名" @click.stop />
+                      </div>
+                      <p class="batch-queue-meta">{{ pointBatchSectionSummary(item.scope_section_ids) }}</p>
+                      <el-input-number v-model="item.count" :min="5" :max="100" size="small" controls-position="right" @click.stop />
+                    </div>
+                  </div>
+                  <el-checkbox v-model="genForm.replace_all_points" style="margin-top: 8px;">批量开始前清空全部测试点</el-checkbox>
+                </div>
                 </div>
                 <div class="map-panel">
                   <TestPointMindMap
@@ -380,8 +429,10 @@
             </el-select>
           </el-form-item>
           <el-form-item label="目标条数">
-            <el-input-number v-model="caseGenForm.count" :min="1" :max="50" />
-            <div class="form-item-tip">单次最多 50 条（与需求用例生成一致，保证 AI 输出稳定）；测试点超过 50 时请分批勾选生成。</div>
+            <el-input-number v-model="caseGenForm.count" :min="1" :max="fixedCountHardMax" />
+            <div class="form-item-tip">
+              单次最多 {{ fixedCountHardMax }} 条（与项目「功能用例生成 → 参考条数硬上限」一致）；超出请分批勾选生成。
+            </div>
           </el-form-item>
           <el-form-item label="用例批次名">
             <el-input v-model="caseGenForm.batch_name" placeholder="如：测试点-v1，用于区分多批用例" />
@@ -585,10 +636,19 @@ const genForm = reactive({
   text_config_id: null,
   batch_name: '',
   count: 30,
-  replace_batch: true
+  replace_batch: true,
+  replace_all_points: false
 })
 /** 最近一次由章节勾选自动填入的批次名，用于区分用户手动修改 */
 const lastAutoBatchName = ref('')
+let pointBatchKeySeq = 0
+const pointBatchQueue = ref([])
+const activePointBatchKey = ref(null)
+const batchGenerating = ref(false)
+const batchPointProgress = ref(null)
+const batchPointJobProgress = ref(null)
+const batchPointJobId = ref(null)
+let batchPointJobPollTimer = null
 const mindmapScopeOnly = ref(false)
 const mindmapFilteredTotal = ref(null)
 const generating = ref(false)
@@ -662,6 +722,7 @@ const caseGenKnowledgeRefsPayload = () => {
 
 const caseGenVisible = ref(false)
 const caseGenLoading = ref(false)
+const fixedCountHardMax = ref(50)
 const caseGenForm = reactive({
   case_gen_config_id: null,
   count: 20,
@@ -781,6 +842,21 @@ const loadConfigs = async () => {
     const res = await aiConfigApi.getList({ size: 200 })
     if (res.data?.code === 200) configList.value = res.data.data?.list || []
   } catch (e) { console.error(e) }
+}
+
+const loadCaseGenHardMax = async () => {
+  const pid = proStore.projectInfo?.id
+  if (!pid) return
+  try {
+    const res = await aiConfigApi.getExecutionSettings(pid)
+    const max = Number(res.data?.data?.requirement_case?.fixed_count_hard_max)
+    if (Number.isFinite(max) && max >= 10) {
+      fixedCountHardMax.value = max
+      if (caseGenForm.count > max) caseGenForm.count = max
+    }
+  } catch (e) {
+    console.error(e)
+  }
 }
 
 const loadList = async () => {
@@ -947,6 +1023,8 @@ const openDetail = async (row) => {
   schemeMdEdit.value = ''
   genForm.batch_name = ''
   lastAutoBatchName.value = ''
+  clearPointBatchQueue()
+  stopPointBatchJobPolling()
   if (!schemeEnvHints.system_name) schemeEnvHints.system_name = row.name || ''
   if (!schemeForm.title) schemeForm.title = `${row.name || ''} 测试方案`
   await loadDocumentStructure()
@@ -955,10 +1033,15 @@ const openDetail = async (row) => {
   await loadSchemes()
   await loadOverview()
   estimateScopeHint()
+  await resumeLatestPointBatchJob(row.id)
 }
 
 const handleGeneratePoints = async () => {
   if (!currentReq.value?.id || !ensureProject()) return
+  if (batchGenerating.value) {
+    ElMessage.warning('批量任务进行中，请等待完成')
+    return
+  }
   if (!selectedSectionIds.value.length) {
     ElMessage.warning('请勾选章节范围')
     return
@@ -993,6 +1076,238 @@ const handleGeneratePoints = async () => {
     ElMessage.error(apiErrorMsg(e, '生成失败'))
   } finally {
     generating.value = false
+  }
+}
+
+const pointBatchSectionSummary = (ids) => {
+  if (!ids?.length) return '—'
+  const titles = ids
+    .map(id => docSections.value.find(s => s.id === id)?.title?.trim())
+    .filter(Boolean)
+  if (!titles.length) return `${ids.length} 节`
+  if (titles.length <= 2) return titles.join('、')
+  return `${titles[0]} 等 ${titles.length} 节`
+}
+
+const inferPointBatchName = (ids) => {
+  const first = docSections.value.find(s => s.id === ids?.[0])
+  const t = (first?.title || '').trim()
+  return t ? t.slice(0, 40) : `批次${pointBatchQueue.value.length + 1}`
+}
+
+const createPointBatchItem = (scopeIds, name = '') => ({
+  _key: ++pointBatchKeySeq,
+  name: name || inferPointBatchName(scopeIds),
+  scope_section_ids: [...scopeIds],
+  count: genForm.count,
+  replace_existing: genForm.replace_batch
+})
+
+const addToPointBatchQueue = () => {
+  if (!selectedSectionIds.value.length) {
+    ElMessage.warning('请先在左侧勾选章节')
+    return
+  }
+  const item = createPointBatchItem(selectedSectionIds.value, genForm.batch_name || '')
+  pointBatchQueue.value.push(item)
+  activePointBatchKey.value = item._key
+  ElMessage.success(`已加入队列：${item.name}`)
+}
+
+const autoSplitToPointBatchQueue = async () => {
+  if (!currentReq.value?.id || !ensureProject()) return
+  if (!selectedSectionIds.value.length) {
+    ElMessage.warning('请先勾选要拆分的章节（可全选）')
+    return
+  }
+  try {
+    const res = await aiTestAnalysisApi.planTestPointBatches(
+      currentReq.value.id,
+      {
+        scope_section_ids: selectedSectionIds.value,
+        default_count: genForm.count
+      },
+      proStore.projectInfo.id
+    )
+    if (res.data?.code !== 200) {
+      ElMessage.error(res.data?.message || '拆分失败')
+      return
+    }
+    const planned = res.data.data?.batches || []
+    if (!planned.length) {
+      ElMessage.warning('未能规划批次')
+      return
+    }
+    pointBatchQueue.value = planned.map(b => createPointBatchItem(b.scope_section_ids, b.name))
+    for (let i = 0; i < pointBatchQueue.value.length; i++) {
+      if (planned[i]?.count) pointBatchQueue.value[i].count = planned[i].count
+    }
+    activePointBatchKey.value = pointBatchQueue.value[0]?._key || null
+    const oversized = planned.filter(b => b.exceeds_budget).length
+    if (oversized) {
+      ElMessage.warning(`已拆分为 ${planned.length} 批，其中 ${oversized} 批单章仍超出 token 预算，生成时可能被拦截，建议再拆细`)
+    } else {
+      ElMessage.success(`已自动拆分为 ${planned.length} 批并加入队列`)
+    }
+  } catch (e) {
+    ElMessage.error(apiErrorMsg(e, '自动拆分失败'))
+  }
+}
+
+const clearPointBatchQueue = () => {
+  pointBatchQueue.value = []
+  activePointBatchKey.value = null
+}
+
+const stopPointBatchJobPolling = () => {
+  if (batchPointJobPollTimer) {
+    clearInterval(batchPointJobPollTimer)
+    batchPointJobPollTimer = null
+  }
+}
+
+const pollPointBatchGenerateJob = async (jobId) => {
+  if (!jobId || !proStore.projectInfo?.id) return
+  try {
+    const res = await aiRequirementApi.getGenerateJob(jobId, proStore.projectInfo.id)
+    const job = res.data?.data
+    if (!job) return
+    if (job.requirement_id && currentReq.value?.id && job.requirement_id !== currentReq.value.id) return
+    const total = job.total_batches || 1
+    const done = job.done_batches || 0
+    const pct = Math.min(100, Math.round((done / total) * 100))
+    const running = ['pending', 'running'].includes(job.status)
+    batchPointJobProgress.value = {
+      percent: running ? pct : 100,
+      failed: job.status === 'failed',
+      title: running
+        ? `进行中 ${done}/${total} 批 · ${job.current_batch_name || ''}`
+        : (job.status === 'completed' ? `已完成 ${done}/${total} 批` : (job.error || '任务失败'))
+    }
+    batchPointProgress.value = { title: batchPointJobProgress.value.title, failed: job.status === 'failed' }
+    if (!running) {
+      stopPointBatchJobPolling()
+      batchGenerating.value = false
+      generating.value = false
+      batchPointJobId.value = null
+      await loadMindmap()
+      await loadTestPoints()
+      await loadOverview()
+      await loadList()
+      if (job.status === 'completed') {
+        ElMessage.success(batchPointJobProgress.value.title)
+      } else {
+        ElMessage.warning(job.error || '批量生成未完全成功')
+      }
+    }
+  } catch (e) {
+    stopPointBatchJobPolling()
+    batchGenerating.value = false
+    generating.value = false
+    batchPointProgress.value = { title: apiErrorMsg(e, '查询进度失败'), failed: true }
+    ElMessage.error(apiErrorMsg(e, '查询进度失败'))
+  }
+}
+
+const startPointBatchJobPolling = (jobId) => {
+  stopPointBatchJobPolling()
+  batchPointJobId.value = jobId
+  batchPointJobPollTimer = setInterval(() => pollPointBatchGenerateJob(jobId), 3000)
+  pollPointBatchGenerateJob(jobId)
+}
+
+const handleBatchGeneratePoints = async () => {
+  if (!currentReq.value?.id || !ensureProject()) return
+  if (!pointBatchQueue.value.length) {
+    ElMessage.warning('请先将章节加入队列')
+    return
+  }
+  for (const item of pointBatchQueue.value) {
+    if (!item.scope_section_ids?.length) {
+      ElMessage.warning(`批次「${item.name}」未选择章节`)
+      return
+    }
+  }
+  const hasImages = pointBatchQueue.value.some(item =>
+    (item.scope_section_ids || []).some(sid => {
+      const sec = docSections.value.find(s => s.id === sid)
+      return sec?.image_indices?.length
+    })
+  )
+  if (hasImages && !genForm.vision_config_id) {
+    ElMessage.warning('队列范围内含图片，请选择 Vision 模型')
+    return
+  }
+  batchGenerating.value = true
+  generating.value = true
+  batchPointProgress.value = { title: `正在提交 ${pointBatchQueue.value.length} 批任务…`, failed: false }
+  batchPointJobProgress.value = { percent: 0, title: '正在提交任务…', failed: false }
+  try {
+    const batches = pointBatchQueue.value.map(b => ({
+      name: (b.name || '').trim() || inferPointBatchName(b.scope_section_ids),
+      scope_section_ids: b.scope_section_ids,
+      count: b.count ?? genForm.count,
+      replace_existing: !!b.replace_existing,
+      supplement: false
+    }))
+    const res = await aiTestAnalysisApi.generateTestPointsBatch(
+      currentReq.value.id,
+      {
+        vision_config_id: genForm.vision_config_id || undefined,
+        text_config_id: genForm.text_config_id || undefined,
+        replace_all: genForm.replace_all_points,
+        batches,
+        ...knowledgeRefsPayload()
+      },
+      proStore.projectInfo.id
+    )
+    if (res.data?.code === 200) {
+      const job = res.data.data
+      ElMessage.success(res.data.message || '任务已提交')
+      if (job?.id) startPointBatchJobPolling(job.id)
+      else {
+        batchGenerating.value = false
+        generating.value = false
+      }
+    } else {
+      ElMessage.error(res.data?.message || '提交失败')
+      batchGenerating.value = false
+      generating.value = false
+    }
+  } catch (e) {
+    ElMessage.error(apiErrorMsg(e, '提交批量生成失败'))
+    batchPointProgress.value = { title: apiErrorMsg(e, '提交失败'), failed: true }
+    batchGenerating.value = false
+    generating.value = false
+  }
+}
+
+const resumeLatestPointBatchJob = async (reqId) => {
+  if (!reqId || !proStore.projectInfo?.id) return false
+  try {
+    const res = await aiRequirementApi.getLatestGenerateJob(reqId, proStore.projectInfo.id)
+    const job = res.data?.data
+    if (!job || !['pending', 'running'].includes(job.status)) return false
+    if ((job.payload || {}).job_kind !== 'test_points') return false
+    const payloadBatches = job.payload?.batches
+    if (Array.isArray(payloadBatches) && payloadBatches.length) {
+      pointBatchQueue.value = payloadBatches.map(b =>
+        createPointBatchItem(b.scope_section_ids || [], b.name || '')
+      )
+      for (let i = 0; i < pointBatchQueue.value.length; i++) {
+        const src = payloadBatches[i]
+        if (src?.count) pointBatchQueue.value[i].count = src.count
+        if (src?.replace_existing) pointBatchQueue.value[i].replace_existing = true
+      }
+      activePointBatchKey.value = pointBatchQueue.value[0]?._key || null
+    }
+    batchGenerating.value = true
+    generating.value = true
+    batchPointProgress.value = { title: '恢复进行中的测试点批量任务…', failed: false }
+    startPointBatchJobPolling(job.id)
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -1307,7 +1622,7 @@ const openCaseGenDialog = () => {
     caseGenForm.scope_mode = 'all'
   }
   const scopeIds = resolveCaseGenScopePointIds(caseGenForm.scope_mode)
-  caseGenForm.count = Math.min(50, Math.max(1, scopeIds.length || 20))
+  caseGenForm.count = Math.min(fixedCountHardMax.value, Math.max(1, scopeIds.length || 20))
   caseGenVisible.value = true
 }
 
@@ -1543,6 +1858,7 @@ const openDetailFromRoute = async () => {
 
 onMounted(async () => {
   loadConfigs()
+  loadCaseGenHardMax()
   if (props.embedMode && props.embedReqId) {
     if (props.embedTab) {
       activeTab.value = props.embedTab === 'schemes' ? 'scheme' : props.embedTab
@@ -1576,6 +1892,7 @@ watch(() => props.highlightPointId, (pid) => {
 })
 
 onBeforeUnmount(() => {
+  stopPointBatchJobPolling()
   typeChart?.dispose()
   moduleChart?.dispose()
 })
@@ -1620,15 +1937,55 @@ onBeforeUnmount(() => {
   gap: 12px;
   min-height: 560px;
 }
-.section-panel {
-  width: 260px;
+.side-column {
+  width: 280px;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 620px;
+}
+.section-panel {
+  flex: 1;
+  min-height: 200px;
   border: 1px solid #ebeef5;
   border-radius: 6px;
   padding: 8px;
   overflow: auto;
-  max-height: 600px;
 }
+.batch-panel {
+  flex-shrink: 0;
+  max-height: 280px;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 8px;
+  overflow: auto;
+  background: #fafafa;
+}
+.batch-queue-list { display: flex; flex-direction: column; gap: 6px; }
+.batch-queue-item {
+  padding: 6px 8px;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+.batch-queue-item.active { border-color: #409eff; background: #ecf5ff; }
+.batch-queue-title { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.batch-idx {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #909399;
+  color: #fff;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.batch-queue-meta { margin: 0 0 4px; color: #909399; line-height: 1.3; }
 .panel-head {
   display: flex;
   align-items: center;

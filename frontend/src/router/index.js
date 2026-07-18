@@ -2,6 +2,7 @@ import {createWebHashHistory, createRouter} from 'vue-router'
 import NProgress from "nprogress"
 import 'nprogress/nprogress.css'
 import {UserStore} from "@/stores/module/UserStore"
+import { knowledgePackChildRoutes } from '../modules/knowledge/routes_pack.js'
 
 const routes = [
     {
@@ -69,6 +70,20 @@ const routes = [
                 }
             },
             {
+                path: '/project-settings',
+                name: 'projectSettings',
+                component: () => import('../views/Project/ProjectSettings.vue'),
+                meta: {
+                    title: '项目设置',
+                    icon: 'Tools',
+                    anyPermissions: [
+                        'project_settings:view',
+                        'ai_config:view',
+                        'notification_config:view'
+                    ]
+                }
+            },
+            {
                 path: '/environment',
                 name: 'environmentList',
                 component: () => import('../views/Environment/Environment.vue'),
@@ -95,11 +110,11 @@ const routes = [
             },
             {
                 path: '/notification-config',
-                redirect: { path: '/platform-config', query: { tab: 'notify', sub: 'channels' } }
+                redirect: { path: '/project-settings', query: { tab: 'notify' } }
             },
             {
                 path: '/smtp-config',
-                redirect: { path: '/platform-config', query: { tab: 'notify', sub: 'smtp' } }
+                redirect: { path: '/platform-config', query: { tab: 'notify' } }
             },
             {
                 path: '/mcp-config',
@@ -127,9 +142,9 @@ const routes = [
                     anyPermissions: [
                         'ai_config:view',
                         'smtp_config:view',
-                        'notification_config:view',
                         'mcp_config:view',
                         'login_page_config:view',
+                        'platform_settings:view',
                         'device:edit'
                     ]
                 }
@@ -686,7 +701,16 @@ const routes = [
             },
             {
                 path: '/ai-config',
-                redirect: { path: '/platform-config', query: { tab: 'ai' } }
+                redirect: (to) => {
+                    const inner = to.query?.tab
+                    if (inner === 'execution') {
+                        return { path: '/project-settings', query: { tab: 'execution' } }
+                    }
+                    if (inner && ['scene', 'prompt', 'embed', 'config'].includes(inner)) {
+                        return { path: '/platform-config', query: { tab: 'ai', sub: inner } }
+                    }
+                    return { path: '/platform-config', query: { tab: 'ai' } }
+                }
             },
             {
                 path: '/ai-usage',
@@ -696,6 +720,23 @@ const routes = [
                     title: '模型使用情况',
                     icon: 'DataLine',
                     permission: 'ai_test:view'
+                }
+            },
+            {
+                path: '/ai-qa-eval',
+                name: 'aiQaEval',
+                component: () => import('../modules/qa-eval/views/AiQaEval.vue'),
+                meta: {
+                    title: '问答准确性评测',
+                    icon: 'ChatLineRound',
+                    permission: 'ai_test:view'
+                },
+                beforeEnter: async (_to, _from, next) => {
+                    const { useCommunityEdition } = await import('@/composables/useCommunityEdition.js')
+                    const { loadCommunityEdition, isCommunityEdition } = useCommunityEdition()
+                    await loadCommunityEdition()
+                    if (isCommunityEdition.value) next('/ai-testing')
+                    else next()
                 }
             },
             {
@@ -741,9 +782,74 @@ const routes = [
                 redirect: '/browser-lab/run'
             },
             {
-                path: '/ai-knowledge/:pathMatch(.*)*',
+                path: '/ai-knowledge',
                 component: () => import('../modules/knowledge/views/KnowledgeLayout.vue'),
-                meta: { title: '迭代资料库', icon: 'DocumentChecked', permission: 'ai_test:view' }
+                meta: { title: '迭代资料库', icon: 'DocumentChecked', permission: 'knowledge:view' },
+                redirect: '/ai-knowledge/folders',
+                beforeEnter: async (_to, _from, next) => {
+                    const { useCommunityEdition } = await import('@/composables/useCommunityEdition.js')
+                    const { loadCommunityEdition, isCommunityEdition } = useCommunityEdition()
+                    await loadCommunityEdition()
+                    if (isCommunityEdition.value) next('/ai-testing')
+                    else next()
+                },
+                children: [
+                    {
+                        path: 'search',
+                        name: 'knowledgeSearch',
+                        component: () => import('../modules/knowledge/views/KnowledgeSearch.vue'),
+                        meta: { title: '资料检索', permission: 'knowledge:view' }
+                    },
+                    {
+                        path: 'qa',
+                        name: 'knowledgeQa',
+                        component: () => import('../modules/knowledge/views/KnowledgeQa.vue'),
+                        meta: { title: '资料问答', permission: 'knowledge:view' }
+                    },
+                    {
+                        path: 'folders',
+                        name: 'knowledgeFolders',
+                        component: () => import('../modules/knowledge/views/KnowledgeFolders.vue'),
+                        meta: { title: '迭代文件夹', permission: 'knowledge:view' }
+                    },
+                    {
+                        path: 'folders/:folderId',
+                        name: 'knowledgeFolderDetail',
+                        component: () => import('../modules/knowledge/views/KnowledgeFolderDetail.vue'),
+                        meta: { title: '文件夹详情', permission: 'knowledge:view' }
+                    },
+                    {
+                        path: 'templates',
+                        name: 'knowledgeTemplates',
+                        component: () => import('../modules/knowledge/views/KnowledgeTemplates.vue'),
+                        meta: { title: '输出模板', permission: 'knowledge:view' }
+                    },
+                    {
+                        path: 'variables',
+                        name: 'knowledgeTemplateVariables',
+                        component: () => import('../modules/knowledge/views/KnowledgeTemplateVariables.vue'),
+                        meta: { title: '模板变量', permission: 'knowledge:view' }
+                    },
+                    {
+                        path: 'reports',
+                        name: 'knowledgeReportWizard',
+                        component: () => import('../modules/knowledge/views/KnowledgeReportWizard.vue'),
+                        meta: { title: '报告向导', permission: 'knowledge:view' }
+                    },
+                    {
+                        path: 'records',
+                        name: 'knowledgeReportRecords',
+                        component: () => import('../modules/knowledge/views/KnowledgeReportRecords.vue'),
+                        meta: { title: '生成记录', permission: 'knowledge:view' }
+                    },
+                    {
+                        path: 'settings',
+                        name: 'knowledgeSettings',
+                        component: () => import('../modules/knowledge/views/KnowledgeSettings.vue'),
+                        meta: { title: '生成配置', permission: 'knowledge:view' }
+                    },
+                    ...knowledgePackChildRoutes
+                ]
             },
             {
                 path: '/perf-scenes',

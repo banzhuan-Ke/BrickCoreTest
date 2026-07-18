@@ -1,79 +1,28 @@
 # 产品功能演示
 
-本页用于展示 BrickCore 核心能力的高清截图与说明，避免 Gitee 首页 README 压缩图片导致模糊。
+本页汇总 BrickCore 核心能力说明。完整录屏与交互演示见在线演示站，比静态截图更直观。
 
-> **维护**：截图放入 `docs-site/public/demo/`，本页引用 `/demo/文件名`；Pro 改完后 sync 到 CE，并重新构建文档站（或 Gitee Pages）。
+## 能力概览
 
-<style>
-.demo-shot {
-  max-width: 100%;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  margin: 12px 0 24px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-}
-.demo-caption {
-  color: var(--vp-c-text-2);
-  font-size: 14px;
-  margin-top: -12px;
-  margin-bottom: 32px;
-}
-</style>
-
-## AI 需求 → 功能用例
-
-上传 Word / PDF 需求文档，AI 按批次生成功能测试用例，支持禅道配置、批量生成与导出 XLSX。
-
-<img class="demo-shot" src="/demo/ai-functional-cases.png" alt="AI 需求生成功能用例" />
-
-<p class="demo-caption">路径：<code>docs-site/public/demo/ai-functional-cases.png</code> · 建议宽度 1920px，PNG 原图</p>
-
-## UI MCP 录制
-
-通过 MCP 或平台助手驱动浏览器录制，操作即自动化步骤。
-
-<img class="demo-shot" src="/demo/ui-mcp-record.png" alt="UI MCP 录制" />
-
-<p class="demo-caption">路径：<code>docs-site/public/demo/ui-mcp-record.png</code> · 动图可用 GIF，或放 B 站链接见下文</p>
-
-## UI 定位器自愈
-
-页面元素变更后，执行时自动尝试修复定位器，降低维护成本。
-
-<img class="demo-shot" src="/demo/ui-locator-heal.png" alt="UI 定位器自愈" />
-
-<p class="demo-caption">路径：<code>docs-site/public/demo/ui-locator-heal.png</code></p>
-
-## 接口用例 AI 生成
-
-基于 Swagger / 接口定义，AI 生成接口自动化用例。
-
-<img class="demo-shot" src="/demo/api-ai-generate.png" alt="接口用例 AI 生成" />
-
-<p class="demo-caption">路径：<code>docs-site/public/demo/api-ai-generate.png</code></p>
-
----
+| 能力 | 说明 |
+|------|------|
+| **AI 需求 → 功能用例** | 上传 Word / PDF，AI 按批次生成功能测试用例，支持禅道配置与导出 |
+| **Web 录制与交互调试** | MCP / 平台助手录制，浏览器内交互调试执行 |
+| **UI 定位器自愈** | 页面元素变更后，执行时自动尝试修复定位器 |
+| **接口用例 AI 生成** | 基于 Swagger / 接口定义生成接口自动化用例 |
+| **App 自动化** | 元素探查、用例与计划管理；真机执行需安装 Runner |
 
 ## 在线体验
 
 | 项 | 内容 |
 |----|------|
-| 演示环境 | http://43.142.83.156/ |
-| 账号 | admin / BrickCore123456 |
+| **产品演示页** | http://43.142.83.156/showcase/ |
+| **演示环境** | http://43.142.83.156/ |
+| **账号** | admin / BrickCore123456 |
 
-## 视频演示（可选）
+> 演示环境密码公开，仅供体验，请勿存放真实业务数据。完整录屏见演示页各模块视频。
 
-README 与文档站不适合内嵌大体积 mp4。若有完整录屏，可上传 B 站后在下方补充链接：
+## 文档说明
 
-- （待补充）UI MCP 录制完整演示
-
----
-
-## 素材规范
-
-| 项 | 建议 |
-|----|------|
-| 格式 | PNG 截图优先；短动作用 GIF |
-| 宽度 | **1920** 或 Retina 2x，文档站会按屏宽缩放，不压糊 |
-| 体积 | 单张 PNG &lt; 2MB；GIF &lt; 5MB |
-| 命名 | 与上表文件名一致，替换即可 |
+- 平台内置 **文档中心** 与 `docs-site/` 同源，登录后或演示站 `/showcase/docs/` 可查阅使用说明。
+- 若需在本页补充高清截图，可放入 `docs-site/public/demo/` 后重新构建文档站；当前以演示站录屏为主。

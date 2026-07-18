@@ -1,29 +1,17 @@
-﻿function ok(data = {}) {
-  return Promise.resolve({ data: { code: 200, data, items: Array.isArray(data) ? data : [] }, message: 'CE unavailable' })
+/**
+ * CE stub：迭代资料库 API 开发测试中，后续放出。
+ */
+const unavailable = async () => {
+  throw new Error('迭代资料库开发测试中，后续放出')
 }
-export const knowledgeApi = {
-  listFolders() {
-    return ok([])
-  },
-  listDocuments() {
-    return ok({ total: 0, list: [] })
-  },
-  getMeta() {
-    return ok({ enabled: false })
-  },
-  archiveFromText() {
-    return Promise.reject(new Error('CE ?????????????'))
-  },
-  archiveFromRequirement() {
-    return Promise.reject(new Error('CE ?????????????'))
-  },
-  estimateRefs() {
-    return ok({ refs: [], count: 0 })
-  },
-  retrieve() {
-    return ok({ items: [] })
-  },
-  ask() {
-    return Promise.reject(new Error('CE ?????????????'))
+
+export const knowledgeApi = new Proxy(
+  {},
+  {
+    get() {
+      return unavailable
+    },
   }
-}
+)
+
+export default knowledgeApi

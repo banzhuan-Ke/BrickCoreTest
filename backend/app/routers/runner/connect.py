@@ -1,11 +1,13 @@
 """Runner 客户端连接 API"""
 from __future__ import annotations
 
+import asyncio
 import uuid
 import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from tortoise.exceptions import OperationalError
 
 from app.core.platform import config as app_config
 from app.core.platform.auth import (
@@ -189,6 +191,32 @@ def _merge_runner_capabilities(device: Device, item: RunnerHeartbeatRequest) -> 
         device.toolchain_status = status
 
 
+def _heartbeat_update_fields(device: Device, item: RunnerHeartbeatRequest) -> dict:
+    _merge_runner_capabilities(device, item)
+    fields: dict = {
+        "runner_last_heartbeat": datetime.now(),
+        "status": "在线",
+        "runner_client_version": device.runner_client_version,
+        "runner_engine_types": device.runner_engine_types,
+        "app_platform": device.app_platform,
+        "app_udid": device.app_udid,
+        "app_connection": device.app_connection,
+        "toolchain_status": device.toolchain_status,
+    }
+    return fields
+
+
+async def _update_device_with_retry(device_id: str, fields: dict, *, attempts: int = 3) -> None:
+    for attempt in range(attempts):
+        try:
+            await Device.filter(id=device_id, is_del=False).update(**fields)
+            return
+        except OperationalError as ex:
+            if attempt >= attempts - 1 or "1205" not in str(ex):
+                raise
+            await asyncio.sleep(0.05 * (attempt + 1))
+
+
 @router.post(
     "/heartbeat",
     summary="Runner 客户端心跳",
@@ -203,12 +231,10 @@ async def runner_heartbeat(
     if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
 
-    device.runner_last_heartbeat = datetime.now()
-    device.status = "在线"
     if item.client_version:
         device.runner_client_version = item.client_version
-    _merge_runner_capabilities(device, item)
-    await device.save()
+    fields = _heartbeat_update_fields(device, item)
+    await _update_device_with_retry(device_id, fields)
     return {"ok": True, "device_id": device_id}
 
 
@@ -226,3 +252,24 @@ async def runner_version(request: Request):
 @router.get("/health", summary="Runner 服务健康检查", status_code=status.HTTP_200_OK)
 async def runner_health():
     return {"ok": True, "service": "runner-api"}
+
+
+@router.get(
+    "/active-recording",
+    summary="查询本 Runner 设备进行中的 Web 录制",
+    status_code=status.HTTP_200_OK,
+)
+async def runner_active_recording(runner_ctx: dict = Depends(verify_runner_token)):
+    """Runner 桌面客户端轮询：返回当前设备 recording 会话快照，无则 data 为 null。"""
+    from app.modules.ai.record_session_lifecycle import (
+        get_active_recording_on_device,
+        serialize_active_recording,
+    )
+    from app.routers.ai.recorder import get_record_runtime_state
+
+    device_id = str(runner_ctx.get("device_id") or "")
+    record = await get_active_recording_on_device(device_id)
+    if not record:
+        return {"data": None}
+    runtime = get_record_runtime_state(record.id)
+    return {"data": serialize_active_recording(record, runtime)}

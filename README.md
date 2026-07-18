@@ -1,8 +1,16 @@
 # BrickCore 自动化测试平台
 
-> **当前版本 v1.3.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
+> **当前版本 v1.4.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
 
-覆盖 **Web UI、App、接口、性能、AI** 等测试能力，支持自建部署、文档中心与执行器网盘分发。平台源码见本仓库；执行器请使用下方 **BrickCoreRunner** 安装包。
+覆盖 **Web UI、App、接口、性能、AI** 等测试能力，支持私有化部署、文档中心与执行器网盘分发。平台源码见本仓库；Web / App / 压测执行请配合下方 **BrickCoreRunner** 安装包使用。
+
+## 核心亮点
+
+- **一站式**：Web / App / 接口 / 性能 / AI 测试统一入口，资产与权限集中管理
+- **AI 辅助**：需求→功能用例、接口用例生成、失败分析、平台助手「小测」、MCP 外部接入
+- **录制与自愈**：Web 录制回放、交互调试、定位器自愈，降低脚本维护成本
+- **可私有化**：源码可自建；内置文档中心，上手成本低
+- **执行方便**：桌面执行器网盘分发，支持 Windows / macOS；压测可选用精简 Worker
 
 ---
 
@@ -11,8 +19,8 @@
 | 项 | 内容 |
 |----|------|
 | **演示地址** | **http://43.142.83.156/** |
-| **文档（免登录）** | [showcase/docs/](http://43.142.83.156/showcase/docs/) |
-| **产品演示页** | [showcase/](http://43.142.83.156/showcase/) |
+| **文档（免登录）** | [http://43.142.83.156/showcase/docs/](http://43.142.83.156/showcase/docs/) |
+| **产品演示页** | [http://43.142.83.156/showcase/](http://43.142.83.156/showcase/) |
 | 登录账号 | `admin` |
 | 登录密码 | `BrickCore123456` |
 
@@ -29,7 +37,7 @@
 | **App 自动化** | 用例/元素库/元素探查/套件/计划/定时任务/片段；真机调度需 Runner 勾选 **App 自动化** |
 | **接口自动化** | Swagger/Postman 导入、测试计划、WebSocket、数据工厂、Mock、定时执行 |
 | **性能测试** | 流式/SSE 阶段、业务链路、CSV 参数化、分布式 Worker、HTML 报告 |
-| **AI 测试** | 需求→功能用例、智能浏览器、失败分析、平台助手「小测」、MCP 外部接入 |
+| **AI 测试** | 需求→功能用例、智能浏览器、失败分析、平台助手「小测」、MCP 外部接入（迭代资料库开发测试中，后续放出） |
 | **平台能力** | 统一测试目录、数据看板、RBAC、文档中心、邮件/钉钉/企微通知 |
 
 详细说明见 [docs-site/](docs-site/) 或演示站 [文档中心](http://43.142.83.156/showcase/docs/)。
@@ -38,7 +46,7 @@
 
 ## 功能演示
 
-README 内嵌大图易被 Gitee 压缩，高清录屏与说明见演示站：
+功能录屏与完整说明见**在线演示站**（不在本仓库内，避免大体积视频进开源仓）：
 
 | 入口 | 链接 |
 |------|------|
@@ -87,6 +95,14 @@ README 内嵌大图易被 Gitee 压缩，高清录屏与说明见演示站：
 
 ---
 
+## Windows 本机部署 / 开发
+
+支持 **不用 Docker**（本机安装 MySQL / Redis / RabbitMQ / MinIO），也支持 Docker 中间件或全栈：
+
+👉 **[docs-site/guide/windows-deploy.md](docs-site/guide/windows-deploy.md)**
+
+---
+
 ## Linux 服务器 Docker 部署（自建）
 
 **首次部署请跟完整文档：**
@@ -117,7 +133,19 @@ docker exec -it fastapi_backend aerich upgrade
 | 平台 | admin | BrickCore123456 |
 | MySQL | admin | BrickCore123456 |
 
-升级至 **v1.3.0** 时务必执行 `aerich upgrade`（含 v1.2.x → v1.3.0 表结构迁移）。
+升级至 **v1.4.0** 时务必执行 `aerich upgrade`，并重新构建前端。
+
+---
+
+## 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| 后端 | FastAPI、Tortoise ORM / Aerich、Pika（MQ） |
+| 前端 | Vue 3、Element Plus、Vite |
+| 中间件 | MySQL、Redis、RabbitMQ、MinIO |
+| 部署 | Docker Compose；Windows 亦可本机中间件 |
+| 执行 | BrickCoreRunner（网盘安装包，见上文） |
 
 ---
 
@@ -126,9 +154,22 @@ docker exec -it fastapi_backend aerich upgrade
 | 文档 | 说明 |
 |------|------|
 | [docs-site/](docs-site/) | 平台使用说明（与登录后「文档中心」内置文档同源） |
-| [版本更新记录](docs-site/guide/release-notes.md) | **v1.3.0** 变更与升级指引 |
+| [版本更新记录](docs-site/guide/release-notes.md) | **v1.4.0** 变更与升级指引 |
 | [亮点功能](docs-site/guide/highlights.md) | 能力总览与快速跳转 |
-| [Docker 部署](docs-site/guide/docker-deploy.md) | 云服务器自建 |
+| [Docker 部署](docs-site/guide/docker-deploy.md) | 云服务器自建（Linux） |
+| [Windows 部署](docs-site/guide/windows-deploy.md) | Windows 本机 Docker / 无 Docker 开发 |
+
+当前公开仓为 **v1.4.0**。迭代资料库等能力开发测试中，后续放出。
+
+问题与建议：[Issues](https://gitee.com/BanZhuanKeOrz/BrickCore/issues) 或下方交流群。
+
+---
+
+## 开源协议
+
+本仓库平台源码采用 **[Apache License 2.0](LICENSE)**：可自用、修改与私有化部署；再分发请保留版权与协议声明。
+
+BrickCoreRunner 安装包为配套客户端（网盘 / 平台内下载），使用约定见 [LICENSE-RUNNER.md](LICENSE-RUNNER.md)。
 
 ---
 
@@ -152,9 +193,3 @@ docker exec -it fastapi_backend aerich upgrade
   <img src="assets/readme/image-20260604162222425.png" width="200" alt="微信好友二维码" /><br />
   <sub>微信好友</sub>
 </p>
-
----
-
-## License
-
-平台源码：[LICENSE](LICENSE)（Apache-2.0）。执行器安装包许可见 [LICENSE-RUNNER.md](LICENSE-RUNNER.md)。

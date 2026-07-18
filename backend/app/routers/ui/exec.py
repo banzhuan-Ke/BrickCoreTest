@@ -10,9 +10,17 @@ from app.models.ui import Suite, Case, Task, UiPlanExecution, UiSuiteExecution, 
 from app.core.platform.auth import is_authenticated, require_permissions
 from app.core.platform.permissions import UI_CASE_EXECUTE, UI_SUITE_EXECUTE, UI_TASK_EXECUTE
 from app.core.infra.mq_producer import MQProducer
-from app.modules.ai.ai_project_settings import resolve_locator_heal_for_execute, load_ai_project_settings, resolve_ai_act_for_execute
+from app.modules.ai.ai_project_settings import (
+    resolve_locator_heal_for_execute,
+    load_ai_project_settings,
+    resolve_ai_act_for_execute,
+    resolve_failure_analysis_for_report,
+)
 from app.modules.ui.ui_execution_stop import stop_plan_execution, stop_suite_execution, stop_case_execution
-from app.modules.ui.ui_device_guard import assert_device_available_for_ui_execution
+from app.modules.ui.ui_device_guard import (
+    assert_device_available_for_ui_execution,
+    lock_device_row,
+)
 from app.modules.ui.ui_project_guard import assert_environment_for_project, assert_user_project_member
 from app.modules.ui.ui_step_expand import FragmentExpandError, expand_fragment_refs
 from app.schemas.ui import RunForm, CaseDebugForm
@@ -39,6 +47,7 @@ class ExecutionService:
         project_id: int,
         user_heal_override: Optional[bool] = None,
         user_act_override: Optional[bool] = None,
+        user_failure_analysis_override: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         构建执行环境负载；ai_heal_enabled / ai_act_enabled 由 Backend 项目配置计算。
@@ -48,9 +57,13 @@ class ExecutionService:
 
         ai_heal_enabled = await resolve_locator_heal_for_execute(project_id, user_heal_override)
         ai_act_enabled = await resolve_ai_act_for_execute(project_id, user_act_override)
+        failure_analysis_on_report = await resolve_failure_analysis_for_report(
+            project_id, user_failure_analysis_override
+        )
         settings = await load_ai_project_settings(project_id)
         variables = ensure_dt_cache(await merge_execution_variables(project_id, env.id))
         resolved_browser = browser_type if browser_type in ["chromium", "firefox", "webkit"] else "chromium"
+        from app.modules.ui.ui_debug_steps import get_env_default_start_url
         payload = {
             "headless": headless,
             "browser": resolved_browser,
@@ -60,9 +73,12 @@ class ExecutionService:
             "project_id": project_id,
             "env_name": env.name,
             "variables": variables,
+            "env_default_start_url": get_env_default_start_url(env.global_vars),
+            "project_default_start_url": str(settings.get("default_start_url") or "").strip(),
             "ai_heal_enabled": ai_heal_enabled,
             "ai_act_enabled": ai_act_enabled,
             "ai_act_max_per_case": int(settings.get("ai_act_max_per_case") or 3),
+            "failure_analysis_on_report": failure_analysis_on_report,
         }
         return payload
 
@@ -191,10 +207,12 @@ async def run_case(
             case_.project_id,
             item.ai_heal_enabled,
             item.ai_act_enabled,
+            item.failure_analysis_on_report,
         )
         env_payload = ExecutionService.with_trigger_source(env_payload, item.trigger_source)
         env_payload["device_id"] = item.device_id
 
+        await lock_device_row(item.device_id)
         await assert_device_available_for_ui_execution(item.device_id)
 
         case_execution = await UiCaseExecution.create(
@@ -281,11 +299,13 @@ async def debug_case(
             case_.project_id,
             item.ai_heal_enabled,
             item.ai_act_enabled,
+            item.failure_analysis_on_report,
         )
         env_payload["debug_mode"] = True
         env_payload["debug_through_index"] = item.through_index
         env_payload["device_id"] = item.device_id
 
+        await lock_device_row(item.device_id)
         await assert_device_available_for_ui_execution(item.device_id)
 
         case_execution = await UiCaseExecution.create(
@@ -355,10 +375,12 @@ async def run_suite(
             suite_.project_id,
             item.ai_heal_enabled,
             item.ai_act_enabled,
+            item.failure_analysis_on_report,
         )
         env_payload = ExecutionService.with_trigger_source(env_payload, item.trigger_source)
         env_payload["device_id"] = item.device_id
 
+        await lock_device_row(item.device_id)
         await assert_device_available_for_ui_execution(item.device_id)
 
         suite_record = await UiSuiteExecution.create(
@@ -456,26 +478,54 @@ async def run_task(
             concurrency=item.concurrency,
             ai_heal_enabled=item.ai_heal_enabled,
             ai_act_enabled=item.ai_act_enabled,
+            failure_analysis_on_report=item.failure_analysis_on_report,
             trigger_source=item.trigger_source,
         )
 
 
 @router.post("/stop/{record_id}", summary="停止 UI 计划执行", status_code=status.HTTP_200_OK,
                dependencies=[Depends(require_permissions(UI_TASK_EXECUTE))])
-async def stop_execution(record_id: int):
+async def stop_execution(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(UI_TASK_EXECUTE)),
+):
     """停止 UI 测试计划执行（通过 MQ 通知 Runner 真正中断）"""
+    record = await UiPlanExecution.get_or_none(id=record_id, is_del=False)
+    if not record:
+        raise HTTPException(status_code=422, detail="执行记录不存在")
+    await assert_user_project_member(user_info, record.project_id)
     return await stop_plan_execution(record_id)
 
 
 @router.post("/stop/suite/{record_id}", summary="停止 UI 套件执行", status_code=status.HTTP_200_OK,
              dependencies=[Depends(require_permissions(UI_SUITE_EXECUTE))])
-async def stop_suite_execution_route(record_id: int):
+async def stop_suite_execution_route(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(UI_SUITE_EXECUTE)),
+):
     """停止 UI 套件执行"""
+    record = await UiSuiteExecution.get_or_none(id=record_id, is_del=False).prefetch_related("suite")
+    if not record:
+        raise HTTPException(status_code=422, detail="套件执行记录不存在")
+    suite = await record.suite
+    if not suite:
+        raise HTTPException(status_code=422, detail="套件执行记录不存在")
+    await assert_user_project_member(user_info, suite.project_id)
     return await stop_suite_execution(record_id)
 
 
 @router.post("/stop/case/{record_id}", summary="停止 UI 用例执行", status_code=status.HTTP_200_OK,
              dependencies=[Depends(require_permissions(UI_CASE_EXECUTE))])
-async def stop_case_execution_route(record_id: int):
+async def stop_case_execution_route(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(UI_CASE_EXECUTE)),
+):
     """停止 UI 单用例/调试执行"""
+    record = await UiCaseExecution.get_or_none(id=record_id, is_del=False).prefetch_related("case")
+    if not record:
+        raise HTTPException(status_code=422, detail="用例执行记录不存在")
+    case = await record.case
+    if not case:
+        raise HTTPException(status_code=422, detail="用例执行记录不存在")
+    await assert_user_project_member(user_info, case.project_id)
     return await stop_case_execution(record_id)

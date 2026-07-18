@@ -336,7 +336,7 @@ class SystemPlatformSettings(models.Model):
 
 
 class SystemStreamParserConfig(models.Model):
-    """SSE 流式解析配置（压测流式 / 接口调试场景复用）"""
+    """SSE 流式解析配置（问答评测 / 压测流式场景复用）"""
     id = fields.IntField(pk=True, auto_increment=True, description="配置ID")
     name = fields.CharField(max_length=200, description="配置名称")
     description = fields.TextField(null=True, description="说明文档（Markdown）")

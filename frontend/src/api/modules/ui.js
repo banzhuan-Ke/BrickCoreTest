@@ -274,6 +274,16 @@ export const uiDebugApi = {
     async setPickMode(sessionId, data) {
         return await http.post(`/ui/debug/sessions/${sessionId}/pick-mode`, data, { timeout: 60000 })
     },
+    async clearHighlight(sessionId) {
+        return await http.post(`/ui/debug/sessions/${sessionId}/clear-highlight`, {}, { timeout: 60000 })
+    },
+    async selectStep(sessionId, data) {
+        // 选中同步失败不弹全局「请求失败」（如偶发冲突），由调用方静默处理
+        return await http.post(`/ui/debug/sessions/${sessionId}/select-step`, data, {
+            timeout: 30000,
+            skipErrorHandler: true,
+        })
+    },
 }
 
 // ========== 执行记录 ==========

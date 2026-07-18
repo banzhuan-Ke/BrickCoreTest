@@ -48,10 +48,10 @@ async def create_cron_job(
     run_date: Optional[str] = None,
     crontab: Optional[dict] = None,
     state: bool = False,
-    use_workers: bool = False,
+    use_workers: bool = True,
     username: str = Depends(get_current_username),
 ):
-    """创建性能测试定时任务"""
+    """创建性能测试定时任务（use_workers 已废弃，始终派发 Worker）。"""
     scene = await PerfScene.get_or_none(id=scene_id, is_del=False)
     if not scene:
         raise HTTPException(status_code=404, detail="场景不存在")
@@ -81,7 +81,7 @@ async def create_cron_job(
         run_date=parsed_run_date,
         crontab=crontab or {},
         state=state,
-        use_workers=use_workers,
+        use_workers=True,  # 已废弃开关：持久化为 True，执行时一律派发 Worker
         create_by=username
     )
 
@@ -134,10 +134,11 @@ async def update_cron_job(
     run_date: Optional[str] = None,
     crontab: Optional[dict] = None,
     state: bool = False,
-    use_workers: bool = False,
+    use_workers: bool = True,
     username: str = Depends(get_current_username),
 ):
-    """更新性能测试定时任务"""
+    """更新性能测试定时任务（use_workers 已废弃，始终 True）。"""
+    _ = use_workers
     job = await PerfCronJob.get_or_none(id=job_id, is_del=False)
     if not job:
         raise HTTPException(status_code=404, detail="定时任务不存在")
@@ -161,7 +162,7 @@ async def update_cron_job(
     job.run_date = parsed_run_date
     job.crontab = crontab or {}
     job.state = state
-    job.use_workers = use_workers
+    job.use_workers = True
     await job.save()
 
     if state:
@@ -334,9 +335,9 @@ async def execute_perf_cron_job(job_id: str):
             cron_job_id=job_id
         )
 
-        # 导入并执行（可选分布式 Worker，无在线 Worker 时自动本机执行）
+        # 施压一律走 Runner Worker；无在线 Worker 时 run_perf_scene 会失败落库
         from .exec import run_perf_scene
-        await run_perf_scene(record.id, use_workers=bool(job.use_workers))
+        await run_perf_scene(record.id, use_workers=True)
 
         # 重新获取记录状态
         record = await PerfRecord.get_or_none(id=record.id)

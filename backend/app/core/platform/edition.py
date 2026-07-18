@@ -16,11 +16,10 @@ def _repo_root() -> Path:
 
 @lru_cache(maxsize=1)
 def is_community_edition() -> bool:
-    """识别社区版。
+    """识别开源发行版（Community Edition）。
 
-    - Docker 部署：backend 镜像仅含 backend+docs-site，须在 compose 中设
-      ``BRICKCORE_EDITION``（Pro 用 ``pro``，CE 用 ``ce``）。
-    - 本机全量仓库：未设环境变量时，根据是否存在 ``runner/WebEngine`` 判断。
+    - Docker：在 compose 中设置 ``BRICKCORE_EDITION=ce``。
+    - 本机：未设环境变量时，根据是否存在 ``runner/WebEngine`` 判断。
     """
     raw = os.getenv("BRICKCORE_EDITION", "").strip().lower()
     if raw in ("ce", "community", "oss"):
@@ -29,6 +28,23 @@ def is_community_edition() -> bool:
         return False
     return not (_repo_root() / "runner" / "WebEngine").is_dir()
 
+
+QA_EVAL_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "list_qa_eval_sets",
+        "get_qa_eval_run",
+        "preview_run_qa_eval",
+        "confirm_run_qa_eval",
+    }
+)
+
+KNOWLEDGE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "search_test_knowledge",
+        "ask_test_knowledge",
+        "list_knowledge_folders",
+    }
+)
 
 
 @lru_cache(maxsize=1)
@@ -42,18 +58,22 @@ def knowledge_feature_enabled() -> bool:
     return not is_community_edition()
 
 
+def qa_eval_feature_enabled() -> bool:
+    """问答准确性评测为可选扩展能力，开源发行版默认不开放。"""
+    return not is_community_edition()
 
-# Pro 定制资料库文档包关联的 AI 场景（未启用时不暴露给 CE / 未配置 Pro 环境）
+
+# 行业资料库扩展包关联的 AI 场景（未启用扩展包时不暴露）
 KNOWLEDGE_PACK_PROMPT_SCENES: frozenset[str] = frozenset(
     {
-        "digitech_scheme_narrative",
-        "digitech_report_narrative",
+        "knowledge_pack_scheme_narrative",
+        "knowledge_pack_report_narrative",
     }
 )
 
 
-def knowledge_digitech_pack_enabled() -> bool:
-    """Pro 定制资料库文档包：CE 永不启用；需非 CE 且 ``BRICKCORE_KNOWLEDGE_PACK`` 已配置。"""
+def knowledge_pack_addon_enabled() -> bool:
+    """行业资料库扩展包：开源发行版不启用；需配置 ``BRICKCORE_KNOWLEDGE_PACK``。"""
     if is_community_edition():
         return False
     raw = os.getenv("BRICKCORE_KNOWLEDGE_PACK", "").strip().lower()

@@ -628,7 +628,7 @@ const buildListQueryParams = (extra = {}) => ({
 })
 
 const buildExportFilterParams = () => {
-  const { project_id, page: _p, size: _s, sort_by: _sb, sort_order: _so, ...rest } = buildListQueryParams()
+  const { project_id, page: _p, size: _s, ...rest } = buildListQueryParams()
   return rest
 }
 
@@ -815,8 +815,12 @@ const handleImportXlsx = async ({ file }) => {
 }
 
 const handleExport = async () => {
+  const sortParams = {
+    sort_by: filters.sort_by || undefined,
+    sort_order: filters.sort_order || undefined
+  }
   const exportOptions = selectedIds.value.length
-    ? { ids: selectedIds.value }
+    ? { ids: selectedIds.value, filters: sortParams }
     : { filters: buildExportFilterParams() }
   const url = aiFunctionalCaseApi.exportXlsxUrl(projectId(), exportOptions)
   try {

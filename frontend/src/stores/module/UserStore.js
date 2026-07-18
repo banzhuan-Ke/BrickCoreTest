@@ -43,7 +43,7 @@ export const UserStore = defineStore('uStore', {
             permissions: [],
             // 暗黑模式存储的变量
             darkMode: useDark().value,
-            // 界面风格：classic 经典 | pro 清新 Pro
+            // 界面风格：classic 经典 | pro 清新简约
             uiTheme: readUiThemeFromStorage(),
         }
     },

@@ -159,6 +159,7 @@ ROUTE_MAPPING = [
     ("POST", r"^/ai/knowledge/documents/archive-from-text$", "文本归档", "迭代测试资料库", "文本归档到资料库"),
     ("DELETE", r"^/ai/knowledge/documents/\d+$", "删除资料文档", "迭代测试资料库", "删除资料文档"),
     ("POST", r"^/ai/knowledge/documents/\d+/reparse$", "重新解析文档", "迭代测试资料库", "重新解析资料文档"),
+    ("POST", r"^/ai/knowledge/documents/reparse$", "批量重新解析文档", "迭代测试资料库", "批量重新解析资料文档"),
     ("POST", r"^/ai/knowledge/documents/\d+/reindex-rag$", "重建RAG索引", "迭代测试资料库", "重建资料RAG索引"),
     ("POST", r"^/ai/knowledge/documents/\d+/rebuild-digest$", "重建摘要缓存", "迭代测试资料库", "重建资料摘要缓存"),
     ("POST", r"^/ai/knowledge/retrieve$", "检索资料库", "迭代测试资料库", "RAG检索资料库"),

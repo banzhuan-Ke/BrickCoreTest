@@ -1,42 +1,35 @@
-"""Embedding config CRUD for CE-safe public release."""
+"""Embedding 模型配置 CRUD"""
 from __future__ import annotations
 
 import time
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from app.core.llm.ai_usage_log import log_ai_usage
+from app.core.llm.embed_providers import (
+    normalize_embed_provider,
+    resolve_embed_api_base,
+    resolve_embed_dimensions,
+)
 from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
 from app.core.platform.encryption import decrypt_value, encrypt_value, mask_key
 from app.core.platform.permissions import AI_CONFIG_EDIT, AI_CONFIG_VIEW, AI_TEST_EXECUTE
 from app.models.ai import AiEmbedConfig
 from app.schemas.ai import StandardResponse
 
-router = APIRouter(prefix="/embed-configs", tags=["Embedding Config"])
-
-_EMBED_PROVIDER_ALIASES = {
-    "tongyi": "qwen",
-    "dashscope": "qwen",
-    "aliyun": "qwen",
-}
-
-_EMBED_PROVIDER_DEFAULT_BASES = {
-    "openai": "https://api.openai.com/v1",
-    "deepseek": "https://api.deepseek.com/v1",
-    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-}
+router = APIRouter(prefix="/embed-configs", tags=["Embedding配置"])
 
 
 class AiEmbedConfigBase(BaseModel):
-    name: str = Field(default="Embedding Config", max_length=100)
+    name: str = Field(default="Embedding 配置", max_length=100)
     provider: str = Field(..., description="openai|deepseek|qwen|claude|custom")
     api_key: str = Field(..., max_length=255)
     api_base: Optional[str] = Field(default=None, max_length=500)
     model: str = Field(default="text-embedding-v3", max_length=100)
-    dimensions: int = Field(default=1024, ge=64, le=2048, description="Embedding vector size")
+    dimensions: int = Field(default=1024, ge=64, le=2048, description="向量维度（v3/v4 可调）")
     timeout: int = Field(default=120, ge=5, le=600)
     is_enabled: bool = True
 
@@ -54,31 +47,6 @@ class AiEmbedConfigUpdate(BaseModel):
     dimensions: Optional[int] = Field(default=None, ge=64, le=2048)
     timeout: Optional[int] = Field(default=None, ge=5, le=600)
     is_enabled: Optional[bool] = None
-
-
-def normalize_embed_provider(provider: str | None) -> str:
-    value = (provider or "").strip().lower()
-    if not value:
-        return "qwen"
-    return _EMBED_PROVIDER_ALIASES.get(value, value)
-
-
-def resolve_embed_dimensions(row: Any, model_name: str | None) -> int | None:
-    dimensions = getattr(row, "dimensions", None)
-    if not dimensions:
-        return None
-    model = (model_name or "").strip().lower()
-    if not model or "embedding" in model:
-        return dimensions
-    return None
-
-
-def resolve_api_base(row: Any) -> str | None:
-    custom_base = (getattr(row, "api_base", None) or "").strip()
-    if custom_base:
-        return custom_base
-    provider = normalize_embed_provider(getattr(row, "provider", None))
-    return _EMBED_PROVIDER_DEFAULT_BASES.get(provider)
 
 
 def _mask_row(row: AiEmbedConfig) -> dict[str, Any]:
@@ -99,8 +67,11 @@ def _mask_row(row: AiEmbedConfig) -> dict[str, Any]:
     }
 
 
-@router.post("", dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))])
-async def create_embed_config(item: AiEmbedConfigCreate, username: str = Depends(get_current_username)):
+@router.post("", summary="创建 Embedding 配置", dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))])
+async def create_embed_config(
+    item: AiEmbedConfigCreate,
+    username: str = Depends(get_current_username),
+):
     row = await AiEmbedConfig.create(
         name=item.name,
         provider=normalize_embed_provider(item.provider),
@@ -118,15 +89,23 @@ async def create_embed_config(item: AiEmbedConfigCreate, username: str = Depends
     return StandardResponse(data=_mask_row(row))
 
 
-@router.get("", dependencies=[Depends(require_permissions(AI_CONFIG_VIEW))])
-async def list_embed_configs(page: int = 1, size: int = 100, user_info: dict = Depends(is_authenticated)):
+@router.get("", summary="Embedding 配置列表", dependencies=[Depends(require_permissions(AI_CONFIG_VIEW))])
+async def list_embed_configs(
+    page: int = 1,
+    size: int = 100,
+    user_info: dict = Depends(is_authenticated),
+):
     qs = AiEmbedConfig.filter(is_del=False).order_by("-is_default", "-id")
     total = await qs.count()
     rows = await qs.offset((page - 1) * size).limit(size)
     return StandardResponse(data={"total": total, "list": [_mask_row(r) for r in rows]})
 
 
-@router.get("/select-options", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
+@router.get(
+    "/select-options",
+    summary="Embedding 配置下拉（资料库等）",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
 async def list_embed_config_select_options(user_info: dict = Depends(is_authenticated)):
     rows = await AiEmbedConfig.filter(is_del=False, is_enabled=True).order_by("-is_default", "-id")
     return StandardResponse(
@@ -144,19 +123,23 @@ async def list_embed_config_select_options(user_info: dict = Depends(is_authenti
     )
 
 
-@router.get("/{config_id}", dependencies=[Depends(require_permissions(AI_CONFIG_VIEW))])
+@router.get("/{config_id}", summary="Embedding 配置详情", dependencies=[Depends(require_permissions(AI_CONFIG_VIEW))])
 async def get_embed_config(config_id: int, user_info: dict = Depends(is_authenticated)):
     row = await AiEmbedConfig.get_or_none(id=config_id, is_del=False)
     if not row:
-        raise HTTPException(status_code=404, detail="Config not found")
+        raise HTTPException(status_code=404, detail="配置不存在")
     return StandardResponse(data=_mask_row(row))
 
 
-@router.put("/{config_id}", dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))])
-async def update_embed_config(config_id: int, item: AiEmbedConfigUpdate, user_info: dict = Depends(is_authenticated)):
+@router.put("/{config_id}", summary="更新 Embedding 配置", dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))])
+async def update_embed_config(
+    config_id: int,
+    item: AiEmbedConfigUpdate,
+    user_info: dict = Depends(is_authenticated),
+):
     row = await AiEmbedConfig.get_or_none(id=config_id, is_del=False)
     if not row:
-        raise HTTPException(status_code=404, detail="Config not found")
+        raise HTTPException(status_code=404, detail="配置不存在")
     data = item.model_dump(exclude_unset=True)
     if "api_key" in data:
         key = data.pop("api_key")
@@ -170,37 +153,37 @@ async def update_embed_config(config_id: int, item: AiEmbedConfigUpdate, user_in
     return StandardResponse(data=_mask_row(row))
 
 
-@router.delete("/{config_id}", dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))])
+@router.delete("/{config_id}", summary="删除 Embedding 配置", dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))])
 async def delete_embed_config(config_id: int, user_info: dict = Depends(is_authenticated)):
     row = await AiEmbedConfig.get_or_none(id=config_id, is_del=False)
     if not row:
-        raise HTTPException(status_code=404, detail="Config not found")
+        raise HTTPException(status_code=404, detail="配置不存在")
     row.is_del = True
     await row.save()
-    return StandardResponse(message="Deleted")
+    return StandardResponse(message="删除成功")
 
 
-@router.post("/{config_id}/set-default", dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))])
+@router.post("/{config_id}/set-default", summary="设为默认 Embedding", dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))])
 async def set_default_embed_config(config_id: int, user_info: dict = Depends(is_authenticated)):
     row = await AiEmbedConfig.get_or_none(id=config_id, is_del=False)
     if not row:
-        raise HTTPException(status_code=404, detail="Config not found")
+        raise HTTPException(status_code=404, detail="配置不存在")
     await AiEmbedConfig.filter(is_default=True).update(is_default=False)
     row.is_default = True
     await row.save()
     return StandardResponse(data=_mask_row(row))
 
 
-@router.post("/{config_id}/test", dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))])
+@router.post("/{config_id}/test", summary="测试 Embedding 连通性", dependencies=[Depends(require_permissions(AI_CONFIG_EDIT))])
 async def test_embed_config(config_id: int, user_info: dict = Depends(is_authenticated)):
     row = await AiEmbedConfig.get_or_none(id=config_id, is_del=False)
     if not row:
-        raise HTTPException(status_code=404, detail="Config not found")
+        raise HTTPException(status_code=404, detail="配置不存在")
     try:
         api_key = decrypt_value(row.api_key)
         client = AsyncOpenAI(
             api_key=api_key,
-            base_url=resolve_api_base(row),
+            base_url=resolve_embed_api_base(row),
             timeout=max(int(row.timeout or 120), 30),
         )
         t0 = time.time()
@@ -214,25 +197,21 @@ async def test_embed_config(config_id: int, user_info: dict = Depends(is_authent
         tokens = int(resp.usage.total_tokens) if resp.usage else 0
         await log_ai_usage(
             row,
-            "embed_config_test",
+            "knowledge_embed",
             user_info=user_info,
             tokens_used=tokens,
             duration_ms=duration_ms,
-            input_summary=f"Embedding connectivity test - {row.name}"[:500],
+            input_summary=f"Embedding 连通性测试 · {row.name}"[:500],
             output_summary=f"dim={dim}",
         )
         return StandardResponse(data={"connected": True, "dimension": dim, "tokens_used": tokens})
     except Exception as ex:
         await log_ai_usage(
             row,
-            "embed_config_test",
+            "knowledge_embed",
             user_info=user_info,
             status="failed",
-            input_summary=f"Embedding connectivity test - {row.name}"[:500],
+            input_summary=f"Embedding 连通性测试 · {row.name}"[:500],
             output_summary=str(ex)[:500],
         )
-        return StandardResponse(
-            code=500,
-            message=f"Embedding connectivity test failed: {ex}",
-            data={"connected": False, "error": str(ex)},
-        )
+        return StandardResponse(code=500, message=f"连通性测试失败: {ex}", data={"connected": False, "error": str(ex)})

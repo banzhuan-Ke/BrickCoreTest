@@ -11,6 +11,14 @@ from app.models.ai import AiConfig
 
 logger = logging.getLogger(__name__)
 
+VISION_MAX_TOKENS_LIMIT = 32768
+
+
+def resolve_vision_max_tokens(config: AiConfig, *, cap: int = VISION_MAX_TOKENS_LIMIT) -> int:
+    """Vision API 对 max_tokens 上限更严（如通义 VL 为 32768），避免配置过大导致 400。"""
+    raw = int(getattr(config, "max_tokens", None) or 4096)
+    return max(1, min(raw, cap))
+
 
 def build_extra_body(config: AiConfig, *, disable_thinking: bool = False) -> dict[str, Any]:
     """根据配置构造 extra_body（用于 thinking 等供应商特定参数）"""

@@ -75,7 +75,7 @@
               <el-table-column label="操作" width="200">
                 <template #default="{ row: caseRow }">
                   <el-button
-                    v-if="isFailed(caseRow.status) && canAiAnalyze"
+                    v-if="isFailed(caseRow.status) && canAnalyzeExecution(caseRow)"
                     type="warning"
                     link
                     @click="openAiAnalyze(caseRow.id)"
@@ -115,7 +115,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
@@ -129,20 +129,19 @@ import ReportKnowledgeBridge from '@/components/ReportKnowledgeBridge.vue'
 import IterationReportShortcut from '@/components/IterationReportShortcut.vue'
 import { appRecordApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
-import { UserStore } from '@/stores/module/UserStore'
+import { useFailureAnalysisGate } from '@/composables/useFailureAnalysisGate.js'
 import dateTools from '@/tools/dateTools.js'
 
 const route = useRoute()
 const router = useRouter()
 const proStore = ProjectStore()
-const uStore = UserStore()
 const runInfo = ref({})
 const suites = ref([])
 const exportLoading = ref(false)
 const aiAnalyzeVisible = ref(false)
 const aiAnalyzeTargetId = ref(null)
 
-const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
+const { canShowFailureAnalysis: canAiAnalyze, loadExecSettings, canAnalyzeExecution } = useFailureAnalysisGate(runInfo, { syncProject: true })
 
 function openAiAnalyze(recordId) {
   aiAnalyzeTargetId.value = recordId

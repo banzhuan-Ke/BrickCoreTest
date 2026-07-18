@@ -352,6 +352,9 @@ def _normalize_ui_steps(steps: list) -> tuple[list[dict], list[str]]:
         intent = (step.get("intent") or "").strip()
         if intent:
             normalized["intent"] = intent
+        meta = step.get("meta")
+        if isinstance(meta, dict) and meta:
+            normalized["meta"] = meta
         valid_steps.append(normalized)
 
     return valid_steps, errors
@@ -675,7 +678,7 @@ def _prepend_agent_browser_steps(steps: list, start_url: str) -> list:
             "keyword": "访问页面url",
             "method": "open_url",
             "desc": f"访问 {url}",
-            "params": {"url": url, "wait_until": "load", "timeout": 30000},
+            "params": {"url": url, "wait_until": "domcontentloaded", "timeout": 30000},
             "children": [],
         })
     return prefix + list(steps)

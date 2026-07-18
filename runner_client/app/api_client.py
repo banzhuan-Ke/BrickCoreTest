@@ -166,6 +166,77 @@ class BrickCoreApi:
             pass
         return None
 
+    def _auth_headers(self) -> dict[str, str]:
+        if not self.user_token:
+            raise ApiError("请先登录")
+        return {"Authorization": f"Bearer {self.user_token}"}
+
+    def _runner_headers(self) -> dict[str, str]:
+        if not self.runner_token:
+            raise ApiError("Runner 未上线")
+        return {"X-Runner-Token": self.runner_token}
+
+    def fetch_active_recording(self) -> dict[str, Any] | None:
+        """查询本设备进行中的 Web 录制（Runner token）。"""
+        resp = requests.get(
+            self._url("/runner/active-recording"),
+            headers=self._runner_headers(),
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            raise ApiError(self._extract_error(resp), resp.status_code)
+        body = resp.json()
+        data = body.get("data") if isinstance(body, dict) else None
+        return data if isinstance(data, dict) else None
+
+    def pause_recording(self, record_id: int) -> dict[str, Any]:
+        resp = requests.post(
+            self._url(f"/ai/record/{record_id}/pause"),
+            json={},
+            headers=self._auth_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            raise ApiError(self._extract_error(resp), resp.status_code)
+        body = resp.json()
+        return body.get("data") if isinstance(body, dict) else body
+
+    def resume_recording(self, record_id: int) -> dict[str, Any]:
+        resp = requests.post(
+            self._url(f"/ai/record/{record_id}/resume"),
+            json={},
+            headers=self._auth_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            raise ApiError(self._extract_error(resp), resp.status_code)
+        body = resp.json()
+        return body.get("data") if isinstance(body, dict) else body
+
+    def stop_recording(self, record_id: int) -> dict[str, Any]:
+        resp = requests.post(
+            self._url(f"/ai/record/{record_id}/stop"),
+            json={},
+            headers=self._auth_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            raise ApiError(self._extract_error(resp), resp.status_code)
+        body = resp.json()
+        return body.get("data") if isinstance(body, dict) else body
+
+    def save_recording_variable(self, record_id: int, var_name: str, source: str = "text") -> dict[str, Any]:
+        resp = requests.post(
+            self._url(f"/ai/record/{record_id}/save-variable"),
+            json={"var_name": var_name, "source": source},
+            headers=self._auth_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            raise ApiError(self._extract_error(resp), resp.status_code)
+        body = resp.json()
+        return body.get("data") if isinstance(body, dict) else body
+
     def list_projects(self, *, page: int = 1, size: int = 200) -> list[dict[str, Any]]:
         if not self.user_token:
             raise ApiError("请先登录")

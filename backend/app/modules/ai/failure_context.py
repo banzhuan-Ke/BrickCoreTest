@@ -84,6 +84,51 @@ def load_image_from_url(url: str) -> Optional[tuple[bytes, str]]:
     return data, _guess_image_mime(object_name)
 
 
+def collect_step_screenshots_around_failure(
+    steps: list,
+    failed_idx: int,
+    *,
+    lookback: int = 2,
+    lookahead: int = 2,
+) -> list[tuple[int, str]]:
+    """收集失败步前后上下文截图 URL（1-based 步骤号，默认 ±2 步）。"""
+    if failed_idx < 0 or not steps:
+        return []
+    items: list[tuple[int, str]] = []
+    start = max(0, failed_idx - lookback)
+    end = min(len(steps) - 1, failed_idx + lookahead)
+    for i in range(start, end + 1):
+        step = steps[i] if i < len(steps) and isinstance(steps[i], dict) else None
+        if not step:
+            continue
+        shot = step.get("screenshot") or step.get("image")
+        if shot:
+            items.append((i + 1, str(shot)))
+    return items
+
+
+def load_context_images(
+    steps: list,
+    failed_idx: int,
+    *,
+    lookback: int = 2,
+    lookahead: int = 2,
+    fallback_url: Optional[str] = None,
+) -> list[tuple[bytes, str, str]]:
+    """加载失败上下文多张截图，返回 (bytes, mime, caption)。"""
+    shot_items = collect_step_screenshots_around_failure(
+        steps, failed_idx, lookback=lookback, lookahead=lookahead
+    )
+    if not shot_items and fallback_url:
+        shot_items = [(failed_idx + 1 if failed_idx >= 0 else 0, fallback_url)]
+    images: list[tuple[bytes, str, str]] = []
+    for step_no, url in shot_items:
+        loaded = load_image_from_url(url)
+        if loaded:
+            images.append((loaded[0], loaded[1], f"第{step_no}步截图"))
+    return images
+
+
 def _pick_failure_screenshot(result_data: dict, failed_step: Optional[dict]) -> Optional[str]:
     if failed_step:
         shot = failed_step.get("screenshot") or failed_step.get("image")
@@ -155,10 +200,10 @@ async def build_api_failure_context(record: ApiRunRecord) -> dict[str, Any]:
 
 async def build_ui_failure_context(
     execution: UiCaseExecution,
-) -> tuple[dict[str, Any], Optional[tuple[bytes, str]], Optional[str]]:
+) -> tuple[dict[str, Any], list[tuple[bytes, str, str]], Optional[str]]:
     """
     采集 UI 执行失败上下文
-    返回 (prompt_vars, image_bytes_mime, screenshot_url)
+    返回 (prompt_vars, context_images, primary_screenshot_url)
     """
     result_data = normalize_result_data(execution.result_data)
     summary = extract_ui_case_failure_summary(result_data)
@@ -170,14 +215,19 @@ async def build_ui_failure_context(
     for i, step in enumerate(steps):
         if not isinstance(step, dict):
             continue
-        step_summaries.append(
-            {
-                "index": i + 1,
-                "keyword": step.get("keyword") or step.get("name") or "",
-                "status": step.get("status") or "",
-                "message": step.get("message") or step.get("desc") or step.get("content") or "",
-            }
-        )
+        item = {
+            "index": i + 1,
+            "keyword": step.get("keyword") or step.get("name") or "",
+            "status": step.get("status") or "",
+            "message": step.get("message") or step.get("desc") or step.get("content") or "",
+        }
+        if step.get("locator_healed"):
+            item["locator_healed"] = step.get("locator_healed")
+        if step.get("ai_act"):
+            item["ai_act"] = step.get("ai_act")
+        if step.get("heal_retry_status"):
+            item["heal_retry_status"] = step.get("heal_retry_status")
+        step_summaries.append(item)
 
     error_msg = summary.get("error_hint") or ""
     if not error_msg and summary.get("log_error_excerpt"):
@@ -192,12 +242,28 @@ async def build_ui_failure_context(
         log_text = summary["log_tail"]
 
     screenshot_desc = ""
-    if screenshot_url:
-        screenshot_desc = f"失败步骤截图已提供（步骤 {failed_idx + 1 if failed_idx >= 0 else '?'}），请结合截图中的页面元素、错误提示、弹窗等视觉信息综合判断。"
+    context_images = load_context_images(
+        steps,
+        failed_idx,
+        lookback=2,
+        lookahead=2,
+        fallback_url=screenshot_url,
+    )
+    if context_images:
+        labels = "、".join(caption for _, _, caption in context_images)
+        screenshot_desc = (
+            f"已提供失败上下文截图（{labels}），请对比失败步前后步骤的页面状态、"
+            "弹窗、下拉选项等视觉差异综合判断。"
+        )
+    elif screenshot_url:
+        screenshot_desc = (
+            f"失败步骤截图已提供（步骤 {failed_idx + 1 if failed_idx >= 0 else '?'}），"
+            "请结合截图中的页面元素、错误提示、弹窗等视觉信息综合判断。"
+        )
     else:
         screenshot_desc = "（无可用截图，仅依据步骤与日志分析）"
 
-    image_payload = load_image_from_url(screenshot_url) if screenshot_url else None
+    image_payload = context_images
 
     case = await execution.case
     prompt_vars = {

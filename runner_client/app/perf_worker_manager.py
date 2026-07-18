@@ -79,6 +79,8 @@ class PerfWorkerManager:
             str(max_concurrent),
             "--project-id",
             str(project_id),
+            "--agent-kind",
+            "runner_client",
         ]
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"

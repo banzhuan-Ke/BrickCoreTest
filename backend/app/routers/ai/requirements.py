@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.core.platform.auth import is_authenticated, require_permissions
 from app.core.platform.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, PROJECT_EDIT
-from app.modules.ai.ai_prompts import PromptManager, append_extra_instructions
+from app.modules.ai.vision_image_cache import lookup_vision_result, store_vision_result
 from app.core.case.case_naming import (
     BUILTIN_TEMPLATE_CATALOG,
     apply_naming_to_cases,
@@ -44,6 +44,10 @@ from app.modules.ai.requirement_storage import (
 )
 from app.core.case.case_steps import align_steps_expects, normalize_corner_quotes
 from app.modules.ai.document_loader import load_document, SUPPORTED_EXTENSIONS
+from app.modules.ai.ai_project_settings import (
+    load_requirement_case_settings,
+    resolve_soft_count_range,
+)
 from app.modules.ai.requirement_document import (
     BLOCK_ESTIMATED_INPUT_TOKENS,
     attach_section_parents,
@@ -51,6 +55,7 @@ from app.modules.ai.requirement_document import (
     collect_image_indices,
     compute_section_coverage,
     estimate_scope,
+    recommend_case_count,
     resolve_sections,
     section_text,
     truncate_scope_text,
@@ -79,6 +84,7 @@ from app.modules.ai.zentao_case_export import (
 from app.core.platform.encryption import decrypt_value
 from app.core.llm.ai_usage_log import log_ai_usage
 from app.core.llm.llm_client import LLMClientFactory
+from app.modules.ai.ai_prompts import PromptManager, append_extra_instructions
 from app.models.ai import (
     AiConfig,
     AiGenerateRecord,
@@ -298,6 +304,8 @@ def _merge_vision_reports(reports: list[dict]) -> Optional[dict]:
             r.get("image_total") or len(r.get("images") or [])
         )
         merged["images"].extend(r.get("images") or [])
+        merged["cache_hit_count"] = int(merged.get("cache_hit_count") or 0) + int(r.get("cache_hit_count") or 0)
+        merged["cache_miss_count"] = int(merged.get("cache_miss_count") or 0) + int(r.get("cache_miss_count") or 0)
         if r.get("warning") and not merged.get("warning"):
             merged["warning"] = r["warning"]
         if r.get("partial"):
@@ -312,6 +320,117 @@ def _merge_vision_reports(reports: list[dict]) -> Optional[dict]:
             f"{skipped_n} 批范围内无图片已跳过"
         )
     return merged
+
+
+def _aggregate_batch_case_gen(batch_results: list[dict]) -> Optional[dict]:
+    """汇总批量任务顶层 case_gen，避免只展示最后一批的条数语义。"""
+    if not batch_results:
+        return None
+    success_batches = [b for b in batch_results if b.get("success")]
+    modes: list[str] = []
+    for b in batch_results:
+        m = (b.get("count_mode") or "").strip().lower()
+        if m in ("fixed", "auto"):
+            modes.append(m)
+    unique_modes = sorted(set(modes))
+    mixed = len(unique_modes) > 1
+    if mixed:
+        count_mode = "mixed"
+    elif unique_modes:
+        count_mode = unique_modes[0]
+    else:
+        count_mode = "fixed"
+
+    parsed_total = sum(
+        int(b.get("parsed_count") or b.get("created_count") or 0) for b in success_batches
+    )
+    created_total = sum(int(b.get("created_count") or 0) for b in batch_results)
+    tokens = sum(int(b.get("tokens_used") or 0) for b in batch_results)
+    any_trunc = any(bool(b.get("partial_truncated")) for b in batch_results)
+
+    # 与合计入库对齐：多批 auto 的总软区间 = 各批 soft_min/max 之和（不是包络 min/max）
+    auto_range_pairs = [
+        (int(b["soft_min_count"]), int(b["soft_max_count"]))
+        for b in success_batches
+        if b.get("count_mode") == "auto"
+        and b.get("soft_min_count") is not None
+        and b.get("soft_max_count") is not None
+    ]
+    fixed_requested = [
+        int(b["requested_count"])
+        for b in success_batches
+        if b.get("count_mode") == "fixed" and b.get("requested_count") is not None
+    ]
+
+    last_cg: dict = {}
+    for b in reversed(batch_results):
+        cg = (b.get("generate_report") or {}).get("case_gen")
+        if isinstance(cg, dict) and cg:
+            last_cg = cg
+            break
+
+    agg_soft_min: Optional[int] = None
+    agg_soft_max: Optional[int] = None
+    if count_mode == "auto" and not mixed and auto_range_pairs:
+        agg_soft_min = sum(lo for lo, _ in auto_range_pairs)
+        agg_soft_max = sum(hi for _, hi in auto_range_pairs)
+
+    if mixed:
+        note = (
+            f"批量含多种条数模式（{'/'.join(unique_modes)}）："
+            f"成功 {len(success_batches)}/{len(batch_results)} 批，合计入库 {created_total} 条；明细见各批次"
+        )
+        range_explain = "见各批次明细"
+    elif count_mode == "auto":
+        note = (
+            f"批量 AI 自定：成功 {len(success_batches)}/{len(batch_results)} 批，"
+            f"合计入库 {created_total} 条"
+        )
+        if len(auto_range_pairs) <= 1:
+            range_explain = (
+                success_batches[0].get("range_explain") if success_batches else None
+            )
+        elif agg_soft_min is not None and agg_soft_max is not None:
+            range_explain = (
+                f"合计软区间 {agg_soft_min}～{agg_soft_max}（各批 soft_min/max 相加）；明细见各批次"
+            )
+        else:
+            range_explain = "见各批次明细"
+    else:
+        note = (
+            f"批量参考条数：成功 {len(success_batches)}/{len(batch_results)} 批，"
+            f"合计入库 {created_total} 条"
+        )
+        range_explain = None
+
+    return {
+        "aggregated": True,
+        "batch_mode": True,
+        "success": bool(success_batches),
+        "count_mode": count_mode,
+        "mixed_modes": mixed,
+        "modes": unique_modes,
+        "batch_total": len(batch_results),
+        "batch_success_count": len(success_batches),
+        "requested_count": (
+            sum(fixed_requested)
+            if fixed_requested and count_mode == "fixed" and not mixed
+            else None
+        ),
+        "soft_min_count": agg_soft_min,
+        "soft_max_count": agg_soft_max,
+        "range_explain": range_explain,
+        "parsed_count": parsed_total,
+        "actual_created_count": created_total,
+        "partial_truncated": any_trunc,
+        "count_note": note,
+        "tokens": tokens or last_cg.get("tokens"),
+        "config_name": None if mixed else last_cg.get("config_name"),
+        "model": None if mixed else last_cg.get("model"),
+        "provider": None if mixed else last_cg.get("provider"),
+        # 顶层不展示单批补充语义，避免误导
+        "supplement_mode": False,
+    }
 
 
 def _find_section_for_image(sections: list[dict], image_index: int) -> Optional[dict]:
@@ -342,6 +461,8 @@ async def _analyze_images_with_vision(
         "images": [],
         "ok_count": 0,
         "fail_count": 0,
+        "cache_hit_count": 0,
+        "cache_miss_count": 0,
     }
     if not images:
         report["skipped"] = True
@@ -374,6 +495,7 @@ async def _analyze_images_with_vision(
 
     vision_text_by_index: dict[int, str] = {}
     total_tokens = 0
+    session_cache: dict[str, dict] = {}
     for img in images[:MAX_IMAGES_FOR_VISION]:
         idx = img.get("index", len(report["images"]) + 1)
         item = {"index": idx, "ok": False, "tokens": 0, "content": "", "error": None, "section_title": ""}
@@ -386,12 +508,31 @@ async def _analyze_images_with_vision(
         excerpt = ctx[:VISION_CONTEXT_MAX_CHARS]
         user_text = user_template_base.replace("（见下方章节上下文）", excerpt)
 
+        img_bytes = img.get("data") or b""
+        cached = await lookup_vision_result(
+            project_id=project_id,
+            image_bytes=img_bytes,
+            model=vision_config.model,
+            session_cache=session_cache,
+        )
+        if cached:
+            vision_text_by_index[idx] = cached["vision_text"]
+            item["ok"] = True
+            item["cached"] = True
+            item["cache_source"] = cached.get("cache_source")
+            item["content"] = (cached.get("raw_content") or cached["vision_text"])[:12000]
+            report["ok_count"] += 1
+            report["cache_hit_count"] += 1
+            report["images"].append(item)
+            continue
+
+        report["cache_miss_count"] += 1
         img_t0 = time.time()
         try:
             resp = await client.chat_with_image(
                 system_prompt=system_prompt,
                 text=user_text,
-                image_bytes=img["data"],
+                image_bytes=img_bytes,
                 image_mime=img.get("mime", "image/png"),
                 temperature=0.3,
                 max_tokens=min(vision_config.max_tokens, 4096),
@@ -407,6 +548,15 @@ async def _analyze_images_with_vision(
                 vision_text_by_index[idx] = vision_summary_to_text(parsed)
             else:
                 vision_text_by_index[idx] = raw_content[:4000]
+            await store_vision_result(
+                project_id=project_id,
+                image_bytes=img_bytes,
+                model=vision_config.model,
+                vision_text=vision_text_by_index[idx],
+                raw_content=raw_content,
+                tokens_used=item["tokens"],
+                session_cache=session_cache,
+            )
             if project_id:
                 await log_ai_usage(
                     vision_config,
@@ -469,6 +619,17 @@ async def _load_existing_cases_for_batch(
     ).order_by("id")
 
 
+async def _delete_cases_for_batch(requirement_id: int, batch_name: str) -> int:
+    ref = _batch_source_ref(batch_name)
+    if not ref or ref == "batch:":
+        return 0
+    return await AiRequirementCase.filter(
+        requirement_id=requirement_id,
+        source_ref=ref,
+        is_del=False,
+    ).update(is_del=True)
+
+
 def _format_existing_cases_for_prompt(
     cases: list[AiRequirementCase],
     max_list: int = 50,
@@ -497,24 +658,113 @@ def _format_existing_cases_for_prompt(
     return "\n".join(lines), n
 
 
-def _case_count_quality_hint(requested: int, char_count: int, section_count: int) -> str:
-    """注入 Prompt：条数目标与范围体量不匹配时的质量优先说明"""
+def _normalize_count_mode(raw: Optional[str]) -> str:
+    mode = (raw or "fixed").strip().lower()
+    return mode if mode in ("fixed", "auto") else "fixed"
+
+
+def _case_count_quality_hint(
+    requested: Optional[int],
+    char_count: int,
+    section_count: int,
+    image_count: int = 0,
+    *,
+    count_mode: str = "fixed",
+    soft_min: Optional[int] = None,
+    soft_max: Optional[int] = None,
+    range_explain: str = "",
+) -> str:
+    """注入 Prompt：条数目标 / AI 自定区间与范围体量说明"""
     sections = max(section_count, 1)
+    rec = recommend_case_count(char_count, sections, image_count)
+    recommended = rec["recommended_count"]
+    core_min = rec["core_min_count"]
+
+    grounding = (
+        "【图文冲突】正文/表格文字与高保原型截图不一致时，**以文字为准**；"
+        "禁止写入文字未定义的按钮、状态、筛选项或固定控件数量。"
+    )
+
+    if count_mode == "auto":
+        lo = soft_min or rec["core_min_count"]
+        hi = soft_max or recommended
+        explain = range_explain or f"建议约 {recommended} 条"
+        return (
+            f"{grounding}\n"
+            f"【AI 自定条数】不设精确目标条数。请按功能点覆盖生成，实际条数落在约 {lo}～{hi} 条。\n"
+            f"{explain}\n"
+            "优先覆盖各主要功能点的主路径/核心操作闭环，其次异常/权限/边界；"
+            "禁止浅浏览凑数；禁止超过区间上限大量灌水。"
+        )
+
+    requested = int(requested or recommended)
+    if requested < core_min or requested < int(recommended * 0.7):
+        return (
+            f"{grounding}\n"
+            f"【条数偏少 · 优先保核心】参考目标仅 {requested} 条，相对本范围建议约 {recommended} 条偏少"
+            f"（核心保底约 {core_min}）。\n"
+            f"必须优先覆盖范围内**每个主要功能点的主路径/核心操作闭环**"
+            f"（进入→关键动作含编辑/提交/重试等→可观察结果/刷新），"
+            f"其次再安排少量异常/权限/边界；"
+            f"**禁止**把额度花在「打开页面看看」、只读浏览、重复展示类浅用例上。"
+            f"额度不足时宁可省略次要异常，也要保证核心交互与关键闭环不断档。"
+        )
     if char_count < 2500 and requested > 8:
         return (
-            f"【条数提示】本次范围约 {char_count} 字、{sections} 个章节，参考目标 {requested} 条可能偏高。"
+            f"{grounding}\n"
+            f"【条数提示】本次范围约 {char_count} 字、{sections} 个章节，参考目标 {requested} 条可能偏高"
+            f"（建议约 {recommended} 条）。"
             f"请按需求分支/边界/异常/权限拆分**高质量**用例，**实际条数可明显少于 {requested}**；"
             "禁止为凑条数输出大量「一步操作+一句泛化预期」的浅用例。"
         )
-    if char_count < 5000 and requested > 12:
+    if char_count < 5000 and requested > max(12, recommended + 4):
         return (
-            f"【条数提示】参考目标 {requested} 条，范围约 {char_count} 字。"
+            f"{grounding}\n"
+            f"【条数提示】参考目标 {requested} 条，范围约 {char_count} 字（建议约 {recommended} 条）。"
             "**质量与覆盖维度优先于凑满条数**；宁可少生成，也不要堆一步式用例。"
         )
     return (
-        f"【条数提示】参考目标约 {requested} 条，以覆盖要点为准，可略少或略多；"
+        f"{grounding}\n"
+        f"【条数提示】参考目标约 {requested} 条（本范围建议约 {recommended} 条），以覆盖要点为准，可略少或略多；"
         "每条须可独立执行，步骤与预期须具体、可验证。"
+        "配比上先保证主路径与关键动作闭环，再覆盖异常/边界/权限。"
     )
+
+
+def _case_count_expectation_note_v2(
+    *,
+    count_mode: str,
+    requested: Optional[int],
+    parsed: int,
+    soft_min: int,
+    soft_max: int,
+    truncated: bool = False,
+) -> str:
+    if parsed <= 0:
+        return "未解析到用例"
+    parts: list[str] = []
+    if count_mode == "auto":
+        parts.append(f"AI 自定模式，软区间 {soft_min}～{soft_max}，实际入库 {parsed} 条")
+        if parsed < soft_min:
+            parts.append("低于软下限，可用补充生成补全缺口")
+        elif parsed > soft_max:
+            parts.append("超过软上限")
+    else:
+        req = int(requested or 0)
+        if parsed == req:
+            parts.append(f"与参考目标 {req} 条一致")
+        elif parsed < req:
+            parts.append(
+                f"少于参考目标 {req} 条（实际入库 {parsed} 条），可对同范围使用「补充生成」或调高目标后重试"
+            )
+        else:
+            parts.append(
+                f"多于参考目标 {req} 条（实际入库 {parsed} 条）："
+                "为模型在需求范围内自行扩展，非系统将多处条数相加"
+            )
+    if truncated:
+        parts.append(f"已按项目上限截断并仅保留前 {parsed} 条（partial_truncated）")
+    return "；".join(parts)
 
 
 def _format_scope_section_titles(sections: list[dict]) -> str:
@@ -738,7 +988,16 @@ class RecalcTitlesRequest(BaseModel):
 class GenerateCasesRequest(BaseModel):
     vision_config_id: Optional[int] = Field(default=None, description="Vision 模型配置（文档含图时必填）")
     case_gen_config_id: Optional[int] = Field(default=None, description="用例生成模型配置（DeepSeek 等文本模型）")
-    count: int = Field(default=15, ge=1, le=50, description="目标生成用例数量")
+    count_mode: str = Field(
+        default="fixed",
+        description="条数模式：fixed=参考条数，auto=AI 自定条数（仅受软区间约束）",
+    )
+    count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="fixed 模式参考条数；auto 模式可省略（后端仍会落库建议条数与软区间）",
+    )
     replace_existing: bool = Field(default=False, description="是否替换已有用例")
     supplement_batch_name: Optional[str] = Field(
         default=None,
@@ -776,10 +1035,15 @@ class ScopeEstimateRequest(BaseModel):
 class GenerateCasesBatchItem(BaseModel):
     name: str = Field(default="", description="批次名称（展示用）")
     scope_section_ids: list[str] = Field(..., min_length=1, description="本批章节 ID")
-    count: int = Field(default=10, ge=1, le=50, description="本批目标用例数")
+    count_mode: str = Field(default="fixed", description="本批条数模式：fixed | auto")
+    count: Optional[int] = Field(default=None, ge=1, le=100, description="fixed 模式本批参考条数")
     supplement: bool = Field(
         default=False,
         description="补充生成：按本批名称匹配已有用例发给模型后追加",
+    )
+    replace: bool = Field(
+        default=False,
+        description="替换本批：生成前删除同批次名已有用例后重新生成",
     )
     export_defaults: Optional[ExportDefaultsBody] = Field(
         default=None,
@@ -790,6 +1054,15 @@ class GenerateCasesBatchItem(BaseModel):
         max_length=2000,
         description="本批额外要求（可选，覆盖批量级默认）",
     )
+
+
+class RetryGenerateBatchRequest(BaseModel):
+    batch_index: int = Field(..., ge=0, description="batch_results 中的批次序号")
+    count_mode: Optional[str] = Field(None, description="覆盖本批条数模式：fixed | auto")
+    count: Optional[int] = Field(None, ge=1, le=100, description="覆盖本批参考条数（fixed）")
+    vision_config_id: Optional[int] = None
+    case_gen_config_id: Optional[int] = None
+    extra_instructions: Optional[str] = Field(None, max_length=2000)
 
 
 class GenerateCasesBatchRequest(BaseModel):
@@ -1260,7 +1533,11 @@ async def get_document_structure(
     est = estimate_scope(
         build_interleaved_content(blocks, scoped, {}),
         len(collect_image_indices(scoped, blocks)),
+        section_count=len(scoped),
     )
+    rc = await load_requirement_case_settings(project_id)
+    soft = resolve_soft_count_range(est.get("recommended_count") or 4, rc)
+    est.update(soft)
     return StandardResponse(
         data={
             "sections": sections,
@@ -1268,6 +1545,7 @@ async def get_document_structure(
             "image_count": meta.get("image_count", 0),
             "text_length": len(req.original_content or ""),
             "estimate_all": est,
+            "requirement_case_settings": rc,
         }
     )
 
@@ -1292,9 +1570,12 @@ async def estimate_generate_scope(
     img_n = len(collect_image_indices(selected, blocks))
     text = build_interleaved_content(blocks, selected, {})
     text, _ = truncate_scope_text(text)
-    est = estimate_scope(text, img_n)
+    est = estimate_scope(text, img_n, section_count=len(selected))
     est["selected_section_count"] = len(selected)
     est["selected_section_ids"] = [s.get("id") for s in selected]
+    rc = await load_requirement_case_settings(project_id)
+    soft = resolve_soft_count_range(est.get("recommended_count") or 4, rc)
+    est.update(soft)
     return StandardResponse(data=est)
 
 
@@ -1411,6 +1692,8 @@ async def _execute_generate_cases(
     is_supplement = bool(supplement_name)
     if body.supplement_batch_name is not None and body.supplement_batch_name.strip() == "":
         raise HTTPException(status_code=400, detail="补充生成须填写有效的批次名称")
+    if is_supplement and body.replace_existing:
+        raise HTTPException(status_code=400, detail="「补充」与「替换已有」不能同时开启")
     do_replace = False if is_supplement else (
         body.replace_existing if replace_existing is None else replace_existing
     )
@@ -1507,7 +1790,11 @@ async def _execute_generate_cases(
     if not scoped_content.strip():
         scoped_content = (req.original_content or "")[:8000]
     scoped_content, truncated = truncate_scope_text(scoped_content)
-    scope_est = estimate_scope(scoped_content, image_count)
+    scope_est = estimate_scope(
+        scoped_content,
+        image_count,
+        section_count=len(selected_sections),
+    )
     if scope_est["level"] == "block":
         raise HTTPException(
             status_code=400,
@@ -1517,8 +1804,29 @@ async def _execute_generate_cases(
     if not scoped_content.strip():
         raise HTTPException(status_code=400, detail="选中范围内无有效文字或图片内容")
 
-    existing_cases_text = ""
-    existing_count = 0
+    # 条数模式：fixed=参考条数；auto=AI 自定（仅软区间）
+    count_mode = _normalize_count_mode(getattr(body, "count_mode", None))
+    rc_settings = await load_requirement_case_settings(project_id)
+    hard_max = int(rc_settings.get("fixed_count_hard_max") or 50)
+    base_recommended = int(scope_est.get("recommended_count") or 4)
+    soft = resolve_soft_count_range(base_recommended, rc_settings)
+    soft_min = int(soft["soft_min_count"])
+    soft_max = int(soft["soft_max_count"])
+    range_explain = soft["range_explain"]
+    max_cap = int(soft["auto_count_max_cap"])
+
+    if count_mode == "auto":
+        requested_count = None
+        prompt_count = soft_max  # 模板仍需 {{count}}，以软上限作参考锚点
+    else:
+        requested_count = int(body.count) if body.count is not None else 15
+        if requested_count > hard_max:
+            raise HTTPException(
+                status_code=400,
+                detail=f"参考条数不能超过项目上限 {hard_max}（可在 AI 模型配置 → 功能用例生成中调整）",
+            )
+        prompt_count = requested_count
+
     existing_cases_text = ""
     existing_count = 0
     existing_feature_points = ""
@@ -1530,6 +1838,16 @@ async def _execute_generate_cases(
     naming_config, naming_template = await _resolve_naming_template(project_id, req)
     naming_rules = format_naming_rules_for_prompt(naming_template)
     section_ctx = build_section_context(selected_sections, all_sections)
+    count_hint = _case_count_quality_hint(
+        requested_count,
+        scope_est.get("char_count", len(scoped_content)),
+        len(selected_sections),
+        scope_est.get("image_count", image_count),
+        count_mode=count_mode,
+        soft_min=soft_min,
+        soft_max=soft_max,
+        range_explain=range_explain,
+    )
 
     try:
         if is_supplement:
@@ -1539,27 +1857,24 @@ async def _execute_generate_cases(
                     "requirement_name": req.name,
                     "batch_name": supplement_name,
                     "scoped_content": scoped_content,
-                    "count": body.count,
+                    "count": prompt_count,
                     "existing_cases": existing_cases_text,
                     "existing_count": existing_count,
                     "existing_feature_points": existing_feature_points,
                     "naming_rules": naming_rules,
                 },
             )
+            user_prompt = f"{count_hint}\n\n{user_prompt}"
         else:
             system_prompt, user_prompt = await PromptManager.render("requirement_doc_to_cases", {
                 "requirement_name": req.name,
                 "scoped_content": scoped_content,
                 "doc_text": scoped_content,
                 "vision_summary": "（已合并至下方结构化需求内容，请直接阅读 scoped_content）",
-                "count": body.count,
+                "count": prompt_count,
                 "naming_rules": naming_rules,
                 "scope_section_titles": _format_scope_section_titles(selected_sections),
-                "count_quality_hint": _case_count_quality_hint(
-                    body.count,
-                    scope_est.get("char_count", len(scoped_content)),
-                    len(selected_sections),
-                ),
+                "count_quality_hint": count_hint,
             })
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1611,11 +1926,14 @@ async def _execute_generate_cases(
 
     prompt_len = len(user_prompt or "")
     logger.info(
-        "[requirements] 用例生成 LLM 调用 model=%s batch=%s prompt_len=%s count=%s extra=%s",
+        "[requirements] 用例生成 LLM 调用 model=%s batch=%s prompt_len=%s mode=%s count=%s soft=%s~%s extra=%s",
         gen_config.model,
         batch_name or supplement_name or "-",
         prompt_len,
-        body.count,
+        count_mode,
+        requested_count,
+        soft_min,
+        soft_max,
         bool(extra_instructions),
     )
     try:
@@ -1676,8 +1994,27 @@ async def _execute_generate_cases(
         for c in named_cases
     ]
 
+    parsed_raw_n = len(cases_data)
+    partial_truncated = False
+    # 超绝对上限：保留前 N 条 + 强告警（避免静默丢数据或半截 JSON）
+    if parsed_raw_n > max_cap:
+        cases_data = cases_data[:max_cap]
+        partial_truncated = True
+        logger.warning(
+            "[requirements] 用例条数 %s 超过上限 %s，已截断入库",
+            parsed_raw_n,
+            max_cap,
+        )
+
     parsed_n = len(cases_data)
-    count_note = _case_count_expectation_note(body.count, parsed_n)
+    count_note = _case_count_expectation_note_v2(
+        count_mode=count_mode,
+        requested=requested_count,
+        parsed=parsed_n,
+        soft_min=soft_min,
+        soft_max=soft_max,
+        truncated=partial_truncated,
+    )
     if is_supplement:
         count_note = (
             f"补充批次「{supplement_name}」：已有 {existing_count} 条，本次新增入库 {parsed_n} 条。"
@@ -1689,8 +2026,16 @@ async def _execute_generate_cases(
         "model": gen_config.model,
         "provider": gen_config.provider,
         "tokens": case_gen_tokens,
-        "requested_count": body.count,
+        "count_mode": count_mode,
+        "requested_count": requested_count,
+        "base_recommended_count": base_recommended,
+        "soft_min_count": soft_min,
+        "soft_max_count": soft_max,
+        "range_explain": range_explain,
         "parsed_count": parsed_n,
+        "parsed_raw_count": parsed_raw_n,
+        "actual_created_count": parsed_n,
+        "partial_truncated": partial_truncated,
         "count_note": count_note,
         "supplement_mode": is_supplement,
         "supplement_batch_name": supplement_name if is_supplement else None,
@@ -1785,6 +2130,7 @@ async def _execute_generate_cases(
 
     created_case_ids = [c["id"] for c in created if c.get("id")]
     generate_report["created_case_ids"] = created_case_ids
+    case_gen_report["actual_created_count"] = len(created)
 
     duration_ms = int((time.time() - start_time) * 1000)
     generate_report["duration_ms"] = duration_ms
@@ -1796,7 +2142,10 @@ async def _execute_generate_cases(
         input_summary={
             "requirement_id": req.id,
             "name": req.name,
-            "count": body.count,
+            "count_mode": count_mode,
+            "count": requested_count,
+            "soft_min_count": soft_min,
+            "soft_max_count": soft_max,
             "batch_name": batch_name or None,
         },
         output_content={
@@ -1818,7 +2167,7 @@ async def _execute_generate_cases(
         project_id=project_id,
         tokens_used=total_tokens,
         duration_ms=duration_ms,
-        input_summary=f"需求#{req.id} {req.name}, count={body.count}"[:500],
+        input_summary=f"需求#{req.id} {req.name}, mode={count_mode}, count={requested_count}"[:500],
         output_summary=f"生成 {len(created)} 条用例",
         requirement_id=req.id,
         batch_name=batch_name or supplement_name or None,
@@ -1877,6 +2226,7 @@ def _job_to_dict(job: AiRequirementGenerateJob) -> dict:
         "progress_percent": pct,
         "batch_results": job.batch_results or [],
         "generate_report": gr,
+        "payload": job.payload if isinstance(job.payload, dict) else {},
         "error": job.error,
         "tokens_used": job.tokens_used,
         "duration_ms": job.duration_ms,
@@ -1898,17 +2248,25 @@ async def _persist_single_generate_job(
 ) -> AiRequirementGenerateJob:
     """单次同步生成写入任务表，便于历史记录查看"""
     gr = data.get("generate_report") or {}
+    cg = gr.get("case_gen") or {}
     batch_results = [
         {
             "name": batch_name or "单批生成",
             "success": True,
             "supplement": bool((body.supplement_batch_name or "").strip()),
-            "requested_count": body.count,
+            "replace": bool(body.replace_existing and not (body.supplement_batch_name or "").strip()),
+            "count_mode": cg.get("count_mode") or _normalize_count_mode(getattr(body, "count_mode", None)),
+            "requested_count": cg.get("requested_count"),
+            "base_recommended_count": cg.get("base_recommended_count"),
+            "soft_min_count": cg.get("soft_min_count"),
+            "soft_max_count": cg.get("soft_max_count"),
+            "range_explain": cg.get("range_explain"),
+            "partial_truncated": bool(cg.get("partial_truncated")),
             "created_count": data.get("created_count", 0),
             "parsed_count": data.get("created_count", 0),
             "generate_report": gr,
             "tokens_used": data.get("tokens_used", 0),
-            "count_note": (gr.get("case_gen") or {}).get("count_note"),
+            "count_note": cg.get("count_note"),
             **_batch_scope_fields(req, body.scope_section_ids, gr),
         }
     ]
@@ -1983,10 +2341,15 @@ async def _run_batch_generate_core(
             item_effective = merge_bindings(project_b, req_b)
             miss = validate_bindings(item_effective)
             if miss:
+                fail_mode = _normalize_count_mode(getattr(item, "count_mode", None))
                 batch_results.append({
                     "index": idx,
                     "name": batch_name,
                     "success": False,
+                    "supplement": bool(item.supplement),
+                    "replace": bool(item.replace),
+                    "count_mode": fail_mode,
+                    "requested_count": item.count if fail_mode == "fixed" else None,
                     "created_count": 0,
                     "error": f"禅道配置不完整：{', '.join(miss)}",
                     **_batch_scope_fields(req, item.scope_section_ids),
@@ -1998,15 +2361,39 @@ async def _run_batch_generate_core(
                 continue
 
         use_supplement = bool(item.supplement)
+        use_replace = bool(item.replace)
+        if use_supplement and use_replace:
+            fail_mode = _normalize_count_mode(getattr(item, "count_mode", None))
+            batch_results.append({
+                "index": idx,
+                "name": batch_name,
+                "success": False,
+                "supplement": False,
+                "replace": False,
+                "count_mode": fail_mode,
+                "requested_count": item.count if fail_mode == "fixed" else None,
+                "created_count": 0,
+                "error": "「补充」与「替换本批」不能同时开启",
+                **_batch_scope_fields(req, item.scope_section_ids),
+            })
+            if job:
+                job.done_batches = idx + 1
+                job.batch_results = batch_results
+                await job.save(update_fields=["done_batches", "batch_results", "update_time"])
+            continue
         if use_supplement:
             batch_name = (item.name or "").strip() or batch_name
+        if use_replace:
+            await _delete_cases_for_batch(req_id, batch_name)
 
         batch_extra = (body.extra_instructions or "").strip()
         item_extra = (item.extra_instructions or "").strip()
+        item_count_mode = _normalize_count_mode(getattr(item, "count_mode", None))
         single_body = GenerateCasesRequest(
             vision_config_id=body.vision_config_id,
             case_gen_config_id=body.case_gen_config_id,
-            count=item.count,
+            count_mode=item_count_mode,
+            count=item.count if item_count_mode == "fixed" else None,
             replace_existing=False,
             export_defaults=None,
             scope_section_ids=item.scope_section_ids,
@@ -2042,7 +2429,14 @@ async def _run_batch_generate_core(
                 "name": batch_name,
                 "success": True,
                 "supplement": use_supplement,
-                "requested_count": item.count,
+                "replace": use_replace,
+                "count_mode": cg.get("count_mode") or item_count_mode,
+                "requested_count": cg.get("requested_count"),
+                "base_recommended_count": cg.get("base_recommended_count"),
+                "soft_min_count": cg.get("soft_min_count"),
+                "soft_max_count": cg.get("soft_max_count"),
+                "range_explain": cg.get("range_explain"),
+                "partial_truncated": bool(cg.get("partial_truncated")),
                 "created_count": data["created_count"],
                 "created_case_ids": batch_created_ids,
                 "parsed_count": cg.get("parsed_count", data["created_count"]),
@@ -2060,6 +2454,10 @@ async def _run_batch_generate_core(
                 "index": idx,
                 "name": batch_name,
                 "success": False,
+                "supplement": use_supplement,
+                "replace": use_replace,
+                "count_mode": item_count_mode,
+                "requested_count": item.count if item_count_mode == "fixed" else None,
                 "created_count": 0,
                 "error": detail,
                 **_batch_scope_fields(req, item.scope_section_ids),
@@ -2070,6 +2468,10 @@ async def _run_batch_generate_core(
                 "index": idx,
                 "name": batch_name,
                 "success": False,
+                "supplement": use_supplement,
+                "replace": use_replace,
+                "count_mode": item_count_mode,
+                "requested_count": item.count if item_count_mode == "fixed" else None,
                 "created_count": 0,
                 "error": str(e),
                 **_batch_scope_fields(req, item.scope_section_ids),
@@ -2096,7 +2498,7 @@ async def _run_batch_generate_core(
         "vision": _merge_vision_reports(vision_reports)
         if vision_reports
         else (last_report.get("vision") if last_report else None),
-        "case_gen": last_report.get("case_gen") if last_report else None,
+        "case_gen": _aggregate_batch_case_gen(batch_results),
         "duration_ms": duration_ms,
         "tokens_used": total_tokens,
     }
@@ -2148,11 +2550,83 @@ async def _run_batch_generate_core(
     return result
 
 
+async def _sync_job_report_from_batch_results(
+    job: AiRequirementGenerateJob,
+    req: AiRequirement,
+    batch_results: list[dict],
+    *,
+    extra_duration_ms: int = 0,
+) -> None:
+    """根据 batch_results 回写任务状态与汇总报告。"""
+    req_id = req.id
+    success_count = sum(1 for b in batch_results if b.get("success"))
+    all_created_ids: list[int] = []
+    vision_reports: list[dict] = []
+    for b in batch_results:
+        if b.get("success"):
+            all_created_ids.extend(b.get("created_case_ids") or [])
+            gr = b.get("generate_report") or {}
+            if gr.get("vision"):
+                vision_reports.append(gr["vision"])
+    total_tokens = sum(int(b.get("tokens_used") or 0) for b in batch_results)
+    last_success = next((b for b in reversed(batch_results) if b.get("success")), None)
+    last_report = (last_success or {}).get("generate_report") or {}
+
+    combined_report = {
+        "batch_mode": True,
+        "batch_results": batch_results,
+        "created_case_ids": all_created_ids,
+        "vision": _merge_vision_reports(vision_reports)
+        if vision_reports
+        else last_report.get("vision"),
+        "case_gen": _aggregate_batch_case_gen(batch_results),
+        "duration_ms": int((job.duration_ms or 0) + extra_duration_ms),
+        "tokens_used": total_tokens,
+    }
+
+    cases = await AiRequirementCase.filter(requirement_id=req_id, is_del=False).order_by("id")
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    meta["last_generate"] = {
+        "case_count": len(cases),
+        "created_case_ids": all_created_ids,
+        "tokens_used": total_tokens,
+        "duration_ms": combined_report["duration_ms"],
+        "generate_report": combined_report,
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    req.parsed_content = meta
+    await req.save()
+
+    job.batch_results = batch_results
+    job.tokens_used = total_tokens
+    job.duration_ms = combined_report["duration_ms"]
+    job.generate_report = combined_report
+    job.finish_time = datetime.now()
+    if success_count == 0:
+        first_err = next((b["error"] for b in batch_results if b.get("error")), "全部批次失败")
+        job.status = "failed"
+        job.error = first_err
+    else:
+        job.status = "completed"
+        if success_count < len(batch_results):
+            job.error = f"部分批次失败（{success_count}/{len(batch_results)} 批成功）"
+        else:
+            job.error = None
+    await job.save()
+
+
 async def _execute_generate_job(job_id: int) -> None:
     job = await AiRequirementGenerateJob.get_or_none(id=job_id)
     if not job:
         return
     if job.status not in ("pending", "running"):
+        return
+
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    if payload.get("job_kind") == "test_points":
+        from app.modules.ai.test_point_batch import execute_test_points_generate_job
+
+        await execute_test_points_generate_job(job)
         return
 
     body = GenerateCasesBatchRequest.model_validate(job.payload)
@@ -2369,6 +2843,187 @@ async def list_generate_jobs(
             "page": page,
             "size": size,
         }
+    )
+
+
+@router.post(
+    "/generate-jobs/{job_id}/retry-batch",
+    summary="重新生成批量任务中失败的批次",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def retry_generate_batch(
+    job_id: int,
+    body: RetryGenerateBatchRequest,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    job = await AiRequirementGenerateJob.get_or_none(
+        id=job_id, project_id=project_id, is_del=False
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="生成记录不存在")
+    if job.status in ("pending", "running"):
+        raise HTTPException(status_code=409, detail="任务执行中，请等待完成后再重试失败批次")
+
+    batch_results = list(job.batch_results or [])
+    if body.batch_index >= len(batch_results):
+        raise HTTPException(status_code=400, detail="批次序号无效")
+    item = batch_results[body.batch_index]
+    if item.get("success"):
+        raise HTTPException(status_code=400, detail="该批次已成功，无需重新生成")
+
+    req = await AiRequirement.get_or_none(
+        id=job.requirement_id, project_id=project_id, is_del=False
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+
+    running = await AiRequirementGenerateJob.filter(
+        requirement_id=job.requirement_id,
+        project_id=project_id,
+        status__in=["pending", "running"],
+        is_del=False,
+    ).first()
+    if running and running.id != job_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"该需求已有进行中的生成任务（#{running.id}），请等待完成后再试",
+        )
+
+    batch_name = (item.get("name") or "").strip() or f"批次{body.batch_index + 1}"
+    scope_ids = list(item.get("scope_section_ids") or [])
+    if not scope_ids:
+        raise HTTPException(status_code=400, detail="该批次缺少章节范围，无法重新生成")
+
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    if payload.get("job_kind") == "test_points":
+        raise HTTPException(status_code=400, detail="该记录为测试点批量任务，请在使用例生成报告中重试")
+
+    count_mode = _normalize_count_mode(
+        body.count_mode if body.count_mode is not None else item.get("count_mode")
+    )
+    count = body.count if body.count is not None else item.get("requested_count")
+    if count_mode == "fixed" and not count:
+        count = 10
+
+    # 重试必须保留原批次写入策略，禁止「有旧用例就强制补充」
+    use_supplement = bool(item.get("supplement"))
+    use_replace = bool(item.get("replace"))
+    if use_supplement and use_replace:
+        raise HTTPException(status_code=400, detail="原批次「补充」与「替换本批」标记冲突，无法重试")
+    existing_rows = await _load_existing_cases_for_batch(req.id, batch_name)
+    if not use_supplement and not use_replace and len(existing_rows) > 0:
+        # 原新建批次残留用例：清空后重生，避免重复入库
+        use_replace = True
+    if use_replace:
+        await _delete_cases_for_batch(req.id, batch_name)
+
+    single_body = GenerateCasesRequest(
+        vision_config_id=body.vision_config_id or payload.get("vision_config_id"),
+        case_gen_config_id=body.case_gen_config_id or payload.get("case_gen_config_id"),
+        count_mode=count_mode,
+        count=count if count_mode == "fixed" else None,
+        replace_existing=False,
+        export_defaults=None,
+        scope_section_ids=scope_ids,
+        supplement_batch_name=batch_name if use_supplement else None,
+        batch_name=batch_name,
+        extra_instructions=(body.extra_instructions or payload.get("extra_instructions") or None),
+        knowledge_folder_ids=payload.get("knowledge_folder_ids"),
+        knowledge_document_ids=payload.get("knowledge_document_ids"),
+    )
+
+    try:
+        data = await _execute_generate_cases(
+            req,
+            project_id,
+            user_info,
+            single_body,
+            batch_name=batch_name,
+            replace_existing=False,
+        )
+    except HTTPException as e:
+        detail = e.detail if isinstance(e.detail, str) else str(e.detail)
+        batch_results[body.batch_index] = {
+            "index": body.batch_index,
+            "name": batch_name,
+            "success": False,
+            "supplement": use_supplement,
+            "replace": use_replace,
+            "count_mode": count_mode,
+            "requested_count": count if count_mode == "fixed" else None,
+            "created_count": 0,
+            "error": detail,
+            **_batch_scope_fields(req, scope_ids),
+        }
+        await _sync_job_report_from_batch_results(job, req, batch_results)
+        raise HTTPException(status_code=e.status_code, detail=detail) from e
+    except Exception as e:
+        logger.error("[requirements] 重试批次 %s 失败: %s", batch_name, e, exc_info=True)
+        detail = f"重新生成失败: {e}"
+        batch_results[body.batch_index] = {
+            "index": body.batch_index,
+            "name": batch_name,
+            "success": False,
+            "supplement": use_supplement,
+            "replace": use_replace,
+            "count_mode": count_mode,
+            "requested_count": count if count_mode == "fixed" else None,
+            "created_count": 0,
+            "error": detail,
+            **_batch_scope_fields(req, scope_ids),
+        }
+        await _sync_job_report_from_batch_results(job, req, batch_results)
+        raise HTTPException(status_code=500, detail=detail) from e
+
+    gr = data.get("generate_report") or {}
+    cg = gr.get("case_gen") or {}
+    batch_created_ids = (
+        gr.get("created_case_ids")
+        or [c.get("id") for c in data.get("cases", []) if c.get("id")]
+    )
+    batch_results[body.batch_index] = {
+        "index": body.batch_index,
+        "name": batch_name,
+        "success": True,
+        "supplement": use_supplement,
+        "replace": use_replace,
+        "count_mode": cg.get("count_mode") or count_mode,
+        "requested_count": cg.get("requested_count"),
+        "base_recommended_count": cg.get("base_recommended_count"),
+        "soft_min_count": cg.get("soft_min_count"),
+        "soft_max_count": cg.get("soft_max_count"),
+        "range_explain": cg.get("range_explain"),
+        "partial_truncated": bool(cg.get("partial_truncated")),
+        "created_count": data["created_count"],
+        "created_case_ids": batch_created_ids,
+        "parsed_count": cg.get("parsed_count", data["created_count"]),
+        "existing_cases_count": cg.get("existing_cases_count", 0),
+        "count_note": cg.get("count_note"),
+        "tokens_used": data["tokens_used"],
+        "duration_ms": data["duration_ms"],
+        "generate_report": gr,
+        "error": None,
+        **_batch_scope_fields(req, scope_ids, gr),
+    }
+
+    await _sync_job_report_from_batch_results(
+        job,
+        req,
+        batch_results,
+        extra_duration_ms=int(data.get("duration_ms") or 0),
+    )
+
+    cases = await AiRequirementCase.filter(requirement_id=req.id, is_del=False).order_by("id")
+    return StandardResponse(
+        message=f"批次「{batch_name}」重新生成成功，入库 {data['created_count']} 条",
+        data={
+            "job": _job_to_dict(job),
+            "batch_result": batch_results[body.batch_index],
+            "cases": [_case_to_dict(c) for c in cases],
+            "created_count": data["created_count"],
+        },
     )
 
 

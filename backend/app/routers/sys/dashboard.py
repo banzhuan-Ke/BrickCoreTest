@@ -16,6 +16,7 @@ from app.modules.ai.ai_dashboard_stats import (
     collect_generate_trend,
     collect_token_stats,
     collect_user_activity_top,
+    enrich_run_by_display,
 )
 from app.models.ui import Case as UiCase, Suite as UiSuite, UiCaseExecution, UiPlanExecution
 from app.models.http import ApiTestCase, ApiTestSuite, ApiRunRecord, ApiSuiteRunRecord, ApiCronJob
@@ -522,6 +523,7 @@ async def get_dashboard(
 
     recent_executions.sort(key=lambda x: x["start_time"] or "", reverse=True)
     recent_executions = recent_executions[:5]
+    recent_executions = await enrich_run_by_display(recent_executions)
 
     ui_success = sum(i["success"] for i in ui_execution_trend)
     ui_fail = sum(i["fail"] for i in ui_execution_trend)

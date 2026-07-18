@@ -67,9 +67,11 @@
 
 > 客户端启动的压测引擎与命令行 `perf_worker.py` **完全相同**，平台报告指标一致。区别仅在于 GUI 选项目、自动 Token、下线即时注销、日志汇聚到客户端窗口。
 
-仍支持命令行脚本方式，见 [性能测试 · 执行机](./perf-testing.md#执行机worker)。
+**仅压测、不要整包浏览器时**：可改用精简包 **BrickCorePerf**（解压 + `.env` + `start-perf`），与完整客户端二选一；见 [性能测试 · 执行机](./perf-testing.md#执行机worker)、包内 `README-PERF.md`。
 
-### App 自动化（Windows，Pro）
+仍支持命令行脚本方式，见同一文档「方式三」。
+
+### App 自动化（Windows）
 
 1. 上线时勾选 **App 自动化**；本机 `adb devices` 须为 `device`
 2. 设备连接三选一：**USB**、**WiFi 无线调试**（`adb pair` / `adb connect`）、**Android 模拟器**（`adb connect 127.0.0.1:端口`）
@@ -128,12 +130,12 @@
 | UI 步骤「数据库断言」失败 | 确认 Runner 含 `kw_db_assert`；`INTERNAL_API_KEY` 与 Backend 一致；数据工厂已配置对应环境数据源 |
 | 客户端未响应 | Backend 慢或未启动；请用含后台探活的最新客户端；确认 `curl http://<IP>/runner/health` |
 | `No module named 'jsonpath_ng'` | `runner/venv` 依赖不全，或 **多个 Runner 进程** 中有一个用了错误 Python；`pip install -r runner/requirements.txt` 后 **下线再上线** |
-| 同环境同 Runner，套件一成功一失败 | 几乎总是 **重复 `main.py` 进程** 抢 MQ；PowerShell 自查见 [排查指南](../../docs/其他文档/RUNNER_TROUBLESHOOTING.md) |
+| 同环境同 Runner，套件一成功一失败 | 几乎总是 **重复 `main.py` 进程** 抢 MQ；PowerShell 自查见 [Runner 排查指南](./runner-troubleshooting.md) |
 | 套件报告里有 `kai-api-key` 等 | 正常：报告展示 **env_payload.variables**（项目/环境共享变量），不是接口套件混用 |
 | 计划并行只开 2 个浏览器 | 部分套件可能在打开浏览器前失败（依赖/进程问题）；并发本身可能已生效 |
 | 点停止后仍在跑 / 单用例停不下来 | 需升级 Runner **1.1.1** 并整包覆盖安装；Backend 也需部署最新停止 API |
 
-完整排查：[Runner 排查指南](runner-troubleshooting.md)（平台文档站）或 [仓库详细版](../../docs/其他文档/RUNNER_TROUBLESHOOTING.md)
+完整排查见 [Runner 排查指南](./runner-troubleshooting.md)。
 
 ## UI 录制（v1.3.6+）
 

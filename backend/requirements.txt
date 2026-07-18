@@ -39,6 +39,9 @@ RestrictedPython>=7.1
 Faker==37.4.2
 qrcode[pil]==8.0
 markdown==3.8
+opencv-python-headless>=4.8.0
+rapidocr>=3.8.0
+onnxruntime>=1.19.0
 fastmcp>=3.3.0
 grpcio>=1.68.0
 grpcio-reflection>=1.68.0

@@ -1,18 +1,9 @@
-"""流式阶段压测引擎"""
+"""流式阶段压测 — Backend 侧仅保留报告/聚合契约；施压循环在 Runner（SOT）。"""
 from __future__ import annotations
 
-import time
 from typing import Any, Optional
 
-import httpx
-
-from app.modules.stream_phase.registry import parse_stream_lines
 from app.modules.stream_phase.contract import normalize_stream_profile
-from app.modules.stream_phase.sse_io import (
-    build_stream_timeout,
-    create_isolated_stream_client,
-    prepare_stream_request_headers,
-)
 
 
 def evaluate_success_rule(rule: dict, result: dict) -> bool:
@@ -70,105 +61,22 @@ async def execute_stream_request(
     timeout: int,
     stream_profile: dict,
     *,
-    client: httpx.AsyncClient | None = None,
+    client: Any = None,
     user_id: str = "",
     question: str = "",
     case_id: Any = None,
     case_name: str = "",
 ) -> dict[str, Any]:
-    """执行流式请求并返回 StreamRequestResult。"""
-    profile = normalize_stream_profile({"stream_profile": stream_profile})
-    parser_id = profile["parser_id"]
-    parser_options = profile.get("parser_options") or {}
-    success_rule = profile.get("success_rule") or {}
-    timeout = profile.get("timeout_seconds") or timeout
-
-    start_time = time.time()
-    request_size = len(str(body).encode("utf-8")) if body else 0
-
-    async def _do_stream(req_client: httpx.AsyncClient):
-        req_timeout = build_stream_timeout(timeout)
-        stream_headers = prepare_stream_request_headers(headers)
-        kwargs = {"headers": stream_headers, "params": params, "timeout": req_timeout}
-        if method in ("POST", "PUT", "PATCH") and body:
-            if body_type == "json":
-                kwargs["json"] = body
-            else:
-                kwargs["data"] = body
-
-        raw_lines: list[str] = []
-        line_elapsed: list[float] = []
-        status_code = 0
-        response_size = 0
-
-        async with req_client.stream(method, url, **kwargs) as response:
-            status_code = response.status_code
-            if status_code >= 400:
-                error_text = (await response.aread()).decode("utf-8", errors="replace")
-                parsed = parse_stream_lines(parser_id, [], start_time=start_time, status_code=status_code, options=parser_options, success_rule=success_rule)
-                parsed["error"] = f"HTTP {status_code}: {error_text[:200]}"
-                parsed["success"] = False
-                return parsed, response_size, request_size
-
-            stream_err = None
-            try:
-                async for line in response.aiter_lines():
-                    if line is not None:
-                        raw_lines.append(line)
-                        line_elapsed.append(time.time() - start_time)
-                        response_size += len(line.encode("utf-8")) if isinstance(line, str) else len(line)
-            except (httpx.ReadError, httpx.RemoteProtocolError, httpx.StreamError) as exc:
-                stream_err = str(exc)
-
-        parsed = parse_stream_lines(
-            parser_id, raw_lines, start_time=start_time, status_code=status_code,
-            options=parser_options, success_rule=success_rule, line_elapsed=line_elapsed,
-        )
-        if stream_err:
-            if success_rule and evaluate_success_rule(success_rule, {**parsed, "error": None}):
-                parsed["success"] = True
-                extras = parsed.setdefault("extras", {})
-                extras["stream_interrupted"] = stream_err
-            elif not parsed.get("success"):
-                parsed["error"] = stream_err
-                parsed["success"] = False
-        return parsed, response_size, request_size
-
-    try:
-        # 并发 SSE 必须独立连接；传入的共享 client 仅作兼容，实际不使用
-        _ = client
-        async with create_isolated_stream_client() as stream_client:
-            parsed, response_size, request_size = await _do_stream(stream_client)
-
-        result = build_stream_request_result(
-            parsed, user_id=user_id, question=question,
-            case_id=case_id, case_name=case_name, success_rule=success_rule,
-        )
-        result["response_time"] = round((result.get("total_time_s") or 0) * 1000, 2)
-        result["response_size"] = response_size
-        result["request_size"] = request_size
-        if not result.get("success") and not result.get("error"):
-            result["error"] = "未满足成功判定规则"
-        return result
-
-    except httpx.TimeoutException:
-        elapsed = round(time.time() - start_time, 3)
-        return {
-            "user_id": user_id, "question": question, "case_id": case_id, "case_name": case_name,
-            "parser_id": parser_id, "success": False, "total_time_s": elapsed, "status_code": 0,
-            "phases": {}, "extras": {}, "error": "timeout",
-            "phase_schema": [], "response_time": elapsed * 1000,
-            "response_size": 0, "request_size": request_size,
-        }
-    except Exception as e:
-        elapsed = round(time.time() - start_time, 3)
-        return {
-            "user_id": user_id, "question": question, "case_id": case_id, "case_name": case_name,
-            "parser_id": parser_id, "success": False, "total_time_s": elapsed, "status_code": 0,
-            "phases": {}, "extras": {}, "error": str(e),
-            "phase_schema": [], "response_time": elapsed * 1000,
-            "response_size": 0, "request_size": request_size,
-        }
+    """已下沉至 Runner Worker；Backend 不再本机执行流式施压。"""
+    _ = (
+        method, url, headers, params, body, body_type, timeout, stream_profile,
+        client, user_id, question, case_id, case_name,
+        normalize_stream_profile,
+    )
+    raise RuntimeError(
+        "流式压测施压已迁至 Runner Worker，请启动并勾选压测 Worker 后重试；"
+        "后端不再支持本机直跑施压引擎。"
+    )
 
 
 def stream_result_to_perf_queue_item(result: dict) -> dict:

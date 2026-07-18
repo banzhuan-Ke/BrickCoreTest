@@ -17,7 +17,7 @@
           <li><strong>创建项目</strong> → 管理测试项目</li>
           <li><strong>配置环境</strong> → 设置测试网址</li>
           <li><strong>安装执行器</strong> → 设备管理下载 zip，登录后上线（见下方「BrickCore 执行器」）</li>
-          <li><strong>编写用例</strong> → 录制测试步骤；编辑页可用 <strong>交互调试</strong> 手动就位后按步试跑，或步骤行「调试到此步」</li>
+          <li><strong>编写用例</strong> → 录制测试步骤；编辑页可用 <strong>交互调试</strong> 手动就位后按步试跑（调试浏览器底部操作条支持拾取 / 高亮 / 验证），或步骤行「调试到此步」</li>
           <li><strong>执行测试</strong> → 选择在线设备，查看测试结果</li>
         </ol>
 
@@ -157,6 +157,17 @@
           来源标识：<code>requirement_copy</code>（需求复制）、<code>zentao_xlsx</code>（禅道导入）、<code>manual</code>（手工新建）。
         </p>
 
+        <h4 v-if="!isCommunityEdition">三-A、问答准确性评测（知识库 / 问答机器人）</h4>
+        <template v-if="!isCommunityEdition">
+        <p>路径：<strong>AI 测试 → 问答准确性评测</strong>。维护标准问答集，批量调用被测 API 并输出统计与对比报告。</p>
+        <ol>
+          <li><strong>评测集</strong>：下载 Excel 模板导入（问题、标准答案必填；序号、问答目录、多轮、问题类型等）</li>
+          <li><strong>被测 API</strong>：配置 SSE 流式或 HTTP 问答接口，支持接口调试</li>
+          <li><strong>执行评测</strong>：填写<strong>评测名称</strong>（默认评测集名，可在执行记录中识别）；模式：自动（API+LLM 评判）/ 仅评判 / 仅拉取；支持序号范围、失败重跑、自动分批（大批量题目）</li>
+          <li><strong>报告</strong>：统计报告（优秀率/场景类型分析）、单题报告、人工审核、合并导出与迭代对比</li>
+        </ol>
+        <p style="color:#909399;font-size:13px;">评判模型在「AI 模型配置 → 场景绑定 → 问答准确性评判」。</p>
+        </template>
 
         <h4>四、AI 生成 API 测试用例</h4>
         <ol>
@@ -191,6 +202,8 @@
           </thead>
           <tbody>
             <tr><td>悬浮录制</td><td>鼠标悬停菜单/下拉项可配置停留时间（500ms～5s）后写入步骤</td></tr>
+            <tr><td>暂停 / 存变量</td><td>录制中可暂停；悬停元素后可存为变量（文本 text 或属性 value）</td></tr>
+            <tr><td>智能步骤</td><td>用例内独立步骤类型，保存自然语言意图；执行时 AI 主动规划操作。与「AI 生成步骤」（编用例一次性产出）、「智能浏览器」（探索导入）、「AI Act」（失败兜底）不同</td></tr>
             <tr><td>AI 优化</td><td>录制完成后可选模型，补全步骤描述、合并冗余操作、补充断言</td></tr>
             <tr><td>测试描述</td><td>建议「操作 + → 预期：」：只在登录成功、查询结果、保存成功等节点写预期；预期用页面真实文案（菜单名、列表数据、提示语），勿写「输入框可见」。勾选补充断言时尤其要写明预期</td></tr>
             <tr><td>断言 placement</td><td>优化时可指定断言插在相关操作<strong>之前</strong>或<strong>之后</strong></td></tr>
@@ -198,6 +211,22 @@
             <tr><td>登录说明</td><td>录制模式一般不自动登录；在浏览器中手动登录后操作，或在测试描述中补充账号信息供 AI 优化</td></tr>
           </tbody>
         </table>
+
+        <h4>录前 checklist（建议每次录制前核对）</h4>
+        <ul>
+          <li>Runner <strong>在线</strong>（设备管理）；客户端版本满足平台要求</li>
+          <li>起始 URL 可访问；录制窗口 <strong>最大化或固定分辨率</strong></li>
+          <li>复杂登录：浏览器内 <strong>手动登录</strong> 再录业务，或维护为步骤片段</li>
+          <li>下拉/悬浮：配置足够 <strong>悬浮停留时间</strong>（500ms～5s）</li>
+          <li>录制中可 <strong>暂停</strong>；悬停元素后可用「存变量」提取文本或 value</li>
+          <li>复杂流程可在步骤条 <strong>插入智能步骤</strong>，用自然语言描述单步操作</li>
+          <li>应用步骤默认<strong>追加或插入</strong>已有步骤；选「覆盖全部」会替换编辑器内步骤，录完后用 <strong>交互调试</strong> 试跑（可用浏览器操作条拾取 / 高亮 / 验证）再入计划</li>
+        </ul>
+        <p style="color:#909399;font-size:13px;">
+          完整手册见文档中心
+          <router-link class="help-doc-link" :to="{ path: '/docs', query: { doc: 'web-recording-playback' } }">Web 录制与稳定回放</router-link>、
+          <router-link class="help-doc-link" :to="{ path: '/docs', query: { doc: 'web-troubleshooting' } }">Web 失败类型与排障</router-link>。
+        </p>
 
         <h4>探索模式详解（UI AI 生成）：</h4>
         <table class="help-table">
@@ -259,16 +288,15 @@
         </ul>
 
         <h4>AI 失败分析（已上线）</h4>
-        <p>接口 / UI 执行失败后，可在执行详情页一键分析根因；UI 失败默认尝试 Vision 读取失败步骤截图。</p>
+        <p>接口 / UI / App 执行失败后，可分析根因与修复建议。UI/App 默认 <strong>纯文本</strong> 分析（步骤+日志），需看图时再手动开启「截图识图」。</p>
         <ul>
-          <li><strong>入口</strong>：接口执行详情、UI 用例执行记录、套件报告页 → 失败行「AI 分析」</li>
-          <li><strong>权限</strong>：<code>ai_test:execute</code></li>
+          <li><strong>入口</strong>：执行记录/报告页失败行「AI 分析」；<strong>用例编辑页</strong>最近一次失败折叠面板（已分析则内联摘要）</li>
+          <li><strong>权限</strong>：<code>ai_test:execute</code>；项目须在 AI 执行设置中开启失败分析</li>
+          <li><strong>识图</strong>：分析抽屉内「截图识图」开关，默认关闭；开启后可选 Vision 模型（qwen-vl 等）</li>
           <li><strong>输出</strong>：根因、可能原因、修复建议、错误分类、置信度</li>
-          <li><strong>Vision</strong>：UI 有截图且已配置 qwen-vl / gpt-4o 等模型时自动读图；抽屉内可切换模型</li>
-          <li><strong>缓存</strong>：24h 内同记录返回缓存，可「重新分析」刷新</li>
-          <li><strong>报告摘要</strong>：套件/计划/接口执行详情页顶部「AI 报告摘要」卡片</li>
-          <li><strong>批量分析</strong>：报告页「批量 AI 分析失败」一次分析 Top 5 失败用例</li>
-          <li><strong>工作台</strong>：「最近失败 · AI 分析」列表快捷入口</li>
+          <li><strong>缓存</strong>：同执行记录保留历史分析，点「重新分析」才重跑 LLM</li>
+          <li><strong>批量分析</strong>：报告页「批量 AI 分析失败」，默认识图关闭</li>
+          <li><strong>工作台</strong>：「最近失败 · AI 分析」快捷入口</li>
         </ul>
 
         <h4>注意事项：</h4>
@@ -960,7 +988,7 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
 
       <div class="help-footer">
         <p>📧 遇到问题？请联系系统管理员或查看接口文档获取更多技术支持。</p>
-        <p style="color: #999; font-size: 12px;">版本：v1.5.1 | 更新日期：2026-06-05</p>
+        <p style="color: #999; font-size: 12px;">版本：v1.4.0 | 更新日期：2026-07-12</p>
       </div>
     </el-scrollbar>
   </div>

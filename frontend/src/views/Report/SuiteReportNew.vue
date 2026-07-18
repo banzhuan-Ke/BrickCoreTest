@@ -171,6 +171,13 @@
                       <el-icon><User /></el-icon>
                       {{ caseItem.username }}
                       <el-button
+                        v-if="isUiFailed(caseItem.status) && canEditCase && resolveCaseId(caseItem)"
+                        link
+                        type="success"
+                        size="small"
+                        @click.stop="goDebugCase(caseItem)"
+                      >用交互调试打开</el-button>
+                      <el-button
                         v-if="canEditCase && resolveCaseId(caseItem)"
                         link
                         type="primary"
@@ -179,7 +186,7 @@
                         @click.stop="goEditCase(caseItem)"
                       >编辑用例</el-button>
                       <el-button
-                        v-if="isUiFailed(caseItem.status) && canAiAnalyze"
+                        v-if="isUiFailed(caseItem.status) && canAnalyzeExecution(caseItem)"
                         link
                         type="warning"
                         size="small"
@@ -281,6 +288,13 @@
           <el-table-column label="操作" width="180" fixed="right">
             <template #default="scope">
               <el-button
+                v-if="isUiFailed(scope.row.status) && canEditCase && resolveCaseId(scope.row)"
+                link
+                type="success"
+                size="small"
+                @click="goDebugCase(scope.row)"
+              >交互调试</el-button>
+              <el-button
                 v-if="canEditCase && resolveCaseId(scope.row)"
                 link
                 type="primary"
@@ -289,7 +303,7 @@
                 @click="goEditCase(scope.row)"
               >编辑</el-button>
               <el-button
-                v-if="isUiFailed(scope.row.status) && canAiAnalyze"
+                v-if="isUiFailed(scope.row.status) && canAnalyzeExecution(scope.row)"
                 link
                 type="warning"
                 size="small"
@@ -425,7 +439,9 @@ import ReportFailureBatchBar from '@/components/ReportFailureBatchBar.vue'
 import ReportKnowledgeBridge from '@/components/ReportKnowledgeBridge.vue'
 import IterationReportShortcut from '@/components/IterationReportShortcut.vue'
 import { UserStore } from "@/stores/module/UserStore.js"
+import { resolveFailedStepIndexFromResult } from '@/utils/caseExecutionHints.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
+import { useFailureAnalysisGate } from '@/composables/useFailureAnalysisGate.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 import { fileApi } from '@/api/modules/sys'
 
@@ -435,7 +451,9 @@ const uStore = UserStore()
 const proStore = ProjectStore()
 const id = route.params.id
 
-const canAiAnalyze = computed(() => uStore.hasPermission('ai_test:execute'))
+const runInfo = ref({})
+const { canShowFailureAnalysis, loadExecSettings, canAnalyzeExecution } = useFailureAnalysisGate(runInfo, { syncProject: true })
+const canAiAnalyze = canShowFailureAnalysis
 const canEditCase = computed(() => uStore.hasPermission('ui_case:edit'))
 const canEditSuite = computed(() => uStore.hasPermission('ui_suite:edit'))
 const aiAnalyzeVisible = ref(false)
@@ -456,6 +474,20 @@ const goEditCase = (row) => {
   const query = {}
   if (row?.id && isUiFailed(row.status)) {
     query.execution_id = row.id
+  }
+  router.push({ name: 'editCase', params: { id: caseId }, query })
+}
+
+const goDebugCase = (row) => {
+  const caseId = resolveCaseId(row)
+  if (!caseId) return
+  const query = {}
+  if (row?.id && isUiFailed(row.status)) {
+    query.execution_id = row.id
+  }
+  const failIdx = resolveFailedStepIndexFromResult(row?.result_data)
+  if (failIdx != null) {
+    query.debugFromStep = String(failIdx)
   }
   router.push({ name: 'editCase', params: { id: caseId }, query })
 }
@@ -485,7 +517,6 @@ const showExportDialog = () => {
 }
 
 // 数据
-const runInfo = ref({})
 const envDisplayName = computed(() => {
   const env = runInfo.value?.env
   if (!env || typeof env !== 'object') return '-'
@@ -560,6 +591,7 @@ const getRunInfo = async () => {
   const response = await http.resultApi.getSuiteRecordDetail(id)
   if (response.status === 200) {
     runInfo.value = response.data
+    await loadExecSettings(proStore.projectInfo?.id)
     await getCaseRunList()
   }
 }

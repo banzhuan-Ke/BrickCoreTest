@@ -9,6 +9,9 @@ from app.modules.ai.recorder_quality import (
     _normalize_desc,
 )
 
+# 各 method 需从原始步骤恢复的 config 字段（LLM 不输出 config）
+_PRESERVE_CONFIG_KEYS: tuple[str, ...] = ("pre_wait_ms", "timeout", "retry")
+
 # 各 method 需从原始步骤恢复的 params 字段（LLM 易误改或合并时丢失）
 _PRESERVE_PARAM_KEYS: dict[str, tuple[str, ...]] = {
     "open_url": ("url",),
@@ -181,6 +184,31 @@ def merge_params_from_originals(opt: dict, originals: list[dict]) -> int:
     return restored
 
 
+def merge_config_from_originals(opt: dict, originals: list[dict]) -> int:
+    """从原始步骤恢复 config（如 pre_wait_ms），返回恢复字段数。"""
+    if not originals:
+        return 0
+
+    primary = _pick_primary_original(opt, originals) or originals[-1]
+    orig_config = primary.get("config") if isinstance(primary.get("config"), dict) else {}
+    opt_config = opt.setdefault("config", {})
+    if not isinstance(opt_config, dict):
+        opt_config = {}
+        opt["config"] = opt_config
+
+    restored = 0
+    for key in _PRESERVE_CONFIG_KEYS:
+        val = orig_config.get(key)
+        if val is None and key == "pre_wait_ms" and "pre_wait_ms" in primary:
+            val = primary.get("pre_wait_ms")
+        if val is None:
+            continue
+        if key not in opt_config:
+            opt_config[key] = val
+            restored += 1
+    return restored
+
+
 def _meta_is_rich(meta: dict) -> bool:
     """meta 是否已含定位候选或捕获文案，无需再模糊匹配。"""
     if not meta:
@@ -196,7 +224,7 @@ def _meta_is_rich(meta: dict) -> bool:
 
 def patch_meta_from_original_steps(optimized_steps: list, original_steps: list) -> dict[str, int]:
     """从原始步骤补回 meta；优先 source_step_ids，再回退 locator/desc 匹配。"""
-    stats = {"meta_patched": 0, "params_restored": 0, "source_traced": 0}
+    stats = {"meta_patched": 0, "params_restored": 0, "config_restored": 0, "source_traced": 0}
     if not optimized_steps or not original_steps:
         return stats
 
@@ -252,15 +280,16 @@ def patch_meta_from_original_steps(optimized_steps: list, original_steps: list) 
                 if merge_meta_from_originals(opt, originals):
                     stats["meta_patched"] += 1
                 stats["params_restored"] += merge_params_from_originals(opt, originals)
+                stats["config_restored"] += merge_config_from_originals(opt, originals)
                 stats["source_traced"] += 1
                 parse_source_step_ids(opt, pop=True)
                 continue
 
         meta = opt.get("meta") or {}
         if _meta_is_rich(meta):
-            stats["params_restored"] += merge_params_from_originals(
-                opt, resolve_original_steps_for_optimized(opt, original_steps)
-            )
+            originals = resolve_original_steps_for_optimized(opt, original_steps)
+            stats["params_restored"] += merge_params_from_originals(opt, originals)
+            stats["config_restored"] += merge_config_from_originals(opt, originals)
             continue
 
         # 尝试 rec_step_index 精确匹配
@@ -279,6 +308,7 @@ def patch_meta_from_original_steps(optimized_steps: list, original_steps: list) 
                         merge_meta_from_originals(opt, [original_steps[idx]])
                         stats["meta_patched"] += 1
                         stats["params_restored"] += merge_params_from_originals(opt, [original_steps[idx]])
+                        stats["config_restored"] += merge_config_from_originals(opt, [original_steps[idx]])
                         continue
             except (TypeError, ValueError):
                 pass
@@ -301,8 +331,8 @@ def patch_meta_from_original_steps(optimized_steps: list, original_steps: list) 
         if meta:
             opt["meta"] = dict(meta)
             stats["meta_patched"] += 1
-        stats["params_restored"] += merge_params_from_originals(
-            opt, resolve_original_steps_for_optimized(opt, original_steps)
-        )
+        originals = resolve_original_steps_for_optimized(opt, original_steps)
+        stats["params_restored"] += merge_params_from_originals(opt, originals)
+        stats["config_restored"] += merge_config_from_originals(opt, originals)
 
     return stats

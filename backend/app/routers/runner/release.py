@@ -7,8 +7,11 @@ from fastapi.responses import FileResponse
 from app.core.platform.auth import is_authenticated_from_header_or_query
 from app.core.runner.runner_release import (
     PACKAGE_FILENAME,
+    PERF_PACKAGE_FILENAME,
+    PERF_PACKAGE_FILENAME_MAC,
     build_client_release_info,
     runner_package_path,
+    perf_package_path,
 )
 from app.core.runner.runner_release_config_service import enrich_release_info
 from app.schemas.runner import RunnerVersionResponse
@@ -55,4 +58,32 @@ async def runner_client_download(
         path,
         media_type="application/zip",
         filename=PACKAGE_FILENAME,
+    )
+
+
+@router.get(
+    "/perf-client-download",
+    summary="下载 BrickCorePerf 精简压测包 zip",
+)
+async def perf_client_download(
+    request: Request,
+    platform: str = "win",
+    _user_info: dict = Depends(is_authenticated_from_header_or_query),
+):
+    plat = (platform or "win").strip().lower()
+    if plat not in ("win", "windows", "mac", "darwin"):
+        raise HTTPException(status_code=422, detail="platform 仅支持 win 或 mac")
+    is_mac = plat in ("mac", "darwin")
+    path = perf_package_path("mac" if is_mac else "win")
+    filename = PERF_PACKAGE_FILENAME_MAC if is_mac else PERF_PACKAGE_FILENAME
+    if not path.is_file():
+        hint = build_client_release_info(_request_base_url(request)).get("package_upload_hint", "")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"压测精简包尚未上传。请将 {filename} 放到服务器目录：{hint}",
+        )
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=filename,
     )

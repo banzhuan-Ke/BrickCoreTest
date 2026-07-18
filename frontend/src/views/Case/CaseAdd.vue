@@ -163,7 +163,7 @@ import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.v
 import CaseUsedVarsPanel from '@/components/CaseUsedVarsPanel.vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
-import { resolveCaseDescriptionForContext, extractOpenUrlFromSteps, normalizeRecorderApplyPayload } from '@/utils/caseDescription.js'
+import { resolveCaseDescriptionForContext, resolveDefaultStartUrl, extractOpenUrlFromSteps, normalizeRecorderApplyPayload } from '@/utils/caseDescription.js'
 import { UserStore } from '@/stores/module/UserStore'
 import http from '@/api/index'
 import { ElNotification, ElMessage } from 'element-plus'
@@ -195,7 +195,7 @@ const aiDialogVisible = ref(false)
 const recordDialogVisible = ref(false)
 
 // 默认展开所有分组
-const activeGroups = ref(['1', '2', '3', '4', '5', '6', '7', '8'])
+const activeGroups = ref(['1', '2', '2b', '3', '4', '5', '6', '7', '8'])
 
 // 图标映射
 const iconMap = {
@@ -247,7 +247,11 @@ const caseInfo = reactive({
 })
 
 const recordingDescription = computed(() => resolveCaseDescriptionForContext(caseInfo))
-const recordingInitialUrl = computed(() => extractOpenUrlFromSteps(caseInfo.steps))
+const recordingInitialUrl = computed(() => resolveDefaultStartUrl({
+  steps: caseInfo.steps,
+  envList: proStore.envList,
+  projectInfo: proStore.projectInfo,
+}))
 
 const cloneKeyword = cloneKeywordForDrag
 

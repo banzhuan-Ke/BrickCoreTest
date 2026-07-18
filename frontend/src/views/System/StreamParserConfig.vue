@@ -9,7 +9,7 @@
         :closable="false"
         show-icon
         title="用途说明"
-        description="在此维护 SSE 流式接口的解析方案（内置解析器 + 规则/选项）。压测「流式阶段」与接口流式调试均可引用此处配置，无需改代码。"
+        description="在此维护 SSE 流式接口的解析方案（内置解析器 + 规则/选项）。问答准确性评测「被测 API」与压测「流式阶段」均可引用此处配置，无需改代码。"
         style="margin-bottom: 16px;"
       />
       <div class="toolbar">
@@ -46,7 +46,7 @@
       <el-drawer v-model="formVisible" :title="form.id ? '编辑解析配置' : '新增解析配置'" size="720px" destroy-on-close>
         <el-form label-width="110px" class="config-form">
           <el-form-item label="名称" required>
-            <el-input v-model="form.name" placeholder="如：KCF 问答 SSE v1" />
+            <el-input v-model="form.name" placeholder="如：问答接口 SSE v1" />
           </el-form-item>
           <el-form-item label="说明文档">
             <el-input
@@ -71,7 +71,7 @@
               </el-option>
             </el-select>
             <div class="field-hint">
-              「问答流式 v1」适用于 KCF 标准协议；「规则配置」可自定义阶段匹配；「仅总耗时」不做内容解析。
+              「问答流式 v1」适用于问答接口标准协议；「规则配置」可自定义阶段匹配；「仅总耗时」不做内容解析。
             </div>
           </el-form-item>
           <el-form-item label="启用">

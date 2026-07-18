@@ -86,7 +86,15 @@ class RunnerVersionResponse(BaseModel):
     middleware_isolation: bool = True
     runner_notices: Optional[dict[str, Any]] = None
     community_edition: bool = False
-    platform_version: str = "1.3.0"
+    platform_version: str = "1.4.0"
+    perf_package_filename: str = "BrickCorePerf.zip"
+    perf_package_available: bool = False
+    perf_package_size_bytes: int = 0
+    perf_package_download_url: str = ""
+    perf_package_mac_filename: str = "BrickCorePerf-mac.zip"
+    perf_package_mac_available: bool = False
+    perf_package_mac_size_bytes: int = 0
+    perf_package_mac_download_url: str = ""
 
 
 class RunnerReleaseConfigForm(BaseModel):

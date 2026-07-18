@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
 from app.core.platform.config import MCP_HTTP_PATH
+from app.core.platform.edition import knowledge_feature_enabled, qa_eval_feature_enabled
 from app.core.integration.mcp_config_service import get_mcp_runtime_config, resolve_public_base_url
 from app.mcp import tools as mcp_tools
 from app.mcp.auth import resolve_mcp_auth
@@ -42,6 +43,7 @@ MCP_DANGEROUS_OPS: tuple[str, ...] = (
     "preview_run_api_suite → confirm_run_api_suite",
     "preview_run_api_plan → confirm_run_api_plan",
     "preview_run_api_case → confirm_run_api_case",
+    "preview_run_qa_eval → confirm_run_qa_eval",
     "preview_run_ui_case → confirm_run_ui_case",
     "preview_run_app_case → confirm_run_app_case",
     "preview_run_ui_task → confirm_run_ui_task",
@@ -143,21 +145,22 @@ _register("confirm_trigger_generate", mcp_tools.tool_confirm_trigger_generate, "
 # 功能用例库
 _register("search_functional_cases", mcp_tools.tool_search_functional_cases, "搜索功能用例库")
 _register("get_functional_case", mcp_tools.tool_get_functional_case, "获取功能用例详情")
-_register(
-    "search_test_knowledge",
-    mcp_tools.tool_search_test_knowledge,
-    "检索迭代测试资料库（历史 Bug、测试计划、迭代文档等）",
-)
-_register(
-    "ask_test_knowledge",
-    mcp_tools.tool_ask_test_knowledge,
-    "资料库问答（retrieve 仅检索 / smart 智能回答）",
-)
-_register(
-    "list_knowledge_folders",
-    mcp_tools.tool_list_knowledge_folders,
-    "列出迭代测试资料库文件夹",
-)
+if knowledge_feature_enabled():
+    _register(
+        "search_test_knowledge",
+        mcp_tools.tool_search_test_knowledge,
+        "检索迭代测试资料库（历史 Bug、测试计划、迭代文档等）",
+    )
+    _register(
+        "ask_test_knowledge",
+        mcp_tools.tool_ask_test_knowledge,
+        "资料库问答（retrieve 仅检索 / smart 智能回答）",
+    )
+    _register(
+        "list_knowledge_folders",
+        mcp_tools.tool_list_knowledge_folders,
+        "列出迭代测试资料库文件夹",
+    )
 
 # 测试执行
 _register("preview_run_api_suite", mcp_tools.tool_preview_run_api_suite, "预览接口套件执行影响")
@@ -166,6 +169,11 @@ _register("confirm_run_api_suite", mcp_tools.tool_confirm_run_api_suite, "确认
 _register("confirm_run_api_plan", mcp_tools.tool_confirm_run_api_plan, "确认异步执行接口测试计划")
 _register("preview_run_api_case", mcp_tools.tool_preview_run_api_case, "预览单条接口用例执行")
 _register("confirm_run_api_case", mcp_tools.tool_confirm_run_api_case, "确认执行单条接口用例")
+if qa_eval_feature_enabled():
+    _register("list_qa_eval_sets", mcp_tools.tool_list_qa_eval_sets, "列出问答准确性评测集")
+    _register("get_qa_eval_run", mcp_tools.tool_get_qa_eval_run, "查询问答评测跑批进度")
+    _register("preview_run_qa_eval", mcp_tools.tool_preview_run_qa_eval, "预览问答准确性评测跑批")
+    _register("confirm_run_qa_eval", mcp_tools.tool_confirm_run_qa_eval, "确认提交问答准确性评测")
 _register("preview_run_ui_case", mcp_tools.tool_preview_run_ui_case, "预览单条 Web UI 用例执行")
 _register("confirm_run_ui_case", mcp_tools.tool_confirm_run_ui_case, "确认执行单条 Web UI 用例")
 _register("preview_run_app_case", mcp_tools.tool_preview_run_app_case, "预览单条 App 用例执行")

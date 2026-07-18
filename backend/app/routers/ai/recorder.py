@@ -6,6 +6,7 @@ AI 录制器路由
 日期：2026-04-22
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -13,10 +14,12 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Request, Body
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.platform.auth import is_authenticated, verify_runner_or_internal
 from app.core.infra.mq_producer import MQProducer
+from app.core.shared.start_url import validate_record_start_url
+from app.modules.ai.ai_project_settings import resolve_recording_locator_strategy
 from app.modules.ai.recorder_converter import convert_actions_to_steps
 from app.modules.ai.recorder_quality import (
     assess_steps,
@@ -24,11 +27,81 @@ from app.modules.ai.recorder_quality import (
 )
 from app.modules.ai.recorder_step_merge import patch_meta_from_original_steps
 from app.modules.ui.ui_device_guard import assert_device_available_for_record
+from app.modules.ui.ui_debug_command import dispatch_debug_command
+from app.modules.ui.ui_project_guard import assert_user_project_member
 from app.models.ai import AiRecordSession
 from app.models.sys import Device
+from app.models.ui import UiDebugSession
 from app.schemas.ai import StandardResponse
 
 logger = logging.getLogger(__name__)
+
+# 录制运行时状态（单进程内存，供前端轮询 paused）
+_record_runtime_state: dict[int, dict] = {}
+
+
+def _set_record_runtime(record_id: int, **kwargs) -> None:
+    state = _record_runtime_state.setdefault(record_id, {})
+    state.update(kwargs)
+
+
+def _get_record_runtime(record_id: int) -> dict:
+    return _record_runtime_state.get(record_id, {})
+
+
+def get_record_runtime_state(record_id: int) -> dict:
+    """对外暴露录制运行时状态（paused / last_control_result）。"""
+    return dict(_get_record_runtime(record_id))
+
+
+async def _assert_record_access(record: AiRecordSession, user_info: dict) -> None:
+    if record.project_id:
+        await assert_user_project_member(user_info, record.project_id)
+
+
+_RECORD_CONTROL_COMMANDS = frozenset({"pause", "resume", "save_variable"})
+
+_CONTROL_RESULT_MESSAGES = {
+    "not_recording": "当前未在录制中",
+    "empty_var_name": "变量名不能为空",
+    "no_hover_target": "请先在浏览器中悬停目标元素（5 秒内）",
+    "session_mismatch": "录制会话与 Runner 不匹配",
+    "no_active_recorder": "Runner 未在录制，控制指令未生效",
+    "unknown_command": "不支持的录制控制指令",
+    "control_timeout": "等待 Runner 响应超时，请稍后重试",
+}
+
+
+def _format_control_error(result: dict) -> str:
+    reason = str(result.get("reason") or "unknown")
+    return _CONTROL_RESULT_MESSAGES.get(reason, f"操作失败: {reason}")
+
+
+async def _wait_control_result(
+    record_id: int,
+    command: str,
+    *,
+    var_name: Optional[str] = None,
+    timeout: float = 4.0,
+) -> dict:
+    dispatched_at = int(time.time() * 1000)
+    _set_record_runtime(
+        record_id,
+        pending_control={"command": command, "var_name": var_name},
+        last_control_result=None,
+    )
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        state = _get_record_runtime(record_id)
+        result = state.get("last_control_result")
+        if isinstance(result, dict) and result.get("command") == command:
+            if int(result.get("ts") or 0) < dispatched_at - 200:
+                await asyncio.sleep(0.25)
+                continue
+            if command != "save_variable" or result.get("var_name") == var_name:
+                return result
+        await asyncio.sleep(0.25)
+    return {"ok": False, "reason": "control_timeout", "command": command}
 
 
 def _steps_content_unchanged(optimized: list, original: list) -> bool:
@@ -99,9 +172,20 @@ class StartRecordRequest(BaseModel):
     url: str = Field(..., min_length=1, max_length=500, description="录制起始页面 URL")
     description: Optional[str] = Field(None, max_length=4000, description="测试描述（可选，用于AI优化）")
     device_id: Optional[str] = Field(None, description="指定 Runner 设备ID（不填则自动分配）")
+    debug_session_id: Optional[int] = Field(
+        None,
+        description="交互调试会话 ID：在同一浏览器上下文接录（W-31），须为 ready 状态",
+    )
     max_record_time: int = Field(600, ge=60, le=3600, description="最大录制时间（秒），默认 10 分钟")
     use_ai_optimize: bool = Field(False, description="是否使用 LLM 优化步骤描述")
     hover_delay_ms: int = Field(1000, ge=500, le=5000, description="悬浮停留时间（毫秒），默认 1 秒。悬浮操作需在元素上方停留该时间才会被录制")
+
+
+class StopRecordRequest(BaseModel):
+    debug_session_id: Optional[int] = Field(
+        None,
+        description="交互调试接录时须带上，以便 Runner 在调试会话内停止录制",
+    )
 
 
 class RecordCallbackRequest(BaseModel):
@@ -116,6 +200,34 @@ class RecordCallbackRequest(BaseModel):
 class HeartbeatRequest(BaseModel):
     actions_count: int = Field(0, description="当前已记录的操作数量")
     raw_actions: list = Field(default_factory=list, description="当前已记录的原始操作列表")
+    paused: bool = Field(False, description="是否处于暂停状态")
+    last_control_result: Optional[dict] = Field(None, description="最近一次录制控制结果")
+
+
+class SaveVariableRequest(BaseModel):
+    var_name: str = Field(..., max_length=100, description="变量名")
+    source: str = Field("text", description="提取来源：text/value")
+    debug_session_id: Optional[int] = Field(None, description="交互调试接录时的调试会话 ID")
+
+    @field_validator("var_name")
+    @classmethod
+    def validate_var_name(cls, value: str) -> str:
+        name = (value or "").strip()
+        if not name:
+            raise ValueError("变量名不能为空")
+        return name
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, value: str) -> str:
+        source = (value or "text").strip().lower()
+        if source not in ("text", "value"):
+            raise ValueError("source 仅支持 text 或 value")
+        return source
+
+
+class RecordControlRequest(BaseModel):
+    debug_session_id: Optional[int] = Field(None, description="交互调试接录时的调试会话 ID")
 
 
 class OptimizeRequest(BaseModel):
@@ -172,8 +284,23 @@ async def start_record(
     3. 发送 MQ 任务到 Runner
     4. 返回 record_id，前端轮询状态
     """
-    # 查找可用 Runner
-    if body.device_id:
+    debug_session = None
+    if body.debug_session_id:
+        debug_session = await UiDebugSession.get_or_none(id=body.debug_session_id)
+        if not debug_session:
+            raise HTTPException(status_code=404, detail="交互调试会话不存在")
+        await assert_user_project_member(user_info, debug_session.project_id)
+        if debug_session.status != "ready":
+            raise HTTPException(
+                status_code=409,
+                detail=f"调试会话状态为 {debug_session.status}，请等待就绪后再接录",
+            )
+        if body.device_id and str(body.device_id) != str(debug_session.device_id):
+            raise HTTPException(status_code=422, detail="设备与交互调试会话不一致")
+        device = await Device.get_or_none(id=debug_session.device_id, status="在线", is_del=False)
+        if not device:
+            raise HTTPException(status_code=503, detail="交互调试所在 Runner 设备不在线")
+    elif body.device_id:
         device = await Device.get_or_none(id=body.device_id, status="在线", is_del=False)
         if not device:
             raise HTTPException(status_code=503, detail=f"指定的 Runner 设备 {body.device_id} 不在线或不存在")
@@ -182,48 +309,98 @@ async def start_record(
         if not device:
             raise HTTPException(status_code=503, detail="当前没有可用的 Runner 设备，请检查 Runner 是否在线")
 
-    await assert_device_available_for_record(device.id)
+    await assert_device_available_for_record(
+        device.id,
+        allow_debug_session_id=debug_session.id if debug_session else None,
+    )
+
+    from app.core.runner.runner_version import ensure_engine_version_for_recording
+
+    # device.version 存引擎版本（engine-ready / connect 上报）；旧设备可能是 OS 串，compare 失败则拒录
+    ensure_engine_version_for_recording(getattr(device, "version", "") or "")
+
+    try:
+        record_url = validate_record_start_url(body.url)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     
     # 创建录制会话
+    record_project_id = (
+        debug_session.project_id if debug_session else user_info.get("project_id")
+    )
     record = await AiRecordSession.create(
-        project_id=user_info.get("project_id"),
+        project_id=record_project_id,
         device_id=device.id,
-        url=body.url,
+        url=record_url,
         description=body.description,
         use_ai_optimize=body.use_ai_optimize,
         status="recording",
         create_by=user_info.get("username", ""),
     )
+    _set_record_runtime(record.id, paused=False)
     
-    # 构建回调 URL（Runner 录制完成后上报结果）
-    # 优先从当前请求 base_url 推导，确保 Runner 能正确回调
     base_url = str(request.base_url).rstrip("/")
     callback_url = f"{base_url}/ai/record/{record.id}/callback"
-    
-    # 发送录制任务到 Runner
-    try:
-        mq = _get_mq()
-        mq.send_test_task(
-            env_config={},
-            run_case={
-                "task_type": "ui_record",
-                "record_session_id": record.id,
-                "url": body.url,
-                "description": body.description,
-                "max_record_time": body.max_record_time,
-                "callback_url": callback_url,
-                "hover_delay_ms": body.hover_delay_ms,
-            },
-            device_id=device.id,
+    heartbeat_url = f"{base_url}/ai/record/{record.id}/heartbeat"
+
+    locator_strategy = await resolve_recording_locator_strategy(int(record_project_id or 0))
+
+    if debug_session:
+        try:
+            await dispatch_debug_command(
+                debug_session,
+                "start_record",
+                {
+                    "record_session_id": record.id,
+                    "callback_url": callback_url,
+                    "heartbeat_url": heartbeat_url,
+                    "max_record_time": body.max_record_time,
+                    "hover_delay_ms": body.hover_delay_ms,
+                    "recording_locator_strategy": locator_strategy,
+                },
+            )
+        except HTTPException:
+            record.status = "failed"
+            record.error = "下发调试接录命令失败"
+            await record.save()
+            raise
+        except Exception as exc:
+            logger.error("调试接录命令下发失败: %s", exc)
+            record.status = "failed"
+            record.error = f"下发接录命令失败: {exc}"
+            await record.save()
+            raise HTTPException(status_code=500, detail=record.error) from exc
+        logger.info(
+            "调试接录已下发: record_id=%s debug_session_id=%s device=%s",
+            record.id,
+            debug_session.id,
+            device.id,
         )
-    except Exception as e:
-        logger.error(f"发送录制任务到 Runner 失败: {e}")
-        record.status = "failed"
-        record.error = f"下发任务失败: {str(e)}"
-        await record.save()
-        raise HTTPException(status_code=500, detail=f"下发录制任务失败: {str(e)}")
-    
-    logger.info(f"录制任务已下发: record_id={record.id}, device_id={device.id}, url={body.url}")
+    else:
+        # 发送录制任务到 Runner（独立浏览器）
+        try:
+            mq = _get_mq()
+            mq.send_test_task(
+                env_config={},
+                run_case={
+                    "task_type": "ui_record",
+                    "record_session_id": record.id,
+                    "url": body.url,
+                    "description": body.description,
+                    "max_record_time": body.max_record_time,
+                    "callback_url": callback_url,
+                    "hover_delay_ms": body.hover_delay_ms,
+                    "recording_locator_strategy": locator_strategy,
+                },
+                device_id=device.id,
+            )
+        except Exception as e:
+            logger.error(f"发送录制任务到 Runner 失败: {e}")
+            record.status = "failed"
+            record.error = f"下发任务失败: {str(e)}"
+            await record.save()
+            raise HTTPException(status_code=500, detail=f"下发录制任务失败: {str(e)}")
+        logger.info(f"录制任务已下发: record_id={record.id}, device_id={device.id}, url={body.url}")
     
     return StandardResponse(
         data={
@@ -231,6 +408,7 @@ async def start_record(
             "device_id": device.id,
             "status": "recording",
             "url": body.url,
+            "debug_session_id": debug_session.id if debug_session else None,
         }
     )
 
@@ -244,6 +422,7 @@ async def get_record_status(
     record = await AiRecordSession.get_or_none(id=record_id)
     if not record:
         raise HTTPException(status_code=404, detail="录制会话不存在")
+    await _assert_record_access(record, user_info)
     
     return StandardResponse(
         data={
@@ -258,6 +437,8 @@ async def get_record_status(
             "error": record.error,
             "duration_ms": record.duration_ms,
             "create_time": record.create_time.isoformat() if record.create_time else None,
+            "paused": bool(_get_record_runtime(record_id).get("paused")),
+            "last_control_result": _get_record_runtime(record_id).get("last_control_result"),
         }
     )
 
@@ -283,33 +464,179 @@ async def get_record_status_runner(
 @router.post("/{record_id}/stop", summary="停止录制")
 async def stop_record(
     record_id: int,
+    body: Optional[StopRecordRequest] = None,
     user_info: dict = Depends(is_authenticated),
 ):
     """发送停止录制指令到 Runner"""
+    stop_body = body or StopRecordRequest()
     record = await AiRecordSession.get_or_none(id=record_id)
     if not record:
         raise HTTPException(status_code=404, detail="录制会话不存在")
+    await _assert_record_access(record, user_info)
     
     if record.status != "recording":
         raise HTTPException(status_code=400, detail=f"当前状态为 {record.status}，无法停止")
     
     if not record.device_id:
         raise HTTPException(status_code=500, detail="录制会话缺少 device_id")
-    
-    try:
-        mq = _get_mq()
-        mq.send_stop_task(
-            device_id=record.device_id,
-            record_session_id=record.id,
-        )
-    except Exception as e:
-        logger.error(f"发送停止录制消息失败: {e}")
-        raise HTTPException(status_code=500, detail=f"发送停止指令失败: {str(e)}")
+
+    if stop_body.debug_session_id:
+        debug_session = await UiDebugSession.get_or_none(id=stop_body.debug_session_id)
+        if not debug_session:
+            raise HTTPException(status_code=404, detail="交互调试会话不存在")
+        await assert_user_project_member(user_info, debug_session.project_id)
+        if str(debug_session.device_id) != str(record.device_id):
+            raise HTTPException(status_code=422, detail="调试会话与录制设备不一致")
+        try:
+            await dispatch_debug_command(
+                debug_session,
+                "stop_record",
+                {"record_session_id": record.id},
+                session_status="ready",
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("下发调试停止录制失败: %s", exc)
+            raise HTTPException(status_code=500, detail="下发停止录制失败") from exc
+    else:
+        try:
+            mq = _get_mq()
+            mq.send_stop_task(
+                device_id=record.device_id,
+                record_session_id=record.id,
+            )
+        except Exception as e:
+            logger.error(f"发送停止录制消息失败: {e}")
+            raise HTTPException(status_code=500, detail=f"发送停止指令失败: {str(e)}")
     
     logger.info(f"停止录制指令已发送: record_id={record.id}, device_id={record.device_id}")
     
     return StandardResponse(
         data={"message": "停止指令已发送", "record_id": record.id}
+    )
+
+
+async def _dispatch_record_control(
+    record: AiRecordSession,
+    command: str,
+    *,
+    debug_session_id: Optional[int] = None,
+    var_name: Optional[str] = None,
+    source: str = "text",
+    user_info: Optional[dict] = None,
+) -> None:
+    if record.status != "recording":
+        raise HTTPException(status_code=400, detail=f"当前状态为 {record.status}，无法操作")
+    if not record.device_id:
+        raise HTTPException(status_code=500, detail="录制会话缺少 device_id")
+    if command not in _RECORD_CONTROL_COMMANDS:
+        raise HTTPException(status_code=400, detail=f"不支持的录制控制指令: {command}")
+
+    _set_record_runtime(record.id, last_control_result=None)
+
+    if debug_session_id:
+        debug_session = await UiDebugSession.get_or_none(id=debug_session_id)
+        if not debug_session:
+            raise HTTPException(status_code=404, detail="交互调试会话不存在")
+        if user_info:
+            await assert_user_project_member(user_info, debug_session.project_id)
+        if str(debug_session.device_id) != str(record.device_id):
+            raise HTTPException(status_code=422, detail="调试会话与录制设备不一致")
+        action_map = {
+            "pause": "pause_record",
+            "resume": "resume_record",
+            "save_variable": "save_variable",
+        }
+        payload = {"record_session_id": record.id}
+        if command == "save_variable":
+            payload["var_name"] = var_name
+            payload["source"] = source
+        await dispatch_debug_command(
+            debug_session,
+            action_map[command],
+            payload,
+            update_session_status=False,
+        )
+    else:
+        try:
+            mq = _get_mq()
+            mq.send_record_control(
+                device_id=record.device_id,
+                record_session_id=record.id,
+                command=command,
+                var_name=var_name,
+                source=source,
+            )
+        except Exception as e:
+            logger.error(f"发送录制控制消息失败: {e}")
+            raise HTTPException(status_code=500, detail=f"发送指令失败: {str(e)}") from e
+
+
+@router.post("/{record_id}/pause", summary="暂停录制")
+async def pause_record(
+    record_id: int,
+    body: Optional[RecordControlRequest] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    record = await AiRecordSession.get_or_none(id=record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="录制会话不存在")
+    await _assert_record_access(record, user_info)
+    ctrl = body or RecordControlRequest()
+    await _dispatch_record_control(
+        record, "pause", debug_session_id=ctrl.debug_session_id, user_info=user_info
+    )
+    result = await _wait_control_result(record.id, "pause")
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=_format_control_error(result))
+    return StandardResponse(data={"message": "录制已暂停", "record_id": record.id, **result})
+
+
+@router.post("/{record_id}/resume", summary="恢复录制")
+async def resume_record(
+    record_id: int,
+    body: Optional[RecordControlRequest] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    record = await AiRecordSession.get_or_none(id=record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="录制会话不存在")
+    await _assert_record_access(record, user_info)
+    ctrl = body or RecordControlRequest()
+    await _dispatch_record_control(
+        record, "resume", debug_session_id=ctrl.debug_session_id, user_info=user_info
+    )
+    result = await _wait_control_result(record.id, "resume")
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=_format_control_error(result))
+    return StandardResponse(data={"message": "录制已恢复", "record_id": record.id, **result})
+
+
+@router.post("/{record_id}/save-variable", summary="存变量（当前悬停元素）")
+async def save_variable_record(
+    record_id: int,
+    body: SaveVariableRequest,
+    user_info: dict = Depends(is_authenticated),
+):
+    record = await AiRecordSession.get_or_none(id=record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="录制会话不存在")
+    await _assert_record_access(record, user_info)
+    var_name = body.var_name
+    await _dispatch_record_control(
+        record,
+        "save_variable",
+        debug_session_id=body.debug_session_id,
+        var_name=var_name,
+        source=body.source,
+        user_info=user_info,
+    )
+    result = await _wait_control_result(record.id, "save_variable", var_name=var_name)
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=_format_control_error(result))
+    return StandardResponse(
+        data={"message": f"已保存变量 ${{{var_name}}}", "record_id": record.id, **result}
     )
 
 
@@ -330,6 +657,10 @@ async def record_heartbeat(
     if record.status == "recording":
         record.actions_count = body.actions_count
         record.raw_actions = body.raw_actions
+        runtime_patch = {"paused": bool(body.paused)}
+        if body.last_control_result:
+            runtime_patch["last_control_result"] = body.last_control_result
+        _set_record_runtime(record_id, **runtime_patch)
         await record.save()
     
     return StandardResponse(data={"message": "heartbeat received", "actions_count": body.actions_count})
@@ -348,10 +679,14 @@ async def record_callback(
     if not record:
         logger.error(f"Runner 回调时录制会话不存在: record_id={record_id}")
         raise HTTPException(status_code=404, detail="录制会话不存在")
+
+    if body.record_session_id != record_id:
+        raise HTTPException(status_code=422, detail="record_session_id 与路径不一致")
     
     if not body.success:
         record.status = "failed"
         record.error = body.error or "录制失败"
+        _record_runtime_state.pop(record_id, None)
         await record.save()
         logger.warning(f"录制失败: record_id={record_id}, error={body.error}")
         return StandardResponse(data={"message": "录制失败已记录"})
@@ -371,18 +706,21 @@ async def record_callback(
     
     # 自动转换原始操作为步骤
     try:
-        steps = convert_actions_to_steps(body.actions)
+        locator_strategy = await resolve_recording_locator_strategy(record.project_id or 0)
+        steps = convert_actions_to_steps(body.actions, locator_strategy=locator_strategy)
         # 调试：检查 step 是否包含 meta
         if steps:
             logger.info(f"[recorder.callback] sample step keys={list(steps[0].keys())}, has_meta={'meta' in steps[0]}")
         record.steps = steps
         record.status = "completed"
+        _record_runtime_state.pop(record_id, None)
         await record.save()
         logger.info(f"转换完成: record_id={record_id}, steps={len(steps)}")
     except Exception as e:
         logger.error(f"转换操作失败: record_id={record_id}, error={e}")
         record.status = "failed"
         record.error = f"转换失败: {str(e)}"
+        _record_runtime_state.pop(record_id, None)
         await record.save()
     
     return StandardResponse(data={"message": "录制结果已接收", "record_id": record_id})
@@ -402,7 +740,8 @@ async def convert_record(
         raise HTTPException(status_code=400, detail="没有原始操作数据可供转换")
     
     try:
-        steps = convert_actions_to_steps(record.raw_actions)
+        locator_strategy = await resolve_recording_locator_strategy(record.project_id or 0)
+        steps = convert_actions_to_steps(record.raw_actions, locator_strategy=locator_strategy)
         record.steps = steps
         record.status = "completed"
         await record.save()
@@ -524,7 +863,12 @@ async def _execute_step_optimize(
     if step_module == "app":
         locator_stats = {"ai_picked": 0, "rule_picked": 0}
     else:
-        locator_stats = resolve_locators_after_optimize(optimized, original_steps or [])
+        locator_strategy = await resolve_recording_locator_strategy(project_id or 0)
+        locator_stats = resolve_locators_after_optimize(
+            optimized,
+            original_steps or [],
+            strategy=locator_strategy,
+        )
         optimized = assess_steps(optimized)
     duration_ms = int((time.time() - start_time) * 1000)
 

@@ -12,15 +12,15 @@
     <div class="release-body">
       <p v-if="hasAnyDownload">
         <template v-if="release.external_download_available">
-          <strong>推荐通过 {{ release.external_download_label || '网盘下载' }} 获取安装包</strong>（速度更快、更稳定）。
+          <strong>推荐通过 {{ release.external_download_label || '网盘下载' }} 获取完整执行器</strong>（速度更快、更稳定）。
         </template>
         <template v-if="release.platform_package_available">
-          若需从平台直接下载，安装包约 {{ formatSize(release.package_size_bytes) }}，下载耗时较长。
+          完整包约 {{ formatSize(release.package_size_bytes) }}；
         </template>
-        解压后双击 <code>BrickCoreRunner.exe</code>，登录平台账号后点击「上线」。
+        解压后双击 <code>BrickCoreRunner.exe</code>，登录后点「上线」。仅压测也可选下方精简包。
       </p>
       <p v-else>
-        暂无可用的安装包下载。管理员可在
+        暂无可用的完整安装包。管理员可在
         <el-link type="primary" @click="goReleaseConfig">执行器发布配置</el-link>
         填写网盘链接，或将 <code>BrickCoreRunner.zip</code> 放到
         <code>{{ release.package_upload_hint || 'static/runner/' }}</code>。
@@ -41,7 +41,23 @@
           icon="Download"
           @click="downloadFromPlatform"
         >
-          平台下载 zip
+          平台下载完整包
+        </el-button>
+        <el-button
+          v-if="release.perf_package_available"
+          type="warning"
+          icon="Download"
+          @click="downloadPerf('win')"
+        >
+          精简压测包 Win
+        </el-button>
+        <el-button
+          v-if="release.perf_package_mac_available"
+          type="warning"
+          icon="Download"
+          @click="downloadPerf('mac')"
+        >
+          精简压测包 Mac
         </el-button>
         <el-button v-if="canManageRelease" link type="primary" @click="goReleaseConfig">
           配置下载地址
@@ -49,6 +65,9 @@
         <el-button icon="Document" @click="goDocs('runner-client')">使用说明</el-button>
         <el-button icon="Document" @click="goDocs('runner-packaging')">打包说明</el-button>
       </div>
+      <p v-if="release.perf_package_available || release.perf_package_mac_available" class="download-hint">
+        BrickCorePerf 仅压测 Worker，体积更小；解压后运行 <code>start-perf</code>（记住配置，可改），与完整客户端二选一即可。
+      </p>
       <p v-if="release.platform_package_available" class="download-hint">
         平台下载由浏览器下载管理器接管，可在地址栏下方或「下载」面板查看进度、暂停或取消；切换页面或刷新本页通常不会中断下载。
       </p>
@@ -78,10 +97,18 @@ const release = ref({
   external_download_url: '',
   external_download_available: false,
   external_download_label: '网盘下载',
+  perf_package_available: false,
+  perf_package_filename: 'BrickCorePerf.zip',
+  perf_package_mac_available: false,
+  perf_package_mac_filename: 'BrickCorePerf-mac.zip',
 })
 
 const hasAnyDownload = computed(
-  () => release.value.platform_package_available || release.value.external_download_available
+  () =>
+    release.value.platform_package_available ||
+    release.value.external_download_available ||
+    release.value.perf_package_available ||
+    release.value.perf_package_mac_available
 )
 
 const canManageRelease = computed(() => uStore.hasPermission('device:edit'))
@@ -125,6 +152,27 @@ const downloadFromPlatform = () => {
   document.body.removeChild(link)
 
   ElMessage.success(`已开始下载 ${filename}，请在浏览器下载栏查看进度`)
+}
+
+const downloadPerf = (platform) => {
+  const token = uStore.token || localStorage.getItem('token') || ''
+  if (!token) {
+    ElMessage.warning('请先登录平台')
+    return
+  }
+  const isMac = platform === 'mac'
+  const filename = isMac
+    ? release.value.perf_package_mac_filename || 'BrickCorePerf-mac.zip'
+    : release.value.perf_package_filename || 'BrickCorePerf.zip'
+  const url = runnerReleaseApi.perfDownloadUrl(token, isMac ? 'mac' : 'win')
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.rel = 'noopener noreferrer'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  ElMessage.success(`已开始下载 ${filename}`)
 }
 
 const openExternalDownload = () => {

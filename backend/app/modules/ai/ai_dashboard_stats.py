@@ -15,7 +15,7 @@ from app.models.ai import (
     AiRequirementTestPoint,
     AiUsageLog,
 )
-from app.modules.ai.ai_scene_config import AI_SCENE_DEFINITIONS
+from app.modules.ai.ai_scene_config import AI_SCENE_DEFINITIONS, resolve_scene_label
 from app.models.http import ApiRunRecord, ApiSuiteRunRecord
 from app.models.perf import PerfRecord
 from app.models.sys import Device, OperationLog, User
@@ -261,7 +261,7 @@ async def collect_usage_summary(
     for scene, tokens in sorted(scene_tokens.items(), key=lambda x: x[1], reverse=True)[:5]:
         if tokens <= 0:
             continue
-        label = scene_labels.get(scene) or AI_SCENE_DEFINITIONS.get(scene, (scene, ""))[0]
+        label = resolve_scene_label(scene, scene_labels.get(scene, ""))
         top_scenes.append({"scene": scene, "label": label, "tokens": tokens})
 
     month_tokens = sum(l.tokens_used or 0 for l in logs)
@@ -336,17 +336,87 @@ async def _load_runner_identity_sets() -> tuple[set[str], set[str]]:
     return device_ids, runner_mq_users
 
 
+def build_user_display_name(username: str, nickname: Optional[str] = None) -> str:
+    username = (username or "").strip()
+    if not username:
+        return "系统（后台任务）"
+    nick = (nickname or "").strip() or username
+    if nick == username:
+        return username
+    return f"{nick}（{username}）"
+
+
+async def format_usernames_display(usernames: list[str]) -> dict[str, str]:
+    clean = sorted({(u or "").strip() for u in usernames if (u or "").strip()})
+    if not clean:
+        return {}
+    users = await User.filter(username__in=clean, is_del=False).values("username", "nickname")
+    nick_map = {u["username"]: (u.get("nickname") or "").strip() for u in users}
+    return {username: build_user_display_name(username, nick_map.get(username)) for username in clean}
+
+
+async def collect_user_token_top(
+    project_id: Optional[int],
+    start_dt: Optional[datetime] = None,
+    end_dt: Optional[datetime] = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """本月按使用人汇总 Token 消耗（ai_usage_log）。"""
+    if start_dt is None or end_dt is None:
+        start_dt, end_dt = _default_period_range(30)
+
+    qs = AiUsageLog.filter(create_time__gte=start_dt, create_time__lte=end_dt)
+    if project_id:
+        qs = qs.filter(project_id=project_id)
+    logs = await qs.all()
+
+    user_tokens: dict[str, int] = defaultdict(int)
+    user_calls: dict[str, int] = defaultdict(int)
+    for row in logs:
+        raw = (row.username or "").strip()
+        key = raw or "__system__"
+        user_tokens[key] += row.tokens_used or 0
+        user_calls[key] += 1
+
+    ranked = sorted(user_tokens.items(), key=lambda x: x[1], reverse=True)[:limit]
+    if not ranked:
+        return []
+
+    real_users = [u for u, _ in ranked if u != "__system__"]
+    display_map = await format_usernames_display(real_users)
+    items: list[dict[str, Any]] = []
+    for username, tokens in ranked:
+        if username == "__system__":
+            display_name = "系统（后台任务）"
+            username_out = ""
+        else:
+            display_name = display_map.get(username, username)
+            username_out = username
+        items.append(
+            {
+                "username": username_out,
+                "display_name": display_name,
+                "tokens_used": tokens,
+                "call_count": user_calls.get(username, 0),
+            }
+        )
+    return items
+
+
+async def enrich_run_by_display(recent_executions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    usernames = [(e.get("run_by") or "").strip() for e in recent_executions]
+    display_map = await format_usernames_display([u for u in usernames if u])
+    for e in recent_executions:
+        raw = (e.get("run_by") or "").strip()
+        e["run_by_display"] = display_map.get(raw, raw or "-")
+    return recent_executions
+
+
 async def _format_activity_display(usernames: list[str]) -> list[dict[str, Any]]:
-    users = await User.filter(username__in=usernames, is_del=False).values("username", "nickname")
-    nick_map = {u["username"]: (u.get("nickname") or u["username"]) for u in users}
+    display_map = await format_usernames_display(usernames)
     rows = []
     for username in usernames:
-        nick = nick_map.get(username) or username
-        if nick == username:
-            display_name = username
-        else:
-            display_name = f"{nick}（{username}）"
-        rows.append({"username": display_name, "activity_score": 0})
+        rows.append({"username": display_map.get(username, username), "activity_score": 0})
     return rows
 
 

@@ -57,18 +57,38 @@ def _clone_steps_with_provenance(
     return cloned
 
 
+def _parse_fragment_id(raw: Any, *, step_label: str = "") -> int:
+    prefix = f"{step_label}：" if step_label else ""
+    try:
+        fragment_id = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise FragmentExpandError(f"{prefix}片段引用 fragment_id 无效: {raw!r}") from exc
+    if fragment_id <= 0:
+        raise FragmentExpandError(f"{prefix}片段引用 fragment_id 必须为正整数")
+    return fragment_id
+
+
 async def _expand_single_ref(
     ref_step: dict,
     project_id: int,
     depth: int,
+    ref_stack: list[int] | None = None,
 ) -> list:
     params = ref_step.get("params") or {}
+    if not isinstance(params, dict):
+        raise FragmentExpandError("片段引用 params 必须是对象")
     fragment_id = params.get("fragment_id")
-    if not fragment_id:
+    if fragment_id is None or fragment_id == "":
         raise FragmentExpandError("片段引用缺少 fragment_id")
 
+    fragment_id = _parse_fragment_id(fragment_id, step_label=ref_step.get("desc") or ref_step.get("id") or "")
+    stack = list(ref_stack or [])
+    if fragment_id in stack:
+        chain = " -> ".join(str(i) for i in stack + [fragment_id])
+        raise FragmentExpandError(f"片段引用存在循环: {chain}")
+
     fragment = await UiStepFragment.get_or_none(
-        id=int(fragment_id),
+        id=fragment_id,
         project_id=project_id,
         is_del=False,
     )
@@ -77,15 +97,24 @@ async def _expand_single_ref(
         raise FragmentExpandError(f"片段不存在或已删除: {name}")
 
     variables = params.get("variables") or params.get("overrides") or {}
+    if variables is not None and not isinstance(variables, dict):
+        raise FragmentExpandError("片段引用 variables/overrides 必须是对象")
+
     frag_steps = _apply_fragment_variables(fragment.steps or [], variables)
     frag_steps = _clone_steps_with_provenance(frag_steps, fragment, ref_step.get("id"))
-    return await expand_fragment_refs(frag_steps, project_id, depth + 1)
+    return await expand_fragment_refs(
+        frag_steps,
+        project_id,
+        depth + 1,
+        ref_stack=stack + [fragment_id],
+    )
 
 
 async def expand_fragment_refs(
     steps: list | None,
     project_id: int,
     depth: int = 0,
+    ref_stack: list[int] | None = None,
 ) -> list:
     """
     递归展开 fragment_ref 节点；condition_branch 内嵌步骤同样处理。
@@ -97,25 +126,32 @@ async def expand_fragment_refs(
         return []
 
     result: list = []
-    for step in steps:
+    for idx, step in enumerate(steps):
+        step_no = idx + 1
         if not isinstance(step, dict):
-            continue
+            raise FragmentExpandError(f"步骤 #{step_no} 必须是对象")
         method = step.get("method")
         if method == FRAGMENT_REF_METHOD:
-            expanded = await _expand_single_ref(step, project_id, depth)
+            expanded = await _expand_single_ref(step, project_id, depth, ref_stack=ref_stack)
             result.extend(expanded)
             continue
         if method == "condition_branch":
             new_step = copy.deepcopy(step)
             new_branches = []
-            for branch in new_step.get("branches") or []:
+            branches = new_step.get("branches") or []
+            if not isinstance(branches, list):
+                raise FragmentExpandError(f"步骤 #{step_no} condition_branch.branches 必须是数组")
+            for branch_idx, branch in enumerate(branches):
                 if not isinstance(branch, dict):
-                    continue
+                    raise FragmentExpandError(
+                        f"步骤 #{step_no} condition_branch 第 {branch_idx + 1} 个分支必须是对象"
+                    )
                 new_branch = copy.deepcopy(branch)
                 new_branch["steps"] = await expand_fragment_refs(
                     branch.get("steps") or [],
                     project_id,
                     depth,
+                    ref_stack=ref_stack,
                 )
                 new_branches.append(new_branch)
             new_step["branches"] = new_branches

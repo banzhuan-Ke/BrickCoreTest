@@ -21,6 +21,39 @@ UI_DEBUG_IDLE_MINUTES = int(os.getenv("UI_DEBUG_IDLE_MINUTES", "30"))
 UI_DEBUG_IDLE_SECONDS = max(300, UI_DEBUG_IDLE_MINUTES * 60)
 _ACTIVE_STATUSES = frozenset({"starting", "ready", "running", "closing"})
 
+# Runner / 平台关闭原因 → 前端展示文案（last_result.message 单一来源）
+_CLOSE_REASON_MESSAGES: dict[str, str] = {
+    "browser_closed_by_user": "检测到浏览器窗口已关闭，调试会话已结束",
+    "user_close": "调试浏览器已关闭",
+    "用户关闭": "调试浏览器已关闭",
+    "idle_timeout": "长时间无操作，调试会话已自动关闭",
+    "空闲超时自动关闭": "长时间无操作，调试会话已自动关闭",
+    "runner_idle_timeout": "调试会话在 Runner 侧空闲超时，已自动结束",
+    "force_closed": "关闭耗时过长，系统已强制结束会话",
+    "关闭超时，系统已强制结束会话": "关闭耗时过长，系统已强制结束会话",
+    "stop_requested": "收到停止指令，调试会话已结束",
+}
+
+
+def close_message_for_reason(reason: str) -> str:
+    text = (reason or "").strip()
+    if not text:
+        return _CLOSE_REASON_MESSAGES["user_close"]
+    if text in _CLOSE_REASON_MESSAGES:
+        return _CLOSE_REASON_MESSAGES[text]
+    if "空闲" in text or "超时" in text:
+        return _CLOSE_REASON_MESSAGES["idle_timeout"]
+    return text
+
+
+def build_closed_last_result(reason: str) -> dict[str, Any]:
+    text = (reason or "").strip() or "user_close"
+    return {
+        "type": "closed",
+        "reason": text,
+        "message": close_message_for_reason(text),
+    }
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -87,10 +120,12 @@ async def recover_stale_session(session: UiDebugSession) -> bool:
         session.error = session.error or "浏览器启动超时，请关闭后重试"
         changed = True
     elif session.status == "closing" and elapsed > STALE_CLOSING_SECONDS:
+        reason = "关闭超时，系统已强制结束会话"
         session.status = "closed"
         session.pending_command = None
+        session.last_result = build_closed_last_result(reason)
         if not session.error:
-            session.error = "关闭超时，系统已强制结束会话"
+            session.error = session.last_result.get("message")
         changed = True
 
     if changed:
@@ -133,10 +168,20 @@ async def resend_close_stop(session: UiDebugSession) -> None:
 
 
 async def force_close_session(session: UiDebugSession, reason: str) -> None:
+    if session.status not in ("closed",) and session.device_id:
+        try:
+            _send_stop_task(session)
+        except Exception as exc:
+            logger.warning(
+                "[ui_debug_session] force_close 发送停止失败 session=%s: %s",
+                session.id,
+                exc,
+            )
     session.status = "closed"
     session.pending_command = None
+    session.last_result = build_closed_last_result(reason or "force_closed")
     if reason and not session.error:
-        session.error = reason
+        session.error = session.last_result.get("message")
     await session.save()
 
 

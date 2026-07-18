@@ -65,64 +65,6 @@
           <AiEmbedConfig />
         </el-tab-pane>
 
-        <!-- Tab: 执行与自愈（Backend 策略，Runner 只执行） -->
-        <el-tab-pane label="执行与自愈" name="execution">
-          <el-alert
-            type="info"
-            :closable="false"
-            show-icon
-            style="margin-bottom: 16px;"
-            title="定位器自愈与 AI Act 策略由 Backend 按项目配置；Runner 仅读取派发结果。Runner .env 的 AI_HEAL_ENABLED / AI_ACT_ENABLED 仅作运维熔断。"
-          />
-          <el-form v-loading="execSettingsLoading" label-width="200px" style="max-width: 720px;">
-            <el-form-item label="启用定位器自愈">
-              <el-switch v-model="execSettings.locator_heal_enabled" />
-              <div class="form-tip">关闭后，本项目所有 UI 执行均不会调用 LLM 自愈</div>
-            </el-form-item>
-            <el-form-item label="执行时默认开启">
-              <el-switch
-                v-model="execSettings.locator_heal_default_on_execute"
-                :disabled="!execSettings.locator_heal_enabled"
-              />
-            </el-form-item>
-            <el-form-item label="允许运行弹窗覆盖">
-              <el-switch
-                v-model="execSettings.locator_heal_allow_run_override"
-                :disabled="!execSettings.locator_heal_enabled"
-              />
-              <div class="form-tip">关闭后，测试人员不能在单次运行中改开关</div>
-            </el-form-item>
-            <el-divider content-position="left">AI Act 兜底</el-divider>
-            <el-form-item label="启用 AI Act">
-              <el-switch v-model="execSettings.ai_act_enabled" />
-              <div class="form-tip">自愈仍失败时，按 intent/操作名称由 LLM 重新规划并执行一步</div>
-            </el-form-item>
-            <el-form-item label="执行时默认开启">
-              <el-switch
-                v-model="execSettings.ai_act_default_on_execute"
-                :disabled="!execSettings.ai_act_enabled"
-              />
-            </el-form-item>
-            <el-form-item label="允许运行弹窗覆盖">
-              <el-switch
-                v-model="execSettings.ai_act_allow_run_override"
-                :disabled="!execSettings.ai_act_enabled"
-              />
-            </el-form-item>
-            <el-form-item label="单用例最大次数">
-              <el-input-number
-                v-model="execSettings.ai_act_max_per_case"
-                :min="1"
-                :max="10"
-                :disabled="!execSettings.ai_act_enabled"
-              />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="execSettingsSaving" @click="saveExecutionSettings">保存</el-button>
-            </el-form-item>
-          </el-form>
-        </el-tab-pane>
-
         <!-- Tab: 场景绑定 -->
         <el-tab-pane label="场景绑定" name="scene">
           <el-alert
@@ -292,7 +234,7 @@
           :closable="false"
           show-icon
           style="margin-bottom: 12px;"
-          title="覆盖绑定模型上的 max_tokens / 温度 / 超时；留空表示使用 LLM 配置中的默认值。长文本场景建议 max_tokens≥16384、timeout≥180。"
+          title="覆盖绑定模型上的 max_tokens / 温度 / 超时；留空表示使用 LLM 配置中的默认值。问答评判建议 max_tokens≥16384、timeout≥180。"
         />
         <el-form label-width="110px">
           <el-form-item label="最大 Token">
@@ -499,16 +441,15 @@ import AiEmbedConfig from '@/views/AI/AiEmbedConfig.vue'
 defineProps({
   embedded: { type: Boolean, default: false }
 })
-import { ref, reactive, onMounted, computed, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, reactive, onMounted, watch, computed, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { aiConfigApi, aiPromptApi } from "@/api/modules/ai.js"
 import { UserStore } from "@/stores/module/UserStore.js"
-import { ProjectStore } from "@/stores/module/ProjectStore.js"
 
-const proStore = ProjectStore()
 const activeTab = ref('config')
 const route = useRoute()
+const router = useRouter()
 
 // ========== LLM 配置相关 ==========
 const configList = ref([])
@@ -546,18 +487,6 @@ const configRules = {
   api_key: [{ required: true, message: '请输入 API Key', trigger: 'blur' }],
   model: [{ required: true, message: '请输入模型名称', trigger: 'blur' }]
 }
-
-const execSettings = reactive({
-  locator_heal_enabled: true,
-  locator_heal_default_on_execute: true,
-  locator_heal_allow_run_override: true,
-  ai_act_enabled: false,
-  ai_act_default_on_execute: false,
-  ai_act_allow_run_override: true,
-  ai_act_max_per_case: 3,
-})
-const execSettingsLoading = ref(false)
-const execSettingsSaving = ref(false)
 
 const sceneBindings = ref([])
 const sceneConfigOptions = ref([])
@@ -709,41 +638,6 @@ const applySceneRecommendations = async () => {
     ElMessage.error(e.response?.data?.detail || e.response?.data?.message || '套用失败')
   } finally {
     sceneApplying.value = false
-  }
-}
-
-const loadExecutionSettings = async () => {
-  const pid = proStore.projectInfo?.id
-  if (!pid) return
-  execSettingsLoading.value = true
-  try {
-    const res = await aiConfigApi.getExecutionSettings(pid)
-    if (res.data?.code === 200 && res.data.data) {
-      Object.assign(execSettings, res.data.data)
-    }
-  } catch (e) {
-    console.error(e)
-  } finally {
-    execSettingsLoading.value = false
-  }
-}
-
-const saveExecutionSettings = async () => {
-  const pid = proStore.projectInfo?.id
-  if (!pid) {
-    ElMessage.warning('请先选择项目')
-    return
-  }
-  execSettingsSaving.value = true
-  try {
-    const res = await aiConfigApi.updateExecutionSettings(pid, { ...execSettings })
-    if (res.data?.code === 200) {
-      ElMessage.success('执行设置已保存')
-    }
-  } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '保存失败')
-  } finally {
-    execSettingsSaving.value = false
   }
 }
 
@@ -1108,16 +1002,26 @@ const runPromptTest = async () => {
   }
 }
 
-onMounted(() => {
-  const tab = route.query.tab
-  if (['config', 'execution', 'scene', 'prompt'].includes(tab)) {
-    activeTab.value = tab
+const syncInnerTabFromRoute = () => {
+  // 嵌入平台配置时外层 tab=ai，内层用 sub；独立深链仍可能带 tab
+  const raw = route.query.sub || route.query.tab
+  if (raw === 'execution') {
+    router.replace({ path: '/project-settings', query: { tab: 'execution' } })
+    return
   }
+  if (['config', 'scene', 'prompt', 'embed'].includes(raw)) {
+    activeTab.value = raw
+  }
+}
+
+onMounted(() => {
+  syncInnerTabFromRoute()
   loadConfigs()
   loadPrompts()
-  loadExecutionSettings()
   loadSceneBindings()
 })
+
+watch(() => [route.query.tab, route.query.sub], syncInnerTabFromRoute)
 </script>
 
 <style scoped>

@@ -72,6 +72,37 @@
           </div>
         </el-form-item>
 
+        <el-form-item v-if="existingStepCount > 0 && !lockApplyMode" label="应用方式">
+          <el-radio-group v-model="applyMode">
+            <el-radio value="append">追加到末尾（保留 {{ existingStepCount }} 步）</el-radio>
+            <el-radio v-if="insertAtIndex != null" value="insert">
+              插入到第 {{ insertAtIndex + 1 }} 步（其后原步骤顺延）
+            </el-radio>
+            <el-radio value="replace">全新录制（覆盖全部步骤）</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item v-else-if="existingStepCount > 0 && lockApplyMode" label="应用方式">
+          <el-alert type="info" :closable="false" show-icon>
+            将从第 {{ (insertAtIndex ?? 0) + 1 }} 步接录，新步骤将插入该位置（保留前置 {{ insertAtIndex ?? 0 }} 步）
+          </el-alert>
+        </el-form-item>
+
+        <el-form-item label="录前检查">
+          <el-alert type="warning" :closable="false" show-icon class="recorder-checklist-alert">
+            <template #title>开始录制前请确认</template>
+            <ul class="recorder-checklist">
+              <li>Runner 已在<strong>设备管理</strong>中显示<strong>在线</strong></li>
+              <li>起始 URL 可访问（内网/VPN 已连通）</li>
+              <li>建议浏览器窗口<strong>最大化</strong>，便于回放与截图稳定</li>
+              <li>需登录时：在弹出浏览器中<strong>手动完成登录</strong>后再录业务步骤</li>
+              <li>下拉/菜单较多时：上方<strong>悬浮停留时间</strong>建议 ≥ 1.5 秒</li>
+              <li>录制中可<strong>暂停</strong>；悬停元素后可用「存变量」提取文本或 value 属性</li>
+              <li>「应用步骤」默认<strong>追加/插入</strong>已有步骤；选「覆盖全部」会替换编辑器内步骤，请录完后<strong>交互调试</strong>试跑</li>
+            </ul>
+          </el-alert>
+        </el-form-item>
+
         <el-form-item>
           <el-alert
             type="info"
@@ -93,18 +124,75 @@
       </div>
     </div>
 
+    <!-- skipConfig 自动接录启动中 -->
+    <div v-if="skipConfig && state === 'config' && starting && !skipConfigStartFailed" class="recorder-form">
+      <div class="recording-header">
+        <el-icon class="is-loading recording-icon" :size="32"><VideoCamera /></el-icon>
+        <div class="recording-info">
+          <h4>正在启动接录…</h4>
+          <p>请稍候，将在当前交互调试浏览器中开始录制</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- skipConfig 自动接录失败时的重试面板（避免空白弹窗） -->
+    <div v-if="skipConfig && state === 'config' && skipConfigStartFailed" class="recorder-form">
+      <el-alert type="warning" :closable="false" show-icon title="接录尚未开始" />
+      <p class="url-hint" style="margin-top: 12px;">
+        请确认交互调试会话仍为就绪状态，然后重试；或关闭后从步骤行重新发起「从这里开始录制」。
+      </p>
+      <div class="dialog-footer">
+        <el-button @click="visible = false">关闭</el-button>
+        <el-button type="primary" :loading="starting" @click="handleStart">重试接录</el-button>
+      </div>
+    </div>
+
     <!-- ===== 录制中 ===== -->
     <div v-if="state === 'recording'" class="recording-state">
       <div class="recording-header">
         <el-icon class="is-loading recording-icon" :size="32"><VideoCamera /></el-icon>
         <div class="recording-info">
-          <h4>🔴 正在录制...</h4>
+          <h4>{{ paused ? '⏸ 录制已暂停' : '🔴 正在录制...' }}</h4>
           <p>请在弹出的浏览器窗口中操作页面</p>
           <p class="recording-stats">
             已记录 <strong>{{ actionsCount }}</strong> 个操作
             <span v-if="elapsedTime > 0">，已录制 {{ formatTime(elapsedTime) }}</span>
           </p>
         </div>
+      </div>
+
+      <div class="save-variable-row">
+        <el-input
+          v-model="saveVarName"
+          placeholder="变量名，如 order_id"
+          size="small"
+          style="width: 160px"
+          :disabled="paused || savingVariable"
+        />
+        <el-select
+          v-model="saveVarSource"
+          size="small"
+          style="width: 110px"
+          :disabled="paused || savingVariable"
+        >
+          <el-option label="文本 text" value="text" />
+          <el-option label="控件值 value" value="value" />
+        </el-select>
+        <el-button
+          size="small"
+          type="primary"
+          plain
+          :disabled="!saveVarName.trim() || paused"
+          :loading="savingVariable"
+          @click="handleSaveVariable"
+        >
+          存当前悬停元素
+        </el-button>
+        <span class="save-var-hint">
+          先在浏览器中悬停目标元素，再点击存变量；
+          <template v-if="saveVarSource === 'value'">value 取 input/textarea/select 当前控件值（非 HTML 属性）</template>
+          <template v-else>text 取元素可见文本</template>
+        </span>
       </div>
 
       <el-divider />
@@ -125,6 +213,22 @@
       </div>
 
       <div class="dialog-footer">
+        <el-button
+          v-if="!paused"
+          :loading="pausing"
+          @click="handlePause"
+        >
+          <el-icon><VideoPause /></el-icon>
+          暂停
+        </el-button>
+        <el-button
+          v-else
+          type="warning"
+          :loading="pausing"
+          @click="handleResume"
+        >
+          继续录制
+        </el-button>
         <el-button type="danger" :loading="stopping" @click="handleStop">
           <el-icon><VideoPause /></el-icon>
           停止录制
@@ -204,7 +308,7 @@
           <el-icon><MagicStick /></el-icon>
           {{ optimizing ? 'AI 优化中...' : 'AI 优化步骤' }}
         </el-button>
-        <span class="optimize-hint">精简冗余操作；可选自动追加断言（建议导入前人工确认）</span>
+        <span class="optimize-hint">录制结果已自动精简冗余步骤；如需合并断言或改写描述，可再点 AI 优化</span>
       </div>
 
       <div class="optimize-section" v-else>
@@ -240,7 +344,7 @@
         >
           <template #title>
             <span style="font-size: 13px">
-              定位支持 CSS、XPath、<code>get_by_text</code>、<code>get_by_role</code>、<code>header &gt;&gt; get_by_text=设置</code> 等区域链式。录制时浏览器会高亮将录制的元素；黄色/红色「质量」标签请导入前核对。
+              定位支持 CSS、XPath、<code>get_by_text</code>、<code>get_by_role</code>、<code>header &gt;&gt; get_by_text=设置</code> 等区域链式。录制完成后会<strong>自动去掉重复导航、多余等待、点击输入框再填值等冗余步骤</strong>；黄色/红色「质量」标签请导入前核对。若 AI 优化后少了必要 click，请对照原始步骤或交互调试试跑。
             </span>
           </template>
         </el-alert>
@@ -367,6 +471,7 @@ function fillDescriptionExample() {
   description.value = DESCRIPTION_EXAMPLE
 }
 import { aiRecordApi } from '@/api/modules/ai'
+import { containsUnresolvedTemplate } from '@/utils/caseDescription.js'
 import { useOnlineDevices } from '@/composables/useOnlineDevices.js'
 import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
 import LocatorSelector from '@/components/LocatorSelector.vue'
@@ -382,6 +487,11 @@ const props = defineProps({
   skipConfig: { type: Boolean, default: false },
   initialHoverDelayMs: { type: Number, default: 1000 },
   applyLabel: { type: String, default: '应用到用例' },
+  existingStepCount: { type: Number, default: 0 },
+  defaultApplyMode: { type: String, default: 'replace' },
+  insertAtIndex: { type: Number, default: null },
+  debugSessionId: { type: Number, default: null },
+  lockApplyMode: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue', 'apply'])
@@ -395,6 +505,12 @@ const visible = computed({
 const state = ref('config') // config / recording / result
 const starting = ref(false)
 const stopping = ref(false)
+const pausing = ref(false)
+const paused = ref(false)
+const saveVarName = ref('')
+const saveVarSource = ref('text')
+const savingVariable = ref(false)
+const skipConfigStartFailed = ref(false)
 
 // ===== 表单 =====
 const form = reactive({
@@ -406,6 +522,20 @@ const form = reactive({
 
 // 测试描述（移到结果态，用于 AI 优化上下文）
 const description = ref('')
+const applyMode = ref('replace')
+const activeDebugSessionId = ref(null)
+
+function syncApplyModeFromProps() {
+  if (props.lockApplyMode) {
+    applyMode.value = 'insert'
+    return
+  }
+  if (props.existingStepCount > 0) {
+    applyMode.value = props.defaultApplyMode === 'replace' ? 'replace' : (props.defaultApplyMode || 'append')
+  } else {
+    applyMode.value = 'replace'
+  }
+}
 
 function ensureDescriptionPrefilled() {
   if ((description.value || '').trim()) return
@@ -431,7 +561,7 @@ const selectedDeviceLabel = computed(() => {
 })
 
 const applyPresetValues = () => {
-  if (props.initialUrl) form.url = props.initialUrl
+  form.url = props.initialUrl || ''
   if (props.presetDeviceId) form.device_id = props.presetDeviceId
   if (props.initialHoverDelayMs) form.hover_delay_ms = props.initialHoverDelayMs
 }
@@ -558,30 +688,48 @@ let startTime = 0
 
 // ===== 方法 =====
 
+const shouldCloseOnStartError = () => props.skipConfig && !props.lockApplyMode
+
 const handleStart = async () => {
-  if (!form.url.trim()) {
+  const attachDebug = props.debugSessionId || activeDebugSessionId.value
+  if (!attachDebug && !form.url.trim()) {
     ElMessage.warning('请输入目标页面地址')
-    if (props.skipConfig) visible.value = false
+    if (shouldCloseOnStartError()) visible.value = false
     return
   }
-  if (!form.device_id) {
+  const startUrl = (form.url || props.initialUrl || 'about:blank').trim()
+  if (!attachDebug && startUrl !== 'about:blank' && containsUnresolvedTemplate(startUrl)) {
+    ElMessage.warning('起始 URL 仍含未替换变量，请检查环境变量或填写完整地址')
+    if (shouldCloseOnStartError()) visible.value = false
+    return
+  }
+  if (!form.device_id && !props.presetDeviceId) {
     ElMessage.warning('请选择执行设备')
-    if (props.skipConfig) visible.value = false
+    if (shouldCloseOnStartError()) visible.value = false
     return
   }
   starting.value = true
+  skipConfigStartFailed.value = false
   try {
-    const res = await aiRecordApi.start({
-      url: form.url,
-      device_id: form.device_id,
+    const payload = {
+      url: startUrl || 'about:blank',
+      device_id: form.device_id || props.presetDeviceId,
       use_ai_optimize: form.use_ai_optimize,
       hover_delay_ms: form.hover_delay_ms,
       description: resolveStartDescription(),
-    })
+    }
+    const debugSid = props.debugSessionId || activeDebugSessionId.value
+    if (debugSid) {
+      payload.debug_session_id = debugSid
+    }
+    const res = await aiRecordApi.start(payload)
     // axios response: res.status = HTTP 状态码, res.data = StandardResponse
     if (res.status === 200 && res.data?.code === 200) {
       recordId.value = res.data.data.record_id
       state.value = 'recording'
+      paused.value = false
+      saveVarName.value = ''
+      saveVarSource.value = 'text'
       startTime = Date.now()
       actions.value = []
       actionsCount.value = 0
@@ -591,14 +739,18 @@ const handleStart = async () => {
       ElMessage.success('录制已启动，请在浏览器中操作页面')
     } else {
       ElMessage.error(res.data?.message || '启动录制失败')
-      if (props.skipConfig) {
+      if (shouldCloseOnStartError()) {
         visible.value = false
+      } else {
+        skipConfigStartFailed.value = true
       }
     }
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '启动录制失败')
-    if (props.skipConfig) {
+    if (shouldCloseOnStartError()) {
       visible.value = false
+    } else {
+      skipConfigStartFailed.value = true
     }
   } finally {
     starting.value = false
@@ -607,21 +759,109 @@ const handleStart = async () => {
 
 const handleStop = async () => {
   stopping.value = true
-  stopPolling()
   stopElapsedTimer()
   try {
-    await aiRecordApi.stop(recordId.value)
+    const stopPayload = {}
+    const debugSid = props.debugSessionId || activeDebugSessionId.value
+    if (debugSid) stopPayload.debug_session_id = debugSid
+    await aiRecordApi.stop(recordId.value, stopPayload)
     ElMessage.info('停止指令已发送，等待结果...')
-    // 再轮询几次等待结果
     await waitForResult()
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '停止录制失败')
+    if (state.value === 'recording') {
+      startPolling()
+      startElapsedTimer()
+    }
   } finally {
     stopping.value = false
   }
 }
 
+const recordControlPayload = () => {
+  const debugSid = props.debugSessionId || activeDebugSessionId.value
+  return debugSid ? { debug_session_id: debugSid } : {}
+}
+
+const handlePause = async () => {
+  pausing.value = true
+  try {
+    const res = await aiRecordApi.pause(recordId.value, recordControlPayload())
+    if (res.status === 200 && res.data?.code === 200) {
+      paused.value = !!res.data.data?.paused
+      ElMessage.success('录制已暂停')
+    }
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '暂停失败')
+  } finally {
+    pausing.value = false
+  }
+}
+
+const handleResume = async () => {
+  pausing.value = true
+  try {
+    const res = await aiRecordApi.resume(recordId.value, recordControlPayload())
+    if (res.status === 200 && res.data?.code === 200) {
+      paused.value = false
+      ElMessage.success('已恢复录制')
+    }
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '恢复失败')
+  } finally {
+    pausing.value = false
+  }
+}
+
+const handleSaveVariable = async () => {
+  const name = saveVarName.value.trim()
+  if (!name) return
+  if (paused.value) {
+    ElMessage.warning('录制已暂停，请先恢复后再存变量')
+    return
+  }
+  savingVariable.value = true
+  try {
+    const res = await aiRecordApi.saveVariable(recordId.value, {
+      var_name: name,
+      source: saveVarSource.value,
+      ...recordControlPayload(),
+    })
+    if (res.status === 200 && res.data?.code === 200) {
+      const data = res.data.data || {}
+      if (data.ok === false) {
+        ElMessage.error(formatSaveVarError(data))
+        return
+      }
+      ElMessage.success(data.message || `已保存变量 ${name}`)
+      saveVarName.value = ''
+      const statusRes = await aiRecordApi.getStatus(recordId.value)
+      if (statusRes.status === 200 && statusRes.data?.code === 200) {
+        const statusData = statusRes.data.data
+        actions.value = statusData.raw_actions || []
+        actionsCount.value = statusData.actions_count
+      }
+    }
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '存变量失败，请确认已悬停目标元素')
+  } finally {
+    savingVariable.value = false
+  }
+}
+
+const SAVE_VAR_ERROR_MAP = {
+  not_recording: '当前未在录制中',
+  empty_var_name: '变量名不能为空',
+  no_hover_target: '请先在浏览器中悬停目标元素（5 秒内）',
+}
+
+function formatSaveVarError(result) {
+  const reason = result?.reason || ''
+  return SAVE_VAR_ERROR_MAP[reason] || result?.message || '存变量失败'
+}
+
 const waitForResult = async () => {
+  stopPolling()
   // 最多等待 30 秒
   for (let i = 0; i < 30; i++) {
     await new Promise(r => setTimeout(r, 1000))
@@ -663,6 +903,7 @@ const startPolling = () => {
         const data = res.data.data
         actions.value = data.raw_actions || []
         actionsCount.value = data.actions_count
+        paused.value = !!data.paused
         // 如果 Runner 已经自动完成
         if (data.status === 'completed' && state.value === 'recording') {
           steps.value = data.steps || []
@@ -747,7 +988,7 @@ const handleDeleteStep = (index) => {
 }
 
 const handleAddStep = () => {
-  steps.value.push({
+  const newStep = {
     id: `step_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
     keyword: '点击元素',
     desc: '点击某个元素',
@@ -755,9 +996,15 @@ const handleAddStep = () => {
     params: { locator: '', index: 1, force: false, timeout: 20000 },
     children: [],
     meta: {},
-  })
-  // stepParamsJson 排除 locator（由 LocatorSelector 单独管理）
-  stepParamsJson.value.push(JSON.stringify({ index: 1, force: false, timeout: 20000 }, null, 2))
+  }
+  const paramsJson = JSON.stringify({ index: 1, force: false, timeout: 20000 }, null, 2)
+  if (stepVersion.value === 'optimized') {
+    optimizedSteps.value.push(newStep)
+    optimizedStepParamsJson.value.push(paramsJson)
+  } else {
+    steps.value.push(newStep)
+    stepParamsJson.value.push(paramsJson)
+  }
 }
 
 const handleOptimize = async () => {
@@ -844,9 +1091,23 @@ const handleApply = async () => {
       return
     }
   }
+  const mode = applyMode.value || 'replace'
+  if (mode === 'replace' && props.existingStepCount > 0) {
+    try {
+      await ElMessageBox.confirm(
+        `将用 ${targetSteps.length} 个新步骤覆盖编辑器内全部 ${props.existingStepCount} 步，是否继续？`,
+        '覆盖确认',
+        { type: 'warning', confirmButtonText: '覆盖', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+  }
   emit('apply', {
     steps: JSON.parse(JSON.stringify(targetSteps)),
     description: (description.value || '').trim(),
+    applyMode: mode,
+    insertAtIndex: mode === 'insert' ? props.insertAtIndex : null,
   })
   visible.value = false
   resetState()
@@ -854,9 +1115,12 @@ const handleApply = async () => {
 
 const resetState = () => {
   state.value = 'config'
+  skipConfigStartFailed.value = false
   form.url = props.initialUrl || ''
   form.device_id = props.presetDeviceId || ''
   description.value = props.initialDescription || ''
+  syncApplyModeFromProps()
+  activeDebugSessionId.value = props.debugSessionId || null
   recordId.value = null
   actions.value = []
   actionsCount.value = 0
@@ -888,13 +1152,17 @@ const actionTypeColor = (type) => {
 const actionTypeLabel = (type) => {
   const map = {
     click: '点击', fill: '输入', navigate: '导航', wait: '等待',
-    dblclick: '双击', select: '选择', hover: '悬停', drag_and_drop: '拖拽',
+    dblclick: '双击', select: '选择', hover: '悬停',     drag_and_drop: '拖拽',
     keydown: '按键', scroll: '滚动', contextmenu: '右键', file: '上传',
+    save_variable: '存变量',
   }
   return map[type] || type
 }
 
 const formatActionDetail = (action) => {
+  if (action.action_type === 'save_variable') {
+    return `$${action.value || ''} ← ${action.selector || ''}`
+  }
   if (action.action_type === 'drag_and_drop') {
     const end = action.value || action.meta?.end_selector || ''
     return end ? `${action.selector || ''} → ${end}` : (action.selector || '')
@@ -916,6 +1184,7 @@ watch(() => props.modelValue, async (val) => {
   if (val) {
     resetState()
     applyPresetValues()
+    syncApplyModeFromProps()
     await loadConfigs()
     if (!props.skipConfig) {
       const list = await loadOnlineDevices()
@@ -932,7 +1201,7 @@ watch(() => props.modelValue, async (val) => {
 })
 
 watch(() => props.initialUrl, (url) => {
-  if (url) form.url = url
+  form.url = url || ''
 })
 
 watch(() => props.presetDeviceId, (id) => {
@@ -959,6 +1228,25 @@ onUnmounted(() => {
 .recorder-form {
   padding: 10px 0;
 }
+
+.recorder-checklist-alert {
+  :deep(.el-alert__content) {
+    width: 100%;
+  }
+}
+
+.recorder-checklist {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #606266;
+
+  li + li {
+    margin-top: 4px;
+  }
+}
+
 .preset-summary {
   font-size: 13px;
   line-height: 1.6;
@@ -1027,6 +1315,19 @@ onUnmounted(() => {
       color: #666;
       font-size: 13px;
       word-break: break-all;
+    }
+  }
+
+  .save-variable-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 8px 0;
+
+    .save-var-hint {
+      color: #909399;
+      font-size: 12px;
     }
   }
 }

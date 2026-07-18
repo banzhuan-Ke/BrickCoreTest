@@ -20,6 +20,11 @@ _ASSERTION_METHODS = frozenset({
     "kw_assert_not_exist",
     "kw_assert_not_visible",
     "kw_assert_enabled",
+    "kw_assert_text_not_contains",
+    "kw_assert_element_count",
+    "kw_assert_text_length",
+    "kw_assert_attribute_exists",
+    "kw_assert_attribute_not_exists",
 })
 
 _APP_ASSERTION_METHODS = frozenset({
@@ -43,10 +48,14 @@ _HIDDEN_HINTS = (
 
 _ACTION_METHODS = frozenset({
     "click_ele",
+    "click_by_text",
     "fill_value",
     "hover",
     "double_click_ele",
     "select_option",
+    "scroll_to_element",
+    "wait_for_element_hidden",
+    "wait_for_url_contains",
 })
 
 # 从功能用例描述中提取「预期：xxx」

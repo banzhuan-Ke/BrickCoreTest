@@ -118,7 +118,7 @@
       <!-- B3：Token 统计 + 生成趋势 -->
       <el-row :gutter="16" class="token-row" v-if="projectId">
         <el-col :xs="24" :lg="8">
-          <el-card shadow="never" class="panel-card" v-loading="loading">
+          <el-card shadow="never" class="panel-card token-panel" v-loading="loading">
             <template #header>
               <div class="recent-header">
                 <span class="card-header-title">本月 Token（当前项目）</span>
@@ -126,23 +126,36 @@
               </div>
             </template>
             <div class="token-grid">
-              <div class="token-item">
+              <div class="token-item token-item--primary">
+                <div class="token-icon">⚡</div>
                 <div class="token-value">{{ formatToken(tokenStats.month_tokens_used) }}</div>
                 <div class="token-label">总消耗</div>
               </div>
-              <div class="token-item">
+              <div class="token-item token-item--success">
+                <div class="token-icon">📊</div>
                 <div class="token-value">{{ tokenStats.month_usage_log_count ?? tokenStats.month_generate_count ?? 0 }}</div>
                 <div class="token-label">AI 调用次数</div>
               </div>
-              <div class="token-item">
+              <div class="token-item token-item--warning">
+                <div class="token-icon">📅</div>
                 <div class="token-value">{{ formatToken(usageSummary.today_tokens) }}</div>
                 <div class="token-label">今日消耗</div>
               </div>
             </div>
             <div v-if="usageSummary.top_scenes?.length" class="usage-scenes">
               <div class="usage-scenes-title">Top 场景（本月 Token）</div>
-              <div v-for="item in usageSummary.top_scenes" :key="item.scene" class="usage-scene-row">
-                <span class="usage-scene-label">{{ item.label }}</span>
+              <div
+                v-for="item in usageSummary.top_scenes"
+                :key="item.scene"
+                class="usage-scene-row"
+              >
+                <span class="usage-scene-label" :title="item.label">{{ item.label }}</span>
+                <div class="usage-scene-bar-wrap">
+                  <div
+                    class="usage-scene-bar"
+                    :style="{ width: sceneBarWidth(item.tokens) }"
+                  ></div>
+                </div>
                 <span class="usage-scene-tokens">{{ formatToken(item.tokens) }}</span>
               </div>
             </div>
@@ -155,6 +168,18 @@
             </template>
             <div v-show="generateTrend.length" ref="trendChartRef" class="trend-chart"></div>
             <el-empty v-if="!generateTrend.length" description="暂无 AI 调用记录" :image-size="64" />
+          </el-card>
+        </el-col>
+      </el-row>
+
+      <el-row :gutter="16" class="user-token-row" v-if="projectId">
+        <el-col :span="24">
+          <el-card shadow="never" class="panel-card" v-loading="loading">
+            <template #header>
+              <span class="card-header-title">本月使用人 Token 消耗（当前项目）</span>
+            </template>
+            <div v-show="userTokenTop.length" ref="userTokenChartRef" class="user-token-chart"></div>
+            <el-empty v-if="!userTokenTop.length" description="暂无使用人 Token 记录" :image-size="64" />
           </el-card>
         </el-col>
       </el-row>
@@ -318,27 +343,34 @@
       <!-- 模型状态 -->
       <el-card shadow="never" class="config-hint-card">
         <template #header>
-          <span class="card-header-title">模型配置</span>
+          <div class="recent-header">
+            <span class="card-header-title">模型配置</span>
+            <el-button v-if="configSummary?.default" link type="primary" @click="router.push('/ai-config')">管理</el-button>
+          </div>
         </template>
-        <div v-if="configSummary?.default" class="config-lines">
-          <div class="config-ok">
+        <div v-if="configSummary?.default" class="config-grid">
+          <div class="config-model-card config-model-card--default">
+            <div class="config-model-badge">默认</div>
+            <div class="config-model-name">{{ configSummary.default.name }}</div>
+            <div class="config-model-id">{{ configSummary.default.model }}</div>
+          </div>
+          <div
+            v-if="configSummary.has_vision && configSummary.vision"
+            class="config-model-card config-model-card--vision"
+          >
+            <div class="config-model-badge">读图</div>
+            <div class="config-model-name">{{ configSummary.vision.name }}</div>
+            <div class="config-model-id">{{ configSummary.vision.model }}</div>
+          </div>
+          <div v-else class="config-model-card config-model-card--warn">
+            <el-icon :size="20"><WarningFilled /></el-icon>
+            <div class="config-warn-text">未配置 Vision 读图模型</div>
+            <div class="config-warn-hint">含图需求建议配置 qwen-vl 等</div>
+          </div>
+          <div class="config-footer">
             <el-icon color="#67c23a"><CircleCheck /></el-icon>
-            <span>
-              默认模型：<b>{{ configSummary.default.name }}</b>（{{ configSummary.default.model }}）
-            </span>
-            <el-button link type="primary" @click="router.push('/ai-config')">管理</el-button>
+            <span>已启用 <b>{{ configSummary.enabled_count }}</b> 个配置</span>
           </div>
-          <div v-if="configSummary.has_vision && configSummary.vision" class="config-ok sub">
-            <el-icon color="#e6a23c"><View /></el-icon>
-            <span>
-              读图模型：<b>{{ configSummary.vision.name }}</b>（{{ configSummary.vision.model }}）
-            </span>
-          </div>
-          <div v-else-if="!configSummary.has_vision" class="config-warn">
-            <el-icon color="#e6a23c"><WarningFilled /></el-icon>
-            <span>未检测到 Vision 类模型，含图需求建议配置 qwen-vl 等读图模型</span>
-          </div>
-          <div class="config-meta">已启用 {{ configSummary.enabled_count }} 个配置</div>
         </div>
         <el-alert
           v-else
@@ -371,7 +403,6 @@ import {
   ArrowRight,
   CircleCheck,
   WarningFilled,
-  View,
   Share,
   Document,
   Setting,
@@ -409,11 +440,14 @@ const funnelColors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399']
 const todos = ref([])
 const tokenStats = ref({})
 const usageSummary = ref({ top_scenes: [] })
+const userTokenTop = ref([])
 const generateTrend = ref([])
 const funnelChartRef = ref(null)
 const trendChartRef = ref(null)
+const userTokenChartRef = ref(null)
 let funnelChart = null
 let trendChart = null
+let userTokenChart = null
 
 const failureAnalyzeVisible = ref(false)
 const failureAnalyzeTarget = ref({ type: 'api', id: null })
@@ -426,6 +460,7 @@ const openFailureAnalyze = (row) => {
 const projectId = computed(() => proStore.projectInfo?.id)
 
 const canAiTest = computed(() => uStore.hasPermission('ai_test:view'))
+const canKnowledge = computed(() => uStore.hasPermission('knowledge:view'))
 const canAiConfig = computed(() => uStore.hasPermission('ai_config:view'))
 const canApi = computed(() => uStore.hasPermission('api_manage:view') || uStore.hasPermission('api_case:view'))
 const canUi = computed(() => uStore.hasPermission('ui_case:view'))
@@ -525,7 +560,7 @@ const secondaryEntries = computed(() => {
     desc: '迭代文档 · 报告向导 · RAG 检索',
     path: '/ai-knowledge/folders',
     icon: FolderOpened,
-    disabled: !canAiTest.value
+    disabled: !canKnowledge.value
   },
   {
     name: '智能浏览器',
@@ -555,9 +590,16 @@ const secondaryEntries = computed(() => {
     icon: Document,
     disabled: !canAiTest.value
   },
+  {
+    name: '问答准确性评测',
+    desc: '标准集 · 被测 API · LLM 打分',
+    path: '/ai-qa-eval',
+    icon: ChatLineRound,
+    disabled: !canAiTest.value
+  }
   ]
   if (isCommunityEdition.value) {
-    return items.filter((item) => item.path !== '/ai-knowledge/folders')
+    return items.filter((item) => item.path !== '/ai-qa-eval' && item.path !== '/ai-knowledge/folders')
   }
   return items
 })
@@ -590,6 +632,54 @@ const formatToken = (n) => {
   if (v >= 1000000) return `${(v / 1000000).toFixed(1)}M`
   if (v >= 1000) return `${(v / 1000).toFixed(1)}K`
   return String(v)
+}
+
+const sceneBarWidth = (tokens) => {
+  const max = Math.max(...(usageSummary.value.top_scenes || []).map(i => i.tokens || 0), 1)
+  const pct = Math.round(((tokens || 0) / max) * 100)
+  return `${Math.max(pct, 4)}%`
+}
+
+const initUserTokenChart = () => {
+  if (!userTokenChartRef.value || !userTokenTop.value.length) return
+  if (userTokenChart) userTokenChart.dispose()
+  userTokenChart = echarts.init(userTokenChartRef.value)
+  const names = userTokenTop.value.map(i => i.display_name || i.username || '未知')
+  const tokens = userTokenTop.value.map(i => i.tokens_used || 0)
+  userTokenChart.setOption({
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params) => {
+        const idx = params[0]?.dataIndex ?? 0
+        const row = userTokenTop.value[idx]
+        if (!row) return ''
+        return [
+          row.display_name || row.username || '未知',
+          `Token：${formatToken(row.tokens_used)}`,
+          `调用：${row.call_count ?? 0} 次`,
+        ].join('<br/>')
+      },
+    },
+    grid: { left: '3%', right: '4%', top: '6%', bottom: '4%', containLabel: true },
+    xAxis: { type: 'value', axisLabel: { formatter: (v) => formatToken(v) } },
+    yAxis: {
+      type: 'category',
+      data: names,
+      inverse: true,
+      axisLabel: { width: 120, overflow: 'truncate' },
+    },
+    series: [{
+      name: 'Token 消耗',
+      type: 'bar',
+      data: tokens,
+      barMaxWidth: 28,
+      itemStyle: {
+        borderRadius: [0, 6, 6, 0],
+        color: '#409eff',
+      },
+    }],
+  })
 }
 
 const initFunnelChart = () => {
@@ -720,6 +810,7 @@ const loadOverview = async (silent = false) => {
     todos.value = []
     tokenStats.value = {}
     usageSummary.value = { top_scenes: [] }
+    userTokenTop.value = []
     generateTrend.value = []
     if (funnelChart) {
       funnelChart.dispose()
@@ -728,6 +819,10 @@ const loadOverview = async (silent = false) => {
     if (trendChart) {
       trendChart.dispose()
       trendChart = null
+    }
+    if (userTokenChart) {
+      userTokenChart.dispose()
+      userTokenChart = null
     }
     return
   }
@@ -746,10 +841,12 @@ const loadOverview = async (silent = false) => {
       todos.value = d.todos || []
       tokenStats.value = d.token_stats || {}
       usageSummary.value = d.usage_summary || { top_scenes: [] }
+      userTokenTop.value = d.user_token_top || []
       generateTrend.value = d.generate_trend || []
       nextTick(() => {
         initFunnelChart()
         initTrendChart()
+        initUserTokenChart()
       })
     }
   } catch (e) {
@@ -780,6 +877,7 @@ watch(runningJobs, () => {
 const handleFunnelResize = () => {
   if (funnelChart) funnelChart.resize()
   if (trendChart) trendChart.resize()
+  if (userTokenChart) userTokenChart.resize()
 }
 
 onMounted(() => {
@@ -792,6 +890,7 @@ onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
   if (funnelChart) funnelChart.dispose()
   if (trendChart) trendChart.dispose()
+  if (userTokenChart) userTokenChart.dispose()
   window.removeEventListener('resize', handleFunnelResize)
 })
 </script>
@@ -903,24 +1002,46 @@ onUnmounted(() => {
     height: 240px;
   }
 }
-.token-row {
+.token-row,
+.user-token-row {
   margin-bottom: 16px;
+}
+.token-panel :deep(.el-card__body) {
+  background: linear-gradient(180deg, #f8fbff 0%, #fff 48%);
 }
 .token-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  gap: 10px;
 }
 .token-item {
   text-align: center;
-  padding: 8px 4px;
-  background: #f5f7fa;
-  border-radius: 8px;
+  padding: 12px 6px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+.token-item--primary {
+  background: linear-gradient(135deg, #ecf5ff 0%, #d9ecff 100%);
+  border-color: #b3d8ff;
+}
+.token-item--success {
+  background: linear-gradient(135deg, #f0f9eb 0%, #e1f3d8 100%);
+  border-color: #c2e7b0;
+}
+.token-item--warning {
+  background: linear-gradient(135deg, #fdf6ec 0%, #faecd8 100%);
+  border-color: #f5dab1;
+}
+.token-icon {
+  font-size: 16px;
+  line-height: 1;
+  margin-bottom: 4px;
 }
 .token-value {
   font-size: 22px;
   font-weight: 700;
   color: #303133;
+  line-height: 1.2;
 }
 .token-label {
   font-size: 12px;
@@ -930,19 +1051,21 @@ onUnmounted(() => {
 .usage-scenes {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px dashed #e4e7ed;
 }
 .usage-scenes-title {
   font-size: 12px;
   color: #909399;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 .usage-scene-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 52px;
+  align-items: center;
   gap: 8px;
-  font-size: 13px;
-  line-height: 1.8;
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 6px;
 }
 .usage-scene-label {
   color: #606266;
@@ -950,10 +1073,28 @@ onUnmounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.usage-scene-bar-wrap {
+  height: 6px;
+  background: #ebeef5;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.usage-scene-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #79bbff, #409eff);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
 .usage-scene-tokens {
   color: #409eff;
   font-weight: 600;
   flex-shrink: 0;
+  text-align: right;
+  font-size: 12px;
+}
+.user-token-chart {
+  width: 100%;
+  height: 280px;
 }
 .trend-chart {
   width: 100%;
@@ -1183,32 +1324,79 @@ onUnmounted(() => {
 .clickable-table :deep(.el-table__row) {
   cursor: pointer;
 }
-.config-lines {
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.config-model-card {
+  position: relative;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid #ebeef5;
+  min-height: 88px;
+}
+.config-model-card--default {
+  background: linear-gradient(135deg, #ecf5ff 0%, #f5faff 100%);
+  border-color: #b3d8ff;
+}
+.config-model-card--vision {
+  background: linear-gradient(135deg, #fdf6ec 0%, #fffbf0 100%);
+  border-color: #f5dab1;
+}
+.config-model-card--warn {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-.config-ok {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  color: #606266;
-}
-.config-ok.sub {
-  padding-left: 4px;
-  font-size: 13px;
-}
-.config-warn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  background: #fdf6ec;
+  border-color: #f5dab1;
   color: #e6a23c;
 }
-.config-meta {
+.config-model-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(64, 158, 255, 0.15);
+  color: #409eff;
+  margin-bottom: 8px;
+}
+.config-model-card--vision .config-model-badge {
+  background: rgba(230, 162, 60, 0.15);
+  color: #e6a23c;
+}
+.config-model-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 4px;
+}
+.config-model-id {
   font-size: 12px;
   color: #909399;
-  margin-top: 4px;
+  font-family: ui-monospace, monospace;
+}
+.config-warn-text {
+  font-size: 14px;
+  font-weight: 500;
+}
+.config-warn-hint {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.config-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #606266;
+  padding-top: 4px;
+}
+.config-hint-card :deep(.el-card__body) {
+  background: linear-gradient(180deg, #fafcff 0%, #fff 100%);
 }
 </style>

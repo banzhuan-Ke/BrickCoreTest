@@ -335,9 +335,44 @@ def collect_image_indices(
     return indices
 
 
+def recommend_case_count(
+    char_count: int,
+    section_count: int = 1,
+    image_count: int = 0,
+) -> dict:
+    """按范围体量给出参考用例条数（启发式，供入队默认值与 Prompt 提示）。
+
+    目标：避免默认 15 条一刀切——范围小时偏多冗余，范围大时偏少漏核心。
+    """
+    sections = max(int(section_count or 1), 1)
+    chars = max(int(char_count or 0), 0)
+    images = max(int(image_count or 0), 0)
+
+    # 每节约 2 条核心；正文每 ~700 字追加 1；图片带来交互点（上限 8）
+    from_sections = sections * 2
+    from_chars = max(0, (chars - 400) // 700)
+    from_images = min(images, 8)
+    recommended = from_sections + from_chars + from_images
+    recommended = max(4, min(30, recommended))
+
+    # 再少也不能低于「每节至少 1 条核心 + 少量全局」量级
+    core_min = max(3, min(recommended, sections + 2))
+
+    reason = (
+        f"约 {sections} 节、{chars} 字、{images} 图 → 建议 {recommended} 条"
+        f"（核心保底约 {core_min}；条数偏少时优先主路径）"
+    )
+    return {
+        "recommended_count": recommended,
+        "core_min_count": core_min,
+        "reason": reason,
+    }
+
+
 def estimate_scope(
     scoped_text: str,
     image_count: int = 0,
+    section_count: int = 1,
 ) -> dict:
     chars = len(scoped_text or "")
     # 中文为主：粗算 input tokens
@@ -347,6 +382,7 @@ def estimate_scope(
         level = "block"
     elif est_tokens >= WARN_ESTIMATED_INPUT_TOKENS:
         level = "warn"
+    rec = recommend_case_count(chars, section_count, image_count)
     return {
         "char_count": chars,
         "image_count": image_count,
@@ -356,6 +392,9 @@ def estimate_scope(
         "max_scope_chars": MAX_SCOPE_CHARS,
         "level": level,
         "message": _estimate_message(level, est_tokens, chars),
+        "recommended_count": rec["recommended_count"],
+        "core_min_count": rec["core_min_count"],
+        "recommend_reason": rec["reason"],
     }
 
 

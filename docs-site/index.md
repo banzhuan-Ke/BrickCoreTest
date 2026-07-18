@@ -40,7 +40,7 @@
 | 3 | 了解菜单与流程 | 平台概览 |
 | 4 | 创建项目、环境、测试目录 | 项目与环境、测试目录 |
 | 5 | 安装执行器（做 UI 时） | 执行器使用说明 |
-| 6 | 进入 UI / 接口 / AI / 性能 | 功能模块 |
+| 6 | 进入 UI / 接口 / AI / 性能 | 功能模块（Web 录制见 **Web 录制与稳定回放**） |
 | 7 | 配置报告推送（可选） | 系统管理 |
 
 ## 获取帮助
@@ -61,7 +61,7 @@
 
 扫码加入 **BrickCoreAI 测试平台交流群**，交流使用问题、部署与版本动态。
 
-<img src="/showcase/assets/wechat-group.png" width="200" alt="BrickCoreAI 测试平台交流群" /><br />
+<img src="../assets/wechat-group.png" width="200" alt="BrickCoreAI 测试平台交流群" /><br />
 <sub>微信加群</sub>
 
 </td>

@@ -172,7 +172,16 @@ async def restore_app_case_execution(record) -> None:
 
 async def delete_iteration_report_record(report, *, permanent: bool = False) -> str:
     """删除资料库生成记录，遵循平台 knowledge_report_delete_mode 配置。"""
-    from app.modules.knowledge.knowledge_storage import purge_report_output_files
+    try:
+        from app.modules.knowledge.knowledge_storage import purge_report_output_files
+    except ImportError:
+        # CE：资料库模块未打包
+        if permanent:
+            await report.delete()
+            return "hard_deleted"
+        report.is_del = True
+        await report.save()
+        return "soft_deleted"
 
     if permanent:
         await purge_report_output_files(report)
@@ -193,7 +202,24 @@ async def delete_iteration_report_record(report, *, permanent: bool = False) -> 
 async def delete_knowledge_document_record(doc, *, permanent: bool = False) -> str:
     """删除资料库上传文档，遵循平台 knowledge_report_delete_mode 配置。"""
     from app.models.knowledge import AiKnowledgeChunk
-    from app.modules.knowledge.knowledge_storage import purge_document_source_files
+
+    try:
+        from app.modules.knowledge.knowledge_storage import purge_document_source_files
+    except ImportError:
+        async def _hard_delete() -> None:
+            await AiKnowledgeChunk.filter(document_id=doc.id).delete()
+            await doc.delete()
+
+        if permanent:
+            await _hard_delete()
+            return "hard_deleted"
+        mode = await get_knowledge_report_delete_mode()
+        if mode == DELETE_MODE_PHYSICAL:
+            await _hard_delete()
+            return "hard_deleted"
+        doc.is_del = True
+        await doc.save()
+        return "soft_deleted"
 
     async def _hard_delete() -> None:
         purge_document_source_files(doc)

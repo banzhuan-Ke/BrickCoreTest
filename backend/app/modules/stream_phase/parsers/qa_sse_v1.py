@@ -1,4 +1,4 @@
-"""问答 SSE v1 阶段解析器（KCF /api/v1/qa 等流式协议）"""
+"""问答 SSE v1 阶段解析器（与 qa_eval_target_client.parse_qa_sse_v1 协议对齐）"""
 from __future__ import annotations
 
 import json
@@ -54,7 +54,7 @@ def _is_meaningful_delta(delta: Any) -> bool:
 
 
 def _extract_think_text(delta: Any) -> str:
-    """解析 think / think_answer 的 delta。"""
+    """解析 think / think_answer 的 delta（与问答准确性评测一致）。"""
     if not delta:
         return ""
     if isinstance(delta, str):
@@ -92,7 +92,7 @@ def _dedupe_refs(refs: list[tuple[str, float]]) -> list[tuple[str, float]]:
 
 
 def parse_qa_sse_content(lines: list[str]) -> dict[str, Any]:
-    """仅提取答案/思考/引用（无阶段计时）。"""
+    """仅提取答案/思考/引用（供问答准确性评测复用，无阶段计时）。"""
     result = parse_stream(lines, start_time=time.time(), status_code=200)
     extras = result.get("extras") or {}
     answer = extras.get("answer") or extras.get("answer_preview") or ""
@@ -106,21 +106,6 @@ def parse_qa_sse_content(lines: list[str]) -> dict[str, Any]:
         "references_high": (extras.get("references_high") or "")[:4000],
         "status": status,
     }
-
-
-def normalize_sse_parser(parser: str | None) -> str:
-    p = (parser or PARSER_ID).lower()
-    if p == "sse_v1":
-        return PARSER_ID
-    return p
-
-
-def is_qa_sse_v1_parser(parser: str | None) -> bool:
-    return normalize_sse_parser(parser) == PARSER_ID
-
-
-def parse_qa_sse_v1(lines: list[str]) -> dict[str, Any]:
-    return parse_qa_sse_content(lines)
 
 
 def parse_stream(
@@ -289,3 +274,22 @@ def parse_stream(
         "phase_schema": PHASE_SCHEMA,
         "extra_schema": EXTRA_SCHEMA,
     }
+
+
+# 供平台侧（含 CE，无 qa_eval 包）复用的薄封装
+_LEGACY_SSE_PARSER_V1 = "kbs_qa_v1"
+
+
+def normalize_sse_parser(parser: str | None) -> str:
+    p = (parser or PARSER_ID).lower()
+    if p == _LEGACY_SSE_PARSER_V1:
+        return PARSER_ID
+    return p
+
+
+def is_qa_sse_v1_parser(parser: str | None) -> bool:
+    return normalize_sse_parser(parser) == PARSER_ID
+
+
+def parse_qa_sse_v1(lines: list[str]) -> dict[str, Any]:
+    return parse_qa_sse_content(lines)

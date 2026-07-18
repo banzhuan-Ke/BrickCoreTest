@@ -1,10 +1,15 @@
-"""
+﻿"""
 Prompt 模板管理器
 负责管理预置 Prompt 模板，支持从数据库读取用户自定义模板
 """
 import re
 from jinja2 import Template as Jinja2Template
-from app.core.platform.edition import KNOWLEDGE_PACK_PROMPT_SCENES, is_community_edition, knowledge_digitech_pack_enabled
+from app.core.platform.edition import KNOWLEDGE_PACK_PROMPT_SCENES, is_community_edition, knowledge_pack_addon_enabled
+from app.modules.ai.qa_judge_prompt_ce import (
+    QA_JUDGE_DESCRIPTION_CE,
+    QA_JUDGE_SYSTEM_PROMPT_CE,
+    QA_JUDGE_USER_PROMPT_TEMPLATE_CE,
+)
 from app.models.ai import AiPromptTemplate
 
 
@@ -167,14 +172,16 @@ class PromptManager:
 定位器选择规则（按优先级，与录制引擎保持一致）：
 1. 最优先使用元素列表中提供的 selector 字段（这是已经生成好的可用 CSS 选择器，严禁修改其中任何文本）
 2. 使用 data-testid：[data-testid='xxx']
-3. 使用 id 选择器：#元素id
-4. 使用 get_by_text：get_by_text=可见文本（Playwright 原生文本定位，推荐用于按钮、链接、span 文本）
-5. 使用 get_by_role：get_by_role=角色, 名称（如 get_by_role=button, 登录、get_by_role=link, 控制台）
-6. 使用 name 属性选择器：tag[name='xxx']
-7. 使用 aria-label 属性选择器：[aria-label='xxx']
-8. 使用 title 属性选择器：tag[title='xxx']（常用于图标按钮、卡片等自定义组件）
-9. 使用 class 选择器：.className（class 中有空格时取第一个，如 .btn-primary）
-10. 兜底使用 CSS 选择器：tag:has-text("xxx")
+3. 使用 id 选择器：#元素id（避开 el-id- / ng- 等动态 id）
+4. 组件路径优先于纯 nth-of-type 长链：含 .el- / .ant- / .ui- 的路径更稳
+5. 表格/下拉优先表格相对 XPath 或 normalize-space 精确文本；绝对 /html 路径须写 xpath=/html...
+6. 使用 get_by_text：get_by_text=可见文本（Playwright 原生文本定位，推荐用于按钮、链接、span 文本）
+7. 使用 get_by_role：get_by_role=角色, 名称（如 get_by_role=button, 登录、get_by_role=link, 控制台）
+8. 使用 name 属性选择器：tag[name='xxx']
+9. 使用 aria-label 属性选择器：[aria-label='xxx']
+10. 使用 title 属性选择器：tag[title='xxx']（常用于图标按钮、卡片等自定义组件）
+11. 使用 class 选择器：.className（class 中有空格时取第一个，如 .btn-primary）
+12. 兜底使用 CSS 选择器：tag:has-text("xxx")
 11. 严禁编造不在上述列表中的选择器
 
 【严格约束 - 违反会导致执行失败】
@@ -209,21 +216,26 @@ class PromptManager:
 - children: 子步骤数组（通常为 []）
 
 【页面操作】
-- open_url: {url, wait_until:"load", timeout:30000}
+- open_url: {url, wait_until:"domcontentloaded", timeout:30000}
 - refresh: {wait_until:"domcontentloaded", timeout:30000}
 - go_back: {timeout:30000, fallback_url:""}
-- scroll_to_height: {height}
+- scroll_to_height: {height}   # 页面滚到纵向高度；滚到顶部 height:0。禁止用 scroll / x,y
+- scroll_to_element: {locator, index:1, timeout:20000}  # 滚到元素可见；禁止写成 scroll_to / scroll
 - execute_script: {script, args:[]}
 - save_page_img: {name}
 - open_new_page: {tag:""}
 - switch_to_page: {tag, index, title, url}
+- switch_to_latest_page: {}
 - close_page: {tag, index, title, url}
 - reset_browser_context: {}
 - close: {}
+- accept_dialog: {prompt_text:""}
+- dismiss_dialog: {}
 
 【元素操作】
 - fill_value: {locator, value, timeout:20000}
-- click_ele: {locator, index:1, force:false, timeout:20000}
+- click_ele: {locator, index:1, force:false, timeout:20000, wait_download:false, save_path:"", var_name:"", download_timeout:60000, accept_dialog:false, dismiss_dialog:false, dialog_timeout:10000, prompt_text:""}
+- click_by_text: {text, index:1, exact:false, force:false, timeout:20000, wait_download:false, save_path:"", var_name:"", download_timeout:60000, accept_dialog:false, dismiss_dialog:false, dialog_timeout:10000, prompt_text:""}
 - double_click_ele: {locator, index:1, force:false, timeout:20000}
 - clear_value: {locator, timeout:20000}
 - set_checked: {locator, timeout:20000}
@@ -260,6 +272,12 @@ class PromptManager:
 - wait_for_load: {}
 - wait_for_network: {}
 - wait_for_element: {locator, timeout:20000}
+- wait_for_element_hidden: {locator, index:1, timeout:20000}
+- wait_for_element_text_change: {locator, text:"", index:1, timeout:20000}
+- wait_for_element_text_stable: {locator, stable_ms:500, index:1, timeout:20000}
+- wait_for_url_contains: {url, use_regex:false, timeout:20000}
+- wait_for_response: {url, method:"", status:"", timeout:30000}
+- wait_for_download: {save_path:"", var_name:""}
 
 【断言操作】
 - kw_assert_page_title: {title}
@@ -268,7 +286,12 @@ class PromptManager:
 - kw_assert_element_text: {locator, text, match_mode:"exact"|"contains"}
 - kw_assert_element_text_contains: {locator, text}
 - kw_assert_text_contains: {text}
+- kw_assert_text_not_contains: {text, locator:"", index:1}
+- kw_assert_element_count: {locator, count, operator:"eq"|"gte"|"lte"}
+- kw_assert_text_length: {locator:"", length:"", min_length:"", max_length:"", operator:"eq"}
 - kw_assert_attribute: {locator, attr_name, value}
+- kw_assert_attribute_exists: {locator, attr_name, index:1}
+- kw_assert_attribute_not_exists: {locator, attr_name, index:1}
 - kw_assert_visible: {locator, index:1}
 - kw_assert_hidden: {locator, index:1}
 - kw_assert_enabled: {locator, index:1}
@@ -282,6 +305,7 @@ class PromptManager:
 - extract_text: {locator, var_name, index:1, timeout:20000}
 - extract_attribute: {locator, attr_name, var_name, index:1, timeout:20000}
 - extract_page_url: {var_name}
+- extract_response_field: {field, var_name, url:"", method:"", status:"", timeout:30000}
 
 【条件分支】
 - condition_branch: {branches:[{name, condition:{type, locator, expected_value}, steps:[]}]}
@@ -289,14 +313,21 @@ class PromptManager:
 生成规则：
 1. 每个页面操作后建议加 wait_for_time 或 wait_for_element 确保稳定
 2. **点击触发弹窗/浮层后**，必须加 wait_for_element 等待弹窗内稳定元素（如 get_by_role=dialog 或弹窗容器），再在弹窗内 click/fill
-3. 弹窗内元素 locator 优先使用 `弹窗容器 >> get_by_text=`，避免裸 get_by_text 全页匹配
-4. 优先使用稳定选择器：#id > [name='xxx'] > [aria-label='xxx'] > .class
-5. 避免使用动态 class（含 random/hash 的 class）
-6. 输入操作使用 fill_value；需要模拟真实键盘输入用 type_value
-7. 引用环境变量或动态值时，params 中的字符串统一使用 ${{变量名}}，如 ${{username}}、${{password}}、auto_${{random_int}}
-8. 如果需求没提到关闭浏览器，最后一步不加 close
-9. 严禁输出列表中不存在的 method 或参数名
-10. 输出必须是可直接解析的 JSON 数组，不要任何解释文字""",
+3. **原生 alert/confirm/prompt**：优先在 click_ele / click_by_text 上设置 accept_dialog 或 dismiss_dialog（同一步点击并处理弹窗）。独立 accept_dialog / dismiss_dialog 仅对紧随下一步生效，未触发则自动清除
+4. **文件下载**：在 click_ele / click_by_text 上设置 wait_download:true，同一步完成点击并等待下载。可先 confirm 再下载：同时设置 accept_dialog 与 wait_download。独立 wait_for_download 仅对紧随下一步生效
+5. **URL 等待**：wait_for_url_contains 默认字面子串匹配；需要正则时设置 use_regex:true
+6. **Ajax 提交/列表刷新**：优先 wait_for_response 或 wait_for_element_text_stable，少用固定 wait_for_time
+7. **列表/表格行数校验**：使用 kw_assert_element_count
+8. **否定文本预期**：使用 kw_assert_text_not_contains，不要用 hidden 代替「文本不应出现」
+9. 弹窗内元素 locator 优先使用 `弹窗容器 >> get_by_text=`，避免裸 get_by_text 全页匹配
+10. 优先使用稳定选择器：#id > [name='xxx'] > [aria-label='xxx'] > .class
+11. 避免使用动态 class（含 random/hash 的 class）
+12. 输入操作使用 fill_value；需要模拟真实键盘输入用 type_value
+13. 引用环境变量或动态值时，params 中的字符串统一使用 ${{变量名}}，如 ${{username}}、${{password}}、auto_${{random_int}}
+14. 如果需求没提到关闭浏览器，最后一步不加 close
+15. 严禁输出列表中不存在的 method 或参数名
+16. 页面滚动只用 scroll_to_height（params.height）或 scroll_to_element（params.locator）；鼠标滚轮用 mouse_wheel（params.x/y）。严禁幻觉 method：scroll、scroll_down、scroll_up、scroll_page、scroll_to、scrollBy、scrollTo
+17. 输出必须是可直接解析的 JSON 数组，不要任何解释文字""",
             "examples": [],
         },
         "ui_agent_plan": {
@@ -344,6 +375,7 @@ Snapshot 类型：{{snapshot_type}}
 2. 若还需操作，设 done=false，step 仅包含**一步**
 3. method 仅限：open_url, fill_value, click_ele, hover, select_option, type_value, clear_value,
    wait_for_time, wait_for_element, wait_for_load, press_key, scroll_to_height
+   （页面滚动仅用 scroll_to_height + params.height；严禁 scroll / scroll_down / scroll_up / scroll_to）
 4. params.locator 必须是**字符串**（禁止 JSON 对象）。**点击按钮/链接**时按优先级选用（snapshot 里有什么用什么）：
    - 有 id → `#btn-login` 或 `//button[@id='btn-login']`
    - 有 data-testid → `[data-testid=xxx]`
@@ -522,17 +554,19 @@ Snapshot 类型：{{snapshot_type}}
             "system_prompt": (
                 "你是一位资深需求分析师与功能测试专家，擅长从原型图、流程图、界面截图中提取可测试信息。"
                 "输出须客观、可验证，优先引用图中可见的文字与控件，不要臆造需求中未出现的内容。"
+                "若上方文档文字摘要与图片不一致，须在 summary / business_rules 中注明差异，"
+                "并标明可测试结论应以文档文字为准。"
                 "严格输出 JSON，不要 Markdown 代码块或解释文字。"
             ),
-            "user_prompt_template": """以下是需求文档的文字摘要（供上下文参考，可与图片交叉印证）：
+            "user_prompt_template": """以下是需求文档的文字摘要（供上下文参考，可与图片交叉印证；**冲突时以文字摘要为准**）：
 {{doc_text_excerpt}}
 
 请分析**当前这张图片**，提取与功能测试直接相关的信息。要求：
-1. **ui_elements**：列出可见控件/区域（按钮、输入框、Tab、表格列、状态标签等），尽量使用图中或上下文中出现的**原文名称**
+1. **ui_elements**：列出可见控件/区域（按钮、输入框、Tab、表格列、状态标签等），尽量使用图中或上下文中出现的**原文名称**；若与文字摘要冲突，标注「（仅图中可见，文字未述）」
 2. **exact_messages**：列出图中或需求可见的**固定文案**（按钮文字、提示语、错误提示、字段标签、单位如 MB/个/字等），逐条原文摘录
-3. **business_rules**：从图中或上下文可推断的**业务规则与边界**（必填、禁用条件、数量/大小上限、状态流转等）；无依据则不写
+3. **business_rules**：从图中或上下文可推断的**业务规则与边界**（必填、禁用条件、数量/大小上限、状态流转等）；无依据则不写；与文字冲突时优先写文字规则
 4. **test_points**：针对本图应设计的测试关注点（含 UI 布局/可见性/交互反馈）
-5. **module** / **summary**：模块名与一句话概述
+5. **module** / **summary**：模块名与一句话概述（含图文差异提示，如有）
 
 输出 JSON（字段不可省略，无内容时用空数组 []）：
 {
@@ -554,6 +588,8 @@ Snapshot 类型：{{snapshot_type}}
                 "你是一位有 10 年经验的功能测试工程师，编写可直接执行的手工测试用例。"
                 "所有步骤、预期、数值、提示文案须**有据可依**：只能来自下方【本次生成范围】正文、"
                 "其中 [图-N] 读图摘要，或需求中明确写明的测试环境地址；禁止编造需求未出现的上限、错误码或按钮文案。"
+                "正文/表格与高保截图冲突时**以文字为准**，禁止采纳文字未定义的控件、状态或筛选项。"
+                "参考条数偏少时：优先覆盖各主要功能的主路径与核心操作闭环，再写异常/边界；禁止把额度花在浅浏览用例上。"
                 "高质量标准：前置条件可落地、每步操作含对象+动作+关键数据、预期可观察可判定；"
                 "涉及表单/反馈/弹窗/跳转/多状态切换的流程须拆成多步，禁止为凑条数写一步式浅用例。"
                 "你必须严格输出标准 JSON 数组，不要 Markdown 代码块。"
@@ -601,7 +637,12 @@ Snapshot 类型：{{snapshot_type}}
 
 ## 需求 grounding（硬性）
 - 文件大小、数量上限、字数限制、配额、评分阈值、错误提示等**必须与上文一致**；上文未写明的写「（需求待确认）」勿虚构具体数字
-- 范围内含 **[图-N]** 或读图 JSON 摘要时：相关用例至少 **30%** 应引用具体 **ui_elements / exact_messages**（控件名、布局、提示原文）
+- **图文冲突**：正文/表格与 [图-N] 读图摘要或高保截图不一致时，**以正文/表格为准**；禁止把文字未出现的按钮、状态、筛选项、固定控件数量写进用例
+- 范围内含 **[图-N]** 或读图 JSON 摘要时：相关用例可引用具体 **ui_elements / exact_messages**，但须先核对是否与文字一致；仅图中可见、文字未述的内容默认不测，除非测试点是「图文差异」本身
+
+## 条数与优先级
+- 参考条数是目标而非硬凑；条数偏少时先覆盖各主要功能点的主路径与核心动作闭环，再写异常/权限/边界
+- 禁止把额度花在打开页面、只读展示、重复浏览类浅用例上
 
 ## 禁止使用的空洞表述（step/expect/precondition 均禁止）
 「执行操作」「符合预期」「显示正常」「功能正常」「操作成功」「执行步骤 N」等无具体对象的描述
@@ -1188,13 +1229,14 @@ Bug 总数：{{ bug_total }}，未关闭：{{ bug_open_count }}，已关闭：{{
 5. 不要输出 JSON 或 Markdown 代码块。""",
             "examples": [],
         },
-        "digitech_scheme_narrative": {
-            "name": "定制测试方案叙述",
-            "scene_type": "digitech_scheme_narrative",
-            "description": "定制测试方案概述、策略与风险",
+        "knowledge_pack_scheme_narrative": {
+            "name": "资料库测试方案叙述",
+            "scene_type": "knowledge_pack_scheme_narrative",
+            "description": "资料库测试方案概述、策略与风险",
             "system_prompt": (
                 "你是企业级测试方案撰写专家。"
-                "根据迭代计划与测试计划数据生成专业中文 JSON，不要编造需求编号。"
+                "必须严格依据提供的需求列表与进度计划生成 JSON，不得编造需求编号。"
+                "测试策略中的时间节点必须与进度计划一致；测试数据须按当前需求逐条给出可执行准备项。"
             ),
             "user_prompt_template": """项目：{{ project_name }}
 迭代编号：{{ iteration_no }}
@@ -1210,21 +1252,36 @@ Bug 总数：{{ bug_total }}，未关闭：{{ bug_open_count }}，已关闭：{{
 {
   "overview": "测试概述（1.概述首段）",
   "test_objectives": "测试目标",
-  "test_data": "测试数据准备说明",
+  "test_data": "测试数据准备说明（必须按上方需求编号/场景分组，写清账号、样例数据、环境、配置等，禁止沿用其他迭代通用描述）",
   "ai_overview_extra": "本项目补充说明",
-  "ai_func_priority": "功能测试重点与优先级",
-  "test_strategy": "整体测试策略摘要",
+  "ai_func_priority": "功能测试重点与优先级（按 P0/P1 与需求场景归纳）",
+  "func_test_priority": "3.1.1 功能测试表-测试重点与优先级（按 P0/P1 列出需求编号与场景，勿用其他迭代编号）",
+  "func_test_special_notes": "3.1.1 功能测试表-需考虑的特殊事项（按当前需求写数据/环境/联调准备）",
+  "ui_test_priority": "3.1.2 UI 测试表-测试重点",
+  "ui_test_special_notes": "3.1.2 UI 测试表-特殊事项",
+  "perf_test_priority": "3.1.3 性能测试表-测试重点（本轮是否专项压测）",
+  "perf_test_special_notes": "3.1.3 性能测试表-特殊事项",
+  "security_test_priority": "3.1.4 安全测试表-测试重点",
+  "security_test_special_notes": "3.1.4 安全测试表-特殊事项",
+  "compat_test_priority": "3.1.5 兼容性测试表-测试重点",
+  "compat_test_special_notes": "3.1.5 兼容性测试表-特殊事项",
+  "regression_test_priority": "3.1.6 回归测试表-测试重点（按本迭代修改模块，勿沿用其他迭代的需求编号）",
+  "regression_test_special_notes": "3.1.6 回归测试表-特殊事项",
+  "test_strategy": "整体测试策略摘要（必须引用进度计划中的日期与里程碑，写明提测/评审/发布窗口，禁止写 6/30、7/1 等未在进度计划出现的日期）",
   "risks": [
     {"req_no": "编号", "risk_assessment": "风险描述", "risk_scope": "影响范围"}
   ]
 }
-只输出 JSON。""",
+要求：
+1. risks 至少覆盖全部 P0 需求；备注含「风险/不明确」的条目须单独说明；
+2. 进度计划为空时，test_strategy 中不要写具体日期；
+3. 只输出 JSON。""",
             "examples": [],
         },
-        "digitech_report_narrative": {
-            "name": "定制测试报告叙述",
-            "scene_type": "digitech_report_narrative",
-            "description": "定制测试报告结论、缺陷分析与建议",
+        "knowledge_pack_report_narrative": {
+            "name": "资料库测试报告叙述",
+            "scene_type": "knowledge_pack_report_narrative",
+            "description": "资料库测试报告结论、缺陷分析与建议",
             "system_prompt": (
                 "你是企业级测试报告撰写专家。"
                 "统计数字由系统提供，不得篡改通过率或 Bug 数量。"
@@ -1265,6 +1322,8 @@ Bug 总数：{{ bug_total }}，未关闭：{{ bug_open_count }}，已关闭：{{
                 "你是一个专业的 UI 自动化测试用例优化专家。"
                 "你的任务是对机器录制的测试步骤进行精简和描述优化。"
                 "只删除或合并符合规则的冗余步骤；若原始步骤已较简洁，可保持相近步数，禁止为凑删减率误删必要操作。"
+                "method/keyword 必须使用平台已登记名称；页面滚动只用 scroll_to_height 或 scroll_to_element，"
+                "严禁输出 scroll、scroll_down、scroll_up、scroll_to 等未登记 method。"
                 "你必须严格输出标准 JSON 格式，不要包含 Markdown 代码块标记（如 ```json），直接输出纯 JSON 文本。"
             ),
             "user_prompt_template": """测试目的：{{description}}
@@ -1322,9 +1381,20 @@ Bug 总数：{{ bug_total }}，未关闭：{{ bug_open_count }}，已关闭：{{
 - drag_and_drop 步骤必须保留 params.start_selector 与 params.end_selector，禁止修改或删除
 - 若步骤标注「定位已锁定」，必须保持原 params.locator 完全不变
 - params.locator 允许从该步骤「候选定位」列表中重新选择更稳的一项；**禁止**自造不在列表中的表达式
-- 选择原则：优先 data-testid / 稳定 #id（非 ng- 等动态 id）；页面上有多个相似按钮时，locator 必须与 desc 中的目标名称一致
-- 表格行内操作（如知识库列表勾选、行内编辑）：候选含 `//tr[contains(.,"行文本")]` 时优先选行级 XPath，勿用裸 get_by_text
-- 常见短词（设置、登录、提交等）且存在区域链式候选（如 header >> get_by_text=设置）时，优先选区域链式而非裸 get_by_text
+- **优先级（从高到低，有则优先选）**：
+  1. data-testid / 稳定 #id（非 el-id-、ng-、:r 等动态 id）
+  2. **组件路径 CSS**（含 `.el-` / `.ant-` / `.ui-` 且带 `>` 或 nth-of-type，如 `tr.el-table__row:nth-of-type(1) > ... > button.el-button`）
+  3. **下拉选项 XPath**（如 `//li[contains(@class,'el-select-dropdown__item') and normalize-space()='测试环境']`）
+  4. **表格相对 XPath**（如 `(//div[contains(@class,'el-table')])[1]//tbody/tr[1]/td[11]//button[1]` 或 `normalize-space()="运行"` 的行内按钮）
+  5. 区域链式（`header >> get_by_text=...`、弹窗容器 `>> get_by_text=`）
+  6. get_by_role / get_by_placeholder；常见短词慎用裸 get_by_text
+- **严禁选用**：
+  - 纯 `div:nth-of-type(n) > ...` 长结构链（无业务 class，DOM 轻微变动即失效）
+  - `/html[1]/body[1]/...` 绝对路径（若必须选用须带 `xpath=` 前缀；一般应换更好候选）
+  - `//tr[...]//*[contains(.,"运行")]` 子串匹配（会误点「运行错误/成功/失败」）；应选 `normalize-space()="运行"` 或 `button[normalize-space()="运行"]`
+  - `span.ui-env-option__name` 这类无文本约束的浅层 class（会命中所有同类选项）
+- 表格行内操作（知识库列表勾选、行内编辑）：候选含行级/表格 XPath 或组件路径时优先选，勿用裸 get_by_text
+- 常见短词（设置、登录、提交、运行、报告等）且存在区域链式候选时，优先区域链式而非裸 get_by_text
 - 若不确定，保持原 locator 不变
 
 ========== keyword 映射表（必须严格使用） ==========
@@ -1332,17 +1402,26 @@ open_url → 访问页面url
 click_ele → 点击元素
 fill_value → 元素输入
 wait_for_time → 强制等待时间
+wait_for_element → 等待元素可见
 hover → 鼠标悬停到元素上方
 press_key → 键盘按键
-scroll → 滚动页面
+scroll_to_height → 滚动到指定高度位置
+scroll_to_element → 滚动到元素
 mouse_click → 鼠标点击
+mouse_wheel → 鼠标滚动
 upload_file → input文件上传
 drag_and_drop → 拖拽元素
-assert_text → 断言文本存在
-assert_ele → 断言元素存在
-select_option → 下拉框选择
-switch_frame → 切换iframe
+select_option → 选择下拉框的值
 close_page → 关闭页面
+（断言类步骤仅能在「补充断言」阶段新增，本阶段禁止新增 method）
+
+【滚动 method 硬性约束 · 违反会导致 Runner 报「关键字不存在」】
+- 页面滚动**只允许** `scroll_to_height`（params 必须含 `height`，滚到顶部用 height:0）或 `scroll_to_element`（params 必须含 `locator`）
+- **严禁**输出以下非法 / 幻觉 method（平台未注册，执行必失败）：
+  `scroll`、`scroll_down`、`scroll_up`、`scroll_page`、`scroll_to`、`scrollBy`、`scrollTo`
+- **严禁**把页面滚动写成 `scroll` + x/y，或 desc 写成「滚动页面到 (x, y)」；坐标滚轮应保留/使用 `mouse_wheel`（params: x, y），与页面 `scroll_to_height` 不是同一关键字
+- 原始步骤若已是 `scroll_to_height` / `scroll_to_element`，优化后 **method 与 keyword 必须保持上表映射**，禁止改成 `scroll` 或其它缩写
+- 不确定时：保留原始滚动 method 与 params，不要 invent 新 method
 
 ========== 删减原则示例 ==========
 原始（10步）：
@@ -1371,10 +1450,10 @@ close_page → 关闭页面
 1. 返回精简后的步骤数组，每个步骤必须包含 method、desc、params、keyword、source_step_ids 字段
 2. 仅删除【任务1】列出的冗余、合并【任务2】的连续操作；步数可减少也可相近，以业务正确性为第一优先级，禁止误删必要等待/hover/导航
 3. source_step_ids 为数组，对应上方原始步骤序号（从 1 开始）：保留单步写 [5]；合并多步写 [3, 4]
-4. keyword 必须严格使用上面的映射表，不要自己编造
+4. keyword / method 必须严格使用上面的映射表，不要自己编造；尤其禁止把滚动类写成未登记的 `scroll`
 5. 不要添加原始步骤中没有的操作
 6. 不要编造不存在的页面元素
-7. 描述使用中文，简洁完整
+7. 描述使用中文，简洁完整；滚动类 desc 用「滚动到高度 N」或「滚动到 xxx 元素」，禁止「滚动页面到 (x, y)」这类非法表述
 8. 直接输出纯 JSON，严禁使用 markdown 代码块（```json）
 
 返回格式：
@@ -1427,6 +1506,9 @@ close_page → 关闭页面
    | 应出现/可见 | kw_assert_visible | 菜单项、按钮、提示文案应展示 |
    | 文本等于 | kw_assert_element_text | 断言元素文本为某值 |
    | **不存在** | kw_assert_not_exist | 「菜单中无该项」「列表不包含 X」—— DOM 匹配数必须为 0 |
+   | **文本不应出现** | kw_assert_text_not_contains | 页面/元素文本不应包含某片段（非 DOM 不存在） |
+   | **元素数量** | kw_assert_element_count | 列表/表格/搜索结果条数 |
+   | **属性存在** | kw_assert_attribute_exists | disabled/aria-* 等状态属性 |
    | **不可见** | kw_assert_not_visible | 元素可能在 DOM 中，但对用户不可见（遮挡/opacity/折叠区未展开） |
    | **隐藏** | kw_assert_hidden | CSS hidden、display:none 或未挂载（Playwright hidden） |
    | 页面 URL | kw_assert_page_url | 跳转后 URL |
@@ -1448,6 +1530,9 @@ close_page → 关闭页面
 kw_assert_visible → 断言元素可见
 kw_assert_element_text → 断言元素文本值
 kw_assert_not_exist → 断言元素不存在
+kw_assert_text_not_contains → 断言文本不包含
+kw_assert_element_count → 断言元素数量
+kw_assert_attribute_exists → 断言元素属性存在
 kw_assert_not_visible → 断言元素不可见
 kw_assert_hidden → 断言元素隐藏
 kw_assert_page_url → 断言页面url地址
@@ -1633,17 +1718,47 @@ Vision 屏幕描述：
 }
 intent=name 时可省略 steps；intent=steps 时可省略 element_name。""",
             "examples": [],
-        }
+        },
+        "qa_judge": {
+            "name": "问答准确性评判",
+            "scene_type": "qa_eval",
+            "description": (
+                "RAG 评测公式 v2（范畴+完整性+准确性+表达，0~1 分 + 5 级等级）。"
+                "变量：question=问题，ground_truth=标准答案，answer=实际回答（被测 API 或导入）"
+            ),
+            "system_prompt": (
+                "你是企业知识库问答质量评审专家。"
+                "必须严格按用户给出的分项公式与 5 级等级映射执行评估，"
+                "仅输出 1 个 JSON 对象（不要 Markdown 代码块）。"
+            ),
+            "user_prompt_template": "",
+            "examples": [],
+        },
     }
 
     @classmethod
+    def _qa_judge_pro_user_template(cls) -> str:
+        from app.modules.qa_eval.qa_judge_prompt import QA_JUDGE_USER_PROMPT_TEMPLATE
+
+        return QA_JUDGE_USER_PROMPT_TEMPLATE
+
+    @classmethod
     def _resolve_default_template(cls, code: str) -> dict | None:
-        if code in KNOWLEDGE_PACK_PROMPT_SCENES and not knowledge_digitech_pack_enabled():
+        if code in KNOWLEDGE_PACK_PROMPT_SCENES and not knowledge_pack_addon_enabled():
             return None
         data = cls.DEFAULT_TEMPLATES.get(code)
         if not data:
             return None
         out = dict(data)
+        if code == "qa_judge":
+            if is_community_edition():
+                out.update(
+                    description=QA_JUDGE_DESCRIPTION_CE,
+                    system_prompt=QA_JUDGE_SYSTEM_PROMPT_CE,
+                    user_prompt_template=QA_JUDGE_USER_PROMPT_TEMPLATE_CE,
+                )
+            else:
+                out["user_prompt_template"] = cls._qa_judge_pro_user_template()
         return out
 
     @classmethod

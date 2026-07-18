@@ -75,7 +75,13 @@ class SendUiReportPayload(BaseModel):
 
 # ============ 项目通知配置 ============
 
-@router.get("/config", summary="获取项目通知配置列表", response_model=List[NotificationConfigOut], status_code=status.HTTP_200_OK)
+@router.get(
+    "/config",
+    summary="获取项目通知配置列表",
+    response_model=List[NotificationConfigOut],
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permissions(NOTIFICATION_CONFIG_VIEW))],
+)
 async def get_notification_configs(project_id: int):
     """按项目查询所有通知配置"""
     configs = await NotificationConfig.filter(project_id=project_id).all()
@@ -95,7 +101,13 @@ async def get_notification_configs(project_id: int):
     return result
 
 
-@router.post("/config", summary="创建通知配置", response_model=NotificationConfigOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/config",
+    summary="创建通知配置",
+    response_model=NotificationConfigOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permissions(NOTIFICATION_CONFIG_EDIT))],
+)
 async def create_notification_config(item: NotificationConfigItem, project_id: int):
     """为项目创建通知配置"""
     project = await Project.get_or_none(id=project_id, is_del=False)
@@ -125,7 +137,13 @@ async def create_notification_config(item: NotificationConfigItem, project_id: i
     )
 
 
-@router.put("/config/{config_id}", summary="更新通知配置", response_model=NotificationConfigOut, status_code=status.HTTP_200_OK)
+@router.put(
+    "/config/{config_id}",
+    summary="更新通知配置",
+    response_model=NotificationConfigOut,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permissions(NOTIFICATION_CONFIG_EDIT))],
+)
 async def update_notification_config(config_id: int, item: NotificationConfigItem):
     """更新通知配置"""
     cfg = await NotificationConfig.get_or_none(id=config_id)
@@ -154,7 +172,12 @@ async def update_notification_config(config_id: int, item: NotificationConfigIte
     )
 
 
-@router.delete("/config/{config_id}", summary="删除通知配置", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/config/{config_id}",
+    summary="删除通知配置",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permissions(NOTIFICATION_CONFIG_EDIT))],
+)
 async def delete_notification_config(config_id: int):
     """删除通知配置"""
     cfg = await NotificationConfig.get_or_none(id=config_id)
@@ -163,7 +186,12 @@ async def delete_notification_config(config_id: int):
     await cfg.delete()
 
 
-@router.post("/config/{config_id}/test", summary="测试通知配置", status_code=status.HTTP_200_OK)
+@router.post(
+    "/config/{config_id}/test",
+    summary="测试通知配置",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permissions(NOTIFICATION_CONFIG_EDIT))],
+)
 async def test_notification_config(config_id: int):
     """按配置发送一条测试消息"""
     cfg = await NotificationConfig.get_or_none(id=config_id)

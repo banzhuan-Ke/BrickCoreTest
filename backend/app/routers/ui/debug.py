@@ -22,6 +22,7 @@ from app.modules.ui.ui_project_guard import (
     assert_user_project_member,
     assert_user_project_viewer,
 )
+from app.modules.ui.ui_debug_command import dispatch_debug_command
 from app.modules.ui.ui_device_guard import assert_device_available_for_debug, get_active_debug_session
 from app.modules.ui.ui_debug_steps import (
     compute_steps_fingerprint,
@@ -31,6 +32,7 @@ from app.modules.ui.ui_debug_steps import (
 from app.modules.ui.ui_debug_index_map import resolve_editor_indices_to_run_segments
 from app.modules.ui.ui_debug_session_lifecycle import (
     UI_DEBUG_IDLE_SECONDS,
+    build_closed_last_result,
     recover_stale_session,
     request_close_session,
     serialize_idle_meta,
@@ -143,27 +145,9 @@ async def _dispatch_debug_command(
     *,
     session_status: str = "running",
 ) -> dict:
-    if session.status == "closing":
-        raise HTTPException(status_code=409, detail="会话正在关闭，无法执行新命令")
-    pending = session.pending_command if isinstance(session.pending_command, dict) else None
-    if pending and pending.get("status") in ("pending", "dispatched"):
-        raise HTTPException(status_code=409, detail="上一条命令尚未执行，请稍候")
-
-    command_id = str(uuid.uuid4())
-    session.pending_command = {
-        "command_id": command_id,
-        "action": action,
-        "status": "pending",
-        **payload,
-    }
-    session.status = session_status
-    await session.save()
-    return {
-        "session_id": session.id,
-        "command_id": command_id,
-        "action": action,
-        "status": session.status,
-    }
+    return await dispatch_debug_command(
+        session, action, payload, session_status=session_status
+    )
 
 
 @router.post("/sessions", summary="打开交互调试浏览器", status_code=status.HTTP_201_CREATED,
@@ -402,6 +386,61 @@ async def set_debug_pick_mode(
     return {"data": data}
 
 
+@router.post("/sessions/{session_id}/clear-highlight", summary="取消浏览器定位器高亮",
+             dependencies=[Depends(require_permissions(UI_CASE_EXECUTE))])
+async def clear_debug_highlight(
+    session_id: int,
+    user_info: dict = Depends(require_permissions(UI_CASE_EXECUTE)),
+):
+    session = await _get_session_for_user(session_id, user_info, require_execute=True)
+    if session.status != "ready":
+        raise HTTPException(status_code=409, detail=f"会话状态为 {session.status}，无法取消高亮")
+    data = await _dispatch_debug_command(session, "clear_highlight", {})
+    return {"data": data}
+
+
+@router.post("/sessions/{session_id}/select-step", summary="同步当前选中步骤到 Runner 工具条",
+             dependencies=[Depends(require_permissions(UI_CASE_EXECUTE))])
+async def select_debug_step(
+    session_id: int,
+    body: DebugSessionStepActionForm,
+    user_info: dict = Depends(require_permissions(UI_CASE_EXECUTE)),
+):
+    session = await _get_session_for_user(session_id, user_info, require_execute=True)
+    if session.status != "ready":
+        raise HTTPException(status_code=409, detail=f"会话状态为 {session.status}，无法选中步骤")
+    steps = session.steps or []
+    if body.step_index >= len(steps):
+        raise HTTPException(status_code=422, detail="step_index 超出步骤范围")
+    # 选中步骤只同步 Runner 工具条标签，不应把会话打成 running（否则连点会 409 弹「请求失败」）
+    pending = session.pending_command if isinstance(session.pending_command, dict) else None
+    if (
+        pending
+        and pending.get("action") == "select_step"
+        and pending.get("status") == "pending"
+    ):
+        pending = dict(pending)
+        pending["step_index"] = body.step_index
+        session.pending_command = pending
+        await session.save()
+        return {
+            "data": {
+                "session_id": session.id,
+                "command_id": pending.get("command_id"),
+                "action": "select_step",
+                "status": session.status,
+            }
+        }
+    data = await dispatch_debug_command(
+        session,
+        "select_step",
+        {"step_index": body.step_index},
+        session_status="ready",
+        update_session_status=False,
+    )
+    return {"data": data}
+
+
 @router.post("/sessions/{session_id}/run", summary="执行指定步骤（保活浏览器）",
              dependencies=[Depends(require_permissions(UI_CASE_EXECUTE))])
 async def run_debug_steps(
@@ -540,13 +579,28 @@ async def runner_poll_command(
     return {"data": cmd}
 
 
+
+def _clear_pending_command(session: UiDebugSession, command_id: Optional[str]) -> None:
+    """仅在匹配 command_id 或当前无 pending 时清理；无 command_id 的工具条回调不得冲掉平台等待中的命令。"""
+    pending = session.pending_command if isinstance(session.pending_command, dict) else None
+    if not pending:
+        session.pending_command = None
+        return
+    if command_id and pending.get("command_id") == command_id:
+        session.pending_command = None
+
+
 _RESULT_EVENTS = frozenset({
     "step_result",
     "steps_synced",
     "highlight_result",
     "verify_result",
+    "clear_highlight_result",
+    "select_step",
     "pick_result",
     "pick_mode",
+    "record_started",
+    "record_stopped",
 })
 
 
@@ -595,7 +649,7 @@ async def runner_debug_callback(
     elif event == "step_result":
         session.status = "ready"
         session.last_result = {"type": "run", **payload}
-        session.pending_command = None
+        _clear_pending_command(session, body.command_id)
         session.error = None
     elif event == "steps_synced":
         session.status = "ready"
@@ -603,24 +657,46 @@ async def runner_debug_callback(
     elif event == "highlight_result":
         session.status = "ready"
         session.last_result = {"type": "highlight", **payload}
-        session.pending_command = None
+        _clear_pending_command(session, body.command_id)
         session.error = None
     elif event == "verify_result":
         session.status = "ready"
         session.last_result = {"type": "verify", **payload}
-        session.pending_command = None
+        _clear_pending_command(session, body.command_id)
         session.error = None
+    elif event == "clear_highlight_result":
+        session.status = "ready"
+        session.last_result = {"type": "clear_highlight", **payload}
+        _clear_pending_command(session, body.command_id)
+        session.error = None
+    elif event == "select_step":
+        session.status = "ready"
+        _clear_pending_command(session, body.command_id)
     elif event == "pick_result":
         session.status = "ready"
         session.last_result = {"type": "pick", **payload}
-        session.pending_command = None
+        _clear_pending_command(session, body.command_id)
         session.error = None
     elif event == "pick_mode":
         session.status = "ready"
+        _clear_pending_command(session, body.command_id)
+    elif event == "record_started":
+        session.status = "ready"
+        session.last_result = {"type": "recording", **payload}
         session.pending_command = None
+        session.error = None
+    elif event == "record_stopped":
+        session.status = "ready"
+        session.last_result = {"type": "record_stopped", **payload}
+        session.pending_command = None
+        session.error = None
     elif event == "closed":
+        pending = session.pending_command if isinstance(session.pending_command, dict) else {}
+        reason = (payload.get("reason") or pending.get("close_reason") or "user_close").strip()
         session.status = "closed"
         session.pending_command = None
+        session.last_result = build_closed_last_result(reason)
+        session.error = None
     elif event == "error":
         session.status = "error"
         session.error = payload.get("message") or payload.get("error") or "调试会话异常"

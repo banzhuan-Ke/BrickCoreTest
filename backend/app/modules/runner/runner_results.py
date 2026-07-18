@@ -4,8 +4,16 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from tortoise.transactions import in_transaction
+
 from app.core.ops.notification import NotificationService
 from app.modules.ui.ui_case_status import normalize_ui_case_status
+from app.modules.ui.plan_reaggregation import aggregate_plan_from_suites
+from app.modules.ui.ui_execution_status import (
+    is_ui_case_terminal,
+    should_apply_plan_status_update,
+    should_apply_suite_status_update,
+)
 from app.modules.ui.ui_suite_hooks import trigger_ui_suite_hooks_for_execution
 from app.models.sys import NotificationConfig
 from app.models.ui import Suite, Task, UiCaseExecution, UiPlanExecution, UiSuiteExecution
@@ -47,7 +55,12 @@ async def _save_case_result(case_result: dict[str, Any], case_execution_id: Opti
     if not record:
         logger.error("用例执行记录不存在: %s", case_execution_id)
         return
-    record.status = normalize_ui_case_status(case_result.get("status")) or record.status
+    new_status = normalize_ui_case_status(case_result.get("status")) or record.status
+    if is_ui_case_terminal(record.status) and new_status != record.status:
+        record.result_data = case_result
+        await record.save()
+        return
+    record.status = new_status
     record.result_data = case_result
     await record.save()
 
@@ -79,6 +92,23 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
             if case_count <= run_all + no_run + result.get("fail", 0) + result.get("error", 0)
             else "执行中"
         )
+
+    apply_status = should_apply_suite_status_update(
+        suite_data.status,
+        status,
+        result_cancelled=bool(result.get("cancelled")),
+    )
+    if not apply_status:
+        if is_final:
+            suite_data.execution_log = result.get("execution_log", suite_data.execution_log or [])
+            await suite_data.save()
+        for case in result.get("executed_cases", []):
+            await _save_case_result(case, case.get("execution_id"))
+        for case in result.get("pending_cases", []):
+            payload = dict(case)
+            payload.setdefault("status", "no_run")
+            await _save_case_result(payload, case.get("execution_id"))
+        return
 
     suite_data.status = status
     suite_data.run_all = run_all
@@ -140,49 +170,56 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
 
 async def _reaggregate_plan_execution(task_record_id: int) -> None:
     """从各套件执行记录汇总计划统计（并行分设备时避免竞态覆盖）。"""
-    task_data = await UiPlanExecution.get_or_none(id=task_record_id, is_del=False)
-    if not task_data:
-        return
+    async with in_transaction():
+        task_data = await UiPlanExecution.select_for_update().get_or_none(
+            id=task_record_id, is_del=False
+        )
+        if not task_data:
+            return
 
-    suites = await UiSuiteExecution.filter(plan_execution_id=task_record_id, is_del=False).all()
-    if not suites:
-        return
+        suites = await UiSuiteExecution.filter(plan_execution_id=task_record_id, is_del=False).all()
+        if not suites:
+            return
 
-    old_status = task_data.status
-    case_count = task_data.case_count or 0
-    success = sum(s.success or 0 for s in suites)
-    fail = sum(s.fail or 0 for s in suites)
-    error = sum(s.error or 0 for s in suites)
-    skip = sum(s.skip or 0 for s in suites)
-    run_all = sum(s.run_all or 0 for s in suites)
-    duration = max((s.duration or 0) for s in suites)
-    pass_rate = round((success + skip) / case_count * 100, 2) if case_count > 0 else 0
+        old_status = task_data.status
+        case_count = task_data.case_count or 0
+        suite_rows = [
+            {
+                "status": s.status,
+                "success": s.success,
+                "fail": s.fail,
+                "error": s.error,
+                "skip": s.skip,
+                "run_all": s.run_all,
+                "no_run": s.no_run,
+                "duration": s.duration,
+            }
+            for s in suites
+        ]
+        agg = aggregate_plan_from_suites(suite_rows, case_count=case_count)
+        status = agg["status"]
+        success = agg["success"]
+        fail = agg["fail"]
+        error = agg["error"]
+        skip = agg["skip"]
+        run_all = agg["run_all"]
+        no_run = agg["no_run"]
+        duration = agg["duration"]
+        pass_rate = agg["pass_rate"]
 
-    statuses = [s.status for s in suites]
-    terminal = {"执行完成", "已停止"}
-    if any(s not in terminal for s in statuses):
-        status = "已停止" if any(s == "已停止" for s in statuses) else "执行中"
-    elif all(s == "执行完成" for s in statuses):
-        status = "执行完成"
-    else:
-        status = "执行中"
+        if not should_apply_plan_status_update(old_status, status):
+            return
 
-    accounted = success + fail + error + skip
-    if status == "执行中":
-        no_run = max(0, case_count - accounted)
-    else:
-        no_run = sum(s.no_run or 0 for s in suites)
-
-    task_data.status = status
-    task_data.run_all = run_all
-    task_data.no_run = no_run
-    task_data.success = success
-    task_data.fail = fail
-    task_data.error = error
-    task_data.skip = skip
-    task_data.duration = duration
-    task_data.pass_rate = pass_rate
-    await task_data.save()
+        task_data.status = status
+        task_data.run_all = run_all
+        task_data.no_run = no_run
+        task_data.success = success
+        task_data.fail = fail
+        task_data.error = error
+        task_data.skip = skip
+        task_data.duration = duration
+        task_data.pass_rate = pass_rate
+        await task_data.save()
 
     if old_status == status or status not in ("执行完成", "已停止"):
         return

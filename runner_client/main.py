@@ -41,6 +41,7 @@ from runner_client import __version__
 from runner_client.app.api_client import ApiError, BrickCoreApi, compare_version
 from runner_client.app.app_local_status import build_app_local_panel_text
 from runner_client.app.brick_animation import StartupSplash
+from runner_client.app.recording_panel import RecordingPanel
 from runner_client.app.engine_manager import EngineManager
 from runner_client.app.health import probe_connect_bundle
 from runner_client.app.perf_worker_manager import PerfWorkerManager
@@ -134,6 +135,72 @@ class _AppStatusWorker(QThread):
             force_probe=self._force_probe,
         )
         self.result_ready.emit(panel)
+
+
+class _RecordingControlWorker(QThread):
+    finished_ok = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        api: BrickCoreApi,
+        action: str,
+        record_id: int,
+        *,
+        var_name: str = "",
+        source: str = "text",
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._api = api
+        self._action = action
+        self._record_id = record_id
+        self._var_name = var_name
+        self._source = source
+
+    def run(self) -> None:
+        try:
+            if self._action == "pause":
+                self._api.pause_recording(self._record_id)
+                self.finished_ok.emit(f"[录制面板] 已暂停录制 #{self._record_id}")
+            elif self._action == "resume":
+                self._api.resume_recording(self._record_id)
+                self.finished_ok.emit(f"[录制面板] 已继续录制 #{self._record_id}")
+            elif self._action == "stop":
+                self._api.stop_recording(self._record_id)
+                self.finished_ok.emit(f"[录制面板] 已发送停止录制 #{self._record_id}")
+            elif self._action == "save_variable":
+                self._api.save_recording_variable(
+                    self._record_id,
+                    self._var_name,
+                    self._source,
+                )
+                self.finished_ok.emit(f"[录制面板] 已存变量 ${{{self._var_name}}}")
+            else:
+                self.failed.emit(f"未知录制操作: {self._action}")
+        except ApiError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class _RecordingPollWorker(QThread):
+    """后台轮询本机进行中的 Web 录制。"""
+
+    result_ready = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, api: BrickCoreApi, parent=None) -> None:
+        super().__init__(parent)
+        self._api = api
+
+    def run(self) -> None:
+        try:
+            self.result_ready.emit(self._api.fetch_active_recording())
+        except ApiError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class _ConnectWorker(QThread):
@@ -263,6 +330,9 @@ class MainWindow(QMainWindow):
         self._version_worker: _VersionInfoWorker | None = None
         self._connect_worker: _ConnectWorker | None = None
         self._app_status_worker: _AppStatusWorker | None = None
+        self._recording_poll_worker: _RecordingPollWorker | None = None
+        self._recording_control_worker: _RecordingControlWorker | None = None
+        self._recording_control_busy = False
         self._pending_perf_project_id: int | None = None
         self._last_app_udid: str = ""
 
@@ -288,6 +358,10 @@ class MainWindow(QMainWindow):
         self.health_timer = QTimer(self)
         self.health_timer.setInterval(self._health_poll_ms)
         self.health_timer.timeout.connect(self._refresh_health)
+
+        self.recording_poll_timer = QTimer(self)
+        self.recording_poll_timer.setInterval(1000)
+        self.recording_poll_timer.timeout.connect(self._poll_active_recording)
 
         QTimer.singleShot(300, self._check_version_on_startup)
 
@@ -596,7 +670,23 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 3)
         splitter.setChildrenCollapsible(False)
         splitter.setSizes([420, 260])
-        layout.addWidget(splitter, stretch=1)
+
+        self.recording_panel = RecordingPanel()
+        self.recording_panel.setVisible(False)
+        self.recording_panel.setMinimumWidth(260)
+        self.recording_panel.pause_requested.connect(self._on_recording_pause)
+        self.recording_panel.resume_requested.connect(self._on_recording_resume)
+        self.recording_panel.stop_requested.connect(self._on_recording_stop)
+        self.recording_panel.save_variable_requested.connect(self._on_recording_save_variable)
+
+        self._outer_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._outer_splitter.addWidget(splitter)
+        self._outer_splitter.addWidget(self.recording_panel)
+        self._outer_splitter.setStretchFactor(0, 3)
+        self._outer_splitter.setStretchFactor(1, 2)
+        self._outer_splitter.setChildrenCollapsible(False)
+        self._outer_splitter.setSizes([820, 0])
+        layout.addWidget(self._outer_splitter, stretch=1)
 
     def _reset_app_local_status_idle(self) -> None:
         """App 面板初始态：不探测 adb/u2，等用户点击「刷新检测」。"""
@@ -1276,8 +1366,12 @@ class MainWindow(QMainWindow):
         self.poll_timer.start()
         if self._needs_ui_role(execution_role):
             self.heartbeat_timer.start()
+            self.recording_poll_timer.start()
+            QTimer.singleShot(200, self._poll_active_recording)
         else:
             self.heartbeat_timer.stop()
+            self.recording_poll_timer.stop()
+            self._set_recording_panel_visible(False)
 
         role_label = " + ".join(started_parts)
         device_id = self.connect_data.get("device_id", "")
@@ -1336,6 +1430,9 @@ class MainWindow(QMainWindow):
         self.poll_timer.stop()
         self.heartbeat_timer.stop()
         self.health_timer.stop()
+        self.recording_poll_timer.stop()
+        self._set_recording_panel_visible(False)
+        self.recording_panel.clear_recording()
         device_id = (self.connect_data or {}).get("device_id", "")
         if self.api and device_id and self._needs_ui_role(self._active_role):
             try:
@@ -1366,6 +1463,92 @@ class MainWindow(QMainWindow):
         self._on_role_changed()
         self._refresh_health()
         self._sync_tray_actions()
+
+    def _set_recording_panel_visible(self, visible: bool) -> None:
+        self.recording_panel.setVisible(visible)
+        if visible:
+            self.recording_panel.setMaximumWidth(16777215)
+            self._outer_splitter.setSizes([560, 300])
+        else:
+            self.recording_panel.setMaximumWidth(0)
+            self._outer_splitter.setSizes([860, 0])
+
+    def _poll_active_recording(self) -> None:
+        if not self._online or not self.api or not self.api.runner_token:
+            return
+        if not self._needs_ui_role(self._active_role):
+            return
+        if self._recording_poll_worker and self._recording_poll_worker.isRunning():
+            return
+        worker = _RecordingPollWorker(self.api, parent=self)
+        self._recording_poll_worker = worker
+        worker.result_ready.connect(self._on_recording_snapshot)
+        worker.failed.connect(self._on_recording_poll_failed)
+        worker.start()
+
+    def _on_recording_snapshot(self, data: object) -> None:
+        if not isinstance(data, dict) or data.get("status") != "recording":
+            self._set_recording_panel_visible(False)
+            self.recording_panel.clear_recording()
+            return
+        self._set_recording_panel_visible(True)
+        self.recording_panel.apply_snapshot(data)
+
+    def _on_recording_poll_failed(self, message: str) -> None:
+        self._append_log(f"[录制面板] 轮询失败：{message}")
+
+    def _run_recording_control(self, action: str, record_id: int, **kwargs) -> None:
+        if not self.api or self._recording_control_busy:
+            return
+        if self._recording_control_worker and self._recording_control_worker.isRunning():
+            return
+        self._recording_control_busy = True
+        worker = _RecordingControlWorker(
+            self.api,
+            action,
+            record_id,
+            var_name=str(kwargs.get("var_name") or ""),
+            source=str(kwargs.get("source") or "text"),
+            parent=self,
+        )
+        self._recording_control_worker = worker
+
+        def _done(message: str) -> None:
+            self._recording_control_busy = False
+            self._append_log(message)
+            self._poll_active_recording()
+
+        def _fail(message: str) -> None:
+            self._recording_control_busy = False
+            QMessageBox.warning(self, "录制操作失败", message)
+
+        worker.finished_ok.connect(_done)
+        worker.failed.connect(_fail)
+        worker.start()
+
+    def _on_recording_pause(self, record_id: int) -> None:
+        self._run_recording_control("pause", record_id)
+
+    def _on_recording_resume(self, record_id: int) -> None:
+        self._run_recording_control("resume", record_id)
+
+    def _on_recording_stop(self, record_id: int) -> None:
+        answer = QMessageBox.question(
+            self,
+            "停止录制",
+            f"确定停止录制 #{record_id}？\n停止后请在平台弹窗中查看并应用步骤。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._run_recording_control("stop", record_id)
+
+    def _on_recording_save_variable(self, record_id: int, var_name: str, source: str) -> None:
+        self._run_recording_control(
+            "save_variable",
+            record_id,
+            var_name=var_name,
+            source=source,
+        )
 
     def _poll_logs(self) -> None:
         if self._needs_ui_role(self._active_role):

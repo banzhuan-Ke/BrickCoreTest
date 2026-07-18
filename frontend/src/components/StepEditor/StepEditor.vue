@@ -27,6 +27,14 @@
     </div>
     <div v-else-if="localSteps.length > 0" class="selection-toolbar is-compact">
       <el-button link type="primary" @click="enterSelectionMode">多选步骤</el-button>
+      <el-button
+        v-if="module !== 'app'"
+        link
+        type="warning"
+        @click="insertSmartStep()"
+      >
+        插入智能步骤
+      </el-button>
       <el-text type="info" size="small">勾选多个步骤后可调试执行或生成可复用片段</el-text>
     </div>
 
@@ -40,6 +48,9 @@
         :drag-class="'dragging'"
         :chosen-class="'chosen'"
         :empty-insert-threshold="80"
+        handle=".step-drag-handle"
+        filter=".btn, button, .el-button, .step-select-box, a, input, textarea"
+        :prevent-on-filter="true"
         target=".draggable-content"
         @add="onStepAdd"
         @end="onDragEnd"
@@ -61,6 +72,7 @@
             @toggle-select="toggleStepSelection(index)"
             @edit="openEditDialog(step, index)"
             @debug="onDebugStep"
+            @record-from-step="onRecordFromStep"
             @debug-select="onDebugSelectStep(index)"
             @copy="copyStep(index)"
             @update:step="updateStep(index, $event)"
@@ -77,6 +89,15 @@
         <el-icon :size="40" color="#909399"><Plus /></el-icon>
         <p>暂无步骤，请从左侧拖拽到此处添加</p>
         <p class="empty-tip-sub">也可双击左侧操作项快速添加</p>
+        <el-button
+          v-if="module !== 'app'"
+          link
+          type="warning"
+          class="empty-tip-action"
+          @click="insertSmartStep(0)"
+        >
+          插入智能步骤
+        </el-button>
       </div>
     </div>
 
@@ -90,6 +111,7 @@
       :module="module"
       :driver-mode="driverMode"
       @save="handleStepSave"
+      @save-multiple="handleStepSaveMultiple"
       @cancel="handleStepCancel"
     />
 
@@ -129,6 +151,8 @@ import {
   stepsMissingIds,
   updateStepAtPath,
   isValidStepPath,
+  replaceStepAtPathWithMultiple,
+  generateStepId,
 } from '@/utils/stepHelper'
 import { uiFragmentApi } from '@/api/modules/ui'
 import { appFragmentApi } from '@/api/modules/app'
@@ -198,7 +222,7 @@ function onDebugSelectStep(index) {
   emit('debug-select-step', index)
 }
 
-const emit = defineEmits(['update:steps', 'debug-step', 'debug-select-step', 'debug-selected-steps'])
+const emit = defineEmits(['update:steps', 'debug-step', 'debug-select-step', 'debug-selected-steps', 'record-from-step'])
 
 // 本地步骤数据
 const localSteps = computed({
@@ -387,6 +411,10 @@ function onDebugStep(index) {
   emit('debug-step', index)
 }
 
+function onRecordFromStep(index) {
+  emit('record-from-step', index)
+}
+
 function copyStep(index) {
   const steps = [...localSteps.value]
   const duplicated = duplicateStepWithNewIds(steps[index])
@@ -512,6 +540,31 @@ function deleteBranch(stepIndex, branchIndex) {
   ElMessage.success('分支已删除')
 }
 
+function insertSmartStep(atIndex = null) {
+  const idx = atIndex != null
+    ? Math.max(0, Math.min(atIndex, localSteps.value.length))
+    : localSteps.value.length
+  const step = {
+    id: generateStepId(),
+    keyword: '智能步骤',
+    method: 'smart_step',
+    desc: '智能步骤',
+    params: { intent: '' },
+    children: [],
+    config: { timeout: 30000, retry: false, pre_wait_ms: 0 },
+  }
+  const list = [...localSteps.value]
+  list.splice(idx, 0, step)
+  localSteps.value = list
+  nextTick(() => {
+    editingStep.value = list[idx]
+    editingIndex.value = idx
+    editingPath.value = [idx]
+    isNewStep.value = true
+    dialogVisible.value = true
+  })
+}
+
 // 处理步骤保存
 function handleStepSave(savedStep) {
   const path = editingPath.value
@@ -535,6 +588,31 @@ function handleStepSave(savedStep) {
   isNewStep.value = false
 }
 
+function handleStepSaveMultiple(steps) {
+  if (!Array.isArray(steps) || steps.length === 0) {
+    ElMessage.error('步骤保存失败：无有效步骤')
+    return
+  }
+  const path = editingPath.value
+  if (isValidStepPath(path)) {
+    localSteps.value = replaceStepAtPathWithMultiple(localSteps.value, path, steps)
+  } else if (isNewStep.value && editingIndex.value >= 0 && editingIndex.value < localSteps.value.length) {
+    const list = [...localSteps.value]
+    list.splice(editingIndex.value, 1, ...steps)
+    localSteps.value = list
+  } else {
+    ElMessage.error('步骤保存失败：路径无效')
+    return
+  }
+  ElMessage.success(`已拆分为 ${steps.length} 条智能步骤`)
+
+  dialogVisible.value = false
+  editingStep.value = null
+  editingIndex.value = -1
+  editingPath.value = []
+  isNewStep.value = false
+}
+
 // 处理取消 - 如果是新增步骤则删除
 function handleStepCancel() {
   if (isNewStep.value && editingIndex.value >= 0) {
@@ -549,6 +627,8 @@ function handleStepCancel() {
   editingPath.value = []
   isNewStep.value = false
 }
+
+defineExpose({ insertSmartStep })
 </script>
 
 <style scoped lang="scss">
@@ -632,6 +712,11 @@ function handleStepCancel() {
   margin-top: 4px !important;
   font-size: 12px;
   color: var(--el-text-color-placeholder);
+}
+
+.empty-tip-action {
+  margin-top: 8px;
+  pointer-events: auto;
 }
 
 // 拖拽样式

@@ -25,6 +25,7 @@ from app.core.shared.report_summary_context import (
     fetch_recent_failures,
 )
 from app.core.llm.llm_client import LLMClientFactory
+from app.core.llm.llm_invoke import resolve_vision_max_tokens
 from app.core.platform.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW
 from app.models.ai import AiConfig, AiGenerateRecord
 from app.models.http import ApiRunRecord
@@ -48,6 +49,7 @@ class AnalyzeFailureRequest(BaseModel):
     target_id: int = Field(..., description="ApiRunRecord.id 或 UiCaseExecution.id")
     ai_config_id: Optional[int] = Field(None, description="文本分析模型，不传用默认配置")
     vision_config_id: Optional[int] = Field(None, description="UI 截图 Vision 模型，不传则自动匹配")
+    use_vision: bool = Field(False, description="是否启用截图识图（默认关闭，纯文本分析）")
     force_refresh: bool = Field(False, description="忽略缓存重新分析")
     knowledge_folder_ids: Optional[list[int]] = Field(
         default=None,
@@ -71,6 +73,7 @@ class BatchFailureRequest(BaseModel):
     limit: int = Field(5, ge=1, le=10, description="从报告中采集的最大失败数")
     ai_config_id: Optional[int] = None
     vision_config_id: Optional[int] = None
+    use_vision: bool = False
     force_refresh: bool = False
     knowledge_folder_ids: Optional[list[int]] = None
     knowledge_document_ids: Optional[list[int]] = None
@@ -164,9 +167,11 @@ async def _call_vision_analysis(
     vision_config: AiConfig,
     system_prompt: str,
     user_prompt: str,
-    image_bytes: bytes,
-    image_mime: str,
+    images: list[tuple[bytes, str, str]],
 ) -> dict:
+    import logging
+
+    logger = logging.getLogger(__name__)
     api_key = decrypt_value(vision_config.api_key)
     client = LLMClientFactory.create(
         provider=vision_config.provider,
@@ -175,18 +180,23 @@ async def _call_vision_analysis(
         model=vision_config.model,
         timeout=max(int(vision_config.timeout or 60), 120),
     )
-    if not hasattr(client, "chat_with_image"):
+    if not hasattr(client, "chat_with_images"):
         raise HTTPException(status_code=400, detail="Vision 客户端不支持读图")
     extra_body = _build_extra_body(vision_config)
-    return await client.chat_with_image(
-        system_prompt=system_prompt,
-        text=user_prompt,
-        image_bytes=image_bytes,
-        image_mime=image_mime,
-        temperature=min(float(vision_config.temperature or 0.3), 0.5),
-        max_tokens=vision_config.max_tokens,
-        extra_body=extra_body or None,
-    )
+    kwargs = {
+        "system_prompt": system_prompt,
+        "text": user_prompt,
+        "temperature": min(float(vision_config.temperature or 0.3), 0.5),
+        "max_tokens": resolve_vision_max_tokens(vision_config),
+        "extra_body": extra_body or None,
+    }
+    try:
+        return await client.chat_with_images(images=images, **kwargs)
+    except Exception as exc:
+        if len(images or []) <= 1:
+            raise
+        logger.warning("多图 Vision 调用失败，降级为失败步单图重试: %s", exc)
+        return await client.chat_with_images(images=[images[-1]], **kwargs)
 
 
 async def _find_cached_report_summary(
@@ -257,11 +267,18 @@ async def _execute_failure_analysis(
     username: str,
     ai_config_id: Optional[int],
     vision_config_id: Optional[int],
-    force_refresh: bool,
+    use_vision: bool = False,
+    force_refresh: bool = False,
     knowledge_folder_ids: Optional[list[int]] = None,
     knowledge_document_ids: Optional[list[int]] = None,
 ) -> dict[str, Any]:
     from app.modules.knowledge.knowledge_refs_resolve import resolve_knowledge_refs_for_scene
+    from app.modules.ai.ai_project_settings import assert_failure_analysis_enabled
+
+    try:
+        await assert_failure_analysis_enabled(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     resolved_folders, resolved_docs = await resolve_knowledge_refs_for_scene(
         project_id,
@@ -277,7 +294,7 @@ async def _execute_failure_analysis(
             data["cached"] = True
             return data
 
-    prompt_vars, image_payload, screenshot_url, case_name = await _load_target(
+    prompt_vars, context_images, screenshot_url, case_name = await _load_target(
         target_type, target_id, project_id
     )
 
@@ -298,20 +315,28 @@ async def _execute_failure_analysis(
     t0 = time.time()
     usage_scene = "failure_analysis"
 
-    use_vision = target_type in ("ui", "app") and image_payload is not None
+    vision_requested = bool(use_vision)
+    use_vision = vision_requested and target_type in ("ui", "app") and bool(context_images)
     if use_vision:
         vision_config = await _get_vision_config(vision_config_id)
-        if not vision_config:
+        if not vision_config or not _is_likely_vision_model(vision_config.model):
             use_vision = False
 
     try:
         if use_vision and vision_config:
             usage_scene = "failure_analysis_vision"
-            image_bytes, image_mime = image_payload
-            llm_resp = await _call_vision_analysis(
-                vision_config, system_prompt, user_prompt, image_bytes, image_mime
-            )
-            text_config = vision_config
+            try:
+                llm_resp = await _call_vision_analysis(
+                    vision_config, system_prompt, user_prompt, context_images
+                )
+                text_config = vision_config
+            except Exception as vision_exc:
+                logger.warning("Vision 分析失败，降级为纯文本: %s", vision_exc)
+                use_vision = False
+                text_config = await _get_ai_config(ai_config_id, scene="failure_analysis")
+                llm_resp = await _call_llm(
+                    system_prompt, user_prompt, text_config, min_timeout=90, max_retries=1
+                )
         else:
             text_config = await _get_ai_config(ai_config_id, scene="failure_analysis")
             llm_resp = await _call_llm(system_prompt, user_prompt, text_config, min_timeout=90, max_retries=1)
@@ -346,9 +371,11 @@ async def _execute_failure_analysis(
         "target_id": target_id,
         "case_name": case_name,
         "vision_used": bool(use_vision and vision_config),
+        "vision_requested": vision_requested,
         "vision_config_name": vision_config.name if vision_config and use_vision else None,
-        "has_screenshot": bool(screenshot_url),
+        "has_screenshot": bool(context_images),
         "screenshot_url": screenshot_url,
+        "context_image_count": len(context_images or []),
     }
 
     record = await AiGenerateRecord.create(
@@ -400,12 +427,26 @@ async def _execute_failure_analysis(
     return data
 
 
+async def _assert_failure_analysis_record_env(project_id: int, env: dict | None) -> None:
+    from app.modules.ai.ai_project_settings import (
+        assert_failure_analysis_for_execution_env,
+        load_ai_project_settings,
+    )
+
+    settings = await load_ai_project_settings(project_id)
+    try:
+        record_env = env if isinstance(env, dict) else {}
+        assert_failure_analysis_for_execution_env(settings, record_env)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 async def _load_target(
     target_type: str,
     target_id: int,
     project_id: int,
-) -> tuple[dict[str, Any], Optional[tuple[bytes, str]], Optional[str], str]:
-    """返回 prompt_vars, image_payload, screenshot_url, case_name"""
+) -> tuple[dict[str, Any], list[tuple[bytes, str, str]], Optional[str], str]:
+    """返回 prompt_vars, context_images, screenshot_url, case_name"""
     if target_type == "api":
         record = await ApiRunRecord.get_or_none(id=target_id, project_id=project_id)
         if not record:
@@ -413,7 +454,7 @@ async def _load_target(
         if record.status not in ("failed", "error"):
             raise HTTPException(status_code=400, detail="仅支持分析失败或错误的执行记录")
         ctx = await build_api_failure_context(record)
-        return ctx, None, None, ctx.get("case_name") or ""
+        return ctx, [], None, ctx.get("case_name") or ""
 
     if target_type == "app":
         record = await AppCaseExecution.get_or_none(id=target_id, is_del=False).prefetch_related("case")
@@ -424,8 +465,12 @@ async def _load_target(
             raise HTTPException(status_code=403, detail="无权访问该执行记录")
         if record.status not in ("fail", "failed", "error"):
             raise HTTPException(status_code=400, detail="仅支持分析失败或错误的执行记录")
+        await _assert_failure_analysis_record_env(project_id, record.env)
         ctx, image_payload, screenshot_url = await build_app_failure_context(record)
-        return ctx, image_payload, screenshot_url, ctx.get("case_name") or ""
+        images: list[tuple[bytes, str, str]] = []
+        if image_payload:
+            images = [(image_payload[0], image_payload[1], "失败截图")]
+        return ctx, images, screenshot_url, ctx.get("case_name") or ""
 
     record = await UiCaseExecution.get_or_none(id=target_id, is_del=False).prefetch_related("case")
     if not record:
@@ -436,8 +481,9 @@ async def _load_target(
         raise HTTPException(status_code=404, detail="关联用例不存在")
     if record.status not in ("fail", "failed", "error"):
         raise HTTPException(status_code=400, detail="仅支持分析失败或错误的执行记录")
-    ctx, image_payload, screenshot_url = await build_ui_failure_context(record)
-    return ctx, image_payload, screenshot_url, ctx.get("case_name") or ""
+    await _assert_failure_analysis_record_env(project_id, record.env)
+    ctx, context_images, screenshot_url = await build_ui_failure_context(record)
+    return ctx, context_images, screenshot_url, ctx.get("case_name") or ""
 
 
 @router.post(
@@ -460,6 +506,7 @@ async def analyze_failure(
         username=username,
         ai_config_id=body.ai_config_id,
         vision_config_id=body.vision_config_id,
+        use_vision=body.use_vision,
         force_refresh=body.force_refresh,
         knowledge_folder_ids=body.knowledge_folder_ids,
         knowledge_document_ids=body.knowledge_document_ids,
@@ -512,6 +559,7 @@ async def analyze_failure_batch(
                 username=username,
                 ai_config_id=body.ai_config_id,
                 vision_config_id=body.vision_config_id,
+                use_vision=body.use_vision,
                 force_refresh=body.force_refresh,
                 knowledge_folder_ids=body.knowledge_folder_ids,
                 knowledge_document_ids=body.knowledge_document_ids,

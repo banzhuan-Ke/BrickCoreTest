@@ -226,6 +226,10 @@
         </template>
         <p class="ui-run-act-hint">自愈仍失败时，按 intent/操作名称由 AI 重新规划并执行一步。</p>
       </el-form-item>
+      <UiRunFailureAnalysisField
+        v-model="runParams.failure_analysis_on_report"
+        :options="healRunOptions"
+      />
       <el-form-item label="执行设备" required>
         <template v-if="runTaskParallel">
           <el-alert
@@ -328,6 +332,7 @@ import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
 import UiRunAiActDisabledTip from '@/components/UiRunAiActDisabledTip.vue'
+import UiRunFailureAnalysisField from '@/components/UiRunFailureAnalysisField.vue'
 import {useRouter, useRoute} from "vue-router"
 import {UserStore} from "@/stores/module/UserStore.js"
 import { makeTableRowIndex } from '@/utils/tableIndex'
@@ -544,6 +549,7 @@ const runParams = reactive({
   headless: false,
   ai_heal_enabled: true,
   ai_act_enabled: false,
+  failure_analysis_on_report: true,
   concurrency: 3,
 })
 
@@ -559,6 +565,7 @@ const loadHealRunOptions = async () => {
       healRunOptions.value = res.data.data || null
       runParams.ai_heal_enabled = healRunOptions.value?.locator_heal_default_on_execute ?? true
       runParams.ai_act_enabled = healRunOptions.value?.ai_act_default_on_execute ?? false
+      runParams.failure_analysis_on_report = healRunOptions.value?.failure_analysis_default_on_report ?? true
     }
   } catch {
     healRunOptions.value = null
@@ -575,6 +582,7 @@ const clickRun = async (task_id) => {
   runParams.headless = false
   runParams.ai_heal_enabled = true
   runParams.ai_act_enabled = false
+  runParams.failure_analysis_on_report = true
   runParams.concurrency = 3
   runTaskParallel.value = false
   await loadHealRunOptions()
@@ -629,6 +637,9 @@ async function runTask() {
   }
   if (healRunOptions.value?.ai_act_enabled && healRunOptions.value?.ai_act_allow_run_override) {
     payload.ai_act_enabled = runParams.ai_act_enabled
+  }
+  if (healRunOptions.value?.failure_analysis_allow_run_override) {
+    payload.failure_analysis_on_report = runParams.failure_analysis_on_report
   }
 
   running.value = true
