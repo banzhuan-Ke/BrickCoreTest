@@ -283,7 +283,7 @@ docker compose up -d --build
 Docker 只部署**平台**。Web 自动化、分布式 Worker 需在 **Windows** 安装 **BrickCoreRunner.zip**（约 800MB）：
 
 1. **网盘下载**：登录平台 **Web 自动化 → 设备管理 → 网盘下载**（或 **平台下载**）
-2. 解压运行 `BrickCoreRunner.exe`，服务器填 **`http://43.142.83.156`**（自建填你的地址），演示账号 `admin` 登录并 **上线**
+2. 解压运行 `BrickCoreRunner.exe`，服务器填 **`http://180.76.142.97`**（自建填你的地址），演示账号 `admin` 登录并 **上线**
 3. **设备管理** 中确认在线  
 
 详见 [执行器说明](runner-client.md)。

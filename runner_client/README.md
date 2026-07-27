@@ -8,7 +8,7 @@ Windows 桌面程序：登录 BrickCore 平台、选择环境、**上线**执行
 | 方式 | 说明 |
 |------|------|
 | **百度网盘（推荐）** | [BrickCoreRunner.zip](https://pan.baidu.com/s/1pObFpG-Mt7-Pxo58hklOlg?pwd=9gbi) · 提取码 `9gbi` |
-| **演示平台** | http://43.142.83.156/ → **UI 自动化 → 设备管理** → **网盘下载** |
+| **演示平台** | http://180.76.142.97/ → **UI 自动化 → 设备管理** → **网盘下载** |
 | **自建平台** | **系统管理 → 执行器发布** 配置网盘/OSS 链接 → 设备管理页下载 |
 
 详细步骤见 [docs-site/guide/runner-client.md](../docs-site/guide/runner-client.md)、[执行器获取与发布](../docs-site/guide/runner-packaging.md)。

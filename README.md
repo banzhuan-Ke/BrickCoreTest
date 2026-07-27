@@ -18,9 +18,9 @@
 
 | 项 | 内容 |
 |----|------|
-| **演示地址** | **http://43.142.83.156/** |
-| **文档（免登录）** | [http://43.142.83.156/showcase/docs/](http://43.142.83.156/showcase/docs/) |
-| **产品演示页** | [http://43.142.83.156/showcase/](http://43.142.83.156/showcase/) |
+| **演示地址** | **http://180.76.142.97/** |
+| **文档（免登录）** | [http://180.76.142.97/showcase/docs/](http://180.76.142.97/showcase/docs/) |
+| **产品演示页** | [http://180.76.142.97/showcase/](http://180.76.142.97/showcase/) |
 | 登录账号 | `admin` |
 | 登录密码 | `BrickCore123456` |
 
@@ -40,7 +40,7 @@
 | **AI 测试** | 需求→功能用例、智能浏览器、失败分析、平台助手「小测」、MCP 外部接入（迭代资料库开发测试中，后续放出） |
 | **平台能力** | 统一测试目录、数据看板、RBAC、文档中心、邮件/钉钉/企微通知 |
 
-详细说明见 [docs-site/](docs-site/) 或演示站 [文档中心](http://43.142.83.156/showcase/docs/)。
+详细说明见 [docs-site/](docs-site/) 或演示站 [文档中心](http://180.76.142.97/showcase/docs/)。
 
 ---
 
@@ -58,8 +58,8 @@
 
 | 入口 | 链接 |
 |------|------|
-| **产品功能演示** | [http://43.142.83.156/showcase/](http://43.142.83.156/showcase/) |
-| **使用说明（文档）** | [http://43.142.83.156/showcase/docs/](http://43.142.83.156/showcase/docs/) |
+| **产品功能演示** | [http://180.76.142.97/showcase/](http://180.76.142.97/showcase/) |
+| **使用说明（文档）** | [http://180.76.142.97/showcase/docs/](http://180.76.142.97/showcase/docs/) |
 
 | 亮点 | 说明 |
 |------|------|
@@ -92,7 +92,7 @@
 **Windows 简要步骤：**
 
 1. 下载解压 `BrickCoreRunner.zip`（路径勿含中文/空格）
-2. 运行 `BrickCoreRunner.exe`，服务器填 **`http://43.142.83.156`**（自建则填你的平台地址）
+2. 运行 `BrickCoreRunner.exe`，服务器填 **`http://180.76.142.97`**（自建则填你的平台地址）
 3. 登录后点击 **上线**；**设备管理** 确认在线
 
 **macOS：** 在 Mac 本机解压对应芯片包 → `chmod +x connect-mac.sh start-mac.sh` → `./connect-mac.sh` → `./start-mac.sh`
