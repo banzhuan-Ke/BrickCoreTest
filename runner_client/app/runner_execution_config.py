@@ -22,6 +22,8 @@ PREF_CASE_ERROR_RETRIES = "runner_case_error_retries"
 ENV_VIEWPORT_WIDTH = "RUNNER_VIEWPORT_WIDTH"
 ENV_VIEWPORT_HEIGHT = "RUNNER_VIEWPORT_HEIGHT"
 ENV_CASE_ERROR_RETRIES = "RUNNER_CASE_ERROR_RETRIES"
+ENV_UI_DEBUG_HOTKEYS = "UI_DEBUG_HOTKEYS_JSON"
+PREF_UI_DEBUG_HOTKEYS = "ui_debug_hotkeys"
 
 
 def _clamp_int(value: Any, default: int, minimum: int, maximum: int | None = None) -> int:
@@ -57,11 +59,15 @@ def normalize_execution_prefs(prefs: dict[str, Any]) -> dict[str, int]:
 
 
 def execution_env_from_prefs(prefs: dict[str, Any]) -> dict[str, str]:
+    from runner_client.app.ui_debug_hotkeys import hotkeys_to_json, merge_hotkeys
+
     normalized = normalize_execution_prefs(prefs)
+    hotkeys = merge_hotkeys(prefs.get(PREF_UI_DEBUG_HOTKEYS) if isinstance(prefs, dict) else None)
     return {
         ENV_VIEWPORT_WIDTH: str(normalized[PREF_VIEWPORT_WIDTH]),
         ENV_VIEWPORT_HEIGHT: str(normalized[PREF_VIEWPORT_HEIGHT]),
         ENV_CASE_ERROR_RETRIES: str(normalized[PREF_CASE_ERROR_RETRIES]),
+        ENV_UI_DEBUG_HOTKEYS: hotkeys_to_json(hotkeys),
     }
 
 

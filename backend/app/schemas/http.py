@@ -195,6 +195,10 @@ class ApiDebugRequest(BaseModel):
     env_id: Optional[int] = Field(None, description="环境ID")
     project_id: Optional[int] = Field(None, description="项目ID（未选环境时用于加载项目变量）")
     variables: Optional[Dict[str, Any]] = Field(default={}, description="变量")
+    worker_id: Optional[int] = Field(
+        None,
+        description="经在线压测执行机代发时指定 Worker ID；不传则由平台本机发送",
+    )
 
 
 class ApiDebugResponse(BaseModel):
@@ -318,6 +322,7 @@ class ApiTestCaseCreate(ApiTestCaseBase):
 
 class ApiTestCaseUpdate(ApiTestCaseBase):
     """更新测试用例"""
+    api_id: Optional[int] = Field(None, description="关联接口ID（传入则更换关联接口）")
     catalog_id: Optional[int] = Field(None, description="目录ID")
 
 

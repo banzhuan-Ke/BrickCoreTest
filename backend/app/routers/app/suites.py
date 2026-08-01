@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from tortoise import transactions
 
 from app.core.platform.auth import get_current_username, is_authenticated, require_permissions
-from app.core.shared.catalog_utils import resolve_catalog
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.core.platform.permissions import APP_SUITE_EDIT, APP_SUITE_VIEW
 from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppCase, AppSuite, AppSuiteExecution, AppSuiteStep
@@ -41,12 +41,17 @@ async def list_suites(
     page: int = 1,
     size: int = 10,
     name: str | None = None,
+    catalog_id: int | None = None,
+    include_children: bool = True,
     user_info: dict = Depends(require_permissions(APP_SUITE_VIEW)),
 ):
     await assert_user_project_viewer(user_info, project_id)
     query = AppSuite.filter(project_id=project_id, is_del=False).order_by("-id")
     if name:
         query = query.filter(name__icontains=name)
+    if catalog_id is not None:
+        await resolve_catalog(project_id, catalog_id)
+        query = await apply_catalog_filter(query, project_id, catalog_id, include_children=include_children)
     total = await query.count()
     data = []
     for suite in await query.offset((page - 1) * size).limit(size):
@@ -56,6 +61,7 @@ async def list_suites(
             "id": suite.id,
             "name": suite.name,
             "username": suite.username,
+            "catalog_id": suite.catalog_id,
             "case_count": steps,
             "status": last.status if last else "等待执行",
             "create_time": suite.create_time,

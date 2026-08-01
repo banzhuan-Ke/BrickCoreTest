@@ -34,29 +34,120 @@ export function formatWebContextLabel(ctx, idx) {
   return `${src}${title}`
 }
 
-export function suggestWebLocator(node) {
-  if (!node) return null
+function _webCandidateKey(loc) {
+  if (!loc?.by) return ''
+  return `${String(loc.by).toLowerCase()}::${String(loc.value ?? '').trim()}::${loc.index || 1}`
+}
+
+function _asWebCandidate(loc) {
+  if (!loc?.by) return null
+  const value = loc.value
+  if (value == null || String(value).trim() === '') return null
+  return {
+    context: 'webview',
+    by: String(loc.by).trim(),
+    value,
+    index: Number(loc.index) > 0 ? Number(loc.index) : 1,
+  }
+}
+
+/** H5 有序候选：testid css → id → css → xpath → text */
+export function buildWebLocatorCandidates(node) {
+  if (!node) return []
+  const out = []
+  const push = (loc) => {
+    const item = _asWebCandidate(loc)
+    if (!item) return
+    const key = _webCandidateKey(item)
+    if (out.some((x) => _webCandidateKey(x) === key)) return
+    out.push(item)
+  }
+
   const testid = (node.data_testid || '').trim()
-  if (testid) {
-    return { context: 'webview', by: 'css', value: `[data-testid="${testid}"]`, index: 1 }
-  }
+  if (testid) push({ by: 'css', value: `[data-testid="${testid}"]`, index: 1 })
+
   const id = (node.id || '').trim()
-  if (id) {
-    return { context: 'webview', by: 'id', value: id, index: 1 }
-  }
+  if (id) push({ by: 'id', value: id, index: 1 })
+
   const css = (node.css || '').trim()
   if (css && !['div', 'span', 'body'].includes(css)) {
-    return { context: 'webview', by: 'css', value: css, index: 1 }
+    push({ by: 'css', value: css, index: 1 })
   }
+
   const xpath = (node.xpath || '').trim()
-  if (xpath) {
-    return { context: 'webview', by: 'xpath', value: xpath, index: 1 }
-  }
+  if (xpath) push({ by: 'xpath', value: xpath, index: 1 })
+
   const text = (node.text || '').trim()
-  if (text && text.length < 40) {
-    return { context: 'webview', by: 'text', value: text, index: 1 }
+  if (text && text.length < 40) push({ by: 'text', value: text, index: 1 })
+
+  if (!out.length && css) push({ by: 'css', value: css, index: 1 })
+  if (!out.length) push({ by: 'css', value: 'body', index: 1 })
+  return out
+}
+
+export function suggestWebLocator(node) {
+  const candidates = buildWebLocatorCandidates(node)
+  return candidates[0] || null
+}
+
+export function formatWebLocatorCandidateLabel(loc) {
+  if (!loc?.by) return ''
+  const v = String(loc.value ?? '')
+  const short = v.length > 48 ? `${v.slice(0, 48)}…` : v
+  return `${loc.by} = ${short}`
+}
+
+/**
+ * H5 探查保存：默认最优 + 全量候选
+ * @param {object|null} node
+ * @param {object|null} preferred
+ * @param {{ page_index?: number, devtools_source?: string }} extras
+ */
+export function buildWebLocatorPayload(node, preferred = null, extras = {}) {
+  const candidates = buildWebLocatorCandidates(node)
+  if (!candidates.length) return null
+
+  let primary = _asWebCandidate(preferred)
+  if (!primary || !candidates.some((c) => _webCandidateKey(c) === _webCandidateKey(primary))) {
+    primary = candidates[0]
   }
-  return { context: 'webview', by: 'css', value: css || 'body', index: 1 }
+  const rest = candidates.filter((c) => _webCandidateKey(c) !== _webCandidateKey(primary))
+  const ordered = [primary, ...rest]
+
+  return {
+    context: 'webview',
+    by: primary.by,
+    value: primary.value,
+    index: primary.index || 1,
+    page_index: extras.page_index ?? 0,
+    devtools_source: extras.devtools_source || 'webview',
+    candidates: ordered,
+    meta: {
+      tag: node?.tag || '',
+      id: node?.id || '',
+      class: node?.class || '',
+      text: node?.text || '',
+      data_testid: node?.data_testid || '',
+      css: node?.css || '',
+      xpath: node?.xpath || '',
+    },
+  }
+}
+
+export function promoteWebLocatorCandidate(locator, candidate) {
+  if (!locator || typeof locator !== 'object') return locator
+  const pick = _asWebCandidate(candidate)
+  if (!pick) return locator
+  const existing = Array.isArray(locator.candidates)
+    ? locator.candidates.map(_asWebCandidate).filter(Boolean)
+    : []
+  const rest = existing.filter((c) => _webCandidateKey(c) !== _webCandidateKey(pick))
+  locator.context = 'webview'
+  locator.by = pick.by
+  locator.value = pick.value
+  locator.index = pick.index || 1
+  locator.candidates = [pick, ...rest]
+  return locator
 }
 
 export function getWebPrimaryAttributes(node) {

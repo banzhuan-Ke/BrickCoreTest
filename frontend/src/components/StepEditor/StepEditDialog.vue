@@ -404,6 +404,7 @@
                       :step="1000"
                       controls-position="right"
                       style="width: 140px"
+                      @change="onTimeoutExplicitChange"
                     />
                     <span class="advanced-unit">ms</span>
                   </div>
@@ -431,12 +432,13 @@
 
             <section v-if="hasClickAdvanced" class="advanced-section">
               <div class="advanced-section-head">
-                <h4>原生弹窗 / 文件下载</h4>
+                <h4>动作后等待 · 原生弹窗 / 文件下载</h4>
                 <UiStepUsageGuide :method="form.method" />
               </div>
               <p class="advanced-section-desc">
-                页面二次确认（自己画的 Dialog）：请拆成「点删除 → 点确定」两步。
-                以下仅用于浏览器系统弹窗，或点击触发的文件下载（不是上传）。
+                慢站保存/查询/菜单：填写「动作后等待选择器」。
+                页面二次确认 Dialog：请拆成两步点击。
+                以下原生弹窗/下载仅用于系统弹窗或导出文件。
               </p>
               <div class="params-container advanced-params">
                 <div
@@ -622,7 +624,7 @@ const form = ref({
   intent: '',
   method: '',
   params: {},
-  config: { timeout: 30000, retry: false, pre_wait_ms: 0 }
+  config: { timeout: 30000, retry: false, pre_wait_ms: 0, timeout_explicit: false }
 })
 const showAdvanced = ref(false)
 const healingLocator = ref(false)
@@ -719,13 +721,23 @@ const advancedActiveCount = computed(() => {
   if (p.wait_download) n += 1
   if (p.accept_dialog) n += 1
   if (p.dismiss_dialog) n += 1
+  if (String(p.expected_selector || '').trim()) n += 1
+  if (p.wait_busy_after) n += 1
   return n
 })
 
 const advancedToggleHint = computed(() => {
-  if (hasClickAdvanced.value) return '超时 · 重试 · 原生弹窗 / 下载'
+  if (hasClickAdvanced.value) return '超时 · 动作后等待 · 原生弹窗 / 下载'
   return '超时 · 重试'
 })
+
+function onTimeoutExplicitChange() {
+  if (!form.value.config || typeof form.value.config !== 'object') {
+    form.value.config = { timeout: 30000, retry: false, pre_wait_ms: 0, timeout_explicit: true }
+    return
+  }
+  form.value.config.timeout_explicit = true
+}
 
 function onClickAdvancedSwitch(key, val) {
   if (!form.value.params) form.value.params = {}
@@ -778,6 +790,11 @@ const hasParams = computed(() => {
 })
 
 function resolveParamLabel(key) {
+  if (form.value.method === 'scroll_to_height' && key === 'height') {
+    const pos = String(form.value.params?.position || 'height').toLowerCase()
+    if (pos === 'up' || pos === 'down') return '滚动距离(像素)'
+    return '绝对高度(距顶部像素)'
+  }
   if (isAppStep.value) {
     return getAppParamLabel(form.value.method, key, paramLabelMap[key])
   }
@@ -829,7 +846,31 @@ function isRequiredParam(key) {
   if (method === 'smart_step') {
     return key === 'intent'
   }
-  const requiredParams = ['selector', 'condition', 'locator', 'var_name', 'attr_name', 'url', 'value', 'text']
+  if (method === 'scroll_to_height') {
+    if (key === 'position') return true
+    if (key === 'height') {
+      const pos = String(form.value.params?.position || 'height').toLowerCase()
+      return !['top', 'middle', 'bottom'].includes(pos)
+    }
+    return false
+  }
+  if (method === 'mouse_wheel') {
+    if (key === 'direction') return true
+    if (key === 'amount') {
+      const dir = String(form.value.params?.direction || 'custom').toLowerCase()
+      return ['down', 'up', 'left', 'right'].includes(dir)
+    }
+    return false
+  }
+  // url 仅对这些方法必填；切换/关闭页面的 url 是可选匹配条件，不能进全局必填列表
+  const urlRequiredMethods = new Set(['open_url', 'wait_for_url_contains', 'kw_assert_page_url'])
+  if (key === 'url') {
+    return urlRequiredMethods.has(method)
+  }
+  if (method === 'switch_to_page' || method === 'close_page' || method === 'open_new_page') {
+    return false
+  }
+  const requiredParams = ['selector', 'condition', 'locator', 'var_name', 'attr_name', 'value', 'text']
   return requiredParams.includes(key)
 }
 
@@ -919,6 +960,73 @@ function repairWebStepParams(params) {
   return next
 }
 
+/** 历史步骤补齐顺序索引默认值，避免编辑页数字框空白（引擎侧本就默认 1） */
+function ensureWebIndexDefaults(method, params) {
+  const next = { ...(params || {}) }
+  if (!method) return next
+  const ordered = getOrderedVisibleParams(method, next, { scope: 'basic' })
+  const advanced = getOrderedVisibleParams(method, next, { scope: 'advanced' })
+  const merged = { ...ordered, ...advanced }
+  for (const key of ['index', 'source_index', 'target_index', 'first_index', 'second_index']) {
+    if (!Object.prototype.hasOwnProperty.call(merged, key)) continue
+    if (next[key] == null || next[key] === '') {
+      next[key] = merged[key] ?? 1
+    }
+  }
+  return next
+}
+
+function normalizeScrollToHeightParams(params) {
+  const next = { ...(params || {}) }
+  if (!next.position) next.position = 'height'
+  const pos = String(next.position).toLowerCase()
+  if (next.height == null || next.height === '') {
+    next.height = (pos === 'up' || pos === 'down') ? 600 : 0
+  } else if (typeof next.height === 'string' && String(next.height).trim() !== '' && !Number.isNaN(Number(next.height))) {
+    next.height = Number(next.height)
+  }
+  return next
+}
+
+function normalizeMouseWheelParams(params) {
+  const next = { ...(params || {}) }
+  let dir = String(next.direction || '').trim().toLowerCase()
+  if (!dir) dir = 'custom'
+  next.direction = dir
+  const preset = ['down', 'up', 'left', 'right'].includes(dir)
+  const toNum = (v, fallback) => {
+    if (v == null || v === '') return fallback
+    const n = Number(v)
+    return Number.isFinite(n) ? n : fallback
+  }
+  if (preset) {
+    const fallback = (dir === 'left' || dir === 'right')
+      ? Math.abs(toNum(next.x, 600))
+      : Math.abs(toNum(next.y, 600))
+    const amount = Math.abs(toNum(next.amount, fallback || 600)) || 600
+    next.amount = amount
+    if (dir === 'down') {
+      next.x = 0
+      next.y = amount
+    } else if (dir === 'up') {
+      next.x = 0
+      next.y = -amount
+    } else if (dir === 'left') {
+      next.x = -amount
+      next.y = 0
+    } else {
+      next.x = amount
+      next.y = 0
+    }
+  } else {
+    next.x = toNum(next.x, 0)
+    next.y = toNum(next.y, 600)
+  }
+  if (next.cursor_x == null) next.cursor_x = ''
+  if (next.cursor_y == null) next.cursor_y = ''
+  return next
+}
+
 // 监听 step 变化
 watch(() => props.step, (newStep) => {
   if (newStep) {
@@ -946,17 +1054,34 @@ watch(() => props.step, (newStep) => {
     const baseParams = props.module === 'app'
       ? { ...newStep.params }
       : repairWebStepParams(newStep.params)
+    const normalizedParams = (() => {
+      if (props.module === 'app') return baseParams
+      let webParams = baseParams
+      if (stepData.method === 'scroll_to_height') webParams = normalizeScrollToHeightParams(webParams)
+      else if (stepData.method === 'mouse_wheel') webParams = normalizeMouseWheelParams(webParams)
+      return ensureWebIndexDefaults(stepData.method, webParams)
+    })()
     form.value = {
       ...stepData,
-      params: baseParams,
+      params: normalizedParams,
       config: {
         timeout: 30000,
         retry: false,
         pre_wait_ms: 0,
+        timeout_explicit: false,
         ...newStep.config,
         pre_wait_ms: newStep.config?.pre_wait_ms ?? newStep.pre_wait_ms ?? 0,
       },
       branches: newStep.branches ? JSON.parse(JSON.stringify(newStep.branches)) : undefined
+    }
+    // 历史 params.timeout：非模板默认值视为用户手工超时
+    if (!isAppStep.value) {
+      const pt = form.value.params?.timeout
+      const n = parseInt(pt, 10)
+      if (Number.isFinite(n) && n > 0 && n !== 20000 && n !== 30000) {
+        form.value.config.timeout = n
+        form.value.config.timeout_explicit = true
+      }
     }
     if (isAppStep.value && isAppMethod(form.value.method)) {
       form.value.params = applyDefaultAppIdToStepParams(
@@ -972,13 +1097,24 @@ watch(() => props.step, (newStep) => {
   }
 }, { immediate: true, deep: true })
 
+watch(
+  () => (form.value.method === 'mouse_wheel' ? form.value.params?.direction : null),
+  (dir, prev) => {
+    if (!dir || dir === prev || form.value.method !== 'mouse_wheel') return
+    form.value.params = normalizeMouseWheelParams(form.value.params || {})
+  },
+)
+
 watch(() => props.visible, (open) => {
   if (open && !varInsertEnvId.value && proStore.envList.length) {
     varInsertEnvId.value = proStore.envList[0].id
   }
   if (open) {
     const p = form.value.params || {}
-    showAdvanced.value = !!(p.wait_download || p.accept_dialog || p.dismiss_dialog)
+        showAdvanced.value = !!(
+          p.wait_download || p.accept_dialog || p.dismiss_dialog
+          || String(p.expected_selector || '').trim() || p.wait_busy_after
+        )
   }
   if (open && isAppStep.value) {
     loadAppElementOptions().then(() => {
@@ -1030,7 +1166,9 @@ function isNumber(value) {
 /** 索引/计数/超时等短数字，避免拉满整行 */
 function compactNumberWidth(key) {
   const tiny = new Set([
-    'index', 'first_index', 'second_index', 'count', 'length', 'min_length', 'max_length',
+    'index', 'first_index', 'second_index', 'source_index', 'target_index',
+    'count', 'length', 'min_length', 'max_length',
+    'amount', 'cursor_x', 'cursor_y',
   ])
   if (tiny.has(key)) return '120px'
   return '168px'
@@ -1041,7 +1179,9 @@ function isSelect(key) {
   if (isAppStep.value) {
     return ['direction', 'key'].includes(key)
   }
-  const selectKeys = ['wait_until', 'browser_type', 'operator', 'key', 'button', 'match_mode', 'order']
+  if (key === 'position' && form.value.method === 'scroll_to_height') return true
+  if (key === 'direction' && form.value.method === 'mouse_wheel') return true
+  const selectKeys = ['wait_until', 'browser_type', 'operator', 'key', 'button', 'match_mode', 'order', 'post_wait_state']
   return selectKeys.includes(key)
 }
 
@@ -1361,7 +1501,7 @@ async function confirmHeal() {
 // 判断是否为布尔值
 function isBoolean(key) {
   if (form.value.method === 'fill_by_image' && key === 'clear_first') return true
-  const booleanKeys = ['force', 'wait_download', 'exact', 'accept_dialog', 'dismiss_dialog', 'use_regex']
+  const booleanKeys = ['force', 'wait_download', 'exact', 'accept_dialog', 'dismiss_dialog', 'use_regex', 'wait_busy_after']
   return booleanKeys.includes(key)
 }
 
@@ -1369,6 +1509,15 @@ function isBoolean(key) {
 function getOptions(key) {
   if (isAppStep.value) {
     return getAppSelectOptions(key)
+  }
+  if (key === 'direction' && form.value.method === 'mouse_wheel') {
+    return [
+      { label: '向下滚', value: 'down' },
+      { label: '向上滚', value: 'up' },
+      { label: '向左滚', value: 'left' },
+      { label: '向右滚', value: 'right' },
+      { label: '自定义 ΔX / ΔY', value: 'custom' },
+    ]
   }
   const options = {
     wait_until: [
@@ -1409,6 +1558,19 @@ function getOptions(key) {
     order: [
       { label: '前面（第一个在第二个之前）', value: 'before' },
       { label: '后面（第一个在第二个之后）', value: 'after' }
+    ],
+    post_wait_state: [
+      { label: '先消失再出现 (reappear，推荐)', value: 'reappear' },
+      { label: '等待出现 (visible，易抢跑)', value: 'visible' },
+      { label: '等待消失 (hidden)', value: 'hidden' },
+    ],
+    position: [
+      { label: '指定高度（距顶部像素）', value: 'height' },
+      { label: '滚到顶部', value: 'top' },
+      { label: '滚到中间', value: 'middle' },
+      { label: '滚到底部', value: 'bottom' },
+      { label: '相对向下滚', value: 'down' },
+      { label: '相对向上滚', value: 'up' },
     ]
   }
   return options[key] || []
@@ -1491,11 +1653,39 @@ async function handleSave() {
   }
   
   // 构建保存的步骤数据
+  let saveParams = { ...(form.value.params || {}) }
+  if (!isAppStep.value && form.value.method === 'scroll_to_height') {
+    saveParams = normalizeScrollToHeightParams(saveParams)
+  }
+  if (!isAppStep.value && form.value.method === 'mouse_wheel') {
+    saveParams = normalizeMouseWheelParams(saveParams)
+    if (Number(saveParams.x || 0) === 0 && Number(saveParams.y || 0) === 0) {
+      ElMessage.warning('请设置滚动量（方向距离或自定义 ΔX/ΔY）')
+      return
+    }
+  }
+  const keepTimeoutMethods = ['wait_for_time', 'set_default_timeout']
+  if (!isAppStep.value && !keepTimeoutMethods.includes(form.value.method)) {
+    const pt = saveParams.timeout
+    if (pt != null && String(pt).trim() !== '') {
+      const n = parseInt(pt, 10)
+      // 历史步骤里非模板默认的 timeout，迁移为显式 config.timeout
+      if (Number.isFinite(n) && n > 0 && n !== 20000 && n !== 30000) {
+        if (!form.value.config || typeof form.value.config !== 'object') {
+          form.value.config = { timeout: n, retry: false, pre_wait_ms: 0, timeout_explicit: true }
+        } else {
+          form.value.config.timeout = n
+          form.value.config.timeout_explicit = true
+        }
+      }
+    }
+    delete saveParams.timeout
+  }
   const savedStep = { 
     ...form.value,
     keyword: form.value.keyword,
     method: form.value.method || form.value.keyword,
-    params: { ...(form.value.params || {}) },
+    params: saveParams,
   }
   delete savedStep.pre_wait_ms
   if (savedStep.config && typeof savedStep.config === 'object') {
@@ -1595,7 +1785,7 @@ function handleClose() {
     intent: '',
     method: '',
     params: {},
-    config: { timeout: 30000, retry: false, pre_wait_ms: 0 }
+    config: { timeout: 30000, retry: false, pre_wait_ms: 0, timeout_explicit: false }
   }
   showAdvanced.value = false
 }
@@ -1915,7 +2105,7 @@ function handleClose() {
 
 <style lang="scss">
 .param-tip-popper {
-  max-width: 360px;
+  max-width: 420px;
 
   .param-tip-content {
     font-size: 13px;

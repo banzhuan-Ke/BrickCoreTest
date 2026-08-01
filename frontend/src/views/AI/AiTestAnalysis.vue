@@ -268,7 +268,7 @@
               <el-collapse v-model="schemeEnvCollapse" class="scheme-env-collapse">
                 <el-collapse-item title="测试环境补充（建议填写，避免 AI 编造环境信息）" name="env">
                   <el-form :inline="true" class="scheme-env-form">
-                    <el-form-item label="被测系统"><el-input v-model="schemeEnvHints.system_name" placeholder="如：知识智能平台" style="width: 200px;" /></el-form-item>
+                    <el-form-item label="被测系统"><el-input v-model="schemeEnvHints.system_name" placeholder="如：示例业务系统" style="width: 200px;" /></el-form-item>
                     <el-form-item label="环境"><el-input v-model="schemeEnvHints.test_env" placeholder="SIT / UAT / 预发" style="width: 120px;" /></el-form-item>
                     <el-form-item label="访问入口"><el-input v-model="schemeEnvHints.access_entry" placeholder="URL 或菜单路径" style="width: 280px;" /></el-form-item>
                     <el-form-item label="版本"><el-input v-model="schemeEnvHints.deploy_version" placeholder="构建号/版本" style="width: 140px;" /></el-form-item>

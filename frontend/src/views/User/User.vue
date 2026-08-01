@@ -288,6 +288,7 @@ import dateTools from "@/tools/dateTools.js"
 import PageCard from "@/components/PageCard.vue"
 import {UserStore} from '@/stores/module/UserStore'
 import { makeTableRowIndex } from '@/utils/tableIndex'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const uStore = UserStore()
 const activeTab = ref('users')
@@ -365,10 +366,10 @@ function roleNames(roleIds) {
   return roleIds.map(id => map[id]).filter(Boolean)
 }
 
-function copyText(text) {
-  navigator.clipboard.writeText(text).then(() => {
-    ElMessage.success('已复制到剪贴板')
-  }).catch(() => ElMessage.warning('复制失败，请手动复制'))
+async function copyText(text) {
+  const ok = await copyToClipboard(text)
+  if (ok) ElMessage.success('已复制到剪贴板')
+  else ElMessage.warning('复制失败，请手动复制')
 }
 
 async function getRoleList() {

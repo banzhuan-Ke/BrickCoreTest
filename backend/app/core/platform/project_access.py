@@ -78,6 +78,10 @@ async def assert_project_access(
     校验用户对项目的访问权限，返回用户在该项目中的角色。
     超管/系统管理员返回 owner 等价权限。
     """
+    # MCP API Key 等无用户 ID 的超管身份（由 MCP 层显式标记）
+    if user_info.get("is_api_key") and user_info.get("is_superuser"):
+        return PROJECT_ROLE_OWNER
+
     user_id = user_info.get("id")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录")

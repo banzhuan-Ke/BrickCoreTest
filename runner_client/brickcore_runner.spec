@@ -2,16 +2,21 @@
 """PyInstaller spec：BrickCore Runner 桌面客户端（onedir）"""
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+
 block_cipher = None
 # SPECPATH = directory of this .spec file (runner_client/)
 client = Path(SPECPATH).resolve()
 root = client.parent
 
+_crypto_datas, _crypto_binaries, _crypto_hidden = collect_all("cryptography")
+_crypto_hidden += collect_submodules("cryptography")
+
 a = Analysis(
     [str(client / "__main__.py")],
     pathex=[str(root)],
-    binaries=[],
-    datas=[],
+    binaries=_crypto_binaries,
+    datas=_crypto_datas,
     hiddenimports=[
         "runner_client",
         "runner_client.main",
@@ -31,6 +36,13 @@ a = Analysis(
         "runner_client.app.server_dialog",
         "runner_client.app.settings_dialog",
         "runner_client.app.package_updater",
+        "runner_client.app.bcpack",
+        "runner_client.app.layered_updater",
+        "runner_client.app.ui_debug_hotkeys",
+        "cryptography",
+        "cryptography.hazmat.primitives.ciphers.aead",
+        "cryptography.hazmat.bindings._rust",
+        *_crypto_hidden,
     ],
     hookspath=[],
     hooksconfig={},

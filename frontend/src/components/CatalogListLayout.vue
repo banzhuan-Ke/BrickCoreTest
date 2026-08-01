@@ -31,7 +31,7 @@ const props = defineProps({
   },
   showManage: {
     type: Boolean,
-    default: false
+    default: true
   },
   includeAllNode: {
     type: Boolean,

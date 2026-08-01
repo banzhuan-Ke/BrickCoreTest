@@ -1,51 +1,10 @@
 <template>
   <el-container class="suite-edit-container">
-    <!-- 左侧：关键字面板 -->
-    <el-aside width="280px" class="keyword-sidebar">
-      <div class="sidebar-header">
-        <h3>前置步骤操作</h3>
-      </div>
-      <div class="keyword-list">
-        <el-collapse v-model="activeGroups" class="keyword-collapse">
-          <el-collapse-item
-            v-for="group in keywordGroups"
-            :key="group.groupId"
-            :name="group.groupId"
-            class="keyword-group"
-          >
-            <template #title>
-              <div class="group-title">
-                <el-icon><component :is="group.icon" /></el-icon>
-                <span>{{ group.name }}</span>
-              </div>
-            </template>
-
-            <VueDraggable
-              :modelValue="group.items"
-              :group="{ name: 'steps', pull: 'clone', put: false }"
-              :sort="false"
-              :clone="cloneKeyword"
-              :animation="200"
-              target=".keyword-items"
-              class="draggable-source"
-            >
-              <div class="keyword-items">
-                <div
-                  v-for="(item, itemIndex) in group.items"
-                  :key="`${group.groupId}_${item.method}_${itemIndex}`"
-                  class="keyword-item"
-                  :data-step="JSON.stringify(item)"
-                >
-                  <el-icon><component :is="item.icon" /></el-icon>
-                  <span>{{ item.name }}</span>
-                  <el-icon class="drag-icon"><Rank /></el-icon>
-                </div>
-              </div>
-            </VueDraggable>
-          </el-collapse-item>
-        </el-collapse>
-      </div>
-    </el-aside>
+    <KeywordSidebar
+      v-model="activeGroups"
+      title="前置步骤操作"
+      :groups="keywordGroups"
+    />
 
     <!-- 中间 + 右侧（可拖拽调整宽度） -->
     <div class="suite-workspace">
@@ -149,25 +108,19 @@
 <script setup>
 import { reactive, ref, computed, watch, provide } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { VueDraggable } from 'vue-draggable-plus'
-import { StepEditor } from '@/components/StepEditor'
+import { StepEditor, KeywordSidebar } from '@/components/StepEditor'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import { UserStore } from '@/stores/module/UserStore'
 import http from '@/api/index'
 import { ElNotification } from 'element-plus'
 import ActionGroup from '@/datas/ActionGroup.js'
-import { cloneKeywordForDrag } from '@/utils/stepHelper'
 import CaseSet from './componets/CaseSet.vue'
 import { useSplitPanelResize } from '@/composables/useSplitPanelResize'
 import {
-  Rank, Check, Close,
-  ChromeFilled, Position, Mouse,
-  CircleCheck, Refresh,
-  DocumentCopy, View, Timer,
-  ArrowDown, Delete,
+  Check, Close,
   Document, Edit, Clock, Search,
-  MessageBox, MoreFilled, Share
+  MessageBox, MoreFilled, Share, Mouse
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -242,8 +195,6 @@ const keywordGroups = computed(() => {
     }))
   }))
 })
-
-const cloneKeyword = cloneKeywordForDrag
 
 // 表单校验规则
 const formRules = {

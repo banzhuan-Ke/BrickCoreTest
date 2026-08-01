@@ -40,11 +40,17 @@
           :icon="Delete"
         >批量删除({{ selectedRecords.length }})</el-button>
         <el-button
-          v-if="selectedRecords.length === 2"
+          v-if="selectedRecords.length >= 2 && selectedRecords.length <= 10"
           type="warning"
-          @click="handleCompare"
+          @click="openCreateReportDialog"
           :icon="TrendCharts"
-        >对比</el-button>
+        >{{ selectedReportActionLabel }}</el-button>
+        <el-button
+          v-else-if="selectedRecords.length > 10"
+          type="info"
+          disabled
+        >最多对比 10 条</el-button>
+        <el-button link type="primary" @click="router.push('/perf-comparisons')">增强报告列表</el-button>
       </div>
 
       <!-- 表格 -->
@@ -52,20 +58,33 @@
         <el-table-column type="selection" width="50" align="center" />
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="scene_name" label="场景名称" min-width="120" show-overflow-tooltip />
-        <el-table-column label="状态" width="140" align="center">
+        <el-table-column label="状态" width="168" align="center">
           <template #default="{ row }">
-            <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+            <div class="status-cell">
               <el-tag size="small" :type="getStatusType(row.status)">
-                {{ getStatusLabel(row.status) }}
+                {{
+                  row.status === 'running' && row._progress?.phase === 'wind_down'
+                    ? '收尾中'
+                    : getStatusLabel(row.status)
+                }}
               </el-tag>
-              <el-progress
+              <div
                 v-if="row.status === 'running' && row._progress"
-                :percentage="row._progress.percentage"
-                :stroke-width="10"
-                :text-inside="true"
-                :format="() => row._progress.text"
-                style="width:120px"
-              />
+                class="run-progress"
+              >
+                <el-progress
+                  :percentage="Math.min(100, Math.max(0, Number(row._progress.percentage) || 0))"
+                  :stroke-width="14"
+                  striped
+                  striped-flow
+                  :show-text="false"
+                  :color="progressBarColor(row._progress.percentage)"
+                />
+                <div class="run-progress-meta">
+                  <span class="run-progress-text">{{ row._progress.text }}</span>
+                  <span class="run-progress-pct">{{ Math.min(100, Math.round(Number(row._progress.percentage) || 0)) }}%</span>
+                </div>
+              </div>
             </div>
           </template>
         </el-table-column>
@@ -158,8 +177,97 @@
   </PageCard>
 
   <!-- 报告对比弹窗 -->
+  <!-- 生成增强报告 -->
+  <el-dialog
+    v-model="createReportVisible"
+    title="生成增强报告"
+    width="640px"
+    destroy-on-close
+    @closed="resetCreateReportForm"
+  >
+    <el-form label-width="100px" label-position="left">
+      <el-form-item label="报告模式">
+        <el-radio-group v-model="createForm.kind">
+          <el-radio value="compare">对比</el-radio>
+          <el-radio value="merge">汇总</el-radio>
+          <el-radio value="hybrid">合并+对比</el-radio>
+        </el-radio-group>
+        <div class="form-hint">
+          <template v-if="createForm.kind === 'compare'">同场景多轮对照，选基准后算变化率与用例对齐。</template>
+          <template v-else-if="createForm.kind === 'merge'">分章并排展示，不设基准、不算变化率。</template>
+          <template v-else>同场景峰值 vs 持续：分章 + 基准对照。跨场景时仅分章并排，不做基准对照。</template>
+        </div>
+        <el-alert
+          v-if="createForm.kind === 'compare' && selectedIsMerge"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-top: 8px"
+          title="当前为跨场景选择：对比变化率仅供参考，更建议改用「汇总」。"
+        />
+      </el-form-item>
+      <el-form-item label="报告标题">
+        <el-input v-model="createForm.title" placeholder="可空，自动生成" maxlength="200" clearable />
+      </el-form-item>
+      <el-form-item v-if="createForm.kind !== 'merge'" label="基准记录">
+        <el-select v-model="createForm.referenceId" style="width: 100%">
+          <el-option
+            v-for="r in selectedRecords"
+            :key="r.id"
+            :label="`#${r.id} ${createForm.displayNames[r.id] || r.scene_name || ''}`"
+            :value="r.id"
+          />
+        </el-select>
+        <div v-if="createForm.kind === 'hybrid' && selectedIsMerge" class="form-hint">
+          当前为跨场景选择：生成后不会启用基准变化率（等同分章并排）。如需基准对照请选同场景记录，或改用「对比」。
+        </div>
+      </el-form-item>
+      <el-form-item label="显示名称">
+        <div class="rename-list">
+          <div v-for="r in selectedRecords" :key="'dn-' + r.id" class="rename-row">
+            <span class="rename-id">#{{ r.id }}</span>
+            <el-input
+              v-model="createForm.displayNames[r.id]"
+              :placeholder="r.scene_name || `执行#${r.id}`"
+              maxlength="80"
+              clearable
+            />
+          </div>
+        </div>
+        <div class="form-hint">仅改报告内展示名，不修改执行记录本身。例：瞬间峰值、常规持续。</div>
+      </el-form-item>
+      <el-form-item label="AI 补充提示">
+        <el-input
+          v-model="createForm.userExtraPrompt"
+          type="textarea"
+          :rows="3"
+          maxlength="2000"
+          show-word-limit
+          placeholder="可选。生成后跑 AI 时会追加到分析提示，例如：重点对比峰值与持续的 P95 差异"
+        />
+        <div class="form-hint">
+          是否自动分析取决于项目「压测 AI」开关；所用模型在
+          AI 配置 → 场景绑定 →「性能测试报告分析」。
+        </div>
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="createReportVisible = false">取消</el-button>
+      <el-button type="primary" :loading="compareLoading" @click="submitCreateReport">生成</el-button>
+    </template>
+  </el-dialog>
+
   <el-dialog v-model="compareDialogVisible" title="报告对比" width="800px" destroy-on-close>
     <div v-if="compareData" v-loading="compareLoading">
+      <el-alert
+        v-for="(msg, idx) in (compareData.trust?.warnings || [])"
+        :key="'trust-' + idx"
+        :title="msg"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+      />
       <!-- 基础信息 -->
       <el-table :data="compareData.records" border size="small" style="margin-bottom: 20px">
         <el-table-column label="指标" width="120">
@@ -246,12 +354,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Refresh, Document, VideoPause, Delete, TrendCharts, Top, Bottom, Minus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
-import { perfRecordApi, perfExecApi } from '@/api'
+import { perfRecordApi, perfExecApi, perfComparisonApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 
 const router = useRouter()
@@ -266,6 +374,15 @@ const statusFilter = ref('')
 const sceneNameFilter = ref('')
 const dateRange = ref(null)
 const selectedRecords = ref([])
+
+const selectedIsMerge = computed(() => {
+  const scenes = new Set(selectedRecords.value.map((r) => r.scene_id))
+  return scenes.size > 1
+})
+const selectedReportActionLabel = computed(() => {
+  const n = selectedRecords.value.length
+  return `生成增强报告(${n})`
+})
 
 let pollTimer = null
 
@@ -287,6 +404,13 @@ const getModeType = (mode) => {
 const getModeLabel = (mode) => {
   const map = { fixed: '固定', loop: '循环', stepping: '梯度', stream_burst: '流式阶段', sse_burst: '流式阶段' }
   return map[mode] || mode
+}
+
+const progressBarColor = (pct) => {
+  const p = Number(pct) || 0
+  if (p >= 90) return '#67c23a'
+  if (p >= 60) return '#409eff'
+  return '#e6a23c'
 }
 
 const fetchData = async () => {
@@ -331,6 +455,11 @@ const fetchRunningProgress = async () => {
           const countModes = ['loop', 'journey_loop', 'stream_burst', 'sse_burst']
           if (countModes.includes(progress.mode)) {
             text = `${progress.current}/${progress.total}`
+          } else if (
+            progress.phase === 'wind_down'
+            || Number(progress.current) >= Number(progress.total)
+          ) {
+            text = `收尾等待 ${progress.current}s/${progress.total}s`
           } else {
             text = `${progress.current}s/${progress.total}s`
           }
@@ -360,11 +489,112 @@ const handleViewReport = (row) => {
   router.push(`/perf-report/${row.id}`)
 }
 
-// 报告对比
+// 生成持久化增强报告（2–10 条）
 const compareDialogVisible = ref(false)
 const compareData = ref(null)
 const compareLoading = ref(false)
+const createReportVisible = ref(false)
+const createForm = ref({
+  kind: 'compare',
+  title: '',
+  referenceId: null,
+  displayNames: {},
+  userExtraPrompt: ''
+})
 
+const openCreateReportDialog = () => {
+  const n = selectedRecords.value.length
+  if (n < 2 || n > 10) {
+    ElMessage.warning('请选择 2–10 条记录生成增强报告')
+    return
+  }
+  if (!proStore.projectInfo?.id) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  const names = {}
+  for (const r of selectedRecords.value) {
+    names[r.id] = ''
+  }
+  createForm.value = {
+    kind: selectedIsMerge.value ? 'merge' : 'compare',
+    title: '',
+    referenceId: selectedRecords.value[0]?.id ?? null,
+    displayNames: names,
+    userExtraPrompt: ''
+  }
+  createReportVisible.value = true
+}
+
+const resetCreateReportForm = () => {
+  createForm.value = {
+    kind: 'compare',
+    title: '',
+    referenceId: null,
+    displayNames: {},
+    userExtraPrompt: ''
+  }
+}
+
+const submitCreateReport = async () => {
+  if (!proStore.projectInfo?.id) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  const ids = selectedRecords.value.map((r) => r.id)
+  if (ids.length < 2) return
+  compareLoading.value = true
+  try {
+    let aiAnalyze = undefined
+    try {
+      const settings = proStore.projectInfo?.global_vars?.ai_settings
+      if (settings?.perf_ai_analysis_enabled) {
+        aiAnalyze = settings.perf_ai_analysis_default_on_run === true
+      } else {
+        aiAnalyze = false
+      }
+    } catch {
+      /* ignore */
+    }
+    const displayNames = {}
+    for (const [k, v] of Object.entries(createForm.value.displayNames || {})) {
+      const label = String(v || '').trim()
+      if (label) displayNames[k] = label
+    }
+    const res = await perfComparisonApi.create({
+      project_id: proStore.projectInfo.id,
+      record_ids: ids,
+      reference_record_id: createForm.value.referenceId || ids[0],
+      kind: createForm.value.kind,
+      title: (createForm.value.title || '').trim() || undefined,
+      ...(Object.keys(displayNames).length ? { display_names: displayNames } : {}),
+      ...(createForm.value.userExtraPrompt?.trim()
+        ? { user_extra_prompt: createForm.value.userExtraPrompt.trim() }
+        : {}),
+      ...(aiAnalyze !== undefined ? { ai_analyze: aiAnalyze } : {})
+    })
+    const created = res.data || res
+    const reportId = created.id
+    if (!reportId) {
+      ElMessage.error('创建报告失败：未返回 ID')
+      return
+    }
+    const kind = created.kind || created.snapshot?.kind
+    const msg =
+      kind === 'merge' ? '汇总报告已生成' : kind === 'hybrid' ? '合并+对比报告已生成' : '对比报告已生成'
+    ElMessage.success(msg)
+    createReportVisible.value = false
+    router.push(`/perf-comparisons/${reportId}`)
+  } catch (err) {
+    console.error(err)
+    const detail = err?.data?.detail || err?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' ? detail : '生成报告失败')
+  } finally {
+    compareLoading.value = false
+  }
+}
+
+/** @deprecated 保留即时 2 条预览能力 */
 const handleCompare = async () => {
   if (selectedRecords.value.length !== 2) {
     ElMessage.warning('请恰好选择两条记录进行对比')
@@ -378,7 +608,8 @@ const handleCompare = async () => {
     compareDialogVisible.value = true
   } catch (err) {
     console.error(err)
-    ElMessage.error('对比失败')
+    const detail = err?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' ? detail : '对比失败')
   } finally {
     compareLoading.value = false
   }
@@ -506,5 +737,67 @@ const formatCompareValue = (key, record) => {
   display: flex;
   flex-wrap: nowrap;
   gap: 6px;
+}
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 2px 0;
+}
+.run-progress {
+  width: 100%;
+  min-width: 132px;
+}
+.run-progress :deep(.el-progress-bar__outer) {
+  background: #ebeef5;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.run-progress :deep(.el-progress-bar__inner) {
+  border-radius: 999px;
+  transition: width 0.45s ease;
+}
+.run-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 3px;
+  line-height: 1.2;
+  gap: 6px;
+}
+.run-progress-text {
+  font-size: 11px;
+  color: #606266;
+  font-variant-numeric: tabular-nums;
+}
+.run-progress-pct {
+  font-size: 11px;
+  font-weight: 600;
+  color: #409eff;
+  font-variant-numeric: tabular-nums;
+}
+.form-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.4;
+}
+.rename-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rename-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rename-id {
+  width: 48px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: #606266;
 }
 </style>

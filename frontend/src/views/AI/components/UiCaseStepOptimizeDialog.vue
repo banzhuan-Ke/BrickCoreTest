@@ -102,7 +102,9 @@ const visible = computed({
   set: (val) => emit('update:modelValue', val),
 })
 
-const { aiConfigId, enabledConfigs, loadingConfigs, loadConfigs } = useAiConfigSelect()
+const { aiConfigId, enabledConfigs, loadingConfigs, loadConfigs } = useAiConfigSelect({
+  scene: 'case_steps_optimize',
+})
 
 const description = ref('')
 const optimizing = ref(false)
@@ -200,7 +202,11 @@ const handleOptimize = async () => {
       ElMessage.error(res.data?.message || 'AI 优化失败')
     }
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || 'AI 优化失败')
+    if (e.code === 'ECONNABORTED' || /timeout/i.test(String(e.message || ''))) {
+      ElMessage.error('AI 优化超时（步骤较多或已开断言会更久）。可在「AI 场景绑定」调高 timeout，或先关掉「补充断言」再试')
+    } else {
+      ElMessage.error(e.response?.data?.detail || e.message || 'AI 优化失败')
+    }
   } finally {
     optimizing.value = false
   }

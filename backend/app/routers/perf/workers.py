@@ -1,9 +1,10 @@
 """性能测试 Worker 节点管理"""
 import asyncio
+import logging
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Any, Optional, List
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from tortoise.transactions import in_transaction
@@ -17,14 +18,73 @@ from app.routers.perf.case_agg_utils import (
     finalize_case_aggregation,
     strip_rt_samples_from_case_aggregations,
 )
+from app.routers.perf.report_utils import merge_rt_histograms
+from app.routers.perf import worker_queue, worker_reports
+from app.routers.perf.access import get_worker_for_member
+from app.modules.perf.metrics_accuracy import merge_rt_samples, percentiles_from_samples
+from app.core.platform.auth import (
+    _authenticate_user_from_token,
+    is_authenticated,
+    oauth2_scheme_optional,
+    require_permissions,
+    verify_runner_token,
+)
+from app.core.platform.config import INTERNAL_API_KEY, RUNNER_ENGINE_VERSION
+from app.core.platform.permissions import PERF_SCENE_EDIT, PERF_WORKER_VIEW
+from app.core.platform.project_access import PROJECT_ROLE_MEMBER, PROJECT_ROLE_VIEWER, assert_project_access
+
+logger = logging.getLogger(__name__)
 
 ERROR_RATE_AUTO_STOP_MSG = "错误率连续3秒超过阈值，已自动停止"
 
 # 前端用 router（继承 perf_router 的认证依赖）
-router = APIRouter(prefix="/workers", tags=["性能测试Worker节点"])
+router = APIRouter(
+    prefix="/workers",
+    tags=["性能测试Worker节点"],
+    dependencies=[Depends(require_permissions(PERF_WORKER_VIEW))],
+)
 
-# Worker 脚本用 public_router（无认证依赖，独立注册）
+# Worker 脚本用 public_router：注册需 Runner/用户/内部密钥；心跳/领取任务仍靠 worker token
 public_router = APIRouter(prefix="/workers", tags=["性能测试Worker节点"])
+
+
+async def _require_worker_project_auth(
+    project_id: int = Query(...),
+    token: str | None = Depends(oauth2_scheme_optional),
+    x_runner_token: str | None = Header(None, alias="X-Runner-Token"),
+    x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
+) -> dict:
+    """注册/下线：必须证明对 project_id 有成员权限，或持有平台内部密钥。"""
+    if x_internal_token and x_internal_token == INTERNAL_API_KEY:
+        return {"internal": True, "project_id": project_id}
+
+    if x_runner_token:
+        runner_ctx = await verify_runner_token(x_runner_token)
+        user_id = runner_ctx.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Runner token 缺少用户信息")
+        from app.models.sys import User
+
+        user = await User.get_or_none(id=user_id, is_del=False)
+        if not user or not user.is_active:
+            raise HTTPException(status_code=403, detail="Runner 关联用户无效或已停用")
+        user_info = {
+            "id": user.id,
+            "username": user.username,
+            "is_superuser": bool(user.is_superuser),
+        }
+        await assert_project_access(user_info, project_id, min_role=PROJECT_ROLE_MEMBER)
+        return {"runner": True, **user_info, "project_id": project_id}
+
+    if token:
+        user_info = await _authenticate_user_from_token(token)
+        await assert_project_access(user_info, project_id, min_role=PROJECT_ROLE_MEMBER)
+        return {**user_info, "project_id": project_id}
+
+    raise HTTPException(
+        status_code=401,
+        detail="Worker 注册/下线需要 X-Runner-Token、登录 JWT 或有效的 X-Internal-Token",
+    )
 
 
 # ========== 请求模型 ==========
@@ -93,16 +153,14 @@ class WorkerFinalReport(BaseModel):
     time_series_data: list = []
     phase_metrics: dict = {}
     request_details: list = []
+    # 蓄水池样本：多 Worker 合并后算真分位（旧客户端可缺省）
+    rt_samples: list = []
+    success_avg_response_time: float = 0
+    success_p95_response_time: float = 0
+    success_rt_samples: list = []
 
 
-# ========== 内存中的分布式聚合数据 ==========
-# {record_id: {worker_id: [秒级数据点列表]}}
-_worker_reports: dict = {}
-
-# 任务队列: {worker_id: task_dict}
-_task_queue: dict = {}
-# 任务事件: {worker_id: asyncio.Event}
-_task_events: dict = {}
+# ========== 分布式聚合（秒级点列存 Redis，见 worker_reports；进程锁仅本机） ==========
 
 _final_merge_locks: dict[int, asyncio.Lock] = {}
 
@@ -128,34 +186,20 @@ async def _assert_worker_assigned(worker: PerfWorker, record: PerfRecord) -> Non
         raise HTTPException(status_code=403, detail="Worker 未参与该压测任务")
 
 
-def _get_worker_reports(record_id: int):
-    if record_id not in _worker_reports:
-        _worker_reports[record_id] = {}
-    return _worker_reports[record_id]
-
-
-def _clear_worker_reports(record_id: int):
-    _worker_reports.pop(record_id, None)
-
-
-def _assign_task(worker_id: int, task: dict):
-    """向 Worker 分配任务"""
-    _task_queue[worker_id] = task
-    evt = _task_events.get(worker_id)
-    if evt:
-        evt.set()
-
-
-def _get_task(worker_id: int) -> Optional[dict]:
-    """获取并移除 Worker 的任务"""
-    return _task_queue.pop(worker_id, None)
+async def _clear_worker_reports(record_id: int):
+    await worker_reports.clear_reports(record_id)
 
 
 # ========== Worker 管理接口 ==========
 
 @public_router.post("/register", summary="Worker 注册")
-async def register_worker(req: WorkerRegisterRequest, project_id: int = Query(...)):
+async def register_worker(
+    req: WorkerRegisterRequest,
+    project_id: int = Query(...),
+    _auth: dict = Depends(_require_worker_project_auth),
+):
     """Worker 节点启动时调用，注册到 Backend（同项目+token+主机名复用已有记录，避免重复计数）"""
+    _ = _auth
     now = datetime.now()
     existing = await PerfWorker.filter(
         project_id=project_id,
@@ -240,8 +284,13 @@ async def worker_stop_check(
 
 
 @public_router.post("/unregister", summary="Worker 主动下线")
-async def unregister_worker(req: WorkerUnregisterRequest, project_id: int = Query(...)):
+async def unregister_worker(
+    req: WorkerUnregisterRequest,
+    project_id: int = Query(...),
+    _auth: dict = Depends(_require_worker_project_auth),
+):
     """客户端下线时调用，立即将节点标记为离线（不再等待心跳超时）。"""
+    _ = _auth
     workers = await PerfWorker.filter(
         project_id=project_id,
         token=req.token,
@@ -261,13 +310,14 @@ async def unregister_worker(req: WorkerUnregisterRequest, project_id: int = Quer
 
 @router.get("", summary="Worker 列表")
 async def get_workers(
-    project_id: Optional[int] = Query(None, description="项目ID，传入则只返回该项目 Worker"),
-    status: Optional[str] = Query(None)
+    project_id: int = Query(..., description="项目ID"),
+    status: Optional[str] = Query(None),
+    user_info: dict = Depends(is_authenticated),
 ):
-    """获取 Worker 节点列表"""
-    query = PerfWorker.filter()
-    if project_id is not None:
-        query = query.filter(project_id=project_id)
+    """获取 Worker 节点列表（必须指定项目，并校验成员权限）"""
+    await assert_project_access(user_info, project_id, min_role=PROJECT_ROLE_VIEWER)
+    await reclaim_stale_busy_workers(project_id)
+    query = PerfWorker.filter(project_id=project_id)
     if status:
         query = query.filter(status=status)
 
@@ -286,16 +336,36 @@ async def get_workers(
             deduped[key] = (w, last_hb)
 
     result = []
+    expected_ver = (RUNNER_ENGINE_VERSION or "").strip()
     for w, last_hb in deduped.values():
         if last_hb:
+            age_sec = max(0, int((now - last_hb).total_seconds()))
             is_offline = (now - last_hb) > timedelta(minutes=2)
+            offline_reason = f"超过 2 分钟无心跳（已 {age_sec} 秒）" if is_offline else None
         else:
-            # 刚注册、尚未心跳：用创建时间兜底
             ct = w.create_time.replace(tzinfo=None) if w.create_time and w.create_time.tzinfo else w.create_time
-            is_offline = not ct or (now - ct) > timedelta(minutes=2)
+            if ct:
+                age_sec = max(0, int((now - ct).total_seconds()))
+                is_offline = (now - ct) > timedelta(minutes=2)
+                offline_reason = (
+                    "从未心跳，且注册已超过 2 分钟"
+                    if is_offline
+                    else None
+                )
+            else:
+                age_sec = None
+                is_offline = True
+                offline_reason = "从未心跳"
         dynamic_status = "offline" if is_offline else "online"
         if status and dynamic_status != status:
             continue
+        engine_ver = (getattr(w, "engine_version", "") or "").strip()
+        if not engine_ver:
+            version_ok = None
+        elif expected_ver:
+            version_ok = engine_ver == expected_ver
+        else:
+            version_ok = None
         result.append({
             "id": w.id,
             "name": w.name,
@@ -303,7 +373,11 @@ async def get_workers(
             "max_concurrent": w.max_concurrent,
             "status": dynamic_status,
             "agent_kind": getattr(w, "agent_kind", "") or "",
-            "engine_version": getattr(w, "engine_version", "") or "",
+            "engine_version": engine_ver,
+            "expected_engine_version": expected_ver,
+            "version_ok": version_ok,
+            "offline_reason": offline_reason if is_offline else None,
+            "heartbeat_age_seconds": age_sec,
             "last_heartbeat": w.last_heartbeat.strftime("%Y-%m-%d %H:%M:%S") if w.last_heartbeat else "-",
             "current_record_id": w.current_record_id,
             "create_time": w.create_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -312,12 +386,13 @@ async def get_workers(
     return result
 
 
-@router.delete("/{worker_id}", summary="删除 Worker")
-async def delete_worker(worker_id: int):
+@router.delete(
+    "/{worker_id}",
+    summary="删除 Worker",
+    dependencies=[Depends(require_permissions(PERF_SCENE_EDIT))],
+)
+async def delete_worker(worker: PerfWorker = Depends(get_worker_for_member)):
     """删除 Worker 节点"""
-    worker = await PerfWorker.get_or_none(id=worker_id)
-    if not worker:
-        raise HTTPException(status_code=404, detail="Worker 不存在")
     await worker.delete()
     return {"message": "删除成功"}
 
@@ -330,9 +405,63 @@ def _normalize_heartbeat(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.replace(tzinfo=None) if dt.tzinfo else dt
 
 
-async def get_active_workers(project_id: Optional[int] = None) -> List[PerfWorker]:
+def _worker_is_busy(w: PerfWorker) -> bool:
+    if w.current_record_id:
+        return True
+    return (w.status or "").lower() == "busy"
+
+
+_HEARTBEAT_TIMEOUT = timedelta(minutes=2)
+
+
+def _is_heartbeat_stale(w: PerfWorker, now: Optional[datetime] = None) -> bool:
+    """超过心跳窗口视为僵死（与 get_active_workers 在线判定一致）。"""
+    now = now or datetime.now()
+    cutoff = now - _HEARTBEAT_TIMEOUT
+    last_hb = _normalize_heartbeat(w.last_heartbeat)
+    if last_hb:
+        return last_hb <= cutoff
+    ct = _normalize_heartbeat(w.create_time)
+    if ct:
+        return ct <= cutoff
+    return True
+
+
+async def reclaim_stale_busy_workers(project_id: Optional[int] = None) -> int:
+    """心跳超时后强制清 current_record_id / busy，避免长期占槽。"""
+    query = PerfWorker.filter()
+    if project_id is not None:
+        query = query.filter(project_id=project_id)
+    workers = await query.all()
+    now = datetime.now()
+    reclaimed = 0
+    for w in workers:
+        if not _worker_is_busy(w):
+            continue
+        if not _is_heartbeat_stale(w, now=now):
+            continue
+        prev_record = w.current_record_id
+        w.status = "idle"
+        w.current_record_id = None
+        await w.save()
+        reclaimed += 1
+        logger.info(
+            "回收僵死 busy Worker id=%s host=%s prev_record_id=%s",
+            w.id,
+            w.host,
+            prev_record,
+        )
+    return reclaimed
+
+
+async def get_active_workers(
+    project_id: Optional[int] = None,
+    *,
+    exclude_busy: bool = True,
+) -> List[PerfWorker]:
     """获取活跃的 Worker 节点（2分钟内有心跳，按项目+token+主机去重）"""
-    cutoff = datetime.now() - timedelta(minutes=2)
+    await reclaim_stale_busy_workers(project_id)
+    cutoff = datetime.now() - _HEARTBEAT_TIMEOUT
     query = PerfWorker.filter()
     if project_id is not None:
         query = query.filter(project_id=project_id)
@@ -340,6 +469,8 @@ async def get_active_workers(project_id: Optional[int] = None) -> List[PerfWorke
 
     deduped: dict = {}
     for w in workers:
+        if exclude_busy and _worker_is_busy(w):
+            continue
         last_hb = _normalize_heartbeat(w.last_heartbeat)
         if not last_hb:
             ct = _normalize_heartbeat(w.create_time)
@@ -358,10 +489,50 @@ async def get_active_workers(project_id: Optional[int] = None) -> List[PerfWorke
     return list(deduped.values())
 
 
-async def send_task_to_worker(worker: PerfWorker, task: dict):
-    """向 Worker 分配压测任务（通过内存队列）"""
-    _assign_task(worker.id, task)
-    return True
+async def send_task_to_worker(worker: PerfWorker, task: dict) -> bool:
+    """向 Worker 分配压测任务（Redis 优先；已有待领取任务则拒绝覆盖）"""
+    if await worker_queue.has_pending_task(worker.id):
+        return False
+    return await worker_queue.assign_task(worker.id, task)
+
+
+class WorkerApiDebugResult(BaseModel):
+    worker_id: int
+    token: str
+    request_id: str
+    status_code: Optional[int] = None
+    headers: dict = {}
+    body: Any = None
+    time: float = 0
+    size: int = 0
+    error: Optional[str] = None
+
+
+@public_router.post("/debug-result", summary="接收执行机接口调试结果")
+async def receive_api_debug_result(data: WorkerApiDebugResult):
+    """Worker 完成 task_type=api_debug 后回传；与压测 final 分离。"""
+    from app.routers.perf import api_debug_bridge
+
+    worker = await PerfWorker.get_or_none(id=data.worker_id)
+    if not worker or worker.token != data.token:
+        raise HTTPException(status_code=403, detail="Token 无效")
+
+    payload = {
+        "status_code": data.status_code,
+        "headers": data.headers or {},
+        "body": data.body,
+        "time": data.time or 0,
+        "size": data.size or 0,
+        "error": data.error,
+    }
+    ok = await api_debug_bridge.complete(data.request_id, payload)
+    # 短任务：立即标空闲，避免压测列表长时间 busy
+    if not worker.current_record_id:
+        worker.status = "idle"
+        await worker.save()
+    if not ok:
+        raise HTTPException(status_code=404, detail="调试请求已过期或不存在")
+    return {"message": "ok"}
 
 
 @public_router.get("/{worker_id}/task", summary="Worker 获取任务（长轮询）")
@@ -373,77 +544,164 @@ async def get_worker_task(worker_id: int, token: str = Query(...), timeout: int 
     if worker.token != token:
         raise HTTPException(status_code=403, detail="Token 无效")
 
-    # 检查是否有立即的任务
-    task = _get_task(worker_id)
+    task = await worker_queue.wait_for_task(worker_id, timeout=min(max(timeout, 1), 60))
     if task:
         worker.status = "busy"
-        await worker.save()
-        return {"has_task": True, "task": task}
-
-    # 创建等待事件
-    evt = asyncio.Event()
-    _task_events[worker_id] = evt
-
-    try:
-        await asyncio.wait_for(evt.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
-        pass
-    finally:
-        _task_events.pop(worker_id, None)
-
-    task = _get_task(worker_id)
-    if task:
-        worker.status = "busy"
+        rid = task.get("record_id")
+        if rid is not None:
+            worker.current_record_id = rid
         await worker.save()
         return {"has_task": True, "task": task}
 
     return {"has_task": False}
 
 
-def distribute_concurrent(total: int, workers: List[PerfWorker]) -> List[int]:
-    """将总并发数拆分到各 Worker
-    策略: 按比例分配，每个 Worker 不超过其 max_concurrent
+def distribute_by_weights(
+    total: int,
+    capacities: List[int],
+    weights: Optional[List[int]] = None,
+) -> List[int]:
+    """按权重将总并发拆到各槽位，每槽不超过 capacities[i]。
+
+    weights 缺省或长度不匹配时，用 capacities 作权重（与历史按 max_concurrent 比例一致）。
     """
-    if not workers:
+    n = len(capacities)
+    if n == 0:
         return []
+    caps = [max(0, int(c or 0)) for c in capacities]
+    if sum(caps) <= 0:
+        return [0] * n
 
-    total_capacity = sum(w.max_concurrent for w in workers)
-    if total_capacity <= 0:
-        return [0] * len(workers)
+    if weights is None or len(weights) != n:
+        wts = [max(1, c) if c > 0 else 0 for c in caps]
+    else:
+        wts = [max(0, int(w or 0)) for w in weights]
+        # 有容量但权重被写成 0 时，至少给 1，避免整槽饿死
+        wts = [max(1, w) if caps[i] > 0 and w <= 0 else w for i, w in enumerate(wts)]
 
-    assignments = []
+    total_weight = sum(wts)
+    if total_weight <= 0:
+        return [0] * n
+
+    total = max(0, int(total or 0))
+    assignments: List[int] = []
     remaining = total
 
-    for w in workers:
-        # 按比例分配
-        ratio = w.max_concurrent / total_capacity
+    for i in range(n):
+        if caps[i] <= 0 or wts[i] <= 0:
+            assignments.append(0)
+            continue
+        ratio = wts[i] / total_weight
         assigned = int(total * ratio)
-        # 不超过 Worker 上限
-        assigned = min(assigned, w.max_concurrent)
-        # 至少分配 1 如果还有剩余
+        assigned = min(assigned, caps[i])
         if remaining > 0 and assigned == 0:
             assigned = 1
-        assigned = min(assigned, remaining)
+        assigned = min(assigned, remaining, caps[i])
         assignments.append(assigned)
         remaining -= assigned
 
-    # 如果还有剩余，按顺序加到还有余量的 Worker
     idx = 0
-    while remaining > 0:
-        w = workers[idx % len(workers)]
-        if assignments[idx % len(workers)] < w.max_concurrent:
-            assignments[idx % len(workers)] += 1
+    guard = 0
+    while remaining > 0 and guard <= n * 10:
+        i = idx % n
+        if assignments[i] < caps[i]:
+            assignments[i] += 1
             remaining -= 1
         idx += 1
-        if idx > len(workers) * 10:  # 防止死循环
-            break
+        guard += 1
 
     return assignments
 
 
-@public_router.post("/{record_id}/report", summary="接收 Worker 秒级上报")
-async def receive_worker_report(record_id: int, data: WorkerReportData):
-    """Worker 每秒上报一次聚合数据"""
+def distribute_concurrent(
+    total: int,
+    workers: List[PerfWorker],
+    weights: Optional[List[int]] = None,
+) -> List[int]:
+    """将总并发数拆分到各 Worker。
+
+    默认按 max_concurrent 比例；传入 weights（与 workers 等长正整数）时按权重比例，
+    仍受各机 max_concurrent 上限约束。
+    """
+    if not workers:
+        return []
+    capacities = [int(w.max_concurrent or 0) for w in workers]
+    return distribute_by_weights(total, capacities, weights)
+
+
+def parse_worker_weights_json(raw: Optional[str]) -> dict[int, int]:
+    """解析 worker_weights 查询参数（JSON 对象，key 为 worker id）。"""
+    import json
+
+    if raw is None or not str(raw).strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise ValueError("worker_weights 须为 JSON 对象，如 {\"12\":2,\"15\":1}")
+    if not isinstance(data, dict):
+        raise ValueError("worker_weights 须为 JSON 对象")
+    out: dict[int, int] = {}
+    for k, v in data.items():
+        try:
+            wid = int(k)
+            wv = int(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"worker_weights 非法项: {k!r}={v!r}")
+        if wv < 1:
+            raise ValueError(f"worker_weights[{wid}] 须为正整数")
+        out[wid] = wv
+    return out
+
+
+def resolve_worker_selection(
+    active: List[PerfWorker],
+    worker_ids: Optional[List[int]] = None,
+    weight_map: Optional[dict[int, int]] = None,
+) -> tuple[List[PerfWorker], List[int]]:
+    """从在线空闲列表解析用户勾选与权重。
+
+    worker_ids 为 None：使用全部 active，权重默认 max_concurrent（可被 weight_map 覆盖）。
+    worker_ids 非空：须全部落在 active 内，否则 ValueError。
+    返回 (selected_workers, weights)，与 selected 等长。
+    """
+    if not active:
+        return [], []
+
+    active_by_id = {int(w.id): w for w in active}
+    weight_map = weight_map or {}
+
+    if worker_ids is None:
+        selected = list(active)
+    else:
+        ids = [int(x) for x in worker_ids]
+        if not ids:
+            raise ValueError("请至少选择一个压测执行器")
+        missing = [i for i in ids if i not in active_by_id]
+        if missing:
+            raise ValueError(
+                f"所选执行器不可用或不在线空闲：{', '.join(str(i) for i in missing)}"
+            )
+        # 保持用户勾选顺序
+        selected = [active_by_id[i] for i in ids]
+
+    weights = [
+        int(weight_map.get(int(w.id), w.max_concurrent or 1) or 1)
+        for w in selected
+    ]
+    weights = [max(1, w) for w in weights]
+    return selected, weights
+
+
+class WorkerRequestStop(BaseModel):
+    worker_id: int
+    token: str
+    reason: str = ERROR_RATE_AUTO_STOP_MSG
+
+
+@public_router.post("/{record_id}/request-stop", summary="Worker 请求全局停止（错误率超限等）")
+async def worker_request_stop(record_id: int, data: WorkerRequestStop):
+    """任一 Worker 触发自动停止时，将整条记录标为 stopped，其他 Worker 经 stop-check 退出。"""
     worker = await PerfWorker.get_or_none(id=data.worker_id)
     if not worker or worker.token != data.token:
         raise HTTPException(status_code=403, detail="Token 无效")
@@ -451,13 +709,48 @@ async def receive_worker_report(record_id: int, data: WorkerReportData):
     if not record:
         raise HTTPException(status_code=404, detail="记录不存在")
     await _assert_worker_assigned(worker, record)
-    reports = _get_worker_reports(record_id)
-    if data.worker_id not in reports:
-        reports[data.worker_id] = []
-    reports[data.worker_id].append(data.dict())
+    if record.status in ("stopped", "failed", "success"):
+        return {"message": "记录已结束", "status": record.status}
+    if not isinstance(record.error_breakdown, dict):
+        record.error_breakdown = {}
+    if not record.error_breakdown.get("stop_reason"):
+        record.error_breakdown["stop_reason"] = data.reason or ERROR_RATE_AUTO_STOP_MSG
+    record.status = "stopped"
+    record.ended_at = datetime.now()
+    record.error_breakdown = record.error_breakdown
+    await record.save()
+    return {"message": "已请求全局停止", "status": record.status}
 
-    # 分布式压测期间将合并时序写入 DB，供前端轮询实时图表
-    if record.status == "running":
+
+@public_router.post("/{record_id}/report", summary="接收 Worker 秒级上报")
+async def receive_worker_report(record_id: int, data: WorkerReportData):
+    """Worker 每秒上报一次聚合数据（点列写入 Redis，供多副本合并）。"""
+    worker = await PerfWorker.get_or_none(id=data.worker_id)
+    if not worker or worker.token != data.token:
+        raise HTTPException(status_code=403, detail="Token 无效")
+
+    point = data.dict() if hasattr(data, "dict") else data.model_dump()
+    ok = await worker_reports.append_report(record_id, data.worker_id, point)
+    if not ok:
+        raise HTTPException(
+            status_code=503,
+            detail="秒级上报存储不可用（需要 Redis；单机调试可设 PERF_ALLOW_INMEMORY_WORKER_REPORTS=1）",
+        )
+
+    async with in_transaction():
+        record = await PerfRecord.select_for_update().get_or_none(id=record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="记录不存在")
+        await _assert_worker_assigned(worker, record)
+
+        bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
+        # 已有 Worker 最终报告合并时，禁止秒级回写覆盖 total / 合并标记
+        if bd.get("_merged_worker_ids"):
+            return {"message": "上报成功（最终合并进行中，已忽略秒级汇总写库）"}
+
+        if record.status != "running":
+            return {"message": "上报成功"}
+
         merged_ts = await merge_worker_time_series(record_id)
         if merged_ts:
             record.time_series_data = merged_ts
@@ -523,13 +816,7 @@ def _merge_worker_final_into_record(record: PerfRecord, data: WorkerFinalReport)
     new_hist = new_errors.get("rt_histogram") or []
     if new_hist:
         merged_hist = existing_errors.get("rt_histogram") or []
-        hist_map = {h["label"]: h for h in merged_hist}
-        for h in new_hist:
-            if h["label"] in hist_map:
-                hist_map[h["label"]]["count"] += h.get("count", 0)
-            else:
-                hist_map[h["label"]] = dict(h)
-        existing_errors["rt_histogram"] = list(hist_map.values())
+        existing_errors["rt_histogram"] = merge_rt_histograms(merged_hist, new_hist)
 
     for key, val in (new_errors.get("by_status_code") or {}).items():
         existing_errors.setdefault("by_status_code", {})[key] = existing_errors.get("by_status_code", {}).get(key, 0) + val
@@ -574,6 +861,7 @@ def _merge_worker_final_into_record(record: PerfRecord, data: WorkerFinalReport)
         if key in (
             "by_status_code", "by_type", "failed_samples", "request_traces",
             "status_code_distribution", "rt_histogram", "journey_aggregations",
+            "metrics_meta",
         ):
             continue
         if key == "stop_reason":
@@ -588,6 +876,39 @@ def _merge_worker_final_into_record(record: PerfRecord, data: WorkerFinalReport)
         else:
             existing_errors[key] = val
     existing_errors["_worker_rt_stats"] = existing_rt_stats
+
+    # 增量合并蓄水池，避免 list-of-lists 撑爆 error_breakdown JSON
+    new_samples = list(getattr(data, "rt_samples", None) or [])
+    if new_samples:
+        prev = existing_errors.get("_worker_rt_samples") or []
+        # 兼容：旧逻辑存 [[...],[...]]，新逻辑存扁平 list
+        if prev and isinstance(prev[0], (list, tuple)):
+            existing_errors["_worker_rt_samples"] = merge_rt_samples([*prev, new_samples])
+        else:
+            existing_errors["_worker_rt_samples"] = merge_rt_samples([prev, new_samples])
+
+    # 成功请求延迟样本合并
+    succ_samples = list(getattr(data, "success_rt_samples", None) or [])
+    if succ_samples or (getattr(data, "success_avg_response_time", 0) or 0) > 0:
+        succ_bucket = existing_errors.get("_worker_success_rt") or {
+            "samples": [], "stats": [],
+        }
+        if succ_samples:
+            prev_s = succ_bucket.get("samples") or []
+            succ_bucket["samples"] = merge_rt_samples([prev_s, succ_samples])
+        stats_list = succ_bucket.setdefault("stats", [])
+        stats_list.append({
+            "total": int(getattr(data, "success_count", 0) or 0),
+            "avg": float(getattr(data, "success_avg_response_time", 0) or 0),
+            "p95": float(getattr(data, "success_p95_response_time", 0) or 0),
+        })
+        existing_errors["_worker_success_rt"] = succ_bucket
+
+    # 透传 metrics_meta（取首个非空，勿做数值累加）
+    new_meta = (new_errors.get("metrics_meta") if isinstance(new_errors, dict) else None) or {}
+    if new_meta and not existing_errors.get("metrics_meta"):
+        existing_errors["metrics_meta"] = new_meta
+
     record.error_breakdown = existing_errors
 
     existing_cases = record.case_aggregations or {}
@@ -629,6 +950,7 @@ async def receive_worker_final_report(record_id: int, data: WorkerFinalReport):
     if not worker or worker.token != data.token:
         raise HTTPException(status_code=403, detail="Token 无效")
 
+    should_finalize = False
     async with _get_final_merge_lock(record_id):
         async with in_transaction():
             record = await PerfRecord.select_for_update().get_or_none(id=record_id)
@@ -637,6 +959,8 @@ async def receive_worker_final_report(record_id: int, data: WorkerFinalReport):
             await _assert_worker_assigned(worker, record)
 
             bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
+            if bd.get("_perf_finalized"):
+                return {"message": "记录已收尾，忽略迟到最终报告"}
             merged_ids = bd.get("_merged_worker_ids") or []
             if data.worker_id in merged_ids:
                 return {"message": "已处理"}
@@ -658,7 +982,30 @@ async def receive_worker_final_report(record_id: int, data: WorkerFinalReport):
             worker_db.status = "idle"
             await worker_db.save()
             await record.save()
+
+            expected = len((record.distribution_info or {}).get("workers") or []) or 1
+            finals = int((record.error_breakdown or {}).get("_worker_final_count") or 0)
+            # 收齐后直接收尾，避免仅依赖 BackgroundTasks 等待循环（进程重启会丢）
+            if record.status == "running" and finals >= expected:
+                should_finalize = True
+
+    if should_finalize:
+        await finalize_distributed_record(record_id)
+        return {"message": "最终报告接收成功，已收尾", "finalized": True}
     return {"message": "最终报告接收成功"}
+
+
+async def maybe_finalize_stuck_running_record(record: PerfRecord) -> bool:
+    """若 running 且已收齐 Worker 最终报告，补做收尾（列表/状态轮询自愈）。"""
+    if not record or record.status != "running":
+        return False
+    bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
+    finals = int(bd.get("_worker_final_count") or 0)
+    expected = len((record.distribution_info or {}).get("workers") or []) or 1
+    if finals < expected:
+        return False
+    await finalize_distributed_record(record.id)
+    return True
 
 
 # ========== 分布式聚合辅助 ==========
@@ -716,24 +1063,100 @@ def _recompute_rt_from_case_aggregations(record: PerfRecord) -> None:
 
 
 def _apply_worker_rt_stats_to_record(record: PerfRecord, *, pop_temp: bool = False) -> None:
-    """从 Worker 最终报告累加的 RT 统计回填 record 顶栏延迟指标"""
+    """从 Worker 最终报告累加的 RT 统计回填 record 顶栏延迟指标。
+
+    优先合并各 Worker ``rt_samples`` 计算真分位；无样本时回退「Pxx 加权平均」。
+    """
     bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
-    rt_stats = bd.get("_worker_rt_stats") or []
-    if not rt_stats:
-        return
-    total_weight = sum(s["total"] for s in rt_stats)
-    if total_weight <= 0:
-        return
-    record.avg_response_time = round(sum(s["avg"] * s["total"] for s in rt_stats) / total_weight, 2)
-    record.min_response_time = round(min(s["min"] for s in rt_stats), 2)
-    record.max_response_time = round(max(s["max"] for s in rt_stats), 2)
-    record.median_response_time = round(sum(s["median"] * s["total"] for s in rt_stats) / total_weight, 2)
-    record.p90_response_time = round(sum(s["p90"] * s["total"] for s in rt_stats) / total_weight, 2)
-    record.p95_response_time = round(sum(s["p95"] * s["total"] for s in rt_stats) / total_weight, 2)
-    record.p99_response_time = round(sum(s["p99"] * s["total"] for s in rt_stats) / total_weight, 2)
-    record.std_dev_response_time = round(sum(s["std_dev"] * s["total"] for s in rt_stats) / total_weight, 2)
+    raw_samples = bd.get("_worker_rt_samples") or []
+    # 兼容扁平 list 与旧版 list-of-lists
+    if raw_samples and isinstance(raw_samples[0], (list, tuple)):
+        merged = merge_rt_samples(raw_samples)
+    elif raw_samples:
+        merged = []
+        for x in raw_samples:
+            try:
+                v = float(x)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                merged.append(v)
+    else:
+        merged = []
+
+    if merged:
+        pct = percentiles_from_samples(merged)
+        record.median_response_time = pct["median_response_time"]
+        record.p90_response_time = pct["p90_response_time"]
+        record.p95_response_time = pct["p95_response_time"]
+        record.p99_response_time = pct["p99_response_time"]
+        # avg/min/max/std 仍用各 Worker 加权（全量计数更准）
+        rt_stats = bd.get("_worker_rt_stats") or []
+        if rt_stats:
+            total_weight = sum(s["total"] for s in rt_stats)
+            if total_weight > 0:
+                record.avg_response_time = round(
+                    sum(s["avg"] * s["total"] for s in rt_stats) / total_weight, 2
+                )
+                record.min_response_time = round(min(s["min"] for s in rt_stats), 2)
+                record.max_response_time = round(max(s["max"] for s in rt_stats), 2)
+                record.std_dev_response_time = round(
+                    sum(s["std_dev"] * s["total"] for s in rt_stats) / total_weight, 2
+                )
+    else:
+        rt_stats = bd.get("_worker_rt_stats") or []
+        if rt_stats:
+            total_weight = sum(s["total"] for s in rt_stats)
+            if total_weight > 0:
+                record.avg_response_time = round(sum(s["avg"] * s["total"] for s in rt_stats) / total_weight, 2)
+                record.min_response_time = round(min(s["min"] for s in rt_stats), 2)
+                record.max_response_time = round(max(s["max"] for s in rt_stats), 2)
+                record.median_response_time = round(sum(s["median"] * s["total"] for s in rt_stats) / total_weight, 2)
+                record.p90_response_time = round(sum(s["p90"] * s["total"] for s in rt_stats) / total_weight, 2)
+                record.p95_response_time = round(sum(s["p95"] * s["total"] for s in rt_stats) / total_weight, 2)
+                record.p99_response_time = round(sum(s["p99"] * s["total"] for s in rt_stats) / total_weight, 2)
+                record.std_dev_response_time = round(sum(s["std_dev"] * s["total"] for s in rt_stats) / total_weight, 2)
+
+    # 成功专用延迟写入 error_breakdown.success_latency（不占顶栏字段）
+    succ = bd.get("_worker_success_rt") or {}
+    succ_samples = succ.get("samples") or []
+    succ_stats = succ.get("stats") or []
+    success_latency = {}
+    if succ_samples:
+        sp = percentiles_from_samples(succ_samples)
+        w = sum(int(s.get("total") or 0) for s in succ_stats) or len(succ_samples)
+        avg = 0.0
+        if succ_stats and w > 0:
+            avg = sum(float(s.get("avg") or 0) * int(s.get("total") or 0) for s in succ_stats) / w
+        elif succ_samples:
+            avg = sum(succ_samples) / len(succ_samples)
+        success_latency = {
+            "avg_response_time": round(avg, 2),
+            "p95_response_time": sp["p95_response_time"],
+            "median_response_time": sp["median_response_time"],
+            "sample_count": len(succ_samples),
+        }
+    elif succ_stats:
+        w = sum(int(s.get("total") or 0) for s in succ_stats)
+        if w > 0:
+            success_latency = {
+                "avg_response_time": round(
+                    sum(float(s.get("avg") or 0) * int(s.get("total") or 0) for s in succ_stats) / w, 2
+                ),
+                "p95_response_time": round(
+                    sum(float(s.get("p95") or 0) * int(s.get("total") or 0) for s in succ_stats) / w, 2
+                ),
+                "sample_count": w,
+            }
+    if success_latency:
+        bd["success_latency"] = success_latency
+
     if pop_temp:
+        bd.pop("_worker_rt_samples", None)
         bd.pop("_worker_rt_stats", None)
+        bd.pop("_worker_success_rt", None)
+    # JSONField 需重新赋值，确保 Tortoise 感知变更
+    if success_latency or pop_temp:
         record.error_breakdown = bd
 
 
@@ -749,8 +1172,13 @@ def _refresh_record_summary_metrics(record: PerfRecord, *, pop_rt_temp: bool = F
 
 
 async def merge_worker_time_series(record_id: int) -> list:
-    """合并所有 Worker 的秒级上报数据为统一时序"""
-    reports = _get_worker_reports(record_id)
+    """合并所有 Worker 的秒级上报数据为统一时序。
+
+    说明：各 Worker 的 P95 不能加权平均得到全局 P95。多 Worker 同秒合并时
+    秒级 p95_rt 取各节点该秒 P95 的最大值作为保守上界（趋势参考），最终报告
+    仍以 rt_samples 合并后的真分位为准。
+    """
+    reports = await worker_reports.load_all_reports(record_id)
     if not reports:
         return []
 
@@ -771,7 +1199,8 @@ async def merge_worker_time_series(record_id: int) -> list:
                     "success": 0,
                     "fail": 0,
                     "_rt_weight": 0,
-                    "_p95_weight": 0,
+                    "_p95_values": [],
+                    "_worker_count": 0,
                 }
             m = merged[ts]
             # 以每秒请求数为准（qps 字段即该秒请求量），避免累计 total_req 参与合并
@@ -781,33 +1210,43 @@ async def merge_worker_time_series(record_id: int) -> list:
             m["success"] += int(dp.get("success") or 0)
             m["fail"] += int(dp.get("fail") or 0)
             m["active_users"] += dp.get("active_users", 0)
+            m["_worker_count"] += 1
             if sec_req > 0:
                 m["avg_rt"] = (
                     m["avg_rt"] * m["_rt_weight"] + dp.get("avg_rt", 0) * sec_req
                 ) / (m["_rt_weight"] + sec_req)
-                p95_val = dp.get("p95_rt")
-                if p95_val is not None:
-                    m["p95_rt"] = (
-                        m["p95_rt"] * m["_p95_weight"] + p95_val * sec_req
-                    ) / (m["_p95_weight"] + sec_req)
-                    m["_p95_weight"] += sec_req
                 m["_rt_weight"] += sec_req
+            p95_val = dp.get("p95_rt")
+            if p95_val is not None:
+                try:
+                    m["_p95_values"].append(float(p95_val))
+                except (TypeError, ValueError):
+                    pass
 
     # 计算错误率
     for m in merged.values():
         total = m["total_req"]
         m["error_rate"] = round(m["fail"] / total * 100, 2) if total > 0 else 0
-        if m.get("_p95_weight", 0) <= 0 and m.get("avg_rt"):
-            m["p95_rt"] = m["avg_rt"]
+        p95_vals = m.pop("_p95_values", [])
+        if len(p95_vals) <= 1:
+            m["p95_rt"] = round(p95_vals[0], 2) if p95_vals else (m.get("avg_rt") or 0)
+            m["p95_approx"] = False
+        else:
+            # 多 Worker：取 max 作保守上界，并标记非严格全局 P95
+            m["p95_rt"] = round(max(p95_vals), 2)
+            m["p95_approx"] = True
         m.pop("_rt_weight", None)
-        m.pop("_p95_weight", None)
+        m.pop("_worker_count", None)
 
     # 按时间戳排序
     return sorted(merged.values(), key=lambda x: x["timestamp"])
 
 
 def merge_time_series_lists(series_list: list) -> list:
-    """合并多个 Worker 最终报告中的时序点（秒级上报缺失时的兜底）。"""
+    """合并多个 Worker 最终报告中的时序点（秒级上报缺失时的兜底）。
+
+    多 Worker 同秒 P95 取 max 作保守上界，并标记 p95_approx（与 merge_worker_time_series 一致）。
+    """
     if not series_list:
         return []
     merged = {}
@@ -830,7 +1269,7 @@ def merge_time_series_lists(series_list: list) -> list:
                     "success": 0,
                     "fail": 0,
                     "_rt_weight": 0,
-                    "_p95_weight": 0,
+                    "_p95_values": [],
                 }
             m = merged[ts]
             sec_req = int(dp.get("qps") or dp.get("total_req") or 0)
@@ -843,40 +1282,52 @@ def merge_time_series_lists(series_list: list) -> list:
                 m["avg_rt"] = (
                     m["avg_rt"] * m["_rt_weight"] + dp.get("avg_rt", 0) * sec_req
                 ) / (m["_rt_weight"] + sec_req)
-                p95_val = dp.get("p95_rt")
-                if p95_val is not None:
-                    m["p95_rt"] = (
-                        m["p95_rt"] * m["_p95_weight"] + p95_val * sec_req
-                    ) / (m["_p95_weight"] + sec_req)
-                    m["_p95_weight"] += sec_req
                 m["_rt_weight"] += sec_req
+            p95_val = dp.get("p95_rt")
+            if p95_val is not None:
+                try:
+                    m["_p95_values"].append(float(p95_val))
+                except (TypeError, ValueError):
+                    pass
 
     for m in merged.values():
         total = m["total_req"]
         m["error_rate"] = round(m["fail"] / total * 100, 2) if total > 0 else 0
-        if m.get("_p95_weight", 0) <= 0 and m.get("avg_rt"):
-            m["p95_rt"] = m["avg_rt"]
+        p95_vals = m.pop("_p95_values", [])
+        if len(p95_vals) <= 1:
+            m["p95_rt"] = round(p95_vals[0], 2) if p95_vals else (m.get("avg_rt") or 0)
+            m["p95_approx"] = False
+        else:
+            m["p95_rt"] = round(max(p95_vals), 2)
+            m["p95_approx"] = True
         m.pop("_rt_weight", None)
-        m.pop("_p95_weight", None)
 
     return sorted(merged.values(), key=lambda x: x["timestamp"])
 
 
 async def finalize_distributed_record(record_id: int):
     """分布式执行完成后，汇总所有 Worker 数据生成最终报告"""
+    async with _get_final_merge_lock(record_id):
+        await _finalize_distributed_record_locked(record_id)
+    _final_merge_locks.pop(record_id, None)
+
+
+async def _finalize_distributed_record_locked(record_id: int):
     record = await PerfRecord.get_or_none(id=record_id)
     if not record:
         return
-
-    # 合并时序数据
-    merged_ts = await merge_worker_time_series(record_id)
-
     bd = record.error_breakdown if isinstance(record.error_breakdown, dict) else {}
-    final_ts_lists = bd.pop("_worker_final_time_series", None)
-    if not merged_ts and final_ts_lists:
-        merged_ts = merge_time_series_lists(final_ts_lists)
+    if bd.get("_perf_finalized"):
+        return
 
-    # 如果秒级上报为空，回退到最终报告中已合并的 time_series_data
+    final_ts_lists = bd.pop("_worker_final_time_series", None)
+
+    # 优先使用各 Worker 最终报告中的完整时序（跨副本一致），秒级缓存仅作兜底
+    merged_ts = []
+    if final_ts_lists:
+        merged_ts = merge_time_series_lists(final_ts_lists)
+    if not merged_ts:
+        merged_ts = await merge_worker_time_series(record_id)
     if not merged_ts and record.time_series_data:
         merged_ts = record.time_series_data
 
@@ -924,14 +1375,14 @@ async def finalize_distributed_record(record_id: int):
     if dur > 0:
         record.received_kb_per_sec = round(total_recv / 1024 / dur, 2)
         record.sent_kb_per_sec = round(total_sent / 1024 / dur, 2)
+    bd["_perf_finalized"] = True
     record.error_breakdown = bd
 
-    record.ended_at = datetime.now()
+    record.ended_at = record.ended_at or datetime.now()
     await record.save()
 
-    # 清理内存数据
-    _clear_worker_reports(record_id)
-    _final_merge_locks.pop(record_id, None)
+    # 清理共享上报缓存
+    await _clear_worker_reports(record_id)
     _running_progress.pop(record_id, None)
 
     # 更新 Worker 状态为 idle
@@ -940,3 +1391,9 @@ async def finalize_distributed_record(record_id: int):
         w.status = "idle"
         w.current_record_id = None
         await w.save()
+
+    try:
+        from app.modules.perf.perf_ai_analyze import maybe_trigger_record_ai_after_finalize
+        await maybe_trigger_record_ai_after_finalize(record)
+    except Exception:
+        logger.exception("触发压测 AI 分析失败 record_id=%s", record_id)

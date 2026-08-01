@@ -93,7 +93,7 @@ const canArchive = computed(() => {
   return u.hasPermission('knowledge:edit') || u.hasPermission('knowledge:execute')
 })
 const canArchiveToKnowledge = computed(
-  () => editionReady.value && !isCommunityEdition.value && canArchive.value
+  () => editionReady.value && canArchive.value
 )
 const successCount = computed(() => batchResults.value.filter(r => r.ok).length)
 const supportsVision = computed(() => {

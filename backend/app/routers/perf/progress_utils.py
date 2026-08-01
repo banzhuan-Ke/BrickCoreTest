@@ -16,6 +16,26 @@ def normalize_distribution_mode(mode: Optional[str]) -> str:
     return "weighted_random"
 
 
+def _time_based_progress(mode: str, elapsed: float, total: int) -> Dict[str, Any]:
+    """固定时长类进度：加压结束后仍 running 时标记收尾等待。"""
+    total = max(0, int(total or 0))
+    elapsed_r = round(float(elapsed or 0), 1)
+    wind_down = total > 0 and elapsed_r >= total
+    if total <= 0:
+        pct = 0.0
+    elif wind_down:
+        pct = 100.0
+    else:
+        pct = round(min(100, elapsed_r / total * 100), 1)
+    return {
+        "mode": mode,
+        "current": elapsed_r,
+        "total": total,
+        "percentage": pct,
+        "phase": "wind_down" if wind_down else "pressure",
+    }
+
+
 def compute_running_progress(config: dict, time_series: List[dict]) -> Optional[Dict[str, Any]]:
     """根据配置与（合并后的）秒级时序计算进度。"""
     if not time_series:
@@ -32,6 +52,7 @@ def compute_running_progress(config: dict, time_series: List[dict]) -> Optional[
             "current": current,
             "total": loop_total,
             "percentage": round(min(100, current / loop_total * 100), 1) if loop_total > 0 else 0,
+            "phase": "pressure",
         }
 
     if mode == JOURNEY_LOOP_MODE:
@@ -48,6 +69,7 @@ def compute_running_progress(config: dict, time_series: List[dict]) -> Optional[
             "current": current,
             "total": loop_total,
             "percentage": round(min(100, current / loop_total * 100), 1) if loop_total > 0 else 0,
+            "phase": "pressure",
         }
 
     if mode in (STREAM_BURST_MODE, "sse_burst"):
@@ -58,34 +80,17 @@ def compute_running_progress(config: dict, time_series: List[dict]) -> Optional[
             "current": current,
             "total": burst_total,
             "percentage": round(min(100, current / burst_total * 100), 1) if burst_total > 0 else 0,
+            "phase": "pressure",
         }
 
     if mode == "stepping":
         steps = config.get("steps") or []
         total_d = sum(int(s.get("duration") or 30) for s in steps) or 60
-        pct = min(100, round(elapsed / total_d * 100, 1))
-        return {
-            "mode": "stepping",
-            "current": round(elapsed, 1),
-            "total": total_d,
-            "percentage": pct,
-        }
+        return _time_based_progress("stepping", elapsed, total_d)
 
     if mode == JOURNEY_FIXED_MODE:
         duration = int(config.get("duration_seconds") or 60)
-        pct = min(100, round(elapsed / duration * 100, 1))
-        return {
-            "mode": mode,
-            "current": round(elapsed, 1),
-            "total": duration,
-            "percentage": pct,
-        }
+        return _time_based_progress(mode, elapsed, duration)
 
     duration = int(config.get("duration_seconds") or 60)
-    pct = min(100, round(elapsed / duration * 100, 1))
-    return {
-        "mode": mode if mode == "fixed" else "fixed",
-        "current": round(elapsed, 1),
-        "total": duration,
-        "percentage": pct,
-    }
+    return _time_based_progress(mode if mode == "fixed" else "fixed", elapsed, duration)

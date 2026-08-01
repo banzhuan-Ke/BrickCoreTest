@@ -53,11 +53,14 @@ def merge_request_headers(
     **_legacy,
 ) -> Dict[str, str]:
     """
-    合并接口/用例本地 Header（低→高：接口 → 用例）。
+    解析最终请求 Header。
+
+    规则与请求参数一致：
+    - 用例配置了任意 Header（非空）→ 整表以用例为准（删掉的 key 不会再从接口补回）
+    - 用例未配置 Header → 使用接口定义 Header
     不再自动合并项目/环境全局 Header；模板仅在编辑页手动导入。
     """
-    result = headers_list_to_dict(api_headers)
     case_dict = headers_list_to_dict(case_headers)
     if case_dict:
-        result.update(case_dict)
-    return result
+        return case_dict
+    return headers_list_to_dict(api_headers)

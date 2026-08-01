@@ -11,6 +11,7 @@
             :project-id="proStore.projectInfo.id"
             v-model="searchForm.catalog_id"
             all-node-label="全部用例"
+            :show-manage="true"
             @change="handleCatalogFilter"
           />
         </div>
@@ -26,6 +27,19 @@
             <el-option label="P1 - 高" value="P1"/>
             <el-option label="P2 - 中" value="P2"/>
             <el-option label="P3 - 低" value="P3"/>
+          </el-select>
+          <el-select
+            v-model="searchForm.tag"
+            placeholder="业务标签"
+            clearable
+            filterable
+            allow-create
+            default-first-option
+            style="width: 140px;"
+          >
+            <el-option label="压测" value="perf"/>
+            <el-option label="业务链路" value="journey"/>
+            <el-option label="登录" value="login"/>
           </el-select>
           <el-input
             v-model="searchForm.keyword"
@@ -883,6 +897,7 @@ const searchForm = reactive({
   api_keyword: '',
   catalog_id: null,
   priority: null,
+  tag: null,
   keyword: ''
 })
 
@@ -1042,6 +1057,9 @@ const getCaseList = async () => {
     if (searchForm.priority) {
       params.priority = searchForm.priority
     }
+    if (searchForm.tag) {
+      params.tag = searchForm.tag
+    }
     const res = await http.apiModuleApi.getTestCaseList(params)
     if (res.status === 200) {
       let data = res.data.data || []
@@ -1124,6 +1142,7 @@ const resetSearch = () => {
   searchForm.api_keyword = ''
   searchForm.catalog_id = null
   searchForm.priority = null
+  searchForm.tag = null
   searchForm.keyword = ''
   getCaseList()
 }
@@ -1152,7 +1171,9 @@ const handleDelete = async (row) => {
       getCaseList()
     }
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error('删除失败')
+    if (error === 'cancel' || error === 'close') return
+    const detail = error?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' ? detail : '删除失败')
   }
 }
 
@@ -1182,9 +1203,9 @@ const handleBatchDelete = async () => {
     selectedCases.value = []
     getCaseList()
   } catch (err) {
-    if (err !== 'cancel') {
-      ElMessage.error('批量删除失败')
-    }
+    if (err === 'cancel' || err === 'close') return
+    const detail = err?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' ? detail : '批量删除失败')
   }
 }
 

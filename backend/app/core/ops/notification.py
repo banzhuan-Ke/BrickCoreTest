@@ -406,7 +406,7 @@ class NotificationService:
 
         from app.routers.perf.records import _generate_perf_html_report
 
-        html_content = _generate_perf_html_report(record, scene)
+        html_content = _generate_perf_html_report(record, scene, editable=False)
         filename = f"perf_report_{record_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
         subject = f"[性能测试报告] {scene_name} - {record.status}"
         body_html = f"""

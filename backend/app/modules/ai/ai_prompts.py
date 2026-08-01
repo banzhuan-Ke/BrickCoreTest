@@ -1,4 +1,4 @@
-﻿"""
+"""
 Prompt 模板管理器
 负责管理预置 Prompt 模板，支持从数据库读取用户自定义模板
 """
@@ -150,6 +150,120 @@ class PromptManager:
 3. 只输出 JSON 对象，不要解释文字""",
             "examples": [],
         },
+        "perf_scene_generation": {
+            "name": "一句话生成压测场景",
+            "scene_type": "perf_scene",
+            "description": "根据自然语言与项目内用例/套件候选，生成压测场景意图 JSON",
+            "system_prompt": (
+                "你是性能测试场景编排助手。你只能从用户提供的候选用例/套件中选择，严禁编造不存在的 case_id 或 suite_id。"
+                "你必须严格输出标准 JSON 对象，不要包含 Markdown 代码块标记。"
+            ),
+            "user_prompt_template": """请根据用户的自然语言描述，从候选资产中挑选用例或套件，并给出压测负载参数。
+
+用户描述：
+{{user_prompt }}
+
+可选套件（优先使用 suite_id）：
+{{ suites_json }}
+
+候选用例（仅可使用下列 id）：
+{{ cases_json }}
+
+输出一个 JSON 对象，字段：
+- name：场景名称（中文，简洁）
+- mode：fixed / loop / stepping / stream_burst / journey_fixed / journey_loop
+  · 探最大并发、容量、梯度/阶梯 → stepping（注意：「爬坡/加压 N 秒」是 ramp_up，不是 stepping）
+  · SSE/流式阶段、每人发一次流式请求 → stream_burst
+  · 链路/多步流程 → journey_*；瞬时每人固定次数 → loop / journey_loop
+  · 普通时长压测 → fixed
+- concurrent_users：并发用户数（整数；stepping 时可填峰值并发或省略）
+- duration_seconds：固定时长秒数（fixed / journey_fixed；1小时=3600）
+- loop_count：每人循环次数（loop / journey_loop）
+- steps：梯度阶段数组，仅 stepping。每项为 JSON 对象，字段 users（并发）与 duration（秒），按并发升序
+- ramp_up_seconds：加压/爬坡秒数（把并发从 0 拉起的时间），默认 0
+- warmup_seconds：热身秒数（可选，汇总时剔除）
+- error_rate_threshold：错误率熔断阈值 0～100，0 表示不启用；峰值场景可填 50
+- stream_profile：流式解析配置（stream_burst 或提到 SSE/流式时需要；可省略由平台补默认）
+- profile：smoke / normal / peak
+- suite_id：候选套件 id 或 null
+- case_ids / case_names：候选用例
+- delay_mode：fixed 或 random；delay_ms / delay_ms_min / delay_ms_max 单位为毫秒（1秒=1000）
+- prefer_journey：多步链路 true；stepping / stream_burst 必须 false
+- reasoning：一两句说明
+
+硬性约束：
+1. suite_id / case_ids 必须来自上方候选；无法匹配时 case_ids 置 [] 并在 reasoning 说明。
+2. 不要编造接口路径或新用例。
+3. 「最大并发 / 容量 / 梯度」→ stepping；若提到「大概/之前是 N 并发」，steps 围绕 N（约 0.5N～2N）。
+4. 「M 并发、持续 T」→ fixed 或 journey_fixed，填 concurrent_users 与 duration_seconds。
+5. 「加压/爬坡 N 秒」写入 ramp_up_seconds，不要因此改成 stepping。
+6. 「1～3 秒间隔」→ delay_mode=random，delay_ms_min=1000，delay_ms_max=3000。
+7. 只输出 JSON 对象，不要解释文字。""",
+            "examples": [],
+        },
+        "stream_parser_rules_generation": {
+            "name": "SSE 解析规则生成",
+            "scene_type": "stream_parser_rules",
+            "description": "根据 SSE 样例与白话阶段说明，生成 rule_based 解析规则 JSON 草稿",
+            "system_prompt": (
+                "你是 SSE 流式协议解析规则工程师。"
+                "你根据用户提供的 SSE 样例行与阶段说明，生成平台 rule_based 解析器可用的规则。"
+                "你必须严格输出标准 JSON 对象，不要包含 Markdown 代码块标记。"
+                "parser_id 固定为 rule_based；derived.expr 仅允许「阶段key - 阶段key」减法形式，可引用 total_time。"
+                "严禁在 derived 中引用未在 phases 里定义的 key（如 start/end/begin）；"
+                "每个 phase 的 match 必须是非空对象，且字段值必须来自样例 JSON（或预处理后的整形视图）。"
+                "平台按 SSE 帧解析：空行分隔的 data/id/event 合成一包；match 可使用 sse_event（对应 event: 行）。"
+                "流结束优先用 event:done（done_events），严禁把 data:{} / {} 填入 done_markers。"
+                "若样例 data 内嵌套 JSON 字符串、或 p/o/v JSON Patch 流，必须用 rules.preprocess 整形后再写 match；"
+                "不要臆造厂商专用 parser_id，只使用通用 preprocess + match。"
+            ),
+            "user_prompt_template": """请根据下列 SSE 样例与阶段说明，生成 rule_based 解析规则。
+
+{% if name_hint %}建议配置名称：{{ name_hint }}
+{% endif %}
+阶段说明（白话）：
+{{ phase_description }}
+
+SSE 样例（每行一条，可能含 data: / event: / id: 前缀）：
+{{ sample_text }}
+
+输出一个 JSON 对象，字段说明：
+- name：配置名称（中文，简洁）
+- description：一两句说明适用协议/接口
+- parser_id：固定字符串 rule_based
+- rules：对象，含
+  · line_prefix：通常为 data:
+  · frame_mode：默认 true（按 SSE 帧拼包）
+  · done_events：字符串数组，默认 ["done"]，匹配 event: 行（如 event:done）
+  · done_markers：仅用于非空 data 结束标记（如 data:[DONE]）；禁止 ["{}"]、["data:{}"]
+  · preprocess（可选）：数组。在 match 之前整形文档。支持：
+    - {{ '{' }}"op":"unwrap_json_text","path":"$.data[0].value","when_path":"$.data[0].type","when_eq":"JSON_TEXT"{{ '}' }}
+      （当 when 条件满足时，把 path 处的 JSON 字符串解析并合并到匹配视图）
+    - {{ '{' }}"op":"json_patch"{{ '}' }}（累积 p/o/v 或仅 v 续写到 _doc）
+  · phases：数组。每项含 key（英文蛇形）、label（中文展示名）、match（对象）、trigger（first 或 last）
+    match 可含 type / agent / action / status / sse_event / fragment_type / response_status 等顶层字段
+    也可含 path_eq / path_nonempty / text_grew（相对预处理后的 _doc），例如
+    path_eq:{{ '{' }}"path":"$.data.messageList[0].status","value":"FINISHED"{{ '}' }}
+    若要求正文非空可加 delta_nonempty 为 true（也识别 text_delta）
+  · derived：数组。每项含 key、label、expr；expr 仅允许「a - b」，a/b 为已有 phase key 或 total_time
+- success_rule：对象。常用 type=phase_exists 且 phase 为某个 phase key；或 type=status_ok
+
+硬性约束：
+1. 只输出 JSON 对象，不要解释文字。
+2. phases 至少一项；key 用英文蛇形且唯一。
+3. match 必须是非空对象，且能对应样例中真实出现的字段值；禁止编造样例里没有的 type/agent/action；禁止 match 为空对象。
+4. derived.expr 禁止乘除、函数调用；仅减法。a/b 必须是 phases[].key 或 total_time，严禁使用 start/end/begin/t0 等未定义名。
+5. 若阶段说明是「检索 + 问答」且样例含 action=search / action=done：检索可用 match 对齐 action=search（可用 status 区分 pending/success）；问答可用 action=done 或正式回答首包。
+6. 若样例含 event: 行（如 event:message / event:done）：阶段结束优先 match.sse_event=done（或 done_events），不要用 data:{} 当 DONE。
+7. 阶段时刻本身已是相对流开始的耗时，不要写「xxx - start」。
+8. 嵌套 JSON 字符串 / Patch 流：先写 preprocess，再用整形后字段或 path_* 匹配；禁止输出厂商专用 parser。
+9. 不要输出 Markdown 代码围栏。
+
+参考示例（仅示意结构，字段值必须按你的样例改写）：
+{{ '{' }}"parser_id":"rule_based","rules":{{ '{' }}"line_prefix":"data:","frame_mode":true,"done_events":["done"],"phases":[{{ '{' }}"key":"search_done","label":"检索完成(s)","match":{{ '{' }}"type":"think","action":"search","status":"success"{{ '}' }},"trigger":"first"{{ '}' }},{{ '{' }}"key":"answer_start","label":"问答开始(s)","match":{{ '{' }}"type":"think","action":"done","status":"success"{{ '}' }},"trigger":"first"{{ '}' }}],"derived":[{{ '{' }}"key":"answer_duration","label":"问答耗时(s)","expr":"total_time - answer_start"{{ '}' }}]{{ '}' }},"success_rule":{{ '{' }}"type":"phase_exists","phase":"answer_start"{{ '}' }}{{ '}' }}
+""",
+            "examples": [],
+        },
         "ui_case_generation": {
             "name": "UI 测试用例生成",
             "scene_type": "ui_case",
@@ -220,6 +334,7 @@ class PromptManager:
 - refresh: {wait_until:"domcontentloaded", timeout:30000}
 - go_back: {timeout:30000, fallback_url:""}
 - scroll_to_height: {height}   # 页面滚到纵向高度；滚到顶部 height:0。禁止用 scroll / x,y
+  也可 position=top|middle|bottom|up|down（up/down 时 height 为相对距离，默认 600）
 - scroll_to_element: {locator, index:1, timeout:20000}  # 滚到元素可见；禁止写成 scroll_to / scroll
 - execute_script: {script, args:[]}
 - save_page_img: {name}
@@ -239,12 +354,12 @@ class PromptManager:
 - double_click_ele: {locator, index:1, force:false, timeout:20000}
 - clear_value: {locator, timeout:20000}
 - set_checked: {locator, timeout:20000}
-- hover: {locator, timeout:20000}
-- focus_element: {locator, timeout:20000}
-- select_option: {locator, value, timeout:20000}
-- type_value: {locator, value, timeout:20000}
+- hover: {locator, index:1, timeout:20000}
+- focus_element: {locator, index:1, timeout:20000}
+- select_option: {locator, value, index:1, timeout:20000}
+- type_value: {locator, value, index:1, timeout:20000}
 - drag_and_drop: {start_selector, end_selector, timeout:20000}
-- long_click_element: {locator, delay:0.1}
+- long_click_element: {locator, delay:0.1, index:1}
 - upload_file: {locator, file_path, timeout:20000}
 
 【鼠标键盘】
@@ -252,15 +367,15 @@ class PromptManager:
 - move_mouse: {x, y}
 - mouse_down: {button:"left"}
 - mouse_up: {button:"left"}
-- mouse_wheel: {x, y}
+- mouse_wheel: {direction:"down", amount:600} 或 {x, y}；可选 cursor_x/cursor_y 先移光标再滚
 - press_key: {key}
 - press_type: {keys}
 
 【iframe操作】（如果操作在 iframe 内时使用）
 - frame_fill_value: {frame, locator, value, timeout:20000}
 - frame_click_element: {frame, locator, index:1, button:"left", force:false, timeout:20000}
-- frame_hover: {frame, locator, timeout:20000}
-- frame_focus_element: {frame, locator, timeout:20000}
+- frame_hover: {frame, locator, index:1, timeout:20000}
+- frame_focus_element: {frame, locator, index:1, timeout:20000}
 - frame_select_option: {frame, locator, value, timeout:20000}
 - frame_type_value: {frame, locator, value, timeout:20000}
 - frame_long_click_element: {frame, locator, delay:0.1}
@@ -951,6 +1066,140 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
   "summary": "总体概述",
   "highlights": ["要点1", "要点2", "要点3"],
   "recommendations": ["建议1", "建议2"]
+}
+不要输出任何解释性文字，只输出 JSON。""",
+            "examples": [],
+        },
+        "perf_compare_analysis": {
+            "name": "性能测试报告分析",
+            "scene_type": "perf_compare_analysis",
+            "description": "基于多条压测执行记录的对比/汇总/合并+对比快照生成分析与建议",
+            "system_prompt": (
+                "你是一位性能测试专家。只能基于提供的对比快照中的数字与 trust 警告做分析，"
+                "禁止编造未给出的 QPS、P95、错误率、阶段耗时或请求数。"
+                "对外汇报：只用场景名与接口名称，禁止输出 case_id、记录内部数字 ID。"
+                "提及压测模式时必须使用中文名（固定模式/循环模式/梯度模式/流式阶段压测/链路固定模式/链路循环模式），"
+                "禁止输出 fixed/loop/stepping/stream_burst 等英文枚举；若快照含 mode_label 优先用它。"
+                "禁止在结论/建议/瓶颈中输出 phase_mean_*、phase_p95_*、phase_key 或其它英文字段名，"
+                "一律使用 metric_compare 中的中文 label（如「检索开始均值」「回答耗时P95」）。"
+                "必须正确区分参照轮与对比轮的场景名与展示名，严禁写反。"
+                "输出中文、专业、可执行；结论须含具体数字对比，便于管理层只读结论段即可决策。"
+                "流式(stream_burst)/链路(journey_*)/问答类场景通常并发与请求数本就不高，"
+                "除非 trust.workload_hint 明确且完成量远低于并发×预期轮次，否则不要把「少于50请求」当作主要风险反复强调。"
+            ),
+            "user_prompt_template": """请分析以下压测多记录报告快照。
+
+快照（JSON）：
+{{compare_snapshot}}
+
+说明：
+- kind=compare：同场景多次执行对比，关注相对基准的变化与可信度
+- kind=merge：跨场景合订，按章节解读各场景表现，仅可对 overview 做简单并排观察，禁止假装用例可对齐对比
+- kind=hybrid：合并+对比，先按 label/章节解读各轮画像，再结合 metric_compare 做相对基准对照；配置差大时变化率仅参考
+- 记录请用 label / display_name（如「瞬间峰值」），禁止输出 case_id、内部数字 ID；写结论时必须分清参照轮与对比轮，勿把名称写反
+- metric_compare 中 key 以 phase_ 开头的为流式/链路阶段指标（单位秒，越低越好），如整体耗时、问答耗时、检索完成等；必须写入结论对照，但对外只用中文 label，禁止写出 phase_mean_* / phase_p95_* 等英文 key
+- 若快照含 stepping_stage_compare：两轮均为梯度模式时按「第 N 阶段」对齐；须对每一个对齐阶段写清两侧并发、有完成秒数、QPS/RT/P95 与变化率，判断容量拐点；禁止只写全程汇总或只挑 1 个阶段；若某阶段 completed_seconds=0 须标明无完成样本；RT/P95 仅基于有完成秒（勿被空闲秒误解）
+- 若 stepping_stage_compare.summary / stages[].summary 已有分阶段摘要句，须纳入 conclusion_points 并扩写
+- 若快照含 user_extra_prompt，须优先遵循用户补充说明（例如重点对比整体耗时与问答耗时）
+- trust_by_record / workload_hint=stream_or_journey：低并发少请求属常见设计，勿机械要求「每侧≥50」
+
+要求：
+1. 按 kind 选择合适叙述（对比趋势 / 合订分章 / 分章+对照）
+2. summary 写 4–8 句详细结论：必须点名关键指标的前后数值与变化百分比（含 HTTP 指标与 phase_* 阶段指标）；若有 stepping_stage_compare，须覆盖全部对齐阶段（不只 1–2 个）；若有 user_extra_prompt 指定的指标须优先写清；文中只用中文指标名
+3. overview 2–4 句写测试画像（模式、并发、请求量、整体走势），勿夸大样本不足；梯度场景 overview 也要点到阶段跨度（如 10→30）
+4. 指出最值得关注的 1–3 个问题（引用展示名、接口名与指标，勿写 case_id / record id / 英文字段名）
+5. compare/hybrid 时结合 trust_by_record；merge 时勿编造跨场景变化率
+6. 给出可执行优化或复测建议（流式/问答场景不要默认建议「加到50并发」；建议里禁止出现 phase_* 英文 key）
+7. 为主要指标写短评（metric_notes）；阶段指标用 phase_mean_<key> 等作键（与 metric_compare.key 一致），短评正文只用中文
+8. 为关键接口写短评（case_notes，按接口 name）
+9. 结合 time_series_sample / rt_histogram_summary，为各轮写 chart_notes
+10. conclusion_points：列出 3–8 条「指标对照」要点，每条含 label、text（含具体数字与百分比）、tone（better=优化变好 / worse=恶化 / flat=接近）；label/text 均为中文；若有梯度阶段对照，应为「第 N 阶段 · …」各阶段尽量各有一条
+11. 输出 JSON：
+{
+  "summary": "详细结论 4–8 句，含具体数字，指标名用中文",
+  "overview": "测试概览 2–4 句",
+  "conclusion_points": [
+    {"label": "整体耗时均值", "text": "从 9.8s 升至 13.5s（+37.8%）", "tone": "worse"},
+    {"label": "问答耗时均值", "text": "从 4.2s 降至 3.1s（-26.2%）", "tone": "better"}
+  ],
+  "metric_notes": {
+    "qps": "一句",
+    "avg_rt": "一句",
+    "p95": "一句",
+    "error_rate": "一句",
+    "total_requests": "一句",
+    "phase_mean_total_time": "一句（若有，正文用中文指标名）"
+  },
+  "case_notes": [{"name": "接口名", "note": "一句"}],
+  "chart_notes": [
+    {"label": "展示名", "trend": "趋势解读 1–2 句", "distribution": "RT 分布解读 1–2 句"}
+  ],
+  "highlights": ["要点1", "要点2"],
+  "risks": ["风险1"],
+  "recommendations": ["建议1", "建议2"],
+  "bottleneck_notes": ["瓶颈说明"]
+}
+不要输出任何解释性文字，只输出 JSON。""",
+            "examples": [],
+        },
+        "perf_report_analysis": {
+            "name": "压测单报告分析",
+            "scene_type": "perf_report_analysis",
+            "description": "基于单次压测执行指标生成汇报型分析（概览/瓶颈/错误/建议）",
+            "system_prompt": (
+                "你是一位性能测试专家，按汇报报告体例撰写分析："
+                "测试概览解读、瓶颈接口、错误与风险、结论与建议。"
+                "只能使用快照中的数字与字段，禁止编造未给出的 QPS、分位、错误率或失败原因。"
+                "性能是否达标必须以快照中的 target_evaluation 为唯一依据，禁止自行创造 SLA、"
+                "目标 QPS、可接受响应时间、「预期基准值」「业务可接受范围」等说法。"
+                "若 target_evaluation.overall_status 为 unknown 或未启用目标，只能说明"
+                "「未配置性能目标，无法按业务 SLA 判定」，不得用经验值冒充判定。"
+                "metric_notes 须先引用系统判定（pass/warn/fail/message），再补充原因分析；"
+                "不得改写或否定 target_evaluation 的 pass/fail。"
+                "对外汇报：只用接口名称，禁止输出 case_id 或内部数字 ID。"
+                "提及压测模式时必须使用 config.mode_label 中文名"
+                "（如「固定模式」「循环模式」「梯度模式」「流式阶段压测」「链路固定模式」「链路循环模式」），"
+                "禁止输出 fixed/loop/stepping/stream_burst/sse_burst/journey_* 等英文枚举。"
+                "禁止在结论/建议/瓶颈中输出 phase_mean_*、phase_p95_* 等英文字段名，一律用中文指标名。"
+                "输出中文、专业、可执行。"
+            ),
+            "user_prompt_template": """请分析以下单次压测报告快照。
+
+报告快照（JSON）：
+{{report_snapshot}}
+
+要求：
+1. 用 2–4 句写 overview（测试概览：配置、时长、整体表现）；模式名只用 mode_label 中文；达标结论必须与 target_evaluation.overall_status 一致
+2. summary 再写一段总评
+3. 指出瓶颈接口或长尾（只引用接口 name 与指标，禁止 case_id）
+4. 若有错误 breakdown / 失败采样，说明可能风险（勿臆造根因细节）
+5. 为主要指标写一句短评（metric_notes）：先引用 target_evaluation 中对应项的系统判定，再解释可能原因；未配置目标时写「未配置性能目标，无法按业务 SLA 判定」，禁止写「预期基准值/业务可接受范围」
+6. 结合 time_series_sample / rt_histogram，写 trend_note 与 distribution_note（各 1–2 句）
+7. 给出可执行复测或优化建议
+8. 若 config.mode 为 stepping（梯度模式）或存在 stepping_stages / steps：
+   - overview 与 summary 必须「逐阶段」写清：各阶段并发、计划时长、观察秒数/有完成秒数、平均 QPS、平均 RT（同时给出 ms 与约合秒）、错误率
+   - 若快照含 stepping_stages_summary，可直接采纳并扩写，禁止只写全程汇总而跳过中间阶段
+   - 结合 stepping_stages 判断容量拐点（QPS 不再随并发上升、RT 或错误率陡升）；有 completed_seconds=0 的阶段须明确写「该阶段无完成样本」
+   - 勿把 config.concurrent_users（常为起始并发）误写成全程固定并发；峰值用 peak_concurrent_users / steps
+   - recommendations 应针对梯度探容量给出下一档复测建议（例如在拐点附近加密阶段）
+9. 输出 JSON：
+{
+  "summary": "总体概述",
+  "overview": "测试概览 2–4 句",
+  "metric_notes": {
+    "qps": "一句",
+    "avg_rt": "一句",
+    "p95": "一句",
+    "error_rate": "一句",
+    "total_requests": "一句"
+  },
+  "case_notes": [{"name": "接口名", "note": "一句"}],
+  "trend_note": "性能趋势解读 1–2 句",
+  "distribution_note": "响应时间分布解读 1–2 句",
+  "highlights": ["要点1", "要点2"],
+  "risks": ["风险1"],
+  "recommendations": ["建议1", "建议2"],
+  "bottleneck_notes": ["瓶颈说明"]
 }
 不要输出任何解释性文字，只输出 JSON。""",
             "examples": [],
@@ -1718,29 +1967,8 @@ Vision 屏幕描述：
 }
 intent=name 时可省略 steps；intent=steps 时可省略 element_name。""",
             "examples": [],
-        },
-        "qa_judge": {
-            "name": "问答准确性评判",
-            "scene_type": "qa_eval",
-            "description": (
-                "RAG 评测公式 v2（范畴+完整性+准确性+表达，0~1 分 + 5 级等级）。"
-                "变量：question=问题，ground_truth=标准答案，answer=实际回答（被测 API 或导入）"
-            ),
-            "system_prompt": (
-                "你是企业知识库问答质量评审专家。"
-                "必须严格按用户给出的分项公式与 5 级等级映射执行评估，"
-                "仅输出 1 个 JSON 对象（不要 Markdown 代码块）。"
-            ),
-            "user_prompt_template": "",
-            "examples": [],
-        },
+        }
     }
-
-    @classmethod
-    def _qa_judge_pro_user_template(cls) -> str:
-        from app.modules.qa_eval.qa_judge_prompt import QA_JUDGE_USER_PROMPT_TEMPLATE
-
-        return QA_JUDGE_USER_PROMPT_TEMPLATE
 
     @classmethod
     def _resolve_default_template(cls, code: str) -> dict | None:
@@ -1750,15 +1978,6 @@ intent=name 时可省略 steps；intent=steps 时可省略 element_name。""",
         if not data:
             return None
         out = dict(data)
-        if code == "qa_judge":
-            if is_community_edition():
-                out.update(
-                    description=QA_JUDGE_DESCRIPTION_CE,
-                    system_prompt=QA_JUDGE_SYSTEM_PROMPT_CE,
-                    user_prompt_template=QA_JUDGE_USER_PROMPT_TEMPLATE_CE,
-                )
-            else:
-                out["user_prompt_template"] = cls._qa_judge_pro_user_template()
         return out
 
     @classmethod

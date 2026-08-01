@@ -1,5 +1,5 @@
 # ============================================================
-# FastAPI 自动化测试平�?- Git 忽略文件
+# FastAPI 自动化测试平�?- Git 忽略文件
 # ============================================================
 
 # 环境变量文件（包含敏感信息）
@@ -7,6 +7,9 @@
 .env.local
 .env.*.local
 scripts/ce-stubs/demo-middleware.env
+showcase.zip
+showcase-ce.zip
+showcase-ce/
 
 # Python
 __pycache__/
@@ -32,18 +35,18 @@ ENV/
 logs/
 *.log
 
-# 数据�?
+# 数据�?
 *.sqlite3
 *.db
 
-# Runner 本地运行配置（勿提交真实密码；开发可�?profiles/local.env + RUNNER_LEGACY=1�?
+# Runner 本地运行配置（勿提交真实密码；开发可�?profiles/local.env + RUNNER_LEGACY=1�?
 runner/.env
 runner/profiles/local.env
 runner/profiles/online.env
 runner/logs/
 runner/venv/
 runner/work/
-# Playwright 本地下载的浏览器（体积大，各环境自行 playwright install�?
+# Playwright 本地下载的浏览器（体积大，各环境自行 playwright install�?
 runner/browsers/
 # 本地启动标记（start-local 等生成的状态文件）
 runner/LOCAL
@@ -55,11 +58,11 @@ video/
 *.webm
 *.mp4
 
-# 例外：前端静态资源需要提�?
+# 例外：前端静态资源需要提�?
 !frontend/src/assets/**/*
 !frontend/public/**/*
 
-# 例外：CE README 功能演示截图/GIF（assets/readme/，已迁移�?docs-site/public/demo/�?
+# 例外：CE README 功能演示截图/GIF（assets/readme/，已迁移�?docs-site/public/demo/�?
 !assets/readme/**
 
 # 例外：文档站功能演示高清截图
@@ -69,7 +72,7 @@ video/
 tmp/
 temp/
 *.tmp
-# 根目录临时调试产物（�?tmp_bug.xlsx�?
+# 根目录临时调试产物（�?tmp_bug.xlsx�?
 /tmp_*
 
 # 本地质量报告调试输出（平台生成物勿提交）
@@ -88,7 +91,7 @@ build/
 scripts/.cache/
 *.egg-info/
 
-# Runner 客户端本地打包产物（build_runner_client.ps1 输出，勿提交�?
+# Runner 客户端本地打包产物（build_runner_client.ps1 输出，勿提交�?
 runner_client/dist/
 runner_client/dist_staging/
 
@@ -97,10 +100,10 @@ frontend/node_modules/
 frontend/dist/
 frontend/.env
 
-# 后端迁移文件（可选，根据团队规范�?
+# 后端迁移文件（可选，根据团队规范�?
 # backend/migrations/
 
-# 后端本地运行时上传（已改�?MinIO 时使用本地回退目录�?
+# 后端本地运行时上传（已改�?MinIO 时使用本地回退目录�?
 backend/static/ai_knowledge/
 backend/static/ai_requirements/
 backend/static/avatars/
@@ -111,7 +114,7 @@ backend/static/browser_lab/
 backend/scripts/
 docs-site/demo/
 docs-site/reference/
-# 兼容旧路径（若仍存在�?
+# 兼容旧路径（若仍存在�?
 backend/app/static/ai_requirements/
 
 # 其他敏感文件

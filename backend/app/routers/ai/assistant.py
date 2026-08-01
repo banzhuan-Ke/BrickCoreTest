@@ -63,6 +63,30 @@ class RenameSessionRequest(BaseModel):
 
 QUICK_PROMPTS = [
     {"key": "overview", "label": "项目概览", "message": "请总结当前项目的完整情况，包括环境、模块、需求和用例库规模。"},
+    {
+        "key": "loop_analyze",
+        "label": "失败闭环",
+        "message": (
+            "请做「失败分析闭环」："
+            "1）列出当前项目最近失败用例；"
+            "2）查看最近接口套件/计划执行记录；"
+            "3）在回复中写明可用于分析的 target_type 与 target_id（接口失败记录 ID）；"
+            "4）若我已在本句给出 target，再发起 AI 失败分析预览（需我确认）；否则先出清单等我指定。"
+            "若当前无失败，直接说明即可。"
+        ),
+    },
+    {
+        "key": "loop_run",
+        "label": "执行闭环",
+        "message": (
+            "请做「接口执行闭环」："
+            "1）列出当前项目的接口测试计划与测试环境；"
+            "2）若页面上下文或本句已有计划 ID 与环境 ID，则预览执行该计划（需我确认）；"
+            "否则先推荐一个可执行计划并说明还需哪项 ID。"
+            "3）执行完成后我会收到回传；若有失败，我再点快捷「失败闭环」做分析。"
+            "不要跳过确认直接执行。"
+        ),
+    },
     {"key": "failures", "label": "最近失败", "message": "列出当前项目最近的失败用例，并简要说明。"},
     {"key": "requirements", "label": "需求列表", "message": "当前项目有哪些需求文档？各有多少条已生成用例？"},
     {
@@ -145,11 +169,6 @@ QUICK_PROMPTS = [
         "key": "run_app_case",
         "label": "App 单条",
         "message": "列出当前项目的 App 用例和在线 App Runner 设备（含 adb 设备），并说明如何执行单条 App 用例。",
-    },
-    {
-        "key": "qa_eval",
-        "label": "问答评测",
-        "message": "列出当前项目的问答准确性评测集及被测 API 配置，并说明如何提交跑批。",
     },
     {
         "key": "data_factory",

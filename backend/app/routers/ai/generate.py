@@ -355,6 +355,10 @@ def _normalize_ui_steps(steps: list) -> tuple[list[dict], list[str]]:
         meta = step.get("meta")
         if isinstance(meta, dict) and meta:
             normalized["meta"] = meta
+        # 保留步骤级 config（如 pre_wait_ms），避免 AI 优化后丢失
+        cfg = step.get("config")
+        if isinstance(cfg, dict) and cfg:
+            normalized["config"] = cfg
         valid_steps.append(normalized)
 
     return valid_steps, errors

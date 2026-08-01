@@ -15,7 +15,7 @@ import {
     uiCaseApi, uiSuiteApi, uiTaskApi, uiExecApi, uiRecordApi,
     httpApi, httpCaseApi, httpSuiteApi, httpExecApi, httpRecordApi, httpCronApi, httpPlanApi,
     scheduleApi,
-    perfSceneApi, perfExecApi, perfRecordApi, perfCronApi, perfWorkerApi,
+    perfSceneApi, perfExecApi, perfRecordApi, perfComparisonApi, perfCronApi, perfWorkerApi, perfJourneyTemplateApi,
     aiConfigApi, aiPromptApi, aiGenerateApi, aiRecordApi,
     appCaseApi, appSuiteApi, appPlanApi, appExecApi, appRecordApi, appElementApi, appInspectorApi,
     appFragmentApi, appCronApi
@@ -27,7 +27,7 @@ export {
     uiCaseApi, uiSuiteApi, uiTaskApi, uiExecApi, uiRecordApi,
     httpApi, httpCaseApi, httpSuiteApi, httpExecApi, httpRecordApi, httpCronApi, httpPlanApi,
     scheduleApi,
-    perfSceneApi, perfExecApi, perfRecordApi, perfCronApi, perfWorkerApi,
+    perfSceneApi, perfExecApi, perfRecordApi, perfComparisonApi, perfCronApi, perfWorkerApi, perfJourneyTemplateApi,
     aiConfigApi, aiPromptApi, aiGenerateApi, aiRecordApi,
     appCaseApi, appSuiteApi, appPlanApi, appExecApi, appRecordApi, appElementApi, appInspectorApi,
     appFragmentApi, appCronApi
@@ -121,6 +121,8 @@ export default {
         // 文件导入
         importSwagger: httpApi.importSwagger,
         importPostman: httpApi.importPostman,
+        importJmeterPreview: httpApi.importJmeterPreview,
+        importJmeterCommit: httpApi.importJmeterCommit,
         // 套件
         getApiSuiteList: httpSuiteApi.getList,
         getSuiteList: httpSuiteApi.getList,  // 兼容命名

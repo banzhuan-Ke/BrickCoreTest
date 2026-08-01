@@ -1,46 +1,13 @@
 <template>
   <el-container class="case-edit-container">
-    <el-aside width="280px" class="keyword-sidebar">
-      <div class="sidebar-header">
-        <h3>App 操作</h3>
-        <p class="sidebar-hint">拖到右侧步骤区，或双击快速添加</p>
-      </div>
-      <div class="keyword-list">
-        <el-collapse v-model="activeGroups" class="keyword-collapse">
-          <el-collapse-item v-for="group in keywordGroups" :key="group.groupId" :name="group.groupId">
-            <template #title>
-              <div class="group-title">
-                <el-icon><component :is="group.icon" /></el-icon>
-                <span>{{ group.name }}</span>
-              </div>
-            </template>
-            <VueDraggable
-              :modelValue="group.items"
-              :group="{ name: 'steps', pull: 'clone', put: false }"
-              :sort="false"
-              :clone="cloneKeyword"
-              :animation="200"
-              target=".keyword-items"
-              class="draggable-source"
-            >
-              <div class="keyword-items">
-                <div
-                  v-for="(item, idx) in group.items"
-                  :key="`${group.groupId}_${item.method}_${idx}`"
-                  class="keyword-item"
-                  :data-step="serializeKeywordForDrag(item)"
-                  @dblclick="addKeywordToSteps(item)"
-                >
-                  <el-icon><component :is="item.icon" /></el-icon>
-                  <span>{{ item.name }}</span>
-                  <el-icon class="drag-icon"><Rank /></el-icon>
-                </div>
-              </div>
-            </VueDraggable>
-          </el-collapse-item>
-        </el-collapse>
-      </div>
-    </el-aside>
+    <KeywordSidebar
+      v-model="activeGroups"
+      title="App 操作"
+      hint="拖到右侧步骤区，或双击快速添加"
+      :groups="keywordGroups"
+      enable-dblclick
+      @add="addKeywordToSteps"
+    />
     <el-main class="case-main">
       <el-card class="edit-card">
         <div class="card-header"><h2>{{ isEdit ? '编辑 App 用例' : '新建 App 用例' }}</h2></div>
@@ -126,10 +93,18 @@
             :driver-mode="caseInfo.driver_mode"
             :debug-enabled="isEdit"
             :execution-hints="executionHints"
+            :debug-selected-index="selectedStepIndex"
             @debug-step="openDebugDialog"
+            @debug-select-step="selectedStepIndex = $event"
           />
         </div>
-        <FragmentPickerDialog v-model="fragmentPickerVisible" domain="app" @insert="onFragmentInsert" />
+        <FragmentPickerDialog
+          v-model="fragmentPickerVisible"
+          domain="app"
+          :selected-step-index="selectedStepIndex"
+          :steps-count="caseInfo.steps?.length || 0"
+          @insert="onFragmentInsert"
+        />
         <AppCaseGenerator
           v-model="generatorDialogVisible"
           :initial-description="caseInfo.description || caseInfo.name"
@@ -165,15 +140,14 @@
 <script setup>
 import { computed, onActivated, onMounted, provide, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { VueDraggable } from 'vue-draggable-plus'
 import { ElMessage } from 'element-plus'
-import { StepEditor } from '@/components/StepEditor'
+import { StepEditor, KeywordSidebar } from '@/components/StepEditor'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import appActionGroup, { APP_DRIVER_MODE_OPTIONS } from '@/datas/AppActionGroup.js'
 import { appCaseApi, appElementApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
-import { cloneKeywordForDrag, serializeKeywordForDrag, buildStepFromKeyword, ensureStepsHaveIds, updateStepLocatorAtPath } from '@/utils/stepHelper'
+import { serializeKeywordForDrag, buildStepFromKeyword, ensureStepsHaveIds, updateStepLocatorAtPath } from '@/utils/stepHelper'
 import { parseExecutionIdQuery } from '@/utils/caseExecutionHints'
 import dateTools from '@/tools/dateTools'
 import { validateCaseDriverMode, rememberProjectDefaultAppId, getProjectDefaultAppId } from '@/utils/appStepMeta.js'
@@ -192,7 +166,8 @@ import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.v
 import UiCaseStepOptimizeDialog from '@/views/AI/components/UiCaseStepOptimizeDialog.vue'
 import AppCaseGenerator from '@/views/AI/components/AppCaseGenerator.vue'
 import CaseExecutionFailureAi from '@/components/CaseExecutionFailureAi.vue'
-import { Document, Edit, Mouse, Clock, Search, MessageBox, MoreFilled, Share, Setting, Rank, WarningFilled, Cpu } from '@element-plus/icons-vue'
+import { insertStepIntoList, resolveInsertAfterIndex } from '@/utils/stepHelper'
+import { Document, Edit, Mouse, Clock, Search, MessageBox, MoreFilled, Share, Setting, WarningFilled, Cpu } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -206,6 +181,7 @@ const executionHints = ref(null)
 const hintsExpanded = ref([])
 const hasFailureAnalysis = ref(false)
 const fragmentPickerVisible = ref(false)
+const selectedStepIndex = ref(-1)
 const optimizeDialogVisible = ref(false)
 const generatorDialogVisible = ref(false)
 const debugDialogVisible = ref(false)
@@ -239,8 +215,14 @@ const rules = {
   level: [{ required: true, message: '请选择优先级', trigger: 'change' }],
 }
 
-function onFragmentInsert(refStep) {
-  caseInfo.steps = [...(caseInfo.steps || []), refStep]
+function onFragmentInsert(payload) {
+  const refStep = payload?.step || payload
+  if (!refStep) return
+  const insertAt = payload?.insertAt ?? resolveInsertAfterIndex(caseInfo.steps?.length || 0, selectedStepIndex.value)
+  const { steps, insertAt: at } = insertStepIntoList(caseInfo.steps, refStep, insertAt)
+  caseInfo.steps = steps
+  selectedStepIndex.value = at
+  ElMessage.success(`已在第 ${at + 1} 步插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
 }
 
 function handleOptimizeApply(steps) {
@@ -326,8 +308,6 @@ const keywordGroups = computed(() =>
     })),
   }))
 )
-
-const cloneKeyword = cloneKeywordForDrag
 
 function addKeywordToSteps(item) {
   const raw = JSON.parse(serializeKeywordForDrag(item))

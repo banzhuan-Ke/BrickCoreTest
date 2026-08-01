@@ -39,8 +39,21 @@
         <!--按钮-->
         <div class="btn">
           <el-tooltip
-            v-if="depth === 0 && interactiveReady"
-            content="在已打开的交互调试浏览器中执行本步"
+            v-if="depth === 0 && interactiveReady && showRunSelectedBtn"
+            :content="`按勾选顺序执行已选的 ${selectedCount} 步（不连续也会依次跑）`"
+            placement="top"
+          >
+            <el-button
+              plain
+              size="small"
+              type="success"
+              :icon="VideoPlay"
+              @click.stop="handleRunSelected"
+            >执行勾选({{ selectedCount }})</el-button>
+          </el-tooltip>
+          <el-tooltip
+            v-else-if="depth === 0 && interactiveReady && !selectable"
+            content="在已打开的交互调试浏览器中只执行本步（勾选多步请用顶部「执行勾选步骤」）"
             placement="top"
           >
             <el-button
@@ -53,7 +66,7 @@
           </el-tooltip>
           <el-tooltip
             v-if="depth === 0"
-            content="自动回放前置步后在当前页接录（需交互调试）"
+            content="调试已开时可二选一：直接在当前浏览器接录，或先回放前置步再接录"
             placement="top"
           >
             <el-button
@@ -235,6 +248,10 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  selectedCount: {
+    type: Number,
+    default: 0
+  },
   executionHint: {
     type: Object,
     default: null
@@ -253,7 +270,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug', 'record-from-step', 'copy', 'expand-fragment', 'toggle-select', 'debug-select'])
+const emit = defineEmits(['update:step', 'delete', 'add-branch', 'delete-branch', 'edit', 'debug', 'record-from-step', 'copy', 'expand-fragment', 'toggle-select', 'debug-select', 'run-selected'])
 
 const fragmentRefEdit = inject('fragmentRefEdit', null)
 const expandFragmentStep = inject('expandFragmentStep', null)
@@ -261,6 +278,9 @@ const editStepMethod = inject('editStepMethod', null)
 const interactiveDebugSession = inject('interactiveDebugSession', ref(null))
 const runInteractiveDebugStep = inject('runInteractiveDebugStep', null)
 const interactiveReady = computed(() => interactiveDebugSession.value?.status === 'ready')
+const showRunSelectedBtn = computed(
+  () => props.selectable && props.selected && props.selectedCount > 0,
+)
 const proStore = ProjectStore()
 const stepModule = inject('stepEditorModule', computed(() => 'web'))
 const latestFragmentVersion = ref(null)
@@ -393,6 +413,10 @@ function handleInteractiveRun() {
   if (typeof runInteractiveDebugStep === 'function') {
     runInteractiveDebugStep(props.index)
   }
+}
+
+function handleRunSelected() {
+  emit('run-selected')
 }
 
 function handleSelectForDebug() {

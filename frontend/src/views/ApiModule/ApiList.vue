@@ -434,18 +434,82 @@ const handleEdit = (row) => {
 }
 
 // 删除接口
+const formatCasePreview = (cases = [], limit = 5) => {
+  const names = (cases || []).map((c) => c.name || `#${c.id}`).filter(Boolean)
+  if (!names.length) return ''
+  const head = names.slice(0, limit).join('、')
+  return names.length > limit ? `${head} 等 ${names.length} 个` : head
+}
+
+const parseDeleteConflict = (error) => {
+  // request 拦截器对非 2xx 常直接 reject(response)
+  const status = error?.response?.status ?? error?.status
+  const detail = error?.response?.data?.detail ?? error?.data?.detail
+  if (status !== 409 || !detail) return null
+  if (typeof detail === 'string') {
+    return { message: detail, can_cascade: true, cases: [], case_count: 0, blocked: [] }
+  }
+  return {
+    message: detail.message || '接口仍有关联用例，无法直接删除',
+    can_cascade: detail.can_cascade !== false,
+    cases: detail.cases || [],
+    case_count: detail.case_count || 0,
+    blocked: detail.blocked || [],
+  }
+}
+
 const handleDelete = async (row) => {
   try {
-    await ElMessageBox.confirm('确认删除该接口吗？', '提示', { type: 'warning' })
+    await ElMessageBox.confirm('确认删除该接口吗？若存在关联用例将无法直接删除。', '提示', {
+      type: 'warning',
+    })
     const res = await http.apiModuleApi.deleteApi(row.id)
     if (res.status === 200 || res.status === 204) {
       ElMessage.success('删除成功')
       getApiList()
     }
   } catch (error) {
-    if (error !== 'cancel') {
-      ElMessage.error('删除失败')
+    if (error === 'cancel') return
+    const conflict = parseDeleteConflict(error)
+    if (conflict?.can_cascade) {
+      const caseHint =
+        conflict.case_count > 0
+          ? `\n关联用例（${conflict.case_count}）：${formatCasePreview(conflict.cases)}`
+          : ''
+      try {
+        await ElMessageBox.confirm(
+          `${conflict.message}${caseHint}\n\n是否连带删除关联用例（并从套件/压测场景中移除引用）后删除接口？`,
+          '无法直接删除',
+          {
+            type: 'warning',
+            confirmButtonText: '连带删除',
+            cancelButtonText: '取消',
+            distinguishCancelAndClose: true,
+          }
+        )
+        await http.apiModuleApi.deleteApi(row.id, { cascade: true })
+        ElMessage.success('已连带删除用例并删除接口')
+        getApiList()
+      } catch (e2) {
+        if (e2 !== 'cancel' && e2 !== 'close') {
+          ElMessage.error(
+            e2?.response?.data?.detail?.message
+              || e2?.data?.detail?.message
+              || e2?.response?.data?.detail
+              || e2?.data?.detail
+              || '连带删除失败'
+          )
+        }
+      }
+      return
     }
+    ElMessage.error(
+      error?.response?.data?.detail?.message
+        || error?.data?.detail?.message
+        || error?.response?.data?.detail
+        || error?.data?.detail
+        || '删除失败'
+    )
   }
 }
 
@@ -460,19 +524,59 @@ const handleBatchDelete = async () => {
   }
   try {
     await ElMessageBox.confirm(
-      `确定删除选中的 ${selectedApis.value.length} 个接口吗？`,
+      `确定删除选中的 ${selectedApis.value.length} 个接口吗？若存在关联用例将无法直接删除。`,
       '警告',
       { type: 'warning' }
     )
-    const ids = selectedApis.value.map(r => r.id)
+    const ids = selectedApis.value.map((r) => r.id)
     await http.apiModuleApi.batchDeleteApis(ids)
     ElMessage.success('批量删除成功')
     selectedApis.value = []
     getApiList()
   } catch (err) {
-    if (err !== 'cancel') {
-      ElMessage.error('批量删除失败')
+    if (err === 'cancel') return
+    const conflict = parseDeleteConflict(err)
+    if (conflict?.can_cascade) {
+      const blockedHint = (conflict.blocked || [])
+        .slice(0, 5)
+        .map((b) => `· ${b.api_name}（${b.case_count} 个用例）`)
+        .join('\n')
+      try {
+        await ElMessageBox.confirm(
+          `${conflict.message}\n${blockedHint}\n\n是否对选中接口执行连带删除（用例 + 清理套件/压测引用）？`,
+          '无法直接批量删除',
+          {
+            type: 'warning',
+            confirmButtonText: '连带删除',
+            cancelButtonText: '取消',
+            distinguishCancelAndClose: true,
+          }
+        )
+        const ids = selectedApis.value.map((r) => r.id)
+        await http.apiModuleApi.batchDeleteApis(ids, { cascade: true })
+        ElMessage.success('已连带删除并完成批量删除')
+        selectedApis.value = []
+        getApiList()
+      } catch (e2) {
+        if (e2 !== 'cancel' && e2 !== 'close') {
+          ElMessage.error(
+            e2?.response?.data?.detail?.message
+              || e2?.data?.detail?.message
+              || e2?.response?.data?.detail
+              || e2?.data?.detail
+              || '连带删除失败'
+          )
+        }
+      }
+      return
     }
+    ElMessage.error(
+      err?.response?.data?.detail?.message
+        || err?.data?.detail?.message
+        || err?.response?.data?.detail
+        || err?.data?.detail
+        || '批量删除失败'
+    )
   }
 }
 
@@ -513,7 +617,9 @@ const openCopyDialog = (row) => {
 const submitCopyApi = (payload) => httpApi.copyToProject(copyDialog.row.id, payload)
 
 const applyRouteQuery = async () => {
-  const apiId = route.query.api_id
+  const debugApiId = route.query.debug_api_id
+  const editApiId = route.query.api_id
+  const apiId = debugApiId || editApiId
   if (!apiId) return
   const id = Number(apiId)
   let row = apiList.value.find((a) => a.id === id)
@@ -525,7 +631,12 @@ const applyRouteQuery = async () => {
       return
     }
   }
-  if (row) handleEdit(row)
+  if (!row) return
+  if (debugApiId) {
+    handleDebug(row)
+  } else {
+    handleEdit(row)
+  }
 }
 
 onMounted(async () => {
@@ -534,9 +645,9 @@ onMounted(async () => {
 })
 
 watch(
-  () => route.query.api_id,
-  async (apiId) => {
-    if (!apiId) return
+  () => [route.query.api_id, route.query.debug_api_id],
+  async ([apiId, debugId]) => {
+    if (!apiId && !debugId) return
     await applyRouteQuery()
   },
 )

@@ -49,18 +49,18 @@ KNOWLEDGE_TOOL_NAMES: frozenset[str] = frozenset(
 
 @lru_cache(maxsize=1)
 def knowledge_feature_enabled() -> bool:
-    """通用资料库能力开关。"""
+    """通用资料库能力开关。开源发行版默认开启，可用环境变量关闭。"""
     raw = os.getenv("BRICKCORE_KNOWLEDGE_ENABLED", "").strip().lower()
     if raw in ("1", "true", "on", "yes"):
         return True
     if raw in ("0", "false", "off", "no"):
         return False
-    return not is_community_edition()
+    return True
 
 
 def qa_eval_feature_enabled() -> bool:
-    """问答准确性评测为可选扩展能力，开源发行版默认不开放。"""
-    return not is_community_edition()
+    """扩展评测能力开关；开源发行版默认关闭。"""
+    return False
 
 
 # 行业资料库扩展包关联的 AI 场景（未启用扩展包时不暴露）
@@ -73,8 +73,10 @@ KNOWLEDGE_PACK_PROMPT_SCENES: frozenset[str] = frozenset(
 
 
 def knowledge_pack_addon_enabled() -> bool:
-    """行业资料库扩展包：开源发行版不启用；需配置 ``BRICKCORE_KNOWLEDGE_PACK``。"""
-    if is_community_edition():
-        return False
-    raw = os.getenv("BRICKCORE_KNOWLEDGE_PACK", "").strip().lower()
-    return bool(raw) and raw not in ("0", "false", "off", "none")
+    """行业资料库扩展包：开源发行版不启用。"""
+    return False
+
+
+# 兼容 Pro 旧符号名（sync 后通用路由仍可能引用）
+def knowledge_digitech_pack_enabled() -> bool:
+    return knowledge_pack_addon_enabled()

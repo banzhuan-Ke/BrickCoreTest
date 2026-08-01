@@ -312,12 +312,7 @@ export const MenuGroups = [
                 icon: 'DocumentChecked',
                 permission: 'ai_test:view'
             },
-            {
-                name: '问答准确性评测',
-                path: '/ai-qa-eval',
-                icon: 'ChatLineRound',
-                permission: 'ai_test:view'
-            },
+
             {
                 name: '模型使用情况',
                 path: '/ai-usage',
@@ -378,6 +373,12 @@ export const MenuGroups = [
                 name: '执行记录',
                 path: '/perf-records',
                 icon: 'List',
+                permission: 'perf_record:view'
+            },
+            {
+                name: '增强报告',
+                path: '/perf-comparisons',
+                icon: 'TrendCharts',
                 permission: 'perf_record:view'
             }
         ]

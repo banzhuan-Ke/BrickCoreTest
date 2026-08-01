@@ -80,7 +80,10 @@
           </el-form>
 
           <div v-if="outputText" class="output-box">
-            <div class="output-title">输出结果</div>
+            <div class="output-title">
+              <span>输出结果</span>
+              <span class="output-resize-hint">拖拽右下角可调整高度</span>
+            </div>
             <div v-if="qrcodePreviewSrc" class="qrcode-preview">
               <img :src="qrcodePreviewSrc" alt="二维码预览" />
               <div class="qrcode-preview-tip">扫码预览（保存标签后可在接口中引用 Base64 或单独存文本）</div>
@@ -365,7 +368,20 @@ onMounted(async () => {
   padding: 10px;
   margin-bottom: 12px;
 }
-.output-title { font-size: 12px; color: #909399; margin-bottom: 6px; }
+.output-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 6px;
+}
+.output-resize-hint {
+  font-size: 11px;
+  color: #c0c4cc;
+  font-weight: normal;
+}
 .qrcode-preview {
   display: flex;
   flex-direction: column;
@@ -392,7 +408,15 @@ onMounted(async () => {
   white-space: pre-wrap;
   word-break: break-all;
   font-size: 12px;
-  max-height: 200px;
+  height: 200px;
+  min-height: 120px;
+  max-height: 80vh;
   overflow: auto;
+  resize: vertical;
+  box-sizing: border-box;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 4px;
 }
 </style>

@@ -1,46 +1,13 @@
 <template>
   <el-container class="suite-edit-container">
-    <el-aside width="280px" class="keyword-sidebar">
-      <div class="sidebar-header">
-        <h3>前置步骤操作</h3>
-        <p class="sidebar-hint">拖到中间步骤区，或双击快速添加</p>
-      </div>
-      <div class="keyword-list">
-        <el-collapse v-model="activeGroups" class="keyword-collapse">
-          <el-collapse-item v-for="group in keywordGroups" :key="group.groupId" :name="group.groupId">
-            <template #title>
-              <div class="group-title">
-                <el-icon><component :is="group.icon" /></el-icon>
-                <span>{{ group.name }}</span>
-              </div>
-            </template>
-            <VueDraggable
-              :modelValue="group.items"
-              :group="{ name: 'steps', pull: 'clone', put: false }"
-              :sort="false"
-              :clone="cloneKeyword"
-              :animation="200"
-              target=".keyword-items"
-              class="draggable-source"
-            >
-              <div class="keyword-items">
-                <div
-                  v-for="(item, idx) in group.items"
-                  :key="`${group.groupId}_${item.method}_${idx}`"
-                  class="keyword-item"
-                  :data-step="serializeKeywordForDrag(item)"
-                  @dblclick="addKeywordToPreActions(item)"
-                >
-                  <el-icon><component :is="item.icon" /></el-icon>
-                  <span>{{ item.name }}</span>
-                  <el-icon class="drag-icon"><Rank /></el-icon>
-                </div>
-              </div>
-            </VueDraggable>
-          </el-collapse-item>
-        </el-collapse>
-      </div>
-    </el-aside>
+    <KeywordSidebar
+      v-model="activeGroups"
+      title="前置步骤操作"
+      hint="拖到中间步骤区，或双击快速添加"
+      :groups="keywordGroups"
+      enable-dblclick
+      @add="addKeywordToPreActions"
+    />
 
     <div class="suite-workspace">
       <div class="suite-main">
@@ -87,10 +54,21 @@
               <el-button size="small" plain type="primary" @click="fragmentPickerVisible = true">插入片段</el-button>
               <el-text type="info" size="small">拖拽左侧操作到此处</el-text>
             </div>
-            <StepEditor v-model:steps="suiteInfo.pre_actions" module="app" />
+            <StepEditor
+              v-model:steps="suiteInfo.pre_actions"
+              module="app"
+              :debug-selected-index="selectedStepIndex"
+              @debug-select-step="selectedStepIndex = $event"
+            />
           </div>
 
-          <FragmentPickerDialog v-model="fragmentPickerVisible" domain="app" @insert="onFragmentInsert" />
+          <FragmentPickerDialog
+            v-model="fragmentPickerVisible"
+            domain="app"
+            :selected-step-index="selectedStepIndex"
+            :steps-count="suiteInfo.pre_actions?.length || 0"
+            @insert="onFragmentInsert"
+          />
 
           <el-collapse class="suite-hooks-collapse">
             <el-collapse-item title="数据工厂（前置/后置 SQL）" name="sql">
@@ -156,9 +134,8 @@
 <script setup>
 import { computed, onMounted, provide, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { VueDraggable } from 'vue-draggable-plus'
 import { ElMessage, ElNotification } from 'element-plus'
-import { StepEditor } from '@/components/StepEditor'
+import { StepEditor, KeywordSidebar } from '@/components/StepEditor'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
 import DbAssertionsEditor from '@/views/ApiModule/components/DbAssertionsEditor.vue'
@@ -171,13 +148,14 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
 import {
   buildStepFromKeyword,
-  cloneKeywordForDrag,
   ensureStepsHaveIds,
   serializeKeywordForDrag,
+  insertStepIntoList,
+  resolveInsertAfterIndex,
 } from '@/utils/stepHelper'
 import { useSplitPanelResize } from '@/composables/useSplitPanelResize'
 import {
-  Check, Close, Rank, Document, Edit, Mouse, Clock, Search, MessageBox, MoreFilled, Share,
+  Check, Close, Document, Edit, Mouse, Clock, Search, MessageBox, MoreFilled, Share,
 } from '@element-plus/icons-vue'
 
 const { rightWidth, isResizing, onResizeStart } = useSplitPanelResize({
@@ -196,6 +174,7 @@ const formRef = ref()
 const suiteCaseListRef = ref()
 const saving = ref(false)
 const fragmentPickerVisible = ref(false)
+const selectedStepIndex = ref(-1)
 const suiteAddedCaseIds = ref(new Set())
 const varInsertEnvId = ref(proStore.envList[0]?.id || null)
 
@@ -244,8 +223,6 @@ const keywordGroups = computed(() =>
   }))
 )
 
-const cloneKeyword = cloneKeywordForDrag
-
 function addKeywordToPreActions(item) {
   const raw = JSON.parse(serializeKeywordForDrag(item))
   suiteInfo.pre_actions = [...(suiteInfo.pre_actions || []), buildStepFromKeyword(raw)]
@@ -255,10 +232,14 @@ function onSuiteCasesChange(caseIds) {
   suiteAddedCaseIds.value = new Set(caseIds)
 }
 
-function onFragmentInsert(refStep) {
+function onFragmentInsert(payload) {
+  const refStep = payload?.step || payload
   if (!refStep) return
-  suiteInfo.pre_actions = [...(suiteInfo.pre_actions || []), refStep]
-  ElMessage.success(`已插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
+  const insertAt = payload?.insertAt ?? resolveInsertAfterIndex(suiteInfo.pre_actions?.length || 0, selectedStepIndex.value)
+  const { steps, insertAt: at } = insertStepIntoList(suiteInfo.pre_actions, refStep, insertAt)
+  suiteInfo.pre_actions = steps
+  selectedStepIndex.value = at
+  ElMessage.success(`已在第 ${at + 1} 步插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
 }
 
 async function loadFactoryMeta() {

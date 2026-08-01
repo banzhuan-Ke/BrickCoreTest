@@ -164,9 +164,13 @@ export function cloneKeywordForDrag(keyword) {
   const cloned = {
     ...keyword,
     _keywordDragPlaceholder: true,
+    keyword: keyword.keyword || keyword.name || '',
+    name: keyword.name || keyword.keyword || '',
+    method: keyword.method || '',
     params: keyword.params ? JSON.parse(JSON.stringify(keyword.params)) : {},
   }
   delete cloned.id
+  delete cloned.icon
   if (keyword.is_container !== undefined) {
     cloned.is_container = keyword.is_container
   }
@@ -345,6 +349,33 @@ export function buildFragmentRefStep(fragment) {
     },
     is_fragment_ref: true,
   }
+}
+
+/**
+ * 在选中步骤之后插入；无有效选中时追加到末尾。
+ * @returns {number} 插入下标
+ */
+export function resolveInsertAfterIndex(stepsLength, selectedIndex) {
+  const len = Number(stepsLength) || 0
+  const sel = Number(selectedIndex)
+  if (len > 0 && Number.isFinite(sel) && sel >= 0 && sel < len) {
+    return sel + 1
+  }
+  return len
+}
+
+/**
+ * 将单步插入步骤列表指定位置。
+ * @returns {{ steps: Array, insertAt: number }}
+ */
+export function insertStepIntoList(steps, newStep, insertAt) {
+  const list = [...(steps || [])]
+  const at = Math.max(
+    0,
+    Math.min(insertAt == null || Number.isNaN(Number(insertAt)) ? list.length : Number(insertAt), list.length),
+  )
+  list.splice(at, 0, newStep)
+  return { steps: list, insertAt: at }
 }
 
 function assignNewStepIds(step) {

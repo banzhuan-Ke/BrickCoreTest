@@ -254,17 +254,33 @@
             <div class="code-section">
               <div class="code-section-head">
                 <span class="suggest-title">推荐定位器（WebView）</span>
-                <el-button link type="primary" size="small" :disabled="!suggestedWebLocator" @click="copyWebLocator">
+                <el-button link type="primary" size="small" :disabled="!effectiveWebLocator" @click="copyWebLocator">
                   复制
                 </el-button>
               </div>
               <code class="locator-code">{{ suggestWebText }}</code>
+              <div v-if="webLocatorCandidates.length" class="locator-candidate-list">
+                <div class="suggest-title candidate-title">定位候选（保存时一并写入，点击切换默认）</div>
+                <div class="candidate-tags">
+                  <el-tag
+                    v-for="cand in webLocatorCandidates"
+                    :key="'web-' + formatWebLocatorCandidateLabel(cand)"
+                    size="small"
+                    class="candidate-tag"
+                    :type="isPreferredWebCandidate(cand) ? 'primary' : 'info'"
+                    :effect="isPreferredWebCandidate(cand) ? 'dark' : 'plain'"
+                    @click="selectPreferredWebCandidate(cand)"
+                  >
+                    {{ isPreferredWebCandidate(cand) ? '默认 · ' : '' }}{{ formatWebLocatorCandidateLabel(cand) }}
+                  </el-tag>
+                </div>
+              </div>
               <el-button
                 v-if="inspectorContext && inspectorHasStepTarget"
                 type="primary"
                 size="small"
                 style="margin-top: 8px"
-                :disabled="!suggestedWebLocator"
+                :disabled="!effectiveWebLocator"
                 @click="applyLocatorToStep"
               >
                 回填到用例{{ inspectorStepLabel }}
@@ -354,29 +370,37 @@
             <div class="code-section">
               <div class="code-section-head">
                 <span class="suggest-title">推荐定位器</span>
-                <el-button link type="primary" size="small" :disabled="!suggestedLocator" @click="copyLocator">
+                <el-button link type="primary" size="small" :disabled="!effectiveNativeLocator" @click="copyLocator">
                   复制
                 </el-button>
               </div>
               <code class="locator-code">{{ suggestText }}</code>
+              <div v-if="nativeLocatorCandidates.length" class="locator-candidate-list">
+                <div class="suggest-title candidate-title">定位候选（保存时一并写入，点击切换默认）</div>
+                <div class="candidate-tags">
+                  <el-tag
+                    v-for="cand in nativeLocatorCandidates"
+                    :key="locatorCandidateKey(cand)"
+                    size="small"
+                    class="candidate-tag"
+                    :type="isPreferredNativeCandidate(cand) ? 'primary' : 'info'"
+                    :effect="isPreferredNativeCandidate(cand) ? 'dark' : 'plain'"
+                    @click="selectPreferredNativeCandidate(cand)"
+                  >
+                    {{ isPreferredNativeCandidate(cand) ? '默认 · ' : '' }}{{ formatLocatorCandidateLabel(cand) }}
+                  </el-tag>
+                </div>
+              </div>
               <el-button
                 v-if="inspectorContext && inspectorHasStepTarget"
                 type="primary"
                 size="small"
                 style="margin-top: 8px"
-                :disabled="!suggestedLocator"
+                :disabled="!effectiveNativeLocator"
                 @click="applyLocatorToStep"
               >
                 回填到用例{{ inspectorStepLabel }}
               </el-button>
-            </div>
-
-            <div v-if="xpathText" class="code-section">
-              <div class="code-section-head">
-                <span class="suggest-title">XPath 备选</span>
-                <el-button link type="primary" size="small" @click="copyText(xpathText, 'XPath')">复制</el-button>
-              </div>
-              <code class="locator-code">{{ xpathText }}</code>
             </div>
 
             <div v-if="u2Code" class="code-section">
@@ -505,17 +529,23 @@ import { appElementApi, appInspectorApi, deviceApi } from '@/api'
 import { aiGenerateApi, aiConfigApi } from '@/api/modules/ai'
 import { getApiErrorMessage, isDuplicateElementNameError } from '@/utils/apiError.js'
 import {
+  buildLocatorCandidates,
+  buildNativeLocatorPayload,
   buildU2Code,
+  formatLocatorCandidateLabel,
   formatLocatorJson,
   formatLocatorText,
   getExtraAttributes,
   getPrimaryAttributes,
+  locatorCandidateKey,
   suggestLocator,
-  suggestXpath,
 } from '@/utils/appInspectorLocator.js'
 import {
+  buildWebLocatorCandidates,
+  buildWebLocatorPayload,
   decorateWebNodes,
   formatWebContextLabel,
+  formatWebLocatorCandidateLabel,
   formatWebLocatorJson,
   formatWebLocatorText,
   getWebPrimaryAttributes,
@@ -737,15 +767,68 @@ const appDevices = computed(() =>
   })
 )
 
-const suggestedLocator = computed(() => suggestLocator(selectedNode.value))
+const preferredNativeCandidate = ref(null)
+const preferredWebCandidate = ref(null)
 
+const nativeLocatorCandidates = computed(() => buildLocatorCandidates(selectedNode.value))
+const webLocatorCandidates = computed(() => buildWebLocatorCandidates(selectedWebNode.value))
+
+const suggestedLocator = computed(() => suggestLocator(selectedNode.value))
 const suggestedWebLocator = computed(() => suggestWebLocator(selectedWebNode.value))
 
+const effectiveNativeLocator = computed(() => {
+  const pref = preferredNativeCandidate.value
+  if (pref && nativeLocatorCandidates.value.some((c) => locatorCandidateKey(c) === locatorCandidateKey(pref))) {
+    return pref
+  }
+  return suggestedLocator.value
+})
+
+const effectiveWebLocator = computed(() => {
+  const pref = preferredWebCandidate.value
+  if (pref) {
+    const key = `${pref.by}::${pref.value}::${pref.index || 1}`
+    if (webLocatorCandidates.value.some((c) => `${c.by}::${c.value}::${c.index || 1}` === key)) {
+      return pref
+    }
+  }
+  return suggestedWebLocator.value
+})
+
+const nativeLocatorPayload = computed(() =>
+  buildNativeLocatorPayload(selectedNode.value, effectiveNativeLocator.value)
+)
+
+const webLocatorPayload = computed(() =>
+  buildWebLocatorPayload(selectedWebNode.value, effectiveWebLocator.value, {
+    page_index: webviewPageIndex.value,
+    devtools_source: devtoolsSource.value,
+  })
+)
+
 const suggestWebText = computed(() => {
-  const loc = suggestedWebLocator.value
+  const loc = effectiveWebLocator.value
   if (!loc) return '请选择 H5 元素'
   return formatWebLocatorText(loc)
 })
+
+function isPreferredNativeCandidate(cand) {
+  return locatorCandidateKey(cand) === locatorCandidateKey(effectiveNativeLocator.value)
+}
+
+function isPreferredWebCandidate(cand) {
+  const cur = effectiveWebLocator.value
+  if (!cur || !cand) return false
+  return cur.by === cand.by && String(cur.value) === String(cand.value) && (cur.index || 1) === (cand.index || 1)
+}
+
+function selectPreferredNativeCandidate(cand) {
+  preferredNativeCandidate.value = { ...cand }
+}
+
+function selectPreferredWebCandidate(cand) {
+  preferredWebCandidate.value = { ...cand }
+}
 
 const webPlaywrightHint = computed(() => buildWebPlaywrightHint(selectedWebNode.value))
 
@@ -773,12 +856,10 @@ function containsWebView(node) {
 }
 
 const suggestText = computed(() => {
-  const loc = suggestedLocator.value
+  const loc = effectiveNativeLocator.value
   if (!loc) return '无可推荐定位（请选择有 text/resource-id 的节点）'
   return formatLocatorText(loc)
 })
-
-const xpathText = computed(() => suggestXpath(selectedNode.value))
 
 const u2Code = computed(() => buildU2Code(selectedNode.value))
 
@@ -786,7 +867,8 @@ const primaryAttributes = computed(() => getPrimaryAttributes(selectedNode.value
 
 const extraAttributes = computed(() => getExtraAttributes(selectedNode.value))
 
-const canSave = computed(() => !!(saveForm.name.trim() && suggestedLocator.value))
+const canSave = computed(() => !!(saveForm.name.trim() && nativeLocatorPayload.value))
+const canSaveWeb = computed(() => !!(saveForm.name.trim() && webLocatorPayload.value))
 
 function isVisionModel(model) {
   const m = (model || '').toLowerCase()
@@ -900,15 +982,9 @@ function navigateBackToCase() {
 
 function buildLocatorForApply() {
   if (treeTab.value === 'h5') {
-    const loc = suggestedWebLocator.value
-    if (!loc?.by) return null
-    return {
-      ...loc,
-      page_index: webviewPageIndex.value,
-      devtools_source: devtoolsSource.value,
-    }
+    return webLocatorPayload.value ? JSON.parse(JSON.stringify(webLocatorPayload.value)) : null
   }
-  return suggestedLocator.value
+  return nativeLocatorPayload.value ? JSON.parse(JSON.stringify(nativeLocatorPayload.value)) : null
 }
 
 function applyLocatorToStep() {
@@ -943,8 +1019,6 @@ function applyAiStepsToCase() {
   aiStepsDialogVisible.value = false
   navigateBackToCase()
 }
-
-const canSaveWeb = computed(() => !!(saveForm.name.trim() && suggestedWebLocator.value))
 
 const canSaveCrop = computed(() => !!(saveForm.name.trim() && cropRect.value?.width >= 8 && cropRect.value?.height >= 8))
 
@@ -1274,6 +1348,8 @@ async function saveCropToLibrary() {
 function selectNode(node) {
   if (!node) return
   clearCropRect()
+  preferredNativeCandidate.value = null
+  preferredWebCandidate.value = null
   selectedNode.value = node
   selectedWebNode.value = null
   if (isWebViewNativeNode(node)) {
@@ -1288,6 +1364,8 @@ function selectNode(node) {
 
 function selectWebNode(node) {
   if (!node) return
+  preferredWebCandidate.value = null
+  preferredNativeCandidate.value = null
   selectedWebNode.value = node
   selectedNode.value = null
   treeTab.value = 'h5'
@@ -1732,30 +1810,33 @@ async function copyText(text, label = '内容') {
 }
 
 async function copyLocator() {
-  const loc = suggestedLocator.value
+  const loc = nativeLocatorPayload.value
   if (!loc) return
   await copyText(formatLocatorJson(loc), '定位器 JSON')
 }
 
 async function copyWebLocator() {
-  const loc = suggestedWebLocator.value
+  const loc = webLocatorPayload.value
   if (!loc) return
   await copyText(formatWebLocatorJson(loc), 'H5 定位器 JSON')
 }
 
 async function saveToLibrary() {
   if (!canSave.value) return
+  const locator = nativeLocatorPayload.value
+  if (!locator) return
   saving.value = true
   try {
+    const n = (locator.candidates || []).length
     await appElementApi.create({
       name: saveForm.name.trim(),
       project_id: proStore.projectInfo.id,
       element_type: 'control',
-      locator: { ...suggestedLocator.value },
+      locator: JSON.parse(JSON.stringify(locator)),
       remark: '元素探查抓取',
       username: uStore.userInfo?.username,
     })
-    ElMessage.success('已保存到元素库')
+    ElMessage.success(n > 1 ? `已保存到元素库（含 ${n} 个定位候选）` : '已保存到元素库')
   } catch (e) {
     const msg = getApiErrorMessage(e, '保存失败')
     if (isDuplicateElementNameError(e)) {
@@ -1770,21 +1851,24 @@ async function saveToLibrary() {
 
 async function saveWebToLibrary() {
   if (!canSaveWeb.value) return
+  const locator = webLocatorPayload.value
+  if (!locator) return
   saving.value = true
   try {
+    const n = (locator.candidates || []).length
     await appElementApi.create({
       name: saveForm.name.trim(),
       project_id: proStore.projectInfo.id,
       element_type: 'control',
-      locator: {
-        ...suggestedWebLocator.value,
-        page_index: webviewPageIndex.value,
-        devtools_source: devtoolsSource.value,
-      },
+      locator: JSON.parse(JSON.stringify(locator)),
       remark: '元素探查 H5 抓取',
       username: uStore.userInfo?.username,
     })
-    ElMessage.success('H5 元素已保存到元素库（用例驱动模式请选 hybrid_web / mobile_chrome）')
+    ElMessage.success(
+      n > 1
+        ? `H5 元素已保存（含 ${n} 个定位候选；用例驱动模式请选 hybrid_web / mobile_chrome）`
+        : 'H5 元素已保存到元素库（用例驱动模式请选 hybrid_web / mobile_chrome）'
+    )
   } catch (e) {
     const msg = getApiErrorMessage(e, '保存失败')
     if (isDuplicateElementNameError(e)) {
@@ -2086,6 +2170,27 @@ onBeforeUnmount(() => {
 .node-detail {
   flex: 1;
   min-height: 0;
+}
+.locator-candidate-list {
+  margin-top: 10px;
+}
+.candidate-title {
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.candidate-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.candidate-tag {
+  cursor: pointer;
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+  line-height: 1.35;
+  padding: 4px 8px;
 }
 .locator-code {
   display: block;

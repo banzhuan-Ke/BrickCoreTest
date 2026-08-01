@@ -157,17 +157,6 @@
           来源标识：<code>requirement_copy</code>（需求复制）、<code>zentao_xlsx</code>（禅道导入）、<code>manual</code>（手工新建）。
         </p>
 
-        <h4 v-if="!isCommunityEdition">三-A、问答准确性评测（知识库 / 问答机器人）</h4>
-        <template v-if="!isCommunityEdition">
-        <p>路径：<strong>AI 测试 → 问答准确性评测</strong>。维护标准问答集，批量调用被测 API 并输出统计与对比报告。</p>
-        <ol>
-          <li><strong>评测集</strong>：下载 Excel 模板导入（问题、标准答案必填；序号、问答目录、多轮、问题类型等）</li>
-          <li><strong>被测 API</strong>：配置 SSE 流式或 HTTP 问答接口，支持接口调试</li>
-          <li><strong>执行评测</strong>：填写<strong>评测名称</strong>（默认评测集名，可在执行记录中识别）；模式：自动（API+LLM 评判）/ 仅评判 / 仅拉取；支持序号范围、失败重跑、自动分批（大批量题目）</li>
-          <li><strong>报告</strong>：统计报告（优秀率/场景类型分析）、单题报告、人工审核、合并导出与迭代对比</li>
-        </ol>
-        <p style="color:#909399;font-size:13px;">评判模型在「AI 模型配置 → 场景绑定 → 问答准确性评判」。</p>
-        </template>
 
         <h4>四、AI 生成 API 测试用例</h4>
         <ol>
@@ -885,12 +874,12 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
           <li>压测过程中可随时点击「停止」终止执行</li>
         </ul>
 
-        <h4>分布式执行机（推荐 BrickCoreRunner）：</h4>
+        <h4>压测执行机（必需 · BrickCoreRunner / BrickCorePerf）：</h4>
         <ul>
-          <li><strong>推荐</strong>：BrickCoreRunner v1.3.14+ → 默认 UI 执行器；压测时切换执行角色为「仅压测执行机」→ 选择压测项目 → 上线；场景执行时勾选「使用分布式 Worker」</li>
-          <li><strong>备选</strong>：在 runner 目录运行 <code>python -u perf_worker.py</code>（见「性能测试 → 执行机」页命令）</li>
-          <li>客户端与脚本使用<strong>同一压测引擎</strong>，平台报告指标一致；客户端可在「当前会话日志」查看秒级 QPS/RT，日志文件 <code>runner/logs/perf_worker.log</code></li>
-          <li>不勾选 Worker 时由平台服务器本机压测，适合小并发验证</li>
+          <li><strong>推荐</strong>：安装 BrickCoreRunner → 执行角色选「仅压测执行机」或「UI + 压测」→ 选择压测项目 → 上线</li>
+          <li><strong>精简包</strong>：下载 BrickCorePerf，解压后运行 <code>start-perf</code> 上线（无浏览器 GUI）</li>
+          <li>施压一律由在线执行机完成，平台<strong>不再本机直跑</strong>；无在线 Worker 时无法启动压测</li>
+          <li>客户端可在「当前会话日志」查看秒级 QPS/RT；完整日志见执行机安装目录</li>
         </ul>
       </div>
 
@@ -988,7 +977,7 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
 
       <div class="help-footer">
         <p>📧 遇到问题？请联系系统管理员或查看接口文档获取更多技术支持。</p>
-        <p style="color: #999; font-size: 12px;">版本：v1.4.0 | 更新日期：2026-07-12</p>
+        <p style="color: #999; font-size: 12px;">版本：v1.5.0 | 更新日期：2026-07-31</p>
       </div>
     </el-scrollbar>
   </div>

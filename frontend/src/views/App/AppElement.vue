@@ -135,6 +135,22 @@
         <el-form-item label="定位值" required>
           <el-input v-model="form.locator.value" placeholder="如 resource_id、文本内容、css 选择器等" />
         </el-form-item>
+        <el-form-item v-if="locatorCandidates.length" label="定位候选">
+          <div class="candidate-tags">
+            <el-tag
+              v-for="cand in locatorCandidates"
+              :key="candidateKey(cand)"
+              size="small"
+              class="candidate-tag"
+              :type="isActiveCandidate(cand) ? 'primary' : 'info'"
+              :effect="isActiveCandidate(cand) ? 'dark' : 'plain'"
+              @click="applyCandidate(cand)"
+            >
+              {{ isActiveCandidate(cand) ? '默认 · ' : '' }}{{ candidateLabel(cand) }}
+            </el-tag>
+          </div>
+          <div class="field-hint">探查保存会写入多套候选；点击可切换默认定位（执行使用默认项）</div>
+        </el-form-item>
         <el-form-item v-if="!isWebviewLocator(form.locator)" label="匹配序号">
           <el-input-number
             v-model="form.locator.index"
@@ -179,6 +195,15 @@ import AppH5UsageGuide from '@/components/App/AppH5UsageGuide.vue'
 import { appElementApi } from '@/api'
 import { APP_LOCATOR_BY_OPTIONS, APP_WEBVIEW_LOCATOR_BY_OPTIONS } from '@/datas/AppActionGroup.js'
 import { isWebviewLocator, APP_LOCATOR_CONTEXT_NATIVE } from '@/utils/appStepMeta.js'
+import {
+  formatLocatorCandidateLabel,
+  locatorCandidateKey,
+  promoteLocatorCandidate,
+} from '@/utils/appInspectorLocator.js'
+import {
+  formatWebLocatorCandidateLabel,
+  promoteWebLocatorCandidate,
+} from '@/utils/appWebviewLocator.js'
 import { presignTemplateKeys, resolveTemplatePreviewUrl } from '@/utils/appTemplatePresign.js'
 import { getApiErrorMessage, isDuplicateElementNameError } from '@/utils/apiError.js'
 import { ProjectStore } from '@/stores/module/ProjectStore'
@@ -194,6 +219,33 @@ const nativeLocatorOptions = APP_LOCATOR_BY_OPTIONS.filter((o) => o.value !== 'i
 const currentLocatorByOptions = computed(() =>
   isWebviewLocator(form.locator) ? APP_WEBVIEW_LOCATOR_BY_OPTIONS : nativeLocatorOptions
 )
+
+const locatorCandidates = computed(() => {
+  const list = form.locator?.candidates
+  return Array.isArray(list) ? list.filter((c) => c?.by) : []
+})
+
+function candidateKey(cand) {
+  return locatorCandidateKey(cand) || `${cand?.by}:${cand?.value}`
+}
+
+function candidateLabel(cand) {
+  return isWebviewLocator(form.locator)
+    ? formatWebLocatorCandidateLabel(cand)
+    : formatLocatorCandidateLabel(cand)
+}
+
+function isActiveCandidate(cand) {
+  return locatorCandidateKey(cand) === locatorCandidateKey(form.locator)
+}
+
+function applyCandidate(cand) {
+  if (isWebviewLocator(form.locator)) {
+    promoteWebLocatorCandidate(form.locator, cand)
+  } else {
+    promoteLocatorCandidate(form.locator, cand)
+  }
+}
 
 const elementList = ref([])
 const page = reactive({ page: 1, size: 10, total: 0 })
@@ -262,7 +314,9 @@ function formatLocator(locator) {
     return `image=${typeof v === 'object' ? JSON.stringify(v) : v}${th}`
   }
   const prefix = locator.context === 'webview' ? '[WebView] ' : ''
-  return `${prefix}${locator.by || ''}=${typeof v === 'object' ? JSON.stringify(v) : v}`
+  const main = `${prefix}${locator.by || ''}=${typeof v === 'object' ? JSON.stringify(v) : v}`
+  const n = Array.isArray(locator.candidates) ? locator.candidates.length : 0
+  return n > 1 ? `${main}（${n} 候选）` : main
 }
 
 function templatePreviewUrl(locator) {
@@ -415,6 +469,21 @@ async function save() {
   try {
     const locator = { ...form.locator }
     normalizeLocatorContext(locator)
+    if (form.element_type !== 'image' && Array.isArray(locator.candidates) && locator.candidates.length) {
+      if (isWebviewLocator(locator)) {
+        promoteWebLocatorCandidate(locator, {
+          by: locator.by,
+          value: locator.value,
+          index: locator.index,
+        })
+      } else {
+        promoteLocatorCandidate(locator, {
+          by: locator.by,
+          value: locator.value,
+          index: locator.index,
+        })
+      }
+    }
     const payload = {
       name: form.name.trim(),
       project_id: proStore.projectInfo.id,
@@ -495,6 +564,19 @@ loadList()
 .field-hint.inline {
   margin-top: 0;
   margin-left: 8px;
+}
+.candidate-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.candidate-tag {
+  cursor: pointer;
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+  line-height: 1.35;
+  padding: 4px 8px;
 }
 .muted-ref {
   color: var(--el-text-color-secondary);

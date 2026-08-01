@@ -40,6 +40,15 @@ async def resolve_catalog(project_id: int, catalog_id: int) -> TestCatalog:
     return catalog
 
 
+async def load_active_catalog_names(catalog_ids: list[int]) -> dict[int, str]:
+    """批量解析目录名；已软删目录不返回，调用方展示为空即可。"""
+    ids = [int(i) for i in catalog_ids if i is not None]
+    if not ids:
+        return {}
+    rows = await TestCatalog.filter(id__in=ids, is_del=False).values("id", "name")
+    return {int(row["id"]): row["name"] for row in rows}
+
+
 def build_catalog_tree(flat_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """将扁平目录列表构建为嵌套树（含 children）。"""
     nodes: dict[int, dict[str, Any]] = {}

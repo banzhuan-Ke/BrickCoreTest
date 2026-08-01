@@ -42,6 +42,7 @@ from app.routers.ui.exec import ExecutionService
 from app.schemas.ui import (
     DebugSessionCompareForm,
     DebugSessionCreateForm,
+    DebugSessionHotkeysForm,
     DebugSessionPickModeForm,
     DebugSessionResolveRunForm,
     DebugSessionRunForm,
@@ -59,7 +60,11 @@ _ACTIVE_STATUSES = frozenset({"starting", "ready", "running", "closing"})
 class RunnerCallbackForm(BaseModel):
     command_id: Optional[str] = None
     event: str = Field(
-        description="ready | step_result | steps_synced | highlight_result | verify_result | pick_result | pick_mode | closed | error"
+        description=(
+            "ready | step_result | steps_synced | highlight_result | verify_result | "
+            "pick_result | pick_mode | pick_freeze | page_freeze | hotkeys_updated | "
+            "toolbar_run_selected | closed | error"
+        )
     )
     payload: dict = Field(default_factory=dict)
 
@@ -226,17 +231,21 @@ async def create_debug_session(
 
     mq = MQProducer()
     try:
+        task_payload = {
+            "task_type": "ui_debug_session",
+            "debug_session_id": session.id,
+            "steps": expanded_steps,
+            "callback_base": callback_base,
+            "max_idle_seconds": UI_DEBUG_IDLE_SECONDS,
+            "auto_navigate": bool(body.auto_navigate),
+            "initial_url": initial_url,
+        }
+        # 仅在前端显式传入时带上，避免空表/默认表盖住执行器 UI_DEBUG_HOTKEYS_JSON
+        if isinstance(body.hotkeys, dict):
+            task_payload["hotkeys"] = body.hotkeys
         mq.send_test_task(
             env_payload,
-            {
-                "task_type": "ui_debug_session",
-                "debug_session_id": session.id,
-                "steps": expanded_steps,
-                "callback_base": callback_base,
-                "max_idle_seconds": UI_DEBUG_IDLE_SECONDS,
-                "auto_navigate": bool(body.auto_navigate),
-                "initial_url": initial_url,
-            },
+            task_payload,
             body.device_id,
         )
     except Exception as exc:
@@ -396,6 +405,24 @@ async def clear_debug_highlight(
     if session.status != "ready":
         raise HTTPException(status_code=409, detail=f"会话状态为 {session.status}，无法取消高亮")
     data = await _dispatch_debug_command(session, "clear_highlight", {})
+    return {"data": data}
+
+
+@router.post("/sessions/{session_id}/hotkeys", summary="更新调试工具条快捷键",
+             dependencies=[Depends(require_permissions(UI_CASE_EXECUTE))])
+async def set_debug_hotkeys(
+    session_id: int,
+    body: DebugSessionHotkeysForm,
+    user_info: dict = Depends(require_permissions(UI_CASE_EXECUTE)),
+):
+    session = await _get_session_for_user(session_id, user_info, require_execute=True)
+    if session.status != "ready":
+        raise HTTPException(status_code=409, detail=f"会话状态为 {session.status}，无法更新快捷键")
+    data = await _dispatch_debug_command(
+        session,
+        "set_hotkeys",
+        {"hotkeys": body.hotkeys if isinstance(body.hotkeys, dict) else {}},
+    )
     return {"data": data}
 
 
@@ -599,6 +626,7 @@ _RESULT_EVENTS = frozenset({
     "select_step",
     "pick_result",
     "pick_mode",
+    "hotkeys_updated",
     "record_started",
     "record_stopped",
 })
@@ -680,6 +708,29 @@ async def runner_debug_callback(
     elif event == "pick_mode":
         session.status = "ready"
         _clear_pending_command(session, body.command_id)
+    elif event == "pick_freeze":
+        session.status = "ready"
+        session.last_result = {"type": "pick_freeze", **payload}
+        session.error = None
+    elif event == "page_freeze":
+        session.status = "ready"
+        session.last_result = {"type": "page_freeze", **payload}
+        session.error = None
+    elif event == "hotkeys_updated":
+        session.status = "ready"
+        session.last_result = {"type": "hotkeys_updated", **payload}
+        _clear_pending_command(session, body.command_id)
+        session.error = None
+    elif event == "toolbar_run_selected":
+        # 工具条「执行勾选」：平台侧读取编辑器勾选下标后真正执行
+        session.status = "ready"
+        session.last_result = {
+            "type": "run_selected_request",
+            "request_id": payload.get("request_id"),
+            "message": payload.get("message") or "request_run_selected",
+            "status": payload.get("status"),
+        }
+        session.error = None
     elif event == "record_started":
         session.status = "ready"
         session.last_result = {"type": "recording", **payload}

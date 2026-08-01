@@ -237,7 +237,7 @@ async def _load_catalog_map_for_plans(plan_ids: List[int]) -> Dict[int, str]:
             catalog_ids.add(row["catalog_id"])
     if not catalog_ids:
         return {}
-    catalogs = await TestCatalog.filter(id__in=list(catalog_ids)).all()
+    catalogs = await TestCatalog.filter(id__in=list(catalog_ids), is_del=False).all()
     return {c.id: c.name for c in catalogs}
 
 

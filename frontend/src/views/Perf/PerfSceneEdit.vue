@@ -41,8 +41,13 @@
               </div>
             </div>
             <div class="mode-guide-extra">
+              <span class="label">流式怎么选：</span>
+              <b>流式阶段压测</b> = 每人只发 <b>1 次</b> SSE，适合测首字/阶段耗时，不适合持续加压；
+              要测持续吞吐请选 <b>固定 / 循环 / 梯度</b>，再打开下方 <b>流式问答</b>（HTTP 压测改为 SSE 采集阶段指标）。
+            </div>
+            <div class="mode-guide-extra">
               <span class="label">流式问答开关：</span>
-              在固定/循环/梯度/链路模式下可启用，将 HTTP 压测切换为 SSE 流式采集（首字时间、阶段耗时等）；关闭则按普通 HTTP 请求统计 QPS 与响应时间。
+              在固定/循环/梯度/链路模式下可启用，将请求切换为 SSE 流式采集（首字时间、阶段耗时等）；关闭则按普通 HTTP 统计 QPS 与响应时间。
             </div>
           </el-collapse-item>
         </el-collapse>
@@ -60,10 +65,17 @@
               <el-tag v-if="form.config.mode === 'fixed'" size="small" type="info">固定并发数，持续指定时间</el-tag>
               <el-tag v-if="form.config.mode === 'loop'" size="small" type="info">固定并发数，每个用户循环指定次数</el-tag>
               <el-tag v-if="form.config.mode === 'stepping'" size="small" type="info">分阶段递增并发，每阶段持续指定时间</el-tag>
-              <el-tag v-if="isStreamBurst" size="small" type="warning">流式并发单次：每用户 1 次，按解析器采集阶段计时</el-tag>
+              <el-tag v-if="isStreamBurst" size="small" type="warning">单次流式：每用户仅 1 次，测阶段耗时（非持续加压）</el-tag>
               <el-tag v-if="isJourneyMode" size="small" type="success">业务链路：每用户按阶段顺序/并行执行，支持变量传递与阶段同步</el-tag>
-              <el-tag v-if="form.config.mode === 'fixed' && enableStreamQA" size="small" type="success">流式持续压测：固定并发在持续时间内循环发起流式问答</el-tag>
-              <el-tag v-if="form.config.mode === 'stepping' && enableStreamQA" size="small" type="success">流式梯度压测：分阶段递增并发，每阶段持续流式问答</el-tag>
+              <el-tag v-if="form.config.mode === 'fixed' && enableStreamQA" size="small" type="success">流式持续：固定并发 + 持续时间内反复 SSE</el-tag>
+              <el-tag v-if="form.config.mode === 'loop' && enableStreamQA" size="small" type="success">流式循环：固定并发 × 循环次数，每次走 SSE</el-tag>
+              <el-tag v-if="form.config.mode === 'stepping' && enableStreamQA" size="small" type="success">流式梯度：分阶段加并发，持续 SSE</el-tag>
+            </div>
+            <div v-if="isStreamBurst" class="field-tip" style="margin-top: 8px;">
+              需要「持续加压 + 流式阶段指标」时：请改选 <b>固定/循环/梯度</b>，并打开下方「流式问答」，不要用流式阶段压测。
+            </div>
+            <div v-else-if="['fixed','loop','stepping'].includes(form.config.mode) && !enableStreamQA" class="field-tip" style="margin-top: 8px;">
+              若用例是 SSE 问答且要看首字/阶段耗时：打开下方「流式问答」。仅测普通 HTTP 吞吐可保持关闭。
             </div>
           </div>
         </el-form-item>
@@ -75,7 +87,11 @@
             inactive-text="关闭"
             @change="onStreamToggle"
           />
-          <div class="field-tip">启用后按 SSE 流式解析器采集首字、整体耗时等阶段指标；关闭则按普通 HTTP 请求压测</div>
+          <div class="field-tip">
+            启用后按 SSE 解析器采集首字、整体耗时等阶段指标，并在持续/循环/梯度窗口内反复发问；
+            关闭则按普通 HTTP 压测（QPS/RT/状态码），报告不再展示 SSE 阶段汇总。与「流式阶段压测」（每人仅 1 次）不同。
+            关闭后请保存场景再执行，否则仍可能沿用旧的流式配置。
+          </div>
         </el-form-item>
 
         <!-- 分配模式 -->
@@ -109,6 +125,24 @@
             <el-icon class="tip-icon"><QuestionFilled /></el-icon>
           </el-tooltip>
         </el-form-item>
+        <el-form-item label="热身(Warmup)">
+          <el-input-number
+            v-model="form.config.warmup_seconds"
+            :min="0"
+            :max="600"
+            controls-position="right"
+            placeholder="跟随 Ramp-up"
+          />
+          <span class="unit">秒</span>
+          <el-tooltip placement="top">
+            <template #content>
+              汇总 Avg/P95 等延迟指标时，剔除前 N 秒样本，降低冷启动噪声。<br />
+              留空 = 跟随 Ramp-up；填 0 = 不剔除（全窗口延迟）。
+            </template>
+            <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+          </el-tooltip>
+          <div class="field-tip">建议 ≥ Ramp-up；总请求数 / QPS 仍按全窗口有效加压时长计算</div>
+        </el-form-item>
         <el-form-item label="目标Host">
           <el-input v-model="form.config.target_host" placeholder="可选，覆盖环境配置的Host" />
           <el-tooltip placement="top" content="不填则使用环境配置中的Host地址，填写后将覆盖环境配置">
@@ -130,14 +164,74 @@
               style="flex:1"
             />
           </div>
-          <div class="field-tip">启用后，当错误率连续 3 秒超过该阈值时，压测将自动停止（0 表示不启用）</div>
+          <div class="field-tip">启用后，当错误率连续 3 秒超过该阈值时，压测将自动停止（运行中熔断，与下方「性能验收目标」无关）</div>
+        </el-form-item>
+
+        <!-- 性能验收目标 -->
+        <el-divider content-position="left">性能验收目标</el-divider>
+        <el-form-item label="验收目标">
+          <div style="width:100%">
+            <el-switch v-model="perfTargets.enabled" active-text="启用" inactive-text="关闭" />
+            <div class="field-tip" style="margin-top:6px">
+              用于报告判定本次是否达到业务绝对值 SLA。与「错误率熔断」「钉选基线退化」相互独立。目标值可留空；仅填写了数值且勾选启用的项参与判定。
+            </div>
+            <template v-if="perfTargets.enabled">
+              <div style="display:flex;flex-wrap:wrap;gap:16px;margin:12px 0;">
+                <div>
+                  <span style="font-size:13px;margin-right:8px;">最小样本数</span>
+                  <el-input-number v-model="perfTargets.min_total_requests" :min="0" :max="1000000" />
+                </div>
+                <div>
+                  <span style="font-size:13px;margin-right:8px;">最小时长(秒)</span>
+                  <el-input-number v-model="perfTargets.min_duration_seconds" :min="0" :max="86400" />
+                </div>
+              </div>
+              <div class="field-tip">样本或时长不足时仍给出 pass/fail，但标记可信度偏低。</div>
+              <el-table :data="perfTargetGlobalRows" size="small" border style="width:100%;max-width:920px;margin-top:8px;">
+                <el-table-column label="启用" width="70" align="center">
+                  <template #default="{ row }">
+                    <el-checkbox v-model="row.enabled" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="指标" min-width="140">
+                  <template #default="{ row }">{{ row.label }}</template>
+                </el-table-column>
+                <el-table-column label="条件" width="70" align="center">
+                  <template #default="{ row }">{{ row.op }}</template>
+                </el-table-column>
+                <el-table-column label="目标值" width="140">
+                  <template #default="{ row }">
+                    <el-input-number
+                      v-model="row.value"
+                      :controls="false"
+                      :precision="2"
+                      :min="0"
+                      placeholder="可空"
+                      style="width:120px"
+                    />
+                  </template>
+                </el-table-column>
+                <el-table-column label="单位" width="60" align="center">
+                  <template #default="{ row }">{{ row.unit }}</template>
+                </el-table-column>
+                <el-table-column label="不满足时" width="130">
+                  <template #default="{ row }">
+                    <el-select v-model="row.severity" size="small" style="width:110px">
+                      <el-option label="失败" value="fail" />
+                      <el-option label="警告" value="warn" />
+                    </el-select>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </template>
+          </div>
         </el-form-item>
 
         <!-- 链路固定模式 -->
         <template v-if="form.config.mode === 'journey_fixed'">
           <el-form-item label="持续时间" prop="config.duration_seconds">
-            <el-input-number v-model="form.config.duration_seconds" :min="1" :max="3600" />
-            <span class="unit">秒（每位用户在此时间内反复执行完整链路）</span>
+            <el-input-number v-model="form.config.duration_seconds" :min="1" :max="86400" />
+            <span class="unit">秒（最长 24 小时；每位用户在此时间内反复执行完整链路）</span>
           </el-form-item>
         </template>
 
@@ -152,9 +246,9 @@
         <!-- 固定模式配置 -->
         <template v-if="form.config.mode === 'fixed'">
           <el-form-item label="持续时间" prop="config.duration_seconds">
-            <el-input-number v-model="form.config.duration_seconds" :min="1" :max="3600" />
-            <span class="unit">秒（最大3600秒）</span>
-            <el-tooltip placement="top" content="压测持续的总时长，期间保持目标并发数持续施压">
+            <el-input-number v-model="form.config.duration_seconds" :min="1" :max="86400" />
+            <span class="unit">秒（最长 24 小时，适合长时间浸泡压测）</span>
+            <el-tooltip placement="top" content="压测持续的总时长，期间保持目标并发数持续施压；最长 86400 秒（24 小时）">
               <el-icon class="tip-icon"><QuestionFilled /></el-icon>
             </el-tooltip>
           </el-form-item>
@@ -192,7 +286,34 @@
         <!-- 流式问答配置（固定/梯度持续压测 或 流式阶段单次） -->
         <template v-if="showStreamConfig && form.config.stream_profile">
           <el-divider content-position="left">流式配置</el-divider>
-          <el-form-item label="解析器">
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin: 0 0 12px 120px;"
+            title="实际执行以「解析器 + 规则/成功判定」为准。上方「SSE 解析方案」只是快捷填入系统里已保存的配置快照，选完后仍可改解析器与规则。"
+          />
+          <el-form-item label="选用方案">
+            <el-select
+              v-model="selectedSseConfigId"
+              clearable
+              filterable
+              placeholder="可选：从系统 SSE 解析配置一键填入"
+              style="width: 360px"
+              @change="onSseConfigSelect"
+            >
+              <el-option
+                v-for="c in sseConfigOptions"
+                :key="c.id"
+                :label="formatSseConfigLabel(c)"
+                :value="c.id"
+              />
+            </el-select>
+            <div class="field-tip">
+              方案在「系统设置 → SSE 解析配置」维护（可 AI 生成规则后保存）。选用 = 复制一份到本场景，不是运行时再去查库。
+            </div>
+          </el-form-item>
+          <el-form-item label="解析器类型">
             <el-select v-model="form.config.stream_profile.parser_id" style="width: 280px" @change="onParserChange">
               <el-option
                 v-for="p in parserList"
@@ -205,7 +326,8 @@
               </el-option>
             </el-select>
             <div class="field-tip">
-              常见问答 SSE 选「问答流式 v1」；协议字段变更时，在下拉框选择「规则配置」，下方会出现阶段匹配规则编辑器
+              本场景真正生效的解析方式。标准 KCF 用「问答流式 v1」；标准 SSE 字段用「规则配置」；
+              行首是 datas/events 等非标准协议时用「自定义 SSE」并改前缀。
             </div>
           </el-form-item>
           <el-form-item label="请求超时">
@@ -231,8 +353,33 @@
               />
             </el-select>
           </el-form-item>
-          <el-form-item v-if="form.config.stream_profile.parser_id === 'rule_based'" label="规则配置">
-            <StreamRuleBuilder v-model="form.config.stream_profile.parser_options.rules" />
+          <div v-if="streamUsesRuleBuilder" class="rules-panel">
+            <StreamRuleBuilder
+              v-model="form.config.stream_profile.parser_options.rules"
+              :show-frame-prefixes="form.config.stream_profile.parser_id === 'custom_sse'"
+            />
+          </div>
+          <el-form-item label="报告着重">
+            <el-select
+              v-model="form.config.stream_profile.report_highlight_phases"
+              multiple
+              clearable
+              filterable
+              collapse-tags
+              collapse-tags-tooltip
+              placeholder="可选：报告摘要中着重展示的指标"
+              style="width: 420px"
+            >
+              <el-option
+                v-for="s in currentPhaseSchema"
+                :key="s.key"
+                :label="s.label || s.key"
+                :value="s.key"
+              />
+            </el-select>
+            <div class="field-tip">
+              默认报告展示全部阶段/派生指标卡片与对比图；勾选后这些指标在摘要区置顶加粗。留空则全部同等展示。
+            </div>
           </el-form-item>
         </template>
 
@@ -241,6 +388,31 @@
           <el-divider content-position="left">业务链路</el-divider>
           <el-alert type="info" :closable="false" show-icon style="margin: 0 0 12px 120px;"
             title="并发 N = N 条链路同时执行（非 N×步骤数）。步骤间变量通过用例 extractors 传递；阶段 sync 在本机/单 Worker 内齐步走。" />
+          <el-alert
+            v-if="journeySourceStatus?.changed"
+            type="warning"
+            :closable="false"
+            show-icon
+            style="margin: 0 0 12px 120px;"
+          >
+            <template #title>{{ journeySourceStatus.message || '源套件已变更' }}</template>
+            <el-button
+              v-if="journeySourceStatus.suite_exists"
+              type="warning"
+              size="small"
+              plain
+              style="margin-top: 6px;"
+              @click="reopenSuiteImportFromSource"
+            >重新导入预览</el-button>
+          </el-alert>
+          <el-alert
+            v-if="missingJourneyCases.length"
+            type="error"
+            :closable="false"
+            show-icon
+            style="margin: 0 0 12px 120px;"
+            :title="`链路中有 ${missingJourneyCases.length} 个用例不可用（已删除或不在当前项目）：${missingJourneyCaseSummary}`"
+          />
           <el-form-item label="失败策略">
             <el-switch v-model="form.config.journey.stop_on_step_fail" active-text="步骤失败中断链路" inactive-text="继续执行" />
           </el-form-item>
@@ -249,6 +421,27 @@
             <span class="unit">ms（每条链路完成后的等待）</span>
           </el-form-item>
           <el-form-item label="业务阶段">
+            <div class="journey-toolbar" style="margin-bottom: 10px;">
+              <el-select
+                v-model="journeyCaseTagFilter"
+                clearable
+                filterable
+                allow-create
+                default-first-option
+                placeholder="按标签筛选用例"
+                style="width: 180px; margin-right: 8px;"
+              >
+                <el-option label="perf" value="perf" />
+                <el-option label="journey" value="journey" />
+                <el-option label="login" value="login" />
+              </el-select>
+              <el-button type="primary" plain size="small" @click="openSuiteImport">从接口套件导入</el-button>
+              <el-button type="success" plain size="small" @click="openSaveTemplate">保存为链路模板</el-button>
+              <el-button type="warning" plain size="small" @click="openApplyTemplate">从模板应用</el-button>
+            </div>
+            <div v-if="journeyCaseTagFilter && journeyCaseOptions.length === 0" class="field-tip" style="margin-bottom: 8px;">
+              无匹配标签「{{ journeyCaseTagFilter }}」的用例，请清空筛选或先在用例上打标签。
+            </div>
             <div class="journey-phases">
               <div v-for="(phase, pIdx) in form.config.journey.phases" :key="pIdx" class="journey-phase-card">
                 <div class="journey-phase-header">
@@ -262,20 +455,85 @@
                   <el-checkbox v-model="phase.sync_before">阶段前同步</el-checkbox>
                   <el-button type="danger" size="small" circle :icon="Delete" @click="removeJourneyPhase(pIdx)" />
                 </div>
-                <el-table :data="phase.steps" size="small" border style="width: 100%; margin-top: 8px;">
+                <el-table :data="phase.steps" size="small" border style="width: 100%; margin-top: 8px;" :row-class-name="journeyStepRowClass">
                   <el-table-column label="顺序" width="60" align="center">
                     <template #default="{ $index }">{{ $index + 1 }}</template>
                   </el-table-column>
                   <el-table-column label="用例" min-width="220">
                     <template #default="{ row }">
-                      <el-select v-model="row.case_id" filterable placeholder="选择用例" style="width: 100%">
-                        <el-option v-for="c in allCases" :key="c.id" :label="`${c.name} [${c.api?.method || c.api_method || ''}]`" :value="c.id" />
-                      </el-select>
+                      <div>
+                        <el-select
+                          v-model="row.case_id"
+                          filterable
+                          clearable
+                          placeholder="选择用例"
+                          style="width: 100%"
+                          :class="{ 'is-missing-case': isMissingJourneyCase(row.case_id) }"
+                        >
+                          <el-option
+                            v-for="c in journeyCaseOptionsForStep(row.case_id)"
+                            :key="c.id"
+                            :label="`${c.name} [${c.api?.method || c.api_method || ''}]`"
+                            :value="c.id"
+                          />
+                        </el-select>
+                        <div v-if="isMissingJourneyCase(row.case_id)" class="missing-case-hint">
+                          用例 #{{ row.case_id }} 不存在或已删除，请重新选择
+                        </div>
+                      </div>
                     </template>
                   </el-table-column>
-                  <el-table-column label="间隔(ms)" width="110" align="center">
+                  <el-table-column label="间隔" min-width="240" align="center">
+                    <template #header>
+                      <span>间隔</span>
+                      <el-tooltip placement="top">
+                        <template #content>
+                          固定：步骤完成后等待固定毫秒<br/>
+                          随机：在区间内均匀抽样（类似 Locust between），更接近真实思考时间；尖刺可设 0
+                        </template>
+                        <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+                      </el-tooltip>
+                    </template>
                     <template #default="{ row }">
-                      <el-input-number v-model="row.delay_ms" :min="0" :max="60000" size="small" style="width: 90px" />
+                      <div class="delay-cell">
+                        <el-select
+                          v-model="row.delay_mode"
+                          size="small"
+                          style="width: 72px"
+                          @change="onDelayModeChange(row)"
+                        >
+                          <el-option label="固定" value="fixed" />
+                          <el-option label="随机" value="random" />
+                        </el-select>
+                        <template v-if="row.delay_mode === 'random'">
+                          <el-input-number
+                            v-model="row.delay_ms_min"
+                            :min="0"
+                            :max="60000"
+                            size="small"
+                            controls-position="right"
+                            style="width: 86px"
+                          />
+                          <span class="delay-sep">~</span>
+                          <el-input-number
+                            v-model="row.delay_ms_max"
+                            :min="0"
+                            :max="60000"
+                            size="small"
+                            controls-position="right"
+                            style="width: 86px"
+                          />
+                          <el-button link type="primary" size="small" @click="applyDelayPreset(row, 1000, 3000)">1~3s</el-button>
+                        </template>
+                        <el-input-number
+                          v-else
+                          v-model="row.delay_ms"
+                          :min="0"
+                          :max="60000"
+                          size="small"
+                          style="width: 100px"
+                        />
+                      </div>
                     </template>
                   </el-table-column>
                   <el-table-column label="流式" width="70" align="center">
@@ -283,8 +541,9 @@
                       <el-checkbox v-model="row.use_stream" :disabled="!enableStreamQA && !form.config.stream_profile" />
                     </template>
                   </el-table-column>
-                  <el-table-column width="60" align="center">
-                    <template #default="{ $index }">
+                  <el-table-column label="操作" width="100" align="center">
+                    <template #default="{ row, $index }">
+                      <el-button type="primary" size="small" link @click="debugJourneyStep(row, pIdx)">调试</el-button>
                       <el-button type="danger" size="small" link @click="removeJourneyStep(pIdx, $index)">删</el-button>
                     </template>
                   </el-table-column>
@@ -295,6 +554,83 @@
             </div>
           </el-form-item>
         </template>
+
+        <!-- 从套件导入链路 -->
+        <el-dialog v-model="suiteImport.visible" title="从接口套件导入业务链路" width="640px" destroy-on-close>
+          <el-form label-width="100px">
+            <el-form-item label="接口套件" required>
+              <el-select
+                v-model="suiteImport.suiteId"
+                filterable
+                placeholder="选择套件"
+                style="width: 100%"
+                :loading="suiteImport.loadingSuites"
+                @change="previewSuiteImport"
+              >
+                <el-option
+                  v-for="s in suiteImport.suites"
+                  :key="s.id"
+                  :label="`${s.name}（${s.case_count ?? 0} 用例）`"
+                  :value="s.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="布局">
+              <el-radio-group v-model="suiteImport.layout" @change="previewSuiteImport">
+                <el-radio label="single_phase">单阶段多步骤</el-radio>
+                <el-radio label="per_case_phase">每用例一阶段</el-radio>
+              </el-radio-group>
+            </el-form-item>
+          </el-form>
+          <el-table v-if="suiteImport.previewCases.length" :data="suiteImport.previewCases" size="small" border max-height="280">
+            <el-table-column type="index" width="50" label="#" />
+            <el-table-column prop="case_name" label="用例" min-width="180" />
+            <el-table-column prop="case_id" label="用例ID" width="90" align="center" />
+          </el-table>
+          <div v-if="suiteImport.skipped.length" class="field-tip" style="margin-top: 8px; color: #e6a23c;">
+            已跳过 {{ suiteImport.skipped.length }} 个无效用例
+          </div>
+          <template #footer>
+            <el-button @click="suiteImport.visible = false">取消</el-button>
+            <el-button type="primary" :loading="suiteImport.applying" :disabled="!suiteImport.journey" @click="applySuiteImport">导入到当前链路</el-button>
+          </template>
+        </el-dialog>
+
+        <!-- 保存为链路模板 -->
+        <el-dialog v-model="templateSave.visible" title="保存为链路模板" width="480px" destroy-on-close>
+          <el-form label-width="80px">
+            <el-form-item label="名称" required>
+              <el-input v-model="templateSave.name" maxlength="100" placeholder="模板名称" />
+            </el-form-item>
+            <el-form-item label="描述">
+              <el-input v-model="templateSave.description" type="textarea" :rows="2" placeholder="可选" />
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="templateSave.visible = false">取消</el-button>
+            <el-button type="primary" :loading="templateSave.saving" @click="submitSaveTemplate">保存</el-button>
+          </template>
+        </el-dialog>
+
+        <!-- 从模板应用 -->
+        <el-dialog v-model="templateApply.visible" title="从链路模板应用" width="560px" destroy-on-close>
+          <el-table
+            :data="templateApply.list"
+            size="small"
+            border
+            highlight-current-row
+            v-loading="templateApply.loading"
+            @current-change="(row) => { templateApply.selected = row }"
+          >
+            <el-table-column prop="name" label="模板名称" min-width="160" />
+            <el-table-column prop="create_by" label="创建人" width="100" />
+            <el-table-column prop="update_time" label="更新时间" width="160" />
+          </el-table>
+          <template #footer>
+            <el-button @click="templateApply.visible = false">取消</el-button>
+            <el-button type="primary" :disabled="!templateApply.selected" :loading="templateApply.applying" @click="applyTemplate">应用到当前链路</el-button>
+          </template>
+        </el-dialog>
 
         <!-- 用例选择 -->
         <el-divider v-if="!isJourneyMode" content-position="left">场景用例</el-divider>
@@ -365,18 +701,60 @@
                 </el-tooltip>
               </template>
               <template #default="{ row }">
-                <el-input-number v-model="row.weight" :min="1" :max="100" size="small" style="width: 90px" />
+                <el-input-number v-model="row.cfg.weight" :min="1" :max="100" size="small" style="width: 90px" />
               </template>
             </el-table-column>
-            <el-table-column width="120" align="center">
+            <el-table-column min-width="240" align="center">
               <template #header>
-                <span>间隔(ms)</span>
-                <el-tooltip placement="top" content="每次请求执行后的等待间隔（毫秒），0表示不等待">
+                <span>间隔</span>
+                <el-tooltip placement="top">
+                  <template #content>
+                    固定：每次请求后等待固定毫秒<br/>
+                    随机：在区间内均匀抽样（类似 Locust between），更接近真实用户思考时间；尖刺压测可设 0
+                  </template>
                   <el-icon class="tip-icon"><QuestionFilled /></el-icon>
                 </el-tooltip>
               </template>
               <template #default="{ row }">
-                <el-input-number v-model="row.delay_ms" :min="0" :max="60000" size="small" style="width: 90px" />
+                <div class="delay-cell">
+                  <el-select
+                    v-model="row.cfg.delay_mode"
+                    size="small"
+                    style="width: 72px"
+                    @change="onDelayModeChange(row.cfg)"
+                  >
+                    <el-option label="固定" value="fixed" />
+                    <el-option label="随机" value="random" />
+                  </el-select>
+                  <template v-if="row.cfg.delay_mode === 'random'">
+                    <el-input-number
+                      v-model="row.cfg.delay_ms_min"
+                      :min="0"
+                      :max="60000"
+                      size="small"
+                      controls-position="right"
+                      style="width: 86px"
+                    />
+                    <span class="delay-sep">~</span>
+                    <el-input-number
+                      v-model="row.cfg.delay_ms_max"
+                      :min="0"
+                      :max="60000"
+                      size="small"
+                      controls-position="right"
+                      style="width: 86px"
+                    />
+                    <el-button link type="primary" size="small" @click="applyDelayPreset(row.cfg, 1000, 3000)">1~3s</el-button>
+                  </template>
+                  <el-input-number
+                    v-else
+                    v-model="row.cfg.delay_ms"
+                    :min="0"
+                    :max="60000"
+                    size="small"
+                    style="width: 100px"
+                  />
+                </div>
               </template>
             </el-table-column>
           </el-table>
@@ -392,7 +770,7 @@
               :closable="false"
               show-icon
               style="margin-bottom: 12px;"
-              title="请先保存场景，保存成功后再回来上传 CSV 文件。"
+              title="请先保存场景，保存成功后再回来选择 CSV；下载模板可随时使用。"
             />
             <el-alert
               type="info"
@@ -405,12 +783,9 @@
               <div style="font-size: 13px; line-height: 1.8;">
                 <div><b>Step 1 — 准备 CSV</b></div>
                 <div>　• 第一行必须是<b>英文列名</b>（如 question），UTF-8 编码，最多 10000 行</div>
-                <div>　• 问答压测示例：</div>
-                <div>　<code style="background:#f5f7fa;padding:2px 6px;border-radius:4px;">question</code></div>
-                <div>　<code style="background:#f5f7fa;padding:2px 6px;border-radius:4px;">什么是知识库？</code></div>
-                <div>　<code style="background:#f5f7fa;padding:2px 6px;border-radius:4px;">如何创建应用？</code></div>
-                <div style="margin-top: 4px;"><b>Step 2 — 上传 CSV</b></div>
-                <div>　• 编辑已保存的场景，点击「上传 CSV」；上传后可预览前 5 行</div>
+                <div>　• 可点击「下载模板」获取样例文件后改内容</div>
+                <div style="margin-top: 4px;"><b>Step 2 — 选择 CSV</b></div>
+                <div>　• 编辑已保存的场景，选择文件后可预览；<b>须再点下方「保存」才会写入场景</b>（取消离开则丢弃）</div>
                 <div style="margin-top: 4px;"><b>Step 3 — 在用例 Body 中引用</b></div>
                 <div>　• 写法：<code v-pre style="background:#f5f7fa;padding:2px 6px;border-radius:4px;">${{csv.列名}}</code>（兼容旧写法 <code v-pre>{{csv.列名}}</code>）</div>
                 <div>　• 问答 Body 示例：<code v-pre style="background:#f5f7fa;padding:2px 6px;border-radius:4px;">{"question":"${{csv.question}}"}</code></div>
@@ -422,21 +797,32 @@
                 <div style="margin-top: 4px; color: #409eff;">💡 固定/梯度 + 流式问答模式下同样生效；每次新请求都会替换 <code v-pre>${{csv.question}}</code> 后再发起 SSE。</div>
               </div>
             </el-alert>
-            <div v-if="!csvInfo.hasCSV" style="display: flex; align-items: center; gap: 12px;">
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px;">
+              <el-button :icon="Download" @click="downloadCSVTemplate">下载模板</el-button>
               <el-upload
+                v-if="isEdit"
                 accept=".csv"
                 :show-file-list="false"
                 :auto-upload="false"
-                :disabled="!isEdit"
                 :on-change="handleCSVUpload"
               >
-                <el-button type="primary" :icon="Upload" :disabled="!isEdit">上传 CSV 文件</el-button>
+                <el-button type="primary" :icon="Upload">
+                  {{ csvInfo.hasCSV ? '重新选择 CSV' : '选择 CSV 文件' }}
+                </el-button>
               </el-upload>
-              <span style="color: #909399; font-size: 13px;">支持 UTF-8 / GBK 编码，最多 10000 行</span>
+              <span style="color: #909399; font-size: 13px;">支持 UTF-8 / GBK，最多 10000 行；变更需点下方保存</span>
             </div>
-            <div v-else>
+            <el-alert
+              v-if="csvDirty"
+              type="warning"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 12px;"
+              title="CSV 尚未写入场景，请点击下方「保存」生效；取消离开将丢弃本次变更。"
+            />
+            <div v-if="csvInfo.hasCSV">
               <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-                <el-tag size="small" type="success">{{ csvInfo.fileName }}</el-tag>
+                <el-tag size="small" :type="csvDirty ? 'warning' : 'success'">{{ csvInfo.fileName }}</el-tag>
                 <span style="color: #606266; font-size: 13px;">共 {{ csvInfo.rowCount }} 行</span>
                 <el-button link type="danger" size="small" @click="handleCSVDelete">删除</el-button>
               </div>
@@ -486,14 +872,16 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Plus, Delete, QuestionFilled, Upload } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Plus, Delete, QuestionFilled, Upload, Download } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import StreamRuleBuilder from '@/components/perf/StreamRuleBuilder.vue'
-import { perfSceneApi, httpCaseApi } from '@/api'
+import { perfSceneApi, httpCaseApi, httpSuiteApi, perfJourneyTemplateApi } from '@/api'
 import { perfSceneApi as perfSceneApiCSV, perfStreamParserApi } from '@/api/modules/perf'
+import { streamParserConfigApi } from '@/api/modules/sys.js'
 import { ProjectStore } from '@/stores/module/ProjectStore'
+import { defaultPerfTargets, normalizePerfTargetsLocal } from '@/views/Perf/perfTargets'
 
 const route = useRoute()
 const router = useRouter()
@@ -507,10 +895,69 @@ const saving = ref(false)
 const allCases = ref([])
 const selectedCaseIds = ref([])
 const enableErrorThreshold = ref(false)
+const perfTargets = reactive(defaultPerfTargets())
+const perfTargetGlobalRows = computed(() =>
+  (perfTargets.items || []).filter((it) => it.scope === 'global')
+)
 const enableStreamQA = ref(false)
 const casesLoading = ref(false)
+const casesLoadedOk = ref(false)
 const successPhaseKey = ref('phase_exists')
 const modeGuideExpanded = ref([])
+const appendCaseHandled = ref(false)
+const journeyCaseTagFilter = ref('')
+const journeySourceStatus = ref(null)
+
+const caseIdMap = computed(() => {
+  const map = new Map()
+  for (const c of allCases.value) {
+    map.set(c.id, c)
+  }
+  return map
+})
+
+const journeyCaseOptions = computed(() => {
+  const tag = (journeyCaseTagFilter.value || '').trim()
+  if (!tag) return allCases.value
+  return allCases.value.filter(c => Array.isArray(c.tags) && c.tags.includes(tag))
+})
+
+const journeyCaseOptionsForStep = (selectedId) => {
+  const options = [...journeyCaseOptions.value]
+  if (selectedId && !options.some(c => c.id === selectedId)) {
+    const selected = caseIdMap.value.get(selectedId)
+    if (selected) options.unshift(selected)
+  }
+  return options
+}
+
+const isMissingJourneyCase = (caseId) => {
+  if (caseId == null || caseId === '') return false
+  // 用例列表未成功加载时不误判为缺失，避免拦截保存
+  if (!casesLoadedOk.value || casesLoading.value) return false
+  return !caseIdMap.value.has(caseId)
+}
+
+const missingJourneyCases = computed(() => {
+  const seen = new Set()
+  const missing = []
+  for (const phase of form.config.journey?.phases || []) {
+    for (const step of phase.steps || []) {
+      if (!step.case_id || seen.has(step.case_id)) continue
+      if (isMissingJourneyCase(step.case_id)) {
+        seen.add(step.case_id)
+        missing.push({ case_id: step.case_id, reason: '用例不存在或已删除，或不属于当前项目' })
+      }
+    }
+  }
+  return missing
+})
+
+const missingJourneyCaseSummary = computed(() =>
+  missingJourneyCases.value.map(m => `#${m.case_id}`).join('、')
+)
+
+const journeyStepRowClass = ({ row }) => (isMissingJourneyCase(row?.case_id) ? 'journey-step-missing' : '')
 
 const perfModeGuides = [
   {
@@ -537,8 +984,8 @@ const perfModeGuides = [
   {
     mode: 'stream_burst',
     title: '流式阶段压测',
-    summary: '每个虚拟用户仅发送 1 次流式请求（如 SSE 问答），按解析器采集各阶段耗时与成功判定。',
-    scenes: '大模型问答、流式接口的首字时间/思考耗时/答案输出耗时评估；不适合测持续高 QPS。',
+    summary: '每个虚拟用户仅发送 1 次流式请求（如 SSE 问答），按解析器采集各阶段耗时与成功判定。不是持续加压模式。',
+    scenes: '大模型问答首字/阶段耗时摸底；若要持续加压请改用固定/循环/梯度并打开「流式问答」。',
     metrics: '阶段计时（首字、意图完成、流式输出等）、整体耗时、逐路请求明细。'
   },
   {
@@ -575,6 +1022,7 @@ const FALLBACK_PARSERS = [
     ],
   },
   { parser_id: 'rule_based', display_name: '规则配置', phase_schema: [], supports_rule_builder: true },
+  { parser_id: 'custom_sse', display_name: '自定义 SSE', phase_schema: [], supports_rule_builder: true },
   {
     parser_id: 'http_timing_only',
     display_name: '仅总耗时',
@@ -584,25 +1032,55 @@ const FALLBACK_PARSERS = [
 ]
 
 const parserList = ref([...FALLBACK_PARSERS])
+const sseConfigOptions = ref([])
+const selectedSseConfigId = ref(null)
 
 const defaultStreamProfile = () => ({
   transport: 'sse',
   parser_id: 'qa_sse_v1',
   parser_options: { rules: {} },
   success_rule: { type: 'phase_exists', phase: 'first_char' },
-  timeout_seconds: 600
+  timeout_seconds: 600,
+  sse_parser_config_id: undefined,
+  report_highlight_phases: []
 })
 
 const isStreamBurst = computed(() => ['stream_burst', 'sse_burst'].includes(form.config.mode))
 const isJourneyMode = computed(() => ['journey_fixed', 'journey_loop'].includes(form.config.mode))
 const showStreamConfig = computed(() => isStreamBurst.value || enableStreamQA.value || (isJourneyMode.value && form.config.stream_profile))
 
+const schemaFromRules = (rules) => {
+  const schema = []
+  for (const p of rules?.phases || []) {
+    if (p?.key) schema.push({ key: p.key, label: p.label || p.key })
+  }
+  for (const d of rules?.derived || []) {
+    if (d?.key) schema.push({ key: d.key, label: d.label || d.key })
+  }
+  schema.push({ key: 'total_time', label: '整体耗时(s)' })
+  return schema
+}
+
+const streamUsesRuleBuilder = computed(() => {
+  const pid = form.config.stream_profile?.parser_id
+  return pid === 'rule_based' || pid === 'custom_sse'
+})
+
 const currentPhaseSchema = computed(() => {
-  const p = parserList.value.find(x => x.parser_id === form.config.stream_profile?.parser_id)
+  const profile = form.config.stream_profile
+  if (streamUsesRuleBuilder.value) {
+    return schemaFromRules(profile?.parser_options?.rules)
+  }
+  const p = parserList.value.find(x => x.parser_id === profile?.parser_id)
   return p?.phase_schema || []
 })
 
-// CSV 参数化数据
+const formatSseConfigLabel = (c) => {
+  if (!c) return ''
+  const type = c.parser_display_name || c.parser_id || ''
+  return type ? `${c.name}（${type}）` : c.name
+}
+// CSV 参数化数据（选择/删除/改策略均为本地待定，点「保存」才写入）
 const csvInfo = reactive({
   hasCSV: false,
   fileName: '',
@@ -611,6 +1089,94 @@ const csvInfo = reactive({
   preview: [],
   strategy: 'round_robin'
 })
+/** 服务端已有 CSV（用于判断删除是否需要落库） */
+const csvServerHasData = ref(false)
+const csvServerStrategy = ref('round_robin')
+/** 待落库的文件；非 null 表示有新文件待上传 */
+const csvPendingFile = ref(null)
+/** 待落库删除 */
+const csvPendingDelete = ref(false)
+
+const csvDirty = computed(() => {
+  if (csvPendingFile.value || csvPendingDelete.value) return true
+  if (!csvInfo.hasCSV || !csvServerHasData.value) return false
+  return csvInfo.strategy !== csvServerStrategy.value
+})
+
+const CSV_TEMPLATE_CONTENT = [
+  'question',
+  '什么是知识库？',
+  '如何创建应用？',
+  '压测场景如何配置并发？',
+].join('\n') + '\n'
+
+const downloadCSVTemplate = () => {
+  const blob = new Blob(['\ufeff' + CSV_TEMPLATE_CONTENT], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'perf_csv_template.csv'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+const resetCSVLocal = () => {
+  csvInfo.hasCSV = false
+  csvInfo.fileName = ''
+  csvInfo.rowCount = 0
+  csvInfo.columns = []
+  csvInfo.preview = []
+  csvInfo.strategy = 'round_robin'
+  csvPendingFile.value = null
+  csvPendingDelete.value = false
+}
+
+const applyCSVPreviewData = (data, { fromServer = false } = {}) => {
+  csvInfo.hasCSV = true
+  csvInfo.fileName = data.file_name || ''
+  csvInfo.rowCount = data.row_count || 0
+  csvInfo.columns = data.columns || []
+  csvInfo.preview = data.preview || []
+  csvInfo.strategy = data.strategy || csvInfo.strategy || 'round_robin'
+  if (fromServer) {
+    csvServerHasData.value = true
+    csvServerStrategy.value = csvInfo.strategy
+    csvPendingFile.value = null
+    csvPendingDelete.value = false
+  }
+}
+
+const flushCSVChanges = async (sid) => {
+  if (!sid) return
+  if (csvPendingDelete.value) {
+    await perfSceneApiCSV.deleteCSV(sid)
+    csvServerHasData.value = false
+    csvServerStrategy.value = 'round_robin'
+    csvPendingDelete.value = false
+    csvPendingFile.value = null
+    return
+  }
+  if (csvPendingFile.value) {
+    const formData = new FormData()
+    formData.append('file', csvPendingFile.value)
+    await perfSceneApiCSV.uploadCSV(sid, formData, {
+      dryRun: false,
+      strategy: csvInfo.strategy,
+    })
+    csvServerHasData.value = true
+    csvServerStrategy.value = csvInfo.strategy
+    csvPendingFile.value = null
+    return
+  }
+  if (
+    csvInfo.hasCSV
+    && csvServerHasData.value
+    && csvInfo.strategy !== csvServerStrategy.value
+  ) {
+    await perfSceneApiCSV.updateCSVConfig(sid, { strategy: csvInfo.strategy, enabled: true })
+    csvServerStrategy.value = csvInfo.strategy
+  }
+}
 
 const defaultJourney = () => ({
   stop_on_step_fail: true,
@@ -627,6 +1193,7 @@ const form = reactive({
     distribution_mode: 'random_weight',
     concurrent_users: 10,
     ramp_up_seconds: 5,
+    warmup_seconds: null,
     duration_seconds: 60,
     loop_count: 100,
     steps: [{ users: 10, duration: 30 }],
@@ -664,16 +1231,66 @@ const caseOptions = computed(() => {
   }))
 })
 
+const normalizeDelayFields = (src = {}) => {
+  const mode = src.delay_mode === 'random' ? 'random' : 'fixed'
+  return {
+    delay_mode: mode,
+    delay_ms: Number(src.delay_ms) || 0,
+    delay_ms_min: Number(src.delay_ms_min) || 0,
+    delay_ms_max: Number(src.delay_ms_max) || 0,
+  }
+}
+
+const onDelayModeChange = (row) => {
+  if (row.delay_mode === 'random' && !(row.delay_ms_min > 0 || row.delay_ms_max > 0)) {
+    row.delay_ms_min = 1000
+    row.delay_ms_max = 3000
+  }
+}
+
+const applyDelayPreset = (row, minMs, maxMs) => {
+  row.delay_mode = 'random'
+  row.delay_ms_min = minMs
+  row.delay_ms_max = maxMs
+}
+
+const serializeDelayFields = (row) => normalizeDelayFields(row)
+
+const ensureSceneItem = (caseId) => {
+  let item = form.scene_items.find(i => i.case_id === caseId)
+  if (!item) {
+    item = { case_id: caseId, weight: 1, ...normalizeDelayFields() }
+    form.scene_items.push(item)
+  } else {
+    Object.assign(item, {
+      weight: item.weight || 1,
+      ...normalizeDelayFields(item),
+    })
+  }
+  return item
+}
+
+watch(selectedCaseIds, (ids) => {
+  const idSet = new Set(ids)
+  form.scene_items = form.scene_items.filter(i => idSet.has(i.case_id))
+  for (const id of ids) {
+    ensureSceneItem(id)
+  }
+})
+
 const selectedCases = computed(() => {
   return selectedCaseIds.value.map(id => {
     const caseInfo = allCases.value.find(c => c.id === id)
-    const existing = form.scene_items.find(item => item.case_id === id)
+    const item = form.scene_items.find(i => i.case_id === id) || {
+      case_id: id,
+      weight: 1,
+      ...normalizeDelayFields(),
+    }
     return {
       case_id: id,
       case_name: caseInfo?.name || '未知',
       api_method: caseInfo?.api?.method || caseInfo?.api_method || '',
-      weight: existing?.weight || 1,
-      delay_ms: existing?.delay_ms || 0
+      cfg: item,
     }
   })
 })
@@ -709,6 +1326,7 @@ const ensureStreamProfileForMode = (mode) => {
     }
     enableStreamQA.value = true
     successPhaseKey.value = form.config.stream_profile.success_rule?.type || 'phase_exists'
+    selectedSseConfigId.value = form.config.stream_profile.sse_parser_config_id || null
   }
 }
 
@@ -767,11 +1385,277 @@ const removeJourneyPhase = (idx) => {
 
 const addJourneyStep = (phaseIdx) => {
   const phase = form.config.journey.phases[phaseIdx]
-  phase.steps.push({ case_id: null, delay_ms: 0, use_stream: false, order: phase.steps.length })
+  phase.steps.push({ case_id: null, ...normalizeDelayFields(), use_stream: false, order: phase.steps.length })
 }
 
 const removeJourneyStep = (phaseIdx, stepIdx) => {
   form.config.journey.phases[phaseIdx].steps.splice(stepIdx, 1)
+}
+
+const applyJourneyConfig = (journey) => {
+  if (!form.config.journey) form.config.journey = defaultJourney()
+  form.config.journey = {
+    stop_on_step_fail: journey.stop_on_step_fail !== false,
+    delay_between_journeys_ms: journey.delay_between_journeys_ms || 0,
+    phases: (journey.phases || []).map((p, i) => ({
+      name: p.name || `阶段${i + 1}`,
+      execution: p.execution || 'serial',
+      sync_before: !!p.sync_before,
+      max_parallel: p.max_parallel || 6,
+      steps: (p.steps || []).map((s, j) => ({
+        case_id: s.case_id,
+        ...normalizeDelayFields(s),
+        use_stream: !!s.use_stream,
+        order: s.order ?? j
+      }))
+    }))
+  }
+  if (!['journey_fixed', 'journey_loop'].includes(form.config.mode)) {
+    form.config.mode = 'journey_fixed'
+    onModeChange('journey_fixed')
+  }
+}
+
+const suiteImport = reactive({
+  visible: false,
+  suiteId: null,
+  layout: 'single_phase',
+  suites: [],
+  loadingSuites: false,
+  previewCases: [],
+  skipped: [],
+  journey: null,
+  applying: false
+})
+
+const openSuiteImport = async () => {
+  suiteImport.visible = true
+  suiteImport.suiteId = null
+  suiteImport.journey = null
+  suiteImport.previewCases = []
+  suiteImport.skipped = []
+  suiteImport.layout = 'single_phase'
+  suiteImport.loadingSuites = true
+  try {
+    const res = await httpSuiteApi.getList({
+      project_id: proStore.projectInfo.id,
+      page: 1,
+      size: 500
+    })
+    suiteImport.suites = res.data?.data || res.data || []
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载套件列表失败')
+  } finally {
+    suiteImport.loadingSuites = false
+  }
+}
+
+const previewSuiteImport = async () => {
+  if (!suiteImport.suiteId) {
+    suiteImport.journey = null
+    suiteImport.previewCases = []
+    return
+  }
+  try {
+    const res = await perfSceneApi.journeyFromSuite({
+      suite_id: suiteImport.suiteId,
+      project_id: proStore.projectInfo.id,
+      layout: suiteImport.layout
+    })
+    const data = res.data || res
+    suiteImport.journey = data.journey
+    suiteImport.previewCases = data.cases || []
+    suiteImport.skipped = data.skipped || []
+  } catch (e) {
+    console.error(e)
+    suiteImport.journey = null
+    suiteImport.previewCases = []
+    ElMessage.error(e?.response?.data?.detail || '预览失败')
+  }
+}
+
+const applySuiteImport = async () => {
+  if (!suiteImport.journey) return
+  const hasSteps = (form.config.journey?.phases || []).some(p => (p.steps || []).some(s => s.case_id))
+  if (hasSteps) {
+    try {
+      await ElMessageBox.confirm('将覆盖当前业务链路配置，是否继续？', '确认导入', { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  suiteImport.applying = true
+  try {
+    applyJourneyConfig(suiteImport.journey)
+    const caseIds = (suiteImport.previewCases || []).map(c => c.case_id).filter(Boolean)
+    const suiteMeta = (suiteImport.suites || []).find(s => s.id === suiteImport.suiteId)
+    form.config.journey_source = {
+      suite_id: suiteImport.suiteId,
+      suite_name: suiteMeta?.name || '',
+      layout: suiteImport.layout,
+      case_ids: caseIds,
+      imported_at: new Date().toISOString()
+    }
+    journeySourceStatus.value = {
+      suite_id: suiteImport.suiteId,
+      suite_exists: true,
+      changed: false,
+      stored_case_ids: caseIds,
+      current_case_ids: caseIds,
+      message: null
+    }
+    await loadCases()
+    suiteImport.visible = false
+    ElMessage.success('已导入套件链路，请检查后保存场景')
+  } finally {
+    suiteImport.applying = false
+  }
+}
+
+const reopenSuiteImportFromSource = async () => {
+  const src = journeySourceStatus.value
+  await openSuiteImport()
+  if (src?.suite_id) {
+    suiteImport.suiteId = src.suite_id
+    if (src.layout) suiteImport.layout = src.layout
+    await previewSuiteImport()
+  }
+}
+
+const templateSave = reactive({
+  visible: false,
+  name: '',
+  description: '',
+  saving: false
+})
+
+const openSaveTemplate = () => {
+  if (!validateJourney()) return
+  templateSave.name = form.name ? `${form.name}-链路模板` : '业务链路模板'
+  templateSave.description = ''
+  templateSave.visible = true
+}
+
+const submitSaveTemplate = async () => {
+  if (!templateSave.name.trim()) {
+    ElMessage.warning('请填写模板名称')
+    return
+  }
+  templateSave.saving = true
+  try {
+    await perfJourneyTemplateApi.create({
+      project_id: proStore.projectInfo.id,
+      name: templateSave.name.trim(),
+      description: templateSave.description || null,
+      journey: form.config.journey,
+      source_scene_id: isEdit.value ? Number(sceneId.value) : null
+    })
+    ElMessage.success('链路模板已保存')
+    templateSave.visible = false
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(e?.response?.data?.detail || '保存模板失败')
+  } finally {
+    templateSave.saving = false
+  }
+}
+
+const templateApply = reactive({
+  visible: false,
+  list: [],
+  loading: false,
+  selected: null,
+  applying: false
+})
+
+const openApplyTemplate = async () => {
+  templateApply.visible = true
+  templateApply.selected = null
+  templateApply.loading = true
+  try {
+    const res = await perfJourneyTemplateApi.getList({ project_id: proStore.projectInfo.id })
+    templateApply.list = res.data?.data || []
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载模板失败')
+  } finally {
+    templateApply.loading = false
+  }
+}
+
+const applyTemplate = async () => {
+  if (!templateApply.selected) return
+  const hasSteps = (form.config.journey?.phases || []).some(p => (p.steps || []).some(s => s.case_id))
+  if (hasSteps) {
+    try {
+      await ElMessageBox.confirm('将覆盖当前业务链路配置，是否继续？', '确认应用模板', { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  templateApply.applying = true
+  try {
+    const res = await perfJourneyTemplateApi.getDetail(templateApply.selected.id)
+    const data = res.data || res
+    applyJourneyConfig(data.journey || {})
+    await loadCases()
+    templateApply.visible = false
+    ElMessage.success('已应用链路模板，请检查后保存场景')
+  } catch (e) {
+    console.error(e)
+    ElMessage.error(e?.response?.data?.detail || '应用模板失败')
+  } finally {
+    templateApply.applying = false
+  }
+}
+
+const debugJourneyStep = (row, phaseIdx) => {
+  if (!row?.case_id) {
+    ElMessage.warning('请先选择用例')
+    return
+  }
+  const caseInfo = allCases.value.find(c => c.id === row.case_id)
+  const apiId = caseInfo?.api_id || caseInfo?.api?.id
+  if (!apiId) {
+    ElMessage.warning('该用例未关联接口，无法打开调试')
+    return
+  }
+  const query = {
+    debug_api_id: String(apiId),
+    from_perf_scene: isEdit.value ? String(sceneId.value) : 'new',
+    phase_index: String(phaseIdx)
+  }
+  router.push({ path: '/api-module', query })
+}
+
+const consumeAppendCaseQuery = async () => {
+  const appendId = route.query.append_case_id
+  if (!appendId || appendCaseHandled.value) return
+  const caseId = Number(appendId)
+  if (!caseId) return
+  appendCaseHandled.value = true
+  const phaseIdx = Math.max(0, Number(route.query.phase_index) || 0)
+  if (!form.config.journey) form.config.journey = defaultJourney()
+  if (!['journey_fixed', 'journey_loop'].includes(form.config.mode)) {
+    form.config.mode = 'journey_fixed'
+    onModeChange('journey_fixed')
+  }
+  await loadCases()
+  const phases = form.config.journey.phases || []
+  while (phases.length <= phaseIdx) addJourneyPhase()
+  const phase = form.config.journey.phases[phaseIdx]
+  phase.steps.push({
+    case_id: caseId,
+    ...normalizeDelayFields(),
+    use_stream: false,
+    order: phase.steps.length
+  })
+  ElMessage.success(`已将用例 #${caseId} 追加到阶段「${phase.name || phaseIdx + 1}」`)
+  const nextQuery = { ...route.query }
+  delete nextQuery.append_case_id
+  delete nextQuery.phase_index
+  router.replace({ path: route.path, query: nextQuery, params: route.params })
 }
 
 const buildJourneySceneItems = () => {
@@ -781,7 +1665,11 @@ const buildJourneySceneItems = () => {
     for (const step of phase.steps || []) {
       if (step.case_id && !seen.has(step.case_id)) {
         seen.add(step.case_id)
-        items.push({ case_id: step.case_id, weight: 1, delay_ms: step.delay_ms || 0 })
+        items.push({
+          case_id: step.case_id,
+          weight: 1,
+          ...serializeDelayFields(step),
+        })
       }
     }
   }
@@ -796,6 +1684,7 @@ const validateJourney = () => {
   }
   let hasStep = false
   let hasSync = false
+  const missingIds = []
   for (const phase of phases) {
     if (phase.sync_before) hasSync = true
     for (const step of phase.steps || []) {
@@ -803,6 +1692,9 @@ const validateJourney = () => {
       else {
         ElMessage.warning('请为每个链路步骤选择用例')
         return false
+      }
+      if (isMissingJourneyCase(step.case_id)) {
+        missingIds.push(step.case_id)
       }
       if (step.use_stream && !form.config.stream_profile?.parser_id) {
         ElMessage.warning('流式步骤需先配置流式解析器（开启流式问答或流式配置）')
@@ -812,6 +1704,11 @@ const validateJourney = () => {
   }
   if (!hasStep) {
     ElMessage.warning('请至少添加一个链路步骤')
+    return false
+  }
+  if (missingIds.length) {
+    const uniq = [...new Set(missingIds)]
+    ElMessage.error(`链路中存在不可用用例：${uniq.map(id => `#${id}`).join('、')}，请重新选择后再保存`)
     return false
   }
   if (hasSync && (form.config.ramp_up_seconds || 0) > 0) {
@@ -825,15 +1722,34 @@ const onStreamToggle = (enabled) => {
   if (enabled) {
     if (!form.config.stream_profile) form.config.stream_profile = defaultStreamProfile()
     successPhaseKey.value = form.config.stream_profile.success_rule?.type || 'phase_exists'
+    selectedSseConfigId.value = form.config.stream_profile.sse_parser_config_id || null
+  } else {
+    // 立刻清掉，避免界面已关但仍带着 stream_profile 去跑 SSE 解析
+    form.config.stream_profile = undefined
+    selectedSseConfigId.value = null
+    successPhaseKey.value = 'phase_exists'
+    // 链路步骤上的「流式」勾选一并清掉，避免保存后无 profile 却仍标记 use_stream
+    for (const phase of form.config.journey?.phases || []) {
+      for (const step of phase.steps || []) {
+        if (step && step.use_stream) step.use_stream = false
+      }
+    }
+    ElMessage.info('已关闭流式问答：将按普通 HTTP 统计（QPS/RT），不再采集 SSE 阶段。请保存场景后再执行。')
   }
 }
 
 const onParserChange = async (parserId) => {
+  if (form.config.stream_profile) {
+    form.config.stream_profile.sse_parser_config_id = undefined
+  }
+  selectedSseConfigId.value = null
   try {
     const res = await perfStreamParserApi.getPreset(parserId)
     const preset = res.data || res
     if (preset.default_options?.rules) {
       form.config.stream_profile.parser_options = { rules: preset.default_options.rules }
+    } else {
+      form.config.stream_profile.parser_options = { rules: {} }
     }
     if (preset.default_success_rule) {
       form.config.stream_profile.success_rule = { ...preset.default_success_rule }
@@ -864,6 +1780,55 @@ const removeStep = (index) => {
   form.config.steps.splice(index, 1)
 }
 
+const loadSseConfigs = async () => {
+  try {
+    const res = await streamParserConfigApi.getList({ enabled_only: true })
+    const list = res.data?.data || res.data || []
+    sseConfigOptions.value = Array.isArray(list) ? list : []
+  } catch (err) {
+    console.warn('[PerfSceneEdit] stream-parser-configs unavailable', err)
+    sseConfigOptions.value = []
+  }
+}
+
+const onSseConfigSelect = async (configId) => {
+  if (!configId) {
+    if (form.config.stream_profile) {
+      form.config.stream_profile.sse_parser_config_id = undefined
+    }
+    return
+  }
+  try {
+    const res = await streamParserConfigApi.getDetail(configId)
+    const detail = res.data?.data || res.data || {}
+    if (!detail.parser_id) {
+      ElMessage.error('解析配置无效')
+      selectedSseConfigId.value = form.config.stream_profile?.sse_parser_config_id || null
+      return
+    }
+    if (!form.config.stream_profile) {
+      form.config.stream_profile = defaultStreamProfile()
+    }
+    const timeout = form.config.stream_profile.timeout_seconds || 600
+    form.config.stream_profile.transport = 'sse'
+    form.config.stream_profile.parser_id = detail.parser_id
+    form.config.stream_profile.parser_options = detail.parser_options?.rules
+      ? { rules: JSON.parse(JSON.stringify(detail.parser_options.rules)) }
+      : (detail.parser_options ? JSON.parse(JSON.stringify(detail.parser_options)) : { rules: {} })
+    form.config.stream_profile.success_rule = detail.success_rule?.type
+      ? { ...detail.success_rule }
+      : { type: 'phase_exists', phase: 'first_char' }
+    form.config.stream_profile.timeout_seconds = timeout
+    form.config.stream_profile.sse_parser_config_id = detail.id
+    selectedSseConfigId.value = detail.id
+    successPhaseKey.value = form.config.stream_profile.success_rule?.type || 'phase_exists'
+    ElMessage.success(`已应用「${detail.name}」`)
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '加载解析配置失败')
+    selectedSseConfigId.value = form.config.stream_profile?.sse_parser_config_id || null
+  }
+}
+
 const loadParsers = async () => {
   try {
     const res = await perfStreamParserApi.getList()
@@ -880,10 +1845,12 @@ const loadParsers = async () => {
 const loadCases = async () => {
   if (!proStore.projectInfo?.id) return
   casesLoading.value = true
+  casesLoadedOk.value = false
   try {
     const res = await httpCaseApi.getList({ project_id: proStore.projectInfo.id, page: 1, size: 5000 })
     if (res.status === 200) {
       allCases.value = res.data?.data || []
+      casesLoadedOk.value = true
     } else {
       allCases.value = []
       ElMessage.error(res.data?.detail || '加载用例列表失败')
@@ -905,8 +1872,12 @@ const loadScene = async () => {
     form.name = data.name || ''
     form.description = data.description || ''
     form.catalog_id = data.catalog_id ?? null
+    journeySourceStatus.value = data.journey_source_status || null
     if (data.config) {
       Object.assign(form.config, data.config)
+      if (!('warmup_seconds' in data.config) || data.config.warmup_seconds === undefined) {
+        form.config.warmup_seconds = null
+      }
       if (!form.config.mode) form.config.mode = 'fixed'
       if (form.config.mode === 'sse_burst') form.config.mode = 'stream_burst'
       const hasStream = form.config.stream_profile?.parser_id
@@ -914,9 +1885,14 @@ const loadScene = async () => {
       if (form.config.mode === 'stream_burst' || hasStream) {
         if (!form.config.stream_profile) form.config.stream_profile = defaultStreamProfile()
         else form.config.stream_profile = { ...defaultStreamProfile(), ...form.config.stream_profile }
+        if (!Array.isArray(form.config.stream_profile.report_highlight_phases)) {
+          form.config.stream_profile.report_highlight_phases = []
+        }
         successPhaseKey.value = form.config.stream_profile.success_rule?.type || 'phase_exists'
+        selectedSseConfigId.value = form.config.stream_profile.sse_parser_config_id || null
       } else {
         form.config.stream_profile = undefined
+        selectedSseConfigId.value = null
       }
       if (!form.config.steps) form.config.steps = [{ users: 10, duration: 30 }]
       if (!form.config.journey) form.config.journey = defaultJourney()
@@ -931,7 +1907,7 @@ const loadScene = async () => {
             max_parallel: p.max_parallel || 6,
             steps: (p.steps || []).map((s, j) => ({
               case_id: s.case_id,
-              delay_ms: s.delay_ms || 0,
+              ...normalizeDelayFields(s),
               use_stream: !!s.use_stream,
               order: s.order ?? j
             }))
@@ -939,12 +1915,13 @@ const loadScene = async () => {
         }
       }
       enableErrorThreshold.value = !!(data.config.error_rate_threshold && data.config.error_rate_threshold > 0)
+      Object.assign(perfTargets, normalizePerfTargetsLocal(data.config.perf_targets))
     }
     if (data.scene_items) {
       form.scene_items = data.scene_items.map(item => ({
         case_id: item.case_id,
         weight: item.weight || 1,
-        delay_ms: item.delay_ms || 0
+        ...normalizeDelayFields(item),
       }))
       selectedCaseIds.value = form.scene_items.map(item => item.case_id)
     }
@@ -975,17 +1952,21 @@ const handleSave = async () => {
       config: { ...form.config },
       scene_items: isJourneyMode.value
         ? buildJourneySceneItems()
-        : selectedCases.value.map(c => ({
-          case_id: c.case_id,
-          weight: c.weight,
-          delay_ms: c.delay_ms
-        }))
+        : selectedCaseIds.value.map(id => {
+          const item = ensureSceneItem(id)
+          return {
+            case_id: id,
+            weight: item.weight || 1,
+            ...serializeDelayFields(item),
+          }
+        })
     }
 
     // 错误率阈值：未启用时设为 0
     if (!enableErrorThreshold.value) {
       payload.config.error_rate_threshold = 0
     }
+    payload.config.perf_targets = normalizePerfTargetsLocal(perfTargets)
     // 清理不需要的字段
     if (payload.config.mode === 'fixed') {
       delete payload.config.loop_count
@@ -1017,6 +1998,13 @@ const handleSave = async () => {
 
     if (isEdit.value) {
       await perfSceneApi.update(sceneId.value, payload)
+      try {
+        await flushCSVChanges(sceneId.value)
+      } catch (csvErr) {
+        console.error(csvErr)
+        ElMessage.warning('场景已保存，但 CSV 写入失败，请重新选择文件后再保存')
+        return
+      }
       ElMessage.success('更新成功')
     } else {
       await perfSceneApi.create(payload)
@@ -1025,7 +2013,11 @@ const handleSave = async () => {
     router.push('/perf-scenes')
   } catch (err) {
     console.error(err)
-    ElMessage.error(isEdit.value ? '更新失败' : '创建失败')
+    const detail = err?.response?.data?.detail
+    const msg = typeof detail === 'string'
+      ? detail
+      : (Array.isArray(detail) ? detail.map(d => d.msg || d.message || JSON.stringify(d)).join('；') : null)
+    ElMessage.error(msg || (isEdit.value ? '更新失败' : '创建失败'))
   } finally {
     saving.value = false
   }
@@ -1035,10 +2027,10 @@ const handleCancel = () => {
   router.push('/perf-scenes')
 }
 
-// CSV 上传
+// 选择 CSV：仅 dry_run 解析预览，不落库
 const handleCSVUpload = async (file) => {
   if (!isEdit.value) {
-    ElMessage.warning('请先保存场景后再上传 CSV')
+    ElMessage.warning('请先保存场景后再选择 CSV')
     return
   }
   const raw = file.raw
@@ -1049,45 +2041,44 @@ const handleCSVUpload = async (file) => {
   try {
     const formData = new FormData()
     formData.append('file', raw)
-    const res = await perfSceneApiCSV.uploadCSV(sceneId.value, formData)
+    const res = await perfSceneApiCSV.uploadCSV(sceneId.value, formData, { dryRun: true })
     const data = res.data || res
-    csvInfo.hasCSV = true
-    csvInfo.fileName = data.file_name
-    csvInfo.rowCount = data.row_count
-    csvInfo.columns = data.columns || []
-    csvInfo.preview = data.preview || []
-    ElMessage.success('CSV 上传成功')
+    const keepStrategy = csvInfo.hasCSV ? csvInfo.strategy : (data.strategy || 'round_robin')
+    applyCSVPreviewData({ ...data, strategy: keepStrategy })
+    csvPendingFile.value = raw
+    csvPendingDelete.value = false
+    ElMessage.success('已解析预览，请点击下方「保存」写入场景')
   } catch (err) {
     console.error(err)
-    ElMessage.error('CSV 上传失败')
+    const detail = err?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' ? detail : 'CSV 解析失败')
   }
 }
 
-// CSV 删除
+// 删除：仅本地标记，保存时落库
 const handleCSVDelete = async () => {
   try {
-    await perfSceneApiCSV.deleteCSV(sceneId.value)
-    csvInfo.hasCSV = false
-    csvInfo.fileName = ''
-    csvInfo.rowCount = 0
-    csvInfo.columns = []
-    csvInfo.preview = []
-    csvInfo.strategy = 'round_robin'
-    ElMessage.success('CSV 已删除')
-  } catch (err) {
-    console.error(err)
-    ElMessage.error('删除失败')
+    await ElMessageBox.confirm(
+      csvServerHasData.value
+        ? '确定删除 CSV？需再点下方「保存」才会从场景中移除。'
+        : '确定清除已选择的 CSV？',
+      '删除 CSV',
+      { type: 'warning' }
+    )
+  } catch {
+    return
   }
+  const hadServer = csvServerHasData.value
+  resetCSVLocal()
+  if (hadServer) csvPendingDelete.value = true
+  ElMessage.info(hadServer ? '已标记删除，请点击下方「保存」生效' : '已清除所选 CSV')
 }
 
-// CSV 策略变更
-const handleCSVStrategyChange = async (val) => {
-  try {
-    await perfSceneApiCSV.updateCSVConfig(sceneId.value, { strategy: val, enabled: true })
-    ElMessage.success('策略已更新')
-  } catch (err) {
-    console.error(err)
-    ElMessage.error('策略更新失败')
+// 策略变更：仅本地，保存时写入
+const handleCSVStrategyChange = () => {
+  if (!csvInfo.hasCSV) return
+  if (csvDirty.value) {
+    ElMessage.info('策略已修改，请点击下方「保存」生效')
   }
 }
 
@@ -1098,12 +2089,11 @@ const loadCSVPreview = async () => {
     const res = await perfSceneApiCSV.previewCSV(sceneId.value)
     const data = res.data || res
     if (data.row_count > 0) {
-      csvInfo.hasCSV = true
-      csvInfo.fileName = data.file_name
-      csvInfo.rowCount = data.row_count
-      csvInfo.columns = data.columns || []
-      csvInfo.preview = data.preview || []
-      csvInfo.strategy = data.strategy || 'round_robin'
+      applyCSVPreviewData(data, { fromServer: true })
+    } else {
+      resetCSVLocal()
+      csvServerHasData.value = false
+      csvServerStrategy.value = 'round_robin'
     }
   } catch (err) {
     // 忽略错误，可能没有 CSV
@@ -1111,7 +2101,8 @@ const loadCSVPreview = async () => {
 }
 
 onMounted(async () => {
-  await Promise.all([loadParsers(), loadCases(), loadScene(), loadCSVPreview()])
+  await Promise.all([loadParsers(), loadSseConfigs(), loadCases(), loadScene(), loadCSVPreview()])
+  await consumeAppendCaseQuery()
 })
 
 watch(
@@ -1142,6 +2133,10 @@ watch(
   font-size: 12px;
   color: #909399;
 }
+.rules-panel {
+  margin: 8px 0 16px;
+  max-width: 960px;
+}
 .tip-icon {
   margin-left: 6px;
   color: #909399;
@@ -1151,6 +2146,17 @@ watch(
 }
 .tip-icon:hover {
   color: #409eff;
+}
+.delay-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.delay-sep {
+  color: #909399;
+  font-size: 12px;
 }
 .case-selector {
   display: flex;
@@ -1205,6 +2211,17 @@ watch(
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+.missing-case-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #f56c6c;
+}
+:deep(.is-missing-case .el-select__wrapper) {
+  box-shadow: 0 0 0 1px #f56c6c inset;
+}
+:deep(.el-table .journey-step-missing) {
+  --el-table-tr-bg-color: #fef0f0;
 }
 .mode-guide-collapse {
   margin: 0 0 16px 120px;

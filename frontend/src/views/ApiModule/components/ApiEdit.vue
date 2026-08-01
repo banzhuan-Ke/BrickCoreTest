@@ -31,12 +31,12 @@
       <el-row :gutter="20">
         <el-col :span="8">
           <el-form-item label="协议类型">
-            <el-radio-group v-model="form.protocol">
-              <el-radio-button value="http">HTTP</el-radio-button>
-              <el-radio-button value="websocket">WebSocket</el-radio-button>
-              <el-radio-button value="graphql">GraphQL</el-radio-button>
-              <el-radio-button value="grpc">gRPC</el-radio-button>
-            </el-radio-group>
+            <el-select v-model="form.protocol" placeholder="请选择协议" style="width: 100%;">
+              <el-option label="HTTP" value="http" />
+              <el-option label="WebSocket" value="websocket" />
+              <el-option label="GraphQL" value="graphql" />
+              <el-option label="gRPC" value="grpc" />
+            </el-select>
           </el-form-item>
         </el-col>
         <el-col :span="6" v-if="form.protocol === 'http'">

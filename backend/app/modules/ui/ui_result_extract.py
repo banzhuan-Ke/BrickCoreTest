@@ -145,15 +145,7 @@ def build_case_execution_hints(result_data: Any) -> dict[str, Any]:
             or step.get("keyword")
             or ""
         ).strip()
-        step_failures.append(
-            {
-                "step_index": step_index,
-                "status": status,
-                "keyword": step.get("keyword") or step.get("desc") or "",
-                "desc": step.get("desc") or "",
-                "message": message,
-            }
-        )
+        step_failures.append(_failure_entry_from_result_step(step, step_index, status, message))
 
     status = str(rd.get("status") or summary.get("status") or "").lower()
     has_failure = status in CASE_FAIL_STATUSES or bool(step_failures)
@@ -180,20 +172,28 @@ def build_case_execution_hints(result_data: Any) -> dict[str, Any]:
             error_hint = summary.get("error_hint") or ""
             if isinstance(nested_summary, dict):
                 error_hint = error_hint or str(nested_summary.get("error_hint") or "")
-            step_failures.append(
-                {
-                    "step_index": idx,
-                    "status": status or "fail",
-                    "keyword": (step or {}).get("keyword") or (step or {}).get("desc") or "",
-                    "desc": (step or {}).get("desc") or "",
-                    "message": (
-                        (step or {}).get("message")
-                        or (step or {}).get("error")
-                        or error_hint
-                        or ""
-                    ),
-                }
+            message = (
+                ((step or {}).get("message") if isinstance(step, dict) else None)
+                or ((step or {}).get("error") if isinstance(step, dict) else None)
+                or error_hint
+                or ""
             )
+            if isinstance(step, dict):
+                step_failures.append(
+                    _failure_entry_from_result_step(step, idx, status or "fail", str(message))
+                )
+            else:
+                step_failures.append(
+                    {
+                        "step_index": idx,
+                        "status": status or "fail",
+                        "keyword": "",
+                        "desc": "",
+                        "method": "",
+                        "step_id": "",
+                        "message": str(message),
+                    }
+                )
 
     return {
         "has_failure": has_failure,
@@ -203,3 +203,142 @@ def build_case_execution_hints(result_data: Any) -> dict[str, Any]:
         "log_tail": summary.get("log_tail") or "",
         "step_failures": step_failures,
     }
+
+
+def _norm_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _extract_step_id(step: dict[str, Any]) -> str:
+    for key in ("step_id", "id"):
+        val = step.get(key)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    nested = step.get("_step_def")
+    if isinstance(nested, dict):
+        val = nested.get("id")
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    return ""
+
+
+def _extract_step_method(step: dict[str, Any]) -> str:
+    method = _norm_text(step.get("method"))
+    if method:
+        return method
+    nested = step.get("_step_def")
+    if isinstance(nested, dict):
+        return _norm_text(nested.get("method"))
+    return ""
+
+
+def _failure_entry_from_result_step(
+    step: dict[str, Any],
+    step_index: int,
+    status: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "step_index": step_index,
+        "status": status,
+        "keyword": _norm_text(step.get("keyword") or step.get("desc")),
+        "desc": _norm_text(step.get("desc")),
+        "method": _extract_step_method(step),
+        "step_id": _extract_step_id(step),
+        "message": message,
+    }
+
+
+def _fingerprint_match(fail: dict[str, Any], case_step: dict[str, Any]) -> bool:
+    """失败记录与当前用例步骤是否像同一步（用于无 step_id 的历史报告）。"""
+    fail_method = _norm_text(fail.get("method"))
+    step_method = _norm_text(case_step.get("method"))
+    if fail_method and step_method and fail_method != step_method:
+        return False
+
+    fail_kw = _norm_text(fail.get("keyword"))
+    step_kw = _norm_text(case_step.get("keyword"))
+    step_desc = _norm_text(case_step.get("desc"))
+    fail_desc = _norm_text(fail.get("desc"))
+
+    if fail_desc and step_desc and fail_desc == step_desc:
+        if not fail_kw or fail_kw == step_kw or fail_kw == step_desc:
+            return True
+    if fail_kw and (fail_kw == step_kw or fail_kw == step_desc):
+        return True
+    return False
+
+
+def _looks_same_at_index(fail: dict[str, Any], case_step: dict[str, Any]) -> bool:
+    """按下标回退时：当前该下标步骤仍像失败步，才允许挂载。"""
+    fail_method = _norm_text(fail.get("method"))
+    step_method = _norm_text(case_step.get("method"))
+    if fail_method and step_method and fail_method != step_method:
+        return False
+    fail_kw = _norm_text(fail.get("keyword"))
+    step_kw = _norm_text(case_step.get("keyword"))
+    step_desc = _norm_text(case_step.get("desc"))
+    fail_desc = _norm_text(fail.get("desc"))
+    if fail_kw and (fail_kw == step_kw or fail_kw == step_desc):
+        return True
+    if fail_desc and fail_desc == step_desc:
+        return True
+    # 仅有 method、无文案时不要盲信下标
+    return False
+
+
+def remap_step_failures_to_case_steps(
+    step_failures: list[dict[str, Any]] | None,
+    case_steps: list[Any] | None,
+) -> list[dict[str, Any]]:
+    """
+    将失败提示对齐到当前用例步骤下标。
+    优先 step_id，其次 method/keyword/desc 唯一匹配；仅当仍像同一步时才保留旧下标，避免增删步骤后标错。
+    """
+    failures = [dict(item) for item in (step_failures or []) if isinstance(item, dict)]
+    steps = [s for s in (case_steps or []) if isinstance(s, dict)]
+    if not failures:
+        return []
+    if not steps:
+        return failures
+
+    id_to_idx = {
+        str(s.get("id")).strip(): i
+        for i, s in enumerate(steps)
+        if s.get("id") is not None and str(s.get("id")).strip()
+    }
+    remapped: list[dict[str, Any]] = []
+    for fail in failures:
+        out = dict(fail)
+        sid = _norm_text(out.get("step_id"))
+        if sid and sid in id_to_idx:
+            out["step_index"] = id_to_idx[sid]
+            out.pop("unresolved", None)
+            remapped.append(out)
+            continue
+
+        candidates = [i for i, s in enumerate(steps) if _fingerprint_match(out, s)]
+        if len(candidates) == 1:
+            idx = candidates[0]
+            out["step_index"] = idx
+            if steps[idx].get("id") is not None and str(steps[idx].get("id")).strip():
+                out["step_id"] = str(steps[idx].get("id")).strip()
+            out.pop("unresolved", None)
+            remapped.append(out)
+            continue
+
+        raw_idx = out.get("step_index")
+        try:
+            idx = int(raw_idx) if raw_idx is not None else -1
+        except (TypeError, ValueError):
+            idx = -1
+        if 0 <= idx < len(steps) and _looks_same_at_index(out, steps[idx]):
+            out.pop("unresolved", None)
+            remapped.append(out)
+            continue
+
+        # 无法可靠对齐：保留摘要信息但不挂到错误步骤上
+        out["step_index"] = None
+        out["unresolved"] = True
+        remapped.append(out)
+    return remapped

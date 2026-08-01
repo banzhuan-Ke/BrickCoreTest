@@ -11,9 +11,10 @@ from app.core.platform.edition import is_community_edition
 
 
 def _resolve_repo_root() -> Path:
-    """定位 docs-site 所在目录（本地 monorepo 根或 Docker /app）。"""
+    """定位 docs-site 所在目录（本地 monorepo 根、backend 旁路副本或 Docker /app）。"""
     here = Path(__file__).resolve()
-    for root in (here.parents[2], here.parents[3]):
+    # shared→core→app→backend→repo；Docker 下 backend 内容在 /app，docs-site 与 app 同级
+    for root in here.parents[:6]:
         if (root / "docs-site" / "index.md").is_file():
             return root
     return here.parents[3]
@@ -41,6 +42,7 @@ BUILTIN_DOC_ENTRIES: dict[str, tuple[str, str]] = {
     "data-factory": ("docs-site/guide/data-factory.md", "数据工厂"),
     "api-auth": ("docs-site/guide/api-auth.md", "Token 授权"),
     "perf-testing": ("docs-site/guide/perf-testing.md", "性能测试"),
+    "perf-worker-protocol": ("docs-site/guide/perf-worker-protocol.md", "压测 Worker 协议"),
     "ai-testing": ("docs-site/guide/ai-testing.md", "AI 测试"),
     "knowledge-base": ("docs-site/guide/knowledge-base.md", "迭代资料库"),
     "browser-lab": ("docs-site/guide/browser-lab.md", "智能浏览器"),
@@ -53,7 +55,7 @@ BUILTIN_DOC_ENTRIES: dict[str, tuple[str, str]] = {
 }
 
 # 公开部署：隐藏无源码支撑的条目；打包页改标题
-_CE_HIDDEN_DOC_IDS = frozenset({"runner-linux-server", "knowledge-base"})
+_CE_HIDDEN_DOC_IDS = frozenset({"runner-linux-server"})
 _CE_DOC_TITLE_OVERRIDES: dict[str, str] = {
     "runner-packaging": "执行器获取与发布",
 }
@@ -85,6 +87,7 @@ BUILTIN_DOC_TREE: list[dict[str, Any]] = [
             {"id": "data-factory", "title": "数据工厂", "type": "builtin"},
             {"id": "api-auth", "title": "Token 授权", "type": "builtin"},
             {"id": "perf-testing", "title": "性能测试", "type": "builtin"},
+            {"id": "perf-worker-protocol", "title": "压测 Worker 协议", "type": "builtin"},
             {"id": "ai-testing", "title": "AI 测试", "type": "builtin"},
             {"id": "knowledge-base", "title": "迭代资料库", "type": "builtin"},
             {"id": "browser-lab", "title": "智能浏览器", "type": "builtin"},

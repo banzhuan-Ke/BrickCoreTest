@@ -39,6 +39,9 @@ DEFAULT_AI_PROJECT_SETTINGS: dict[str, Any] = {
     "failure_analysis_enabled": True,
     "failure_analysis_default_on_report": True,
     "failure_analysis_allow_run_override": True,
+    "perf_ai_analysis_enabled": False,
+    "perf_ai_analysis_default_on_run": False,
+    "perf_ai_analysis_allow_run_override": True,
     "requirement_case": copy.deepcopy(DEFAULT_REQUIREMENT_CASE_SETTINGS),
 }
 
@@ -276,3 +279,22 @@ def assert_failure_analysis_for_execution_env(settings: dict, env: dict | None) 
         if not settings.get("failure_analysis_enabled", True):
             raise ValueError("项目已关闭失败 AI 分析")
         raise ValueError("本次执行未启用失败 AI 分析")
+
+
+async def resolve_perf_ai_for_run(
+    project_id: int,
+    user_override: Optional[bool] = None,
+) -> bool:
+    """计算本次压测结束后是否自动触发 AI 分析。"""
+    settings = await load_ai_project_settings(project_id)
+    if not settings.get("perf_ai_analysis_enabled", False):
+        return False
+    if user_override is not None and settings.get("perf_ai_analysis_allow_run_override", True):
+        return bool(user_override)
+    return bool(settings.get("perf_ai_analysis_default_on_run", False))
+
+
+async def assert_perf_ai_analysis_enabled(project_id: int) -> None:
+    settings = await load_ai_project_settings(project_id)
+    if not settings.get("perf_ai_analysis_enabled", False):
+        raise ValueError("项目已关闭压测 AI 分析")

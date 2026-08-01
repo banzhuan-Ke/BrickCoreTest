@@ -3,12 +3,16 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from app.modules.stream_phase.parsers import qa_sse_v1, rule_based, http_timing_only
+from app.modules.stream_phase.parsers import qa_sse_v1, rule_based, http_timing_only, custom_sse
 from app.modules.stream_phase.parsers.rule_based import DEFAULT_RULES
+from app.modules.stream_phase.parsers.custom_sse import DEFAULT_RULES as CUSTOM_SSE_DEFAULT_RULES
 
 ParseFn = Callable[..., dict[str, Any]]
 
 _REGISTRY: dict[str, dict[str, Any]] = {}
+
+# 使用 StreamRuleBuilder / rules 配置的解析器
+RULE_BUILDER_PARSER_IDS = frozenset({rule_based.PARSER_ID, custom_sse.PARSER_ID})
 
 
 def _register(parser_id: str, module) -> None:
@@ -26,10 +30,13 @@ def _register(parser_id: str, module) -> None:
 
 _register(qa_sse_v1.PARSER_ID, qa_sse_v1)
 _register(rule_based.PARSER_ID, rule_based)
+_register(custom_sse.PARSER_ID, custom_sse)
 _register(http_timing_only.PARSER_ID, http_timing_only)
 
 _REGISTRY[rule_based.PARSER_ID]["default_options"] = {"rules": DEFAULT_RULES}
 _REGISTRY[rule_based.PARSER_ID]["default_success_rule"] = {"type": "phase_exists", "phase": "first_char"}
+_REGISTRY[custom_sse.PARSER_ID]["default_options"] = {"rules": CUSTOM_SSE_DEFAULT_RULES}
+_REGISTRY[custom_sse.PARSER_ID]["default_success_rule"] = {"type": "phase_exists", "phase": "first_char"}
 _REGISTRY[http_timing_only.PARSER_ID]["default_success_rule"] = {"type": "phase_exists", "phase": "total_time"}
 
 
@@ -44,7 +51,7 @@ def list_parsers() -> list[dict[str, Any]]:
             "extra_schema": meta.get("extra_schema") or [],
             "default_options": meta.get("default_options") or {},
             "default_success_rule": meta.get("default_success_rule") or {},
-            "supports_rule_builder": pid == rule_based.PARSER_ID,
+            "supports_rule_builder": pid in RULE_BUILDER_PARSER_IDS,
         })
     return out
 
@@ -82,7 +89,7 @@ def parse_stream_lines(
 
     opts = dict(meta.get("default_options") or {})
     opts.update(options or {})
-    if success_rule and parser_id == rule_based.PARSER_ID:
+    if success_rule and parser_id in RULE_BUILDER_PARSER_IDS:
         opts["success_rule"] = success_rule
 
     result = meta["parse"](
@@ -93,7 +100,7 @@ def parse_stream_lines(
         line_elapsed=line_elapsed,
     )
 
-    if success_rule and parser_id != rule_based.PARSER_ID:
+    if success_rule and parser_id not in RULE_BUILDER_PARSER_IDS:
         from app.modules.stream_phase.engine import evaluate_success_rule
         result["success"] = evaluate_success_rule(success_rule, result)
 

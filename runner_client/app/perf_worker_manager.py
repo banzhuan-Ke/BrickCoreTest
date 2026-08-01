@@ -40,6 +40,8 @@ class PerfWorkerManager:
         name: str,
         project_id: int,
         max_concurrent: int,
+        runner_token: str | None = None,
+        access_token: str | None = None,
     ) -> None:
         if self.is_running:
             raise RuntimeError("压测 Worker 已在运行")
@@ -55,6 +57,15 @@ class PerfWorkerManager:
             raise ValueError("最大并发必须大于 0")
         if project_id < 1:
             raise ValueError("请选择有效的压测项目")
+
+        rt = (runner_token or "").strip()
+        at = (access_token or "").strip()
+        # 仅「性能测试」角色不上报 UI 设备，不会拿到 X-Runner-Token；须用登录 JWT 注册
+        if not rt and not at:
+            raise RuntimeError(
+                "压测 Worker 注册缺少认证：请先登录；"
+                "若仅开压测角色，将使用登录 JWT；也可改选「UI + 压测」上线。"
+            )
 
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         if self.log_path.exists():
@@ -82,10 +93,18 @@ class PerfWorkerManager:
             "--agent-kind",
             "runner_client",
         ]
+        if rt:
+            cmd.extend(["--runner-token", rt])
+        if at:
+            cmd.extend(["--access-token", at])
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
+        if rt:
+            env["RUNNER_TOKEN"] = rt
+        if at:
+            env["PERF_ACCESS_TOKEN"] = at
         print(f"[client] perf worker python: {py_exe}", flush=True)
         self._proc = subprocess.Popen(
             cmd,

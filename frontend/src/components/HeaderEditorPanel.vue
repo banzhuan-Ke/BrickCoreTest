@@ -203,14 +203,15 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
-  gap: 8px;
+  margin-bottom: 10px;
+  gap: 10px;
 }
 
 .section-title {
   font-weight: 600;
   font-size: 13px;
   flex-shrink: 0;
+  line-height: 1.4;
 }
 
 .section-actions {
@@ -218,7 +219,7 @@ watch(
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 4px;
+  gap: 6px;
 }
 
 .template-select {
@@ -226,7 +227,8 @@ watch(
 }
 
 .panel-hint {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
+  padding: 0 2px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.6;
@@ -234,5 +236,14 @@ watch(
 
 .header-table {
   width: 100%;
+
+  :deep(.el-table__cell) {
+    padding: 8px 10px;
+  }
+
+  :deep(.el-table .cell) {
+    padding: 0 4px;
+    line-height: 1.4;
+  }
 }
 </style>

@@ -97,17 +97,43 @@
           </el-form-item>
         </el-col>
       </el-row>
-      
-      <el-form-item label="所属目录">
-        <el-tree-select
-          v-model="form.catalog_id"
-          :data="catalogTree"
-          :props="{ label: 'name', value: 'id', children: 'children' }"
-          placeholder="选择目录"
-          style="width: 100%;"
-          clearable
-        />
-      </el-form-item>
+
+      <el-row :gutter="20">
+        <el-col :span="16">
+          <el-form-item label="业务标签">
+            <el-select
+              v-model="form.tags"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              collapse-tags
+              collapse-tags-tooltip
+              placeholder="输入或选择标签，如 压测 / 业务链路"
+              style="width: 100%;"
+            >
+              <el-option
+                v-for="t in tagSuggestions"
+                :key="t.value"
+                :label="t.label"
+                :value="t.value"
+              />
+            </el-select>
+          </el-form-item>
+        </el-col>
+        <el-col :span="8">
+          <el-form-item label="所属目录">
+            <el-tree-select
+              v-model="form.catalog_id"
+              :data="catalogTree"
+              :props="{ label: 'name', value: 'id', children: 'children' }"
+              placeholder="选择目录"
+              style="width: 100%;"
+              clearable
+            />
+          </el-form-item>
+        </el-col>
+      </el-row>
 
       <ApiCaseUsedVarsPanel :case-form="form" />
 
@@ -168,33 +194,36 @@
               <el-button type="info" link size="small" @click="copyApiHeaders" :disabled="!form.api_id" icon="CopyDocument">从接口复制</el-button>
             </template>
           </HeaderEditorPanel>
-          <el-empty v-if="form.request_headers.length === 0" :image-size="40" description="暂无覆盖的 Header；未覆盖时使用接口定义的 Header"/>
+          <el-empty v-if="form.request_headers.length === 0" :image-size="40" description="暂无覆盖的 Header；为空时使用接口定义的全部 Header。一旦添加/复制了覆盖项，将整表以本列表为准（在此删除的字段不会再从接口补回）"/>
         </el-collapse-item>
 
         <el-collapse-item name="params">
           <template #title>
-            <span class="collapse-title">
-              请求参数覆盖
-              <el-tooltip placement="top" :show-after="300">
-                <template #content>
-                  <div class="help-popover">
-                    <p><b>请求参数覆盖</b>用于在用例级别修改请求参数</p>
-                    <p class="mt-5"><b>典型场景：</b></p>
-                    <p>• 修改 pageSize 为超大值测试分页边界</p>
-                    <p>• 传入非法字符测试参数校验</p>
-                    <p class="mt-5"><b>规则：</b>用例参数会覆盖接口定义的同名参数</p>
-                  </div>
-                </template>
-                <el-icon class="section-help-icon"><QuestionFilled /></el-icon>
-              </el-tooltip>
-              <el-tag v-if="form.request_params.length > 0" type="warning" size="small" class="count-tag">{{ form.request_params.length }}</el-tag>
-            </span>
+            <div class="collapse-header-row">
+              <span class="collapse-title">
+                请求参数覆盖
+                <el-tooltip placement="top" :show-after="300">
+                  <template #content>
+                    <div class="help-popover">
+                      <p><b>请求参数覆盖</b>用于在用例级别修改请求参数</p>
+                      <p class="mt-5"><b>典型场景：</b></p>
+                      <p>• 修改 pageSize 为超大值测试分页边界</p>
+                      <p>• 传入非法字符测试参数校验</p>
+                      <p class="mt-5"><b>规则：</b>用例参数会完全覆盖接口定义的参数（非按 key 合并）</p>
+                      <p>• 与 Header 不同：这里是 Query/Path 参数，不是 JSON 请求体</p>
+                    </div>
+                  </template>
+                  <el-icon class="section-help-icon" @click.stop><QuestionFilled /></el-icon>
+                </el-tooltip>
+                <el-tag v-if="form.request_params.length > 0" type="warning" size="small" class="count-tag">{{ form.request_params.length }}</el-tag>
+              </span>
+              <div class="section-actions" @click.stop>
+                <el-button type="info" link size="small" @click="copyApiParams" :disabled="!form.api_id" icon="CopyDocument">从接口复制</el-button>
+                <el-button type="info" link size="small" @click="tagPickerVisible = true" icon="Collection">数据工厂标签</el-button>
+                <el-button type="primary" link size="small" @click="addParam" icon="Plus">添加</el-button>
+              </div>
+            </div>
           </template>
-          <div class="section-actions">
-            <el-button type="info" link size="small" @click="copyApiParams" :disabled="!form.api_id" icon="CopyDocument">从接口复制</el-button>
-            <el-button type="info" link size="small" @click="tagPickerVisible = true" icon="Collection">数据工厂标签</el-button>
-            <el-button type="primary" link size="small" @click="addParam" icon="Plus">添加</el-button>
-          </div>
           <el-table :data="form.request_params" size="small" border class="config-table">
             <el-table-column label="参数名" width="180">
               <template #default="{ $index }">
@@ -208,7 +237,7 @@
             </el-table-column>
             <el-table-column label="类型" width="100">
               <template #default="{ $index }">
-                <el-select v-model="form.request_params[$index].type" size="small">
+                <el-select v-model="form.request_params[$index].type" size="small" style="width: 100%">
                   <el-option label="string" value="string"/>
                   <el-option label="number" value="number"/>
                   <el-option label="boolean" value="boolean"/>
@@ -226,31 +255,33 @@
 
         <el-collapse-item name="body" v-if="showBodySection">
           <template #title>
-            <span class="collapse-title">
-              请求体覆盖
-              <el-tooltip placement="top" :show-after="300">
-                <template #content>
-                  <div class="help-popover">
-                    <p><b>请求体覆盖</b>用于在用例级别修改请求体（仅 POST/PUT/PATCH）</p>
-                    <p class="mt-5"><b>支持类型：</b></p>
-                    <p>• JSON / XML / Raw：继续使用文本方式编辑</p>
-                    <p>• form-data：支持文本字段与文件字段</p>
-                    <p>• 文件字段：本地选择后自动上传到 MinIO，仅保存 bucket/key 引用</p>
-                    <p class="mt-5"><b>规则：</b>用例 Body 覆盖优先于接口默认 Body</p>
-                    <p>• 为空时自动使用接口定义的 Body</p>
-                  </div>
-                </template>
-                <el-icon class="section-help-icon"><QuestionFilled /></el-icon>
-              </el-tooltip>
-              <el-tag v-if="form.request_body || form.request_body_fields.length" type="warning" size="small" class="count-tag">已覆盖</el-tag>
-            </span>
+            <div class="collapse-header-row">
+              <span class="collapse-title">
+                请求体覆盖
+                <el-tooltip placement="top" :show-after="300">
+                  <template #content>
+                    <div class="help-popover">
+                      <p><b>请求体覆盖</b>用于在用例级别修改请求体（仅 POST/PUT/PATCH）</p>
+                      <p class="mt-5"><b>支持类型：</b></p>
+                      <p>• JSON / XML / Raw：继续使用文本方式编辑</p>
+                      <p>• form-data：支持文本字段与文件字段</p>
+                      <p>• 文件字段：本地选择后自动上传到 MinIO，仅保存 bucket/key 引用</p>
+                      <p class="mt-5"><b>规则：</b>用例 Body 覆盖优先于接口默认 Body</p>
+                      <p>• 为空时自动使用接口定义的 Body</p>
+                    </div>
+                  </template>
+                  <el-icon class="section-help-icon" @click.stop><QuestionFilled /></el-icon>
+                </el-tooltip>
+                <el-tag v-if="form.request_body || form.request_body_fields.length" type="warning" size="small" class="count-tag">已覆盖</el-tag>
+              </span>
+              <div class="section-actions" @click.stop>
+                <el-button type="info" link size="small" @click="copyApiBody" :disabled="!form.api_id" icon="CopyDocument">从接口复制</el-button>
+                <el-button type="danger" link size="small" @click="clearBody" icon="Delete">清空</el-button>
+              </div>
+            </div>
           </template>
-          <div class="section-actions">
-            <el-button type="info" link size="small" @click="copyApiBody" :disabled="!form.api_id" icon="CopyDocument">从接口复制</el-button>
-            <el-button type="danger" link size="small" @click="clearBody" icon="Delete">清空</el-button>
-          </div>
           <div class="body-mode-row">
-            <el-radio-group v-model="form.request_body_type" size="small">
+            <el-radio-group v-model="form.request_body_type" size="small" class="body-mode-group">
               <el-radio-button label="json">JSON</el-radio-button>
               <el-radio-button label="form-data">Form Data</el-radio-button>
               <el-radio-button label="x-www-form-urlencoded">x-www-form-urlencoded</el-radio-button>
@@ -267,6 +298,11 @@
             input-class="body-textarea"
             :json-mode="form.request_body_type === 'json'"
             show-compact
+          />
+          <el-empty
+            v-if="form.request_body_type !== 'form-data' && !(form.request_body || '').trim()"
+            :image-size="40"
+            description="暂无覆盖的请求体；为空时执行会使用接口定义的 Body。需要改内容时点「从接口复制」后再编辑"
           />
 
           <div v-else class="form-data-editor">
@@ -783,7 +819,7 @@ async function onDfTagInsert(refStr) {
 }
 const apiLoading = ref(false)
 const filteredApis = ref([])
-const activeCollapse = ref(['headers', 'params'])
+const activeCollapse = ref(['headers', 'params', 'body'])
 const refEnvId = ref(null)
 provide('varInsertEnvId', refEnvId)
 
@@ -953,6 +989,7 @@ const form = reactive({
   priority: 'P2',
   timeout: 30,
   retry_count: 0,
+  tags: [],
   request_headers: [],
   request_params: [],
   request_body: '',
@@ -967,6 +1004,12 @@ const form = reactive({
   data_set: [],
   db_assertions: [],
 })
+
+const tagSuggestions = [
+  { label: '压测', value: 'perf' },
+  { label: '业务链路', value: 'journey' },
+  { label: '登录', value: 'login' },
+]
 
 const rules = {
   name: [{ required: true, message: '请输入用例名称', trigger: 'blur' }],
@@ -983,6 +1026,7 @@ const resetForm = () => {
   form.priority = 'P2'
   form.timeout = 30
   form.retry_count = 0
+  form.tags = []
   form.request_headers = []
   form.request_params = []
   form.request_body = ''
@@ -997,7 +1041,7 @@ const resetForm = () => {
   form.post_script = null
   form.data_set = []
   form.db_assertions = []
-  activeCollapse.value = ['headers', 'params']
+  activeCollapse.value = ['headers', 'params', 'body']
 }
 
 const datasources = ref([])
@@ -1057,6 +1101,7 @@ watch(() => props.data, (val) => {
     form.priority = val.priority
     form.timeout = val.timeout
     form.retry_count = val.retry_count
+    form.tags = Array.isArray(val.tags) ? [...val.tags] : []
     form.request_headers = normalizeToKvArray(val.request_headers)
     form.request_params = normalizeParams(val.request_params)
     form.request_body = bodyToString(val.request_body)
@@ -1121,6 +1166,7 @@ const fetchCaseDetail = async (caseId) => {
       form.priority = val.priority || 'P2'
       form.timeout = val.timeout ?? 30
       form.retry_count = val.retry_count ?? 0
+      form.tags = Array.isArray(val.tags) ? [...val.tags] : []
       form.request_headers = normalizeToKvArray(val.request_headers)
       form.request_params = normalizeParams(val.request_params)
       form.request_body = bodyToString(val.request_body)
@@ -1529,7 +1575,8 @@ const handleSave = async () => {
     emit('success')
     emit('update:modelValue', false)
   } catch (error) {
-    ElMessage.error('保存失败')
+    const detail = error?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' ? detail : '保存失败')
   } finally {
     saving.value = false
   }
@@ -1617,8 +1664,8 @@ const handleSave = async () => {
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  margin-bottom: 12px;
-  padding: 8px 12px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
   background: var(--el-fill-color-light);
   border-radius: 6px;
 }
@@ -1642,15 +1689,23 @@ const handleSave = async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin: 20px 0 10px;
-  padding-bottom: 8px;
+  margin: 20px 0 12px;
+  padding: 0 2px 10px;
   border-bottom: 1px solid var(--el-border-color-lighter);
   font-weight: 500;
+  gap: 8px;
 }
 
 .config-table {
+  width: 100%;
+
   :deep(.el-table__cell) {
-    padding: 4px 0;
+    padding: 8px 10px;
+  }
+
+  :deep(.el-table .cell) {
+    padding: 0 4px;
+    line-height: 1.4;
   }
 }
 .operator-fixed {
@@ -1680,64 +1735,120 @@ const handleSave = async () => {
 
 // 折叠面板样式
 .request-config-collapse {
-  margin-bottom: 10px;
-  
+  margin-bottom: 12px;
+  width: 100%;
+  overflow: hidden;
+
+  :deep(.el-collapse-item) {
+    overflow: hidden;
+  }
+
   :deep(.el-collapse-item__header) {
     font-weight: 500;
     font-size: 14px;
+    height: auto;
+    min-height: 44px;
+    line-height: 1.4;
+    padding: 8px 12px;
+    align-items: center;
+    box-sizing: border-box;
   }
-  
+
+  :deep(.el-collapse-item__arrow) {
+    margin: 0 0 0 8px;
+    flex-shrink: 0;
+  }
+
+  :deep(.el-collapse-item__wrap) {
+    border-bottom: none;
+    overflow: hidden;
+  }
+
+  :deep(.el-collapse-item__content) {
+    padding: 12px 14px 16px;
+    box-sizing: border-box;
+    overflow-x: auto;
+  }
+
+  .collapse-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    min-width: 0;
+    padding-right: 4px;
+    box-sizing: border-box;
+  }
+
   .collapse-title {
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+    flex: 1;
   }
-  
+
   .count-tag {
     margin-left: 4px;
+    flex-shrink: 0;
   }
-  
+
   .section-actions {
     display: flex;
     justify-content: flex-end;
-    gap: 8px;
-    margin-bottom: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    flex-shrink: 0;
+    margin-bottom: 0;
   }
-  
+
   .body-mode-row {
-    margin: 8px 0 12px;
+    margin: 0 0 12px;
+    width: 100%;
+    overflow-x: auto;
   }
-  
+
+  .body-mode-group {
+    display: inline-flex;
+    flex-wrap: wrap;
+  }
+
   .form-data-editor {
     margin-top: 8px;
+    width: 100%;
+    overflow-x: auto;
   }
-  
+
   .compact-actions {
     margin-bottom: 10px;
   }
-  
+
   .body-textarea {
     font-family: 'Consolas', 'Monaco', monospace;
     font-size: 13px;
+    width: 100%;
+    box-sizing: border-box;
   }
-  
+
   .file-field-cell {
     display: flex;
     align-items: center;
     gap: 10px;
   }
-  
+
   .file-meta-name {
     font-size: 12px;
     color: var(--el-text-color-secondary);
   }
-  
+
   .hidden-file-input {
     display: none;
   }
-  
+
   .body-hint {
-    margin-top: 8px;
+    margin-top: 10px;
   }
 }
 
@@ -1745,25 +1856,36 @@ const handleSave = async () => {
   display: flex;
   flex-direction: column;
   max-height: 85vh;
-  
+  width: min(1100px, 96vw) !important;
+  overflow: hidden;
+
   .el-dialog__body {
     flex: 1;
+    overflow-x: hidden;
     overflow-y: auto;
-    padding-top: 10px;
+    padding: 14px 20px 20px;
     max-height: calc(85vh - 110px);
+    box-sizing: border-box;
+  }
+
+  .el-dialog__footer {
+    padding: 12px 20px 16px;
   }
 }
 
 .dataset-section {
   margin-top: 16px;
-  padding: 12px 16px;
+  padding: 14px 16px 16px;
   border: 1px solid var(--el-border-color);
-  border-radius: 4px;
+  border-radius: 6px;
+  background: var(--el-fill-color-blank);
 
   .section-header {
     display: flex;
     align-items: center;
-    margin-bottom: 10px;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 12px;
 
     .section-title-text {
       font-size: 14px;
@@ -1772,6 +1894,7 @@ const handleSave = async () => {
       display: flex;
       align-items: center;
       gap: 4px;
+      line-height: 1.4;
     }
   }
 
@@ -1779,11 +1902,19 @@ const handleSave = async () => {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px;
-    margin-bottom: 8px;
-    padding: 8px;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding: 10px 12px;
     background: var(--el-fill-color-lighter);
-    border-radius: 4px;
+    border-radius: 6px;
+  }
+
+  :deep(.el-table__cell) {
+    padding: 8px 10px;
+  }
+
+  :deep(.el-table .cell) {
+    padding: 0 4px;
   }
 }
 </style>

@@ -23,17 +23,23 @@ export const httpApi = {
     async update(api_id, data) {
         return await http.put(`/api-module/definition/${api_id}`, data)
     },
-    // 删除接口
-    async delete(api_id) {
-        return await http.delete(`/api-module/definition/${api_id}`)
+    // 删除接口（cascade=true 连带删除关联用例；skipErrorHandler 便于前端处理 409）
+    async delete(api_id, { cascade = false } = {}) {
+        return await http.delete(`/api-module/definition/${api_id}`, {
+            params: { cascade: cascade ? true : false },
+            skipErrorHandler: true,
+        })
     },
     // 复制接口到其他项目
     async copyToProject(api_id, data) {
         return await http.post(`/api-module/definition/${api_id}/copy`, data)
     },
     // 批量删除接口
-    async batchDelete(api_ids) {
-        return await http.post('/api-module/definition/batch-delete', api_ids)
+    async batchDelete(api_ids, { cascade = false } = {}) {
+        return await http.post('/api-module/definition/batch-delete', api_ids, {
+            params: { cascade: cascade ? true : false },
+            skipErrorHandler: true,
+        })
     },
     // 检测接口关联用例同步状态
     async syncCheck(api_id) {
@@ -43,12 +49,13 @@ export const httpApi = {
     async getLinkedCases(api_id, params = {}) {
         return await http.get(`/api-module/definition/${api_id}/linked-cases`, { params })
     },
-    // 调试接口（后端默认 30s；axios 需略大于后端 timeout，避免先被 10s 全局超时截断）
+    // 调试接口（后端默认 30s；经执行机时后端再等 timeout+15s，axios 需覆盖完整等待）
     async debug(data) {
         const payload = { timeout: 30, ...data }
         const sec = Number(payload.timeout) || 30
+        const viaWorker = payload.worker_id != null && payload.worker_id !== ''
         return await http.post('/api-module/debug', payload, {
-            timeout: sec * 1000 + 5000
+            timeout: sec * 1000 + (viaWorker ? 20000 : 5000)
         })
     },
     async debugWs(data) {
@@ -87,6 +94,18 @@ export const httpApi = {
         formData.append('project_id', project_id)
         if (catalog_id) formData.append('catalog_id', catalog_id)
         return await http.post('/api-module/import/postman', formData)
+    },
+    // 预览 JMeter JMX
+    async importJmeterPreview(project_id, file, catalog_id) {
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('project_id', project_id)
+        if (catalog_id) formData.append('catalog_id', catalog_id)
+        return await http.post('/api-module/import/jmeter/preview', formData)
+    },
+    // 确认导入 JMeter
+    async importJmeterCommit(data) {
+        return await http.post('/api-module/import/jmeter/commit', data)
     }
 }
 

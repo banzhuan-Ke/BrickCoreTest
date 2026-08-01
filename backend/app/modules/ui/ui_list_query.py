@@ -95,11 +95,12 @@ async def load_json_array_length(
 
 
 async def load_catalog_names(catalog_ids: list[int]) -> dict[int, str]:
+    """仅返回未删除目录的名称；已软删目录视为不可用（不展示旧名，避免误导）。"""
     if not catalog_ids:
         return {}
     from app.models.sys import TestCatalog
 
-    rows = await TestCatalog.filter(id__in=catalog_ids).values("id", "name")
+    rows = await TestCatalog.filter(id__in=catalog_ids, is_del=False).values("id", "name")
     return {row["id"]: row["name"] for row in rows}
 
 

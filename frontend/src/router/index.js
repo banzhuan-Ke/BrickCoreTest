@@ -723,23 +723,6 @@ const routes = [
                 }
             },
             {
-                path: '/ai-qa-eval',
-                name: 'aiQaEval',
-                component: () => import('../modules/qa-eval/views/AiQaEval.vue'),
-                meta: {
-                    title: '问答准确性评测',
-                    icon: 'ChatLineRound',
-                    permission: 'ai_test:view'
-                },
-                beforeEnter: async (_to, _from, next) => {
-                    const { useCommunityEdition } = await import('@/composables/useCommunityEdition.js')
-                    const { loadCommunityEdition, isCommunityEdition } = useCommunityEdition()
-                    await loadCommunityEdition()
-                    if (isCommunityEdition.value) next('/ai-testing')
-                    else next()
-                }
-            },
-            {
                 path: '/browser-lab',
                 component: () => import('../views/AI/browserLab/BrowserLabLayout.vue'),
                 meta: { title: '智能浏览器', icon: 'Monitor', permission: 'ai_test:view' },
@@ -786,13 +769,6 @@ const routes = [
                 component: () => import('../modules/knowledge/views/KnowledgeLayout.vue'),
                 meta: { title: '迭代资料库', icon: 'DocumentChecked', permission: 'knowledge:view' },
                 redirect: '/ai-knowledge/folders',
-                beforeEnter: async (_to, _from, next) => {
-                    const { useCommunityEdition } = await import('@/composables/useCommunityEdition.js')
-                    const { loadCommunityEdition, isCommunityEdition } = useCommunityEdition()
-                    await loadCommunityEdition()
-                    if (isCommunityEdition.value) next('/ai-testing')
-                    else next()
-                },
                 children: [
                     {
                         path: 'search',
@@ -908,6 +884,26 @@ const routes = [
                 meta: {
                     title: '性能测试记录',
                     icon: 'List',
+                    permission: 'perf_record:view'
+                }
+            },
+            {
+                path: '/perf-comparisons',
+                name: 'perfComparisonList',
+                component: () => import('../views/Perf/PerfComparisonList.vue'),
+                meta: {
+                    title: '压测增强报告',
+                    icon: 'TrendCharts',
+                    permission: 'perf_record:view'
+                }
+            },
+            {
+                path: '/perf-comparisons/:reportId',
+                name: 'perfComparisonReport',
+                component: () => import('../views/Perf/PerfComparisonReport.vue'),
+                meta: {
+                    title: '增强报告详情',
+                    icon: 'TrendCharts',
                     permission: 'perf_record:view'
                 }
             },

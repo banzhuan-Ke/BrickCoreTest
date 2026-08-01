@@ -12,6 +12,15 @@ import requests
 
 from runner_client import __version__ as CLIENT_VERSION
 from runner_client.app.engine_capabilities import detect_runner_capabilities
+from runner_client.app.bcpack import read_installed_package_version
+from runner_client.app.engine_manager import app_root_dir
+
+
+def _report_client_version() -> str:
+    try:
+        return read_installed_package_version(app_root_dir(), fallback=CLIENT_VERSION)
+    except Exception:
+        return CLIENT_VERSION
 
 DEFAULT_TIMEOUT = 30
 
@@ -105,7 +114,7 @@ class BrickCoreApi:
             "username": self.username or device_name,
             "version": platform.version(),
             "hostname": socket.gethostname(),
-            "client_version": CLIENT_VERSION,
+            "client_version": _report_client_version(),
             **caps,
         }
         resp = requests.post(
@@ -144,7 +153,7 @@ class BrickCoreApi:
             self._url("/runner/heartbeat"),
             json={
                 "device_id": device_id,
-                "client_version": CLIENT_VERSION,
+                "client_version": _report_client_version(),
                 "runner_engine_types": caps.get("runner_engine_types"),
                 "app_platform": caps.get("app_platform", ""),
                 "app_udid": caps.get("app_udid", ""),
@@ -258,10 +267,18 @@ class BrickCoreApi:
         from runner_client.app.perf_worker_manager import perf_worker_token
 
         hostname = host or socket.gethostname()
+        headers: dict[str, str] = {}
+        if self.runner_token:
+            headers["X-Runner-Token"] = self.runner_token
+        if self.user_token:
+            headers["Authorization"] = f"Bearer {self.user_token}"
+        if not headers:
+            raise ApiError("压测下线缺少认证：请先登录或保持 Runner 会话")
         resp = requests.post(
             self._url("/perf/workers/unregister"),
             params={"project_id": project_id},
             json={"token": perf_worker_token(), "host": hostname},
+            headers=headers,
             timeout=DEFAULT_TIMEOUT,
         )
         if resp.status_code != 200:

@@ -64,13 +64,14 @@ _EXECUTE_CAPABILITY_PHRASES = (
     "我是说",
     "会执行",
 )
-_QA_EVAL_HINTS = ("问答评测", "问答准确性", "qa eval", "qa_eval", "评测集", "问答准确")
 _PERF_HINTS = ("压测", "性能", "perf", "Perf", "TPS", "QPS", "并发")
 _RECORD_HINTS = ("执行记录", "跑测", "运行记录", "最近执行", "测试记录", "报告")
 _API_PLAN_HINTS = ("测试计划", "接口计划", "编排计划", "api计划")
 _MOCK_HINTS = ("mock", "Mock", "模拟接口")
 _CRON_HINTS = ("定时", "cron", "调度", "Cron")
 _DATA_FACTORY_HINTS = ("数据工厂", "数据源", "SQL模板", "SQL 模板", "sql模板", "造数", "数据准备")
+_LOOP_ANALYZE_HINTS = ("失败闭环", "继续失败闭环", "分析闭环", "失败分析闭环")
+_LOOP_RUN_HINTS = ("执行闭环", "接口执行闭环", "跑测闭环")
 
 SYSTEM_PROMPT = """你是 BrickCore 测试平台助手。根据用户问题与附带的平台查询 JSON 数据，用简体中文回答。
 可综合多个工具的结果作答。不要编造数据中不存在的内容；若某类数据未出现在 JSON 中，请明确说明「平台未返回该数据」，不要从失败记录等无关数据猜测。
@@ -82,11 +83,15 @@ SYSTEM_PROMPT = """你是 BrickCore 测试平台助手。根据用户问题与�
 你具备发起测试执行的能力：单条接口/Web UI/App 用例，接口/UI/App 套件与计划，压测场景，问答评测等；流程为先 preview 再展示 pending_confirm 确认卡片，用户点击「确认执行」后才真正跑测。
 若用户询问「能否/可不可以执行用例」，应明确回答「可以」，说明需指定用例/套件/计划 ID 与环境 ID（Web/App UI 还需 Runner device_id），并给出示例说法；可结合 list_environments、list_online_devices 等数据辅助说明。
 禁止因本次 JSON 未含 preview 结果、或无执行按钮字段，就声称「无法执行任何用例」——未调用 preview 仅表示尚未发起执行，不等于平台无执行能力。
-危险操作（执行测试、批量生成、失败分析）需用户在前端点击确认后才会真正执行；若返回了 pending_confirm，请简要说明影响并提示用户确认。"""
+危险操作（执行测试、批量生成、失败分析）需用户在前端点击确认后才会真正执行；若返回了 pending_confirm，请简要说明影响并提示用户确认。
+若用户要求「失败闭环 / 继续失败闭环」：先基于 list_recent_failures 与执行记录给出失败清单，并写明可用于分析的 target_type/target_id（接口失败记录 ID，不是计划运行 ID）；用户指定目标后再 preview 分析，本回合通常先出清单。
+若用户要求「执行闭环」：先列计划与环境；消息或页面上下文已有计划 ID 与环境 ID 时再 preview 执行并等确认；执行回传后若有失败，提醒用户可再说「继续失败闭环」。"""
 
 TOOL_SELECT_PROMPT = """你是 BrickCore 平台工具规划器。根据用户问题，从可用工具中选择 1～4 个最相关的工具及参数。
 规则：
 - 项目总结/概览优先 get_project_overview，可叠加 list_recent_failures、list_requirements
+- **失败闭环 / 继续失败闭环 / 分析闭环**：优先 list_recent_failures + list_api_run_records；若问题或历史已给出失败记录 target_type+target_id，再加 preview_analyze_failure
+- **执行闭环 / 接口执行闭环**：优先 list_api_plans + list_environments；若已明确计划 ID 与环境 ID，再加 preview_run_api_plan
 - **接口管理概览/汇总**（未要求逐条列举）：优先 list_api_categories + list_api_suites，**不要**同时拉全量 list_api_definitions + list_api_test_cases
 - **接口管理/接口用例详情**：用 list_api_categories + list_api_definitions + list_api_test_cases（可选 list_api_suites），**禁止**用 list_requirements
 - 查单个接口详情用 get_api_definition
@@ -101,7 +106,6 @@ TOOL_SELECT_PROMPT = """你是 BrickCore 平台工具规划器。根据用户问
 - 执行单条 Web UI 用例用 preview_run_ui_case（case_id 或 case_name + env_id + device_id）
 - 执行单条 App 用例用 preview_run_app_case（需在线 App Runner + adb 设备）
 - 执行 App 套件用 preview_run_app_suite；App 测试计划用 preview_run_app_plan（均需 env_id、device_id）
-- 问答准确性评测：支持「跑评测集 2 第 1-10 题」自动解析 range；需 target_id
 - Web UI 执行前可先 list_online_devices 获取在线 Runner 的 device_id；App 执行需 App Runner 及 app_udid
 - 执行 UI 测试计划用 preview_run_ui_task；Web UI 套件用 preview_run_ui_suite（均需 env_id、device_id）
 - 启动压测场景用 preview_run_perf_scene（需 env_id；施压必须有在线 Worker，不再支持本机直跑）
@@ -205,6 +209,95 @@ def _plan_tools_for_execution_capability(
     return planned[:4]
 
 
+def _is_failure_loop(message: str) -> bool:
+    text = (message or "").strip()
+    if not any(h in text for h in _LOOP_ANALYZE_HINTS):
+        return False
+    # 执行闭环快捷文案可能附带「失败后可再说失败闭环」说明，优先归为执行闭环
+    if _is_run_loop(text) and not any(
+        h in text for h in ("失败分析闭环", "继续失败闭环", "分析闭环")
+    ):
+        return False
+    return True
+
+
+def _is_run_loop(message: str) -> bool:
+    text = (message or "").strip()
+    return any(h in text for h in _LOOP_RUN_HINTS)
+
+
+def _plan_tools_for_failure_loop(
+    message: str, project_id: int
+) -> list[tuple[str, dict[str, Any]]]:
+    """失败闭环：先查失败与最近执行；若已给出目标则 preview 分析。"""
+    pid = project_id
+    planned: list[tuple[str, dict[str, Any]]] = []
+    seen: set[str] = set()
+
+    def add(name: str, args: dict[str, Any]) -> None:
+        if name not in seen:
+            seen.add(name)
+            planned.append((name, args))
+
+    text = message or ""
+    add("list_recent_failures", {"project_id": pid, "limit": 10})
+    add("list_api_run_records", {"project_id": pid, "page": 1, "size": 10})
+
+    # 避免「检测到失败 2 条」误抽 target_id；优先显式 target/记录/用例
+    target_id = _extract_id(text, ("target_id", "target", "记录", "用例", "case"))
+    target_type = "api"
+    if any(h in text for h in _UI_HINTS) and "接口" not in text:
+        target_type = "ui"
+    elif any(h in text for h in _APP_HINTS) and "接口" not in text:
+        target_type = "app"
+    m = re.search(r"target_type\s*[=:：]\s*(api|ui|app)", text, re.I)
+    if m:
+        target_type = m.group(1).lower()
+    if target_id:
+        add(
+            "preview_analyze_failure",
+            {
+                "project_id": pid,
+                "target_type": target_type,
+                "target_id": target_id,
+            },
+        )
+    return planned[:4]
+
+
+def _plan_tools_for_run_loop(
+    message: str,
+    project_id: int,
+    page_context: dict[str, Any] | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    """执行闭环：列计划与环境；消息或页面上下文已有计划+环境 ID 时 preview 执行。"""
+    pid = project_id
+    planned: list[tuple[str, dict[str, Any]]] = []
+    seen: set[str] = set()
+
+    def add(name: str, args: dict[str, Any]) -> None:
+        if name not in seen:
+            seen.add(name)
+            planned.append((name, args))
+
+    text = message or ""
+    add("list_api_plans", {"project_id": pid, "page": 1, "size": 15})
+    add("list_environments", {"project_id": pid})
+    plan_id = _extract_id(text, ("测试计划", "计划", "plan"))
+    env_id = _extract_id(text, ("环境", "env"))
+    ctx = page_context or {}
+    if not plan_id:
+        plan_id = _safe_int(ctx.get("plan_id"))
+    if not env_id:
+        env_id = _safe_int(ctx.get("env_id")) or _safe_int(ctx.get("environment_id"))
+    if plan_id and env_id:
+        add(
+            "preview_run_api_plan",
+            {"project_id": pid, "plan_id": plan_id, "env_id": env_id},
+        )
+    return planned[:4]
+
+
 def _execution_capability_answer_hint() -> str:
     return (
         "\n\n【执行能力说明】用户是在询问能否由助手代为发起测试执行，而非查询某条执行记录。"
@@ -297,20 +390,6 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
-def _parse_qa_eval_range(text: str) -> tuple[int, int] | None:
-    """从自然语言解析评测序号区间，如「第 1-10 题」「序号 1 到 10」。"""
-    patterns = (
-        r"第?\s*(\d+)\s*[～~\-—至到]\s*(\d+)\s*[题号]?",
-        r"序号\s*(\d+)\s*[～~\-—至到]\s*(\d+)",
-        r"(\d+)\s*到\s*(\d+)\s*题",
-    )
-    for pat in patterns:
-        m = re.search(pat, text or "")
-        if m:
-            start, end = int(m.group(1)), int(m.group(2))
-            if start <= end:
-                return start, end
-    return None
 
 
 def _format_page_context_hint(page_context: dict[str, Any] | None) -> str:
@@ -433,8 +512,7 @@ def _plan_tools_from_page_context(
         add("list_sql_templates", {"project_id": pid, "page": 1, "size": 20})
     elif page_hint == "mock_apis":
         add("list_mock_apis", {"project_id": pid, "page": 1, "size": 20})
-    elif page_hint == "qa_eval":
-        add("list_qa_eval_sets", {"project_id": pid})
+
     elif page_hint == "online_devices":
         add("list_online_devices", {"project_id": pid})
     elif page_hint == "api_plans":
@@ -661,18 +739,8 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
         is_ui_exec = any(h in text for h in _UI_HINTS) and not is_api_ctx and not is_app_ctx
         is_app_exec = is_app_ctx and not is_api_ctx
         is_perf_exec = any(h in text for h in _PERF_HINTS)
-        is_qa_eval = any(h in text for h in _QA_EVAL_HINTS)
-        if is_qa_eval and set_id and any(h in text for h in _EXECUTE_HINTS):
-            target_id = _extract_id(text, ("被测", "target", "api"))
-            qa_args: dict[str, Any] = {"project_id": pid, "set_id": set_id}
-            if target_id:
-                qa_args["target_id"] = target_id
-            qa_range = _parse_qa_eval_range(text)
-            if qa_range:
-                qa_args["case_scope"] = "range"
-                qa_args["range_start"], qa_args["range_end"] = qa_range
-            add("preview_run_qa_eval", qa_args)
-        elif case_id and is_app_exec and not is_qa_eval and "套件" not in text:
+
+        if case_id and is_app_exec and "套件" not in text:
             add(
                 "preview_run_app_case",
                 {
@@ -682,7 +750,7 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
                     "device_id": "",
                 },
             )
-        elif case_id and is_ui_exec and not is_qa_eval and "套件" not in text:
+        elif case_id and is_ui_exec and "套件" not in text:
             add(
                 "preview_run_ui_case",
                 {
@@ -692,7 +760,7 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
                     "device_id": "",
                 },
             )
-        elif case_id and is_api_ctx and not is_qa_eval and "套件" not in text:
+        elif case_id and is_api_ctx and "套件" not in text:
             add(
                 "preview_run_api_case",
                 {"project_id": pid, "case_id": case_id, "env_id": env_id or 0},
@@ -747,9 +815,6 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
             add("list_api_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
         else:
             add("list_api_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
-
-    if any(h in text for h in _QA_EVAL_HINTS) and not any(h in text for h in _EXECUTE_HINTS):
-        add("list_qa_eval_sets", {"project_id": pid})
 
     if any(k in text for k in ("runner", "device_id", "执行设备", "执行器", "在线设备")) and (
         any(h in text for h in _UI_HINTS) or is_app_ctx
@@ -1053,9 +1118,18 @@ async def run_assistant_chat(
     )
 
     is_exec_capability = _is_execution_capability_inquiry(user_message)
+    is_run_loop = _is_run_loop(user_message)
+    is_failure_loop = _is_failure_loop(user_message)
 
     if is_exec_capability:
         planned = _plan_tools_for_execution_capability(user_message, resolved_pid)
+    elif is_run_loop:
+        # 须先于失败闭环：执行闭环快捷文案常附带「失败后可继续分析」说明
+        planned = _plan_tools_for_run_loop(
+            user_message, resolved_pid, page_context=page_context
+        )
+    elif is_failure_loop:
+        planned = _plan_tools_for_failure_loop(user_message, resolved_pid)
     else:
         context_planned = _plan_tools_from_page_context(page_context, resolved_pid) if resolved_pid else []
 

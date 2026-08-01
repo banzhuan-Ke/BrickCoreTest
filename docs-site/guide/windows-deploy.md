@@ -20,6 +20,8 @@
 
 中间件账号密码下文按方式分别说明。演示约定常用同一密码：`BrickCore123456`。
 
+**库表与种子顺序（重要）**：只手工建空库 `fastapi` 即可，**不要**手工建表，也**不要**跑 `aerich init` / `aerich init-db`（仓库已带 migrations）。正确顺序是：配好 `backend/.env` → 在 `backend` 目录执行 **`aerich upgrade`** 生表 → 再导入根目录 **`database.sql`**（仅演示 INSERT）。
+
 ---
 
 ## 方式一：全本机安装（不用 Docker）
@@ -59,13 +61,7 @@ GRANT ALL PRIVILEGES ON fastapi.* TO 'admin'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
-3. 导入种子数据（在仓库根目录，需已把 `mysql` 加入 PATH）：
-
-```powershell
-mysql -h 127.0.0.1 -P 3306 -uadmin -pBrickCore123456 --default-character-set=utf8mb4 fastapi < database.sql
-```
-
-若本机没有 `mysql` 命令，可用 Workbench **Data Import** 导入根目录 `database.sql`。
+> `database.sql` 只有演示 **INSERT**，不含建表。请先完成下文 **`aerich upgrade`**，再导入种子数据；空库直接导入会报 `Table 'fastapi.user' doesn't exist`。
 
 ### 2. 安装 Redis（便携版即可）
 
@@ -150,7 +146,13 @@ copy .env.example .env
 notepad .env
 ```
 
-将 `backend\.env` 调成与上面中间件一致（示例）：
+将 `backend\.env` 调成与上面中间件一致（**必须保存**；无 Docker 方式一端口见下）。至少确认这几行：
+
+- `DATABASE_USER=admin`（不要留成示例默认的 `fastapi`）
+- `DATABASE_PASSWORD=BrickCore123456`（与建库时一致）
+- `DATABASE_HOST=127.0.0.1`、`DATABASE_PORT=3306`、`DATABASE_NAME=fastapi`
+
+完整示例：
 
 ```env
 BASE_URL=http://localhost:8000
@@ -183,16 +185,41 @@ AI_REQUIREMENT_BUCKET=ai-requirements
 DOC_USERNAME=admin
 DOC_PASSWORD=BrickCore123456
 INTERNAL_API_KEY=brickcore-internal-demo
-PLATFORM_VERSION=1.3.0
-RUNNER_CLIENT_VERSION_LATEST=1.4.0
+PLATFORM_VERSION=1.5.0
+RUNNER_CLIENT_VERSION_LATEST=1.5.5
 RUNNER_CLIENT_VERSION_MIN=1.3.8
-RUNNER_ENGINE_VERSION=1.0.2
+RUNNER_ENGINE_VERSION=1.1.1
+RUNNER_ENGINE_VERSION_MIN=1.0.0
 ```
 
-初始化表结构并启动：
+> 若你本地平台是 **v1.4.0**，把 `PLATFORM_VERSION=1.4.0`、`RUNNER_CLIENT_VERSION_LATEST=1.4.5` 即可；连库账号仍用 **`admin`**。
+
+先确认 **MySQL 服务已启动**，再初始化表结构（只需 **`aerich upgrade`**，勿执行 `aerich init` / `init-db`）。  
+`aerich` 会通过配置读取 `backend/.env`；若仍报连库用户为 `fastapi`，说明 `.env` 未保存或未放在 `backend` 目录。
+
+可先自检（应打印 `admin`）：
+
+```powershell
+python -c "from dotenv import load_dotenv; load_dotenv('.env'); import os; print(os.getenv('DATABASE_USER'), os.getenv('DATABASE_PASSWORD'))"
+```
+
+然后：
 
 ```powershell
 aerich upgrade
+```
+
+表建好后（仓库根目录，需已把 `mysql` 加入 PATH）导入种子数据：
+
+```powershell
+cd ..
+mysql -h 127.0.0.1 -P 3306 -uadmin -pBrickCore123456 --default-character-set=utf8mb4 fastapi < database.sql
+cd backend
+```
+
+若本机没有 `mysql` 命令，可用 Workbench **Data Import** 导入根目录 `database.sql`。然后启动：
+
+```powershell
 python run_new.py
 ```
 
@@ -258,13 +285,7 @@ docker compose -f docker-services.yml ps
 | RabbitMQ | **25672**（管理台 35672） | `admin` / `BrickCore123456` |
 | MinIO | **9200**（控制台 9001） | `admin` / `BrickCore123456` |
 
-### 2. 导入初始数据（首次）
-
-```powershell
-Get-Content .\database.sql -Raw | docker exec -i fastapi-mysql mysql --default-character-set=utf8mb4 -uadmin -pBrickCore123456 fastapi
-```
-
-### 3. Backend / Frontend
+### 2. Backend / Frontend（先建表，再导种子）
 
 ```powershell
 cd backend
@@ -274,6 +295,14 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 copy .env.example .env
 # 保持 REDIS_PORT=26379、MQ_PORT=25672（与 docker-services.yml 一致）
 aerich upgrade
+```
+
+表建好后导入演示数据（仓库根目录）：
+
+```powershell
+cd ..
+Get-Content .\database.sql -Raw | docker exec -i fastapi-mysql mysql --default-character-set=utf8mb4 -uadmin -pBrickCore123456 fastapi
+cd backend
 python run_new.py
 ```
 
@@ -356,8 +385,9 @@ docker compose logs -f backend
 |------|------|
 | 不想装 Docker | 用 **方式一** |
 | Redis / MQ 连不上 | 核对 `.env` 端口：无 Docker 用 6379/5672；Docker 中间件用 26379/25672 |
-| 导入 SQL 失败 | 先建好库和 `admin` 用户；确认字符集 utf8mb4 |
-| 登录失败 | 确认已导入 `database.sql`；账号 **admin / BrickCore123456** |
+| 导入 SQL 失败 / `Table 'fastapi.user' doesn't exist` | 先 `aerich upgrade` 建表，再导 `database.sql`；并确认已建库、`admin` 用户与 utf8mb4 |
+| `aerich` 报 Access denied / 用户 `fastapi` | 确认 `backend/.env` 已保存且 `DATABASE_USER=admin`；在 `backend` 目录执行；先跑上面的自检打印；并确认 MySQL 服务已启动 |
+| 登录失败 | 确认已 `aerich upgrade` 且导入 `database.sql`；账号 **admin / BrickCore123456** |
 | 附件/截图打不开 | MinIO 已启动，且 `MINIO_PUBLIC_ENDPOINT` 为本机可访问地址 |
 | Docker 装不上 / 无 Hyper-V | 不要用方式二/三，改方式一 |
 | 页面空白（全栈） | 先 `npm run build`，确认有 `frontend/dist/index.html` |

@@ -26,6 +26,7 @@ _CLOSE_REASON_MESSAGES: dict[str, str] = {
     "browser_closed_by_user": "检测到浏览器窗口已关闭，调试会话已结束",
     "user_close": "调试浏览器已关闭",
     "用户关闭": "调试浏览器已关闭",
+    "toolbar_close": "已从调试浏览器工具条关闭会话",
     "idle_timeout": "长时间无操作，调试会话已自动关闭",
     "空闲超时自动关闭": "长时间无操作，调试会话已自动关闭",
     "runner_idle_timeout": "调试会话在 Runner 侧空闲超时，已自动结束",

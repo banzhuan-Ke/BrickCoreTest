@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 from typing import Any, Optional
 from app.core.shared.locator_utils import normalize_locator, prefer_popup_elements, resolve_locator_on_page
+from app.modules.ui.scroll_page_js import SCROLL_PAGE_JS
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
@@ -1009,8 +1010,30 @@ class SmartPageExplorer:
                 await self.page.wait_for_load_state("load", timeout=self.timeout * 1000)
 
             elif method == "scroll_to_height":
+                mode = str(params.get("position") or params.get("scroll_mode") or "").strip().lower()
                 height = params.get("height", 0)
-                await self.page.evaluate(f"window.scrollTo(0, {height})")
+                if mode in ("top", "start"):
+                    await self.page.evaluate(SCROLL_PAGE_JS, ["top", None])
+                elif mode in ("bottom", "end"):
+                    await self.page.evaluate(SCROLL_PAGE_JS, ["bottom", None])
+                elif mode in ("middle", "center", "mid"):
+                    await self.page.evaluate(SCROLL_PAGE_JS, ["middle", None])
+                elif mode in ("down", "page_down"):
+                    delta = abs(int(height)) if height not in (None, "") else 600
+                    info = await self.page.evaluate(SCROLL_PAGE_JS, ["down", delta])
+                    if not (info or {}).get("moved"):
+                        vp = self.page.viewport_size or {"width": 1280, "height": 720}
+                        await self.page.mouse.move(int(vp["width"] / 2), int(vp["height"] / 2))
+                        await self.page.mouse.wheel(0, delta)
+                elif mode in ("up", "page_up"):
+                    delta = abs(int(height)) if height not in (None, "") else 600
+                    info = await self.page.evaluate(SCROLL_PAGE_JS, ["up", delta])
+                    if not (info or {}).get("moved"):
+                        vp = self.page.viewport_size or {"width": 1280, "height": 720}
+                        await self.page.mouse.move(int(vp["width"] / 2), int(vp["height"] / 2))
+                        await self.page.mouse.wheel(0, -delta)
+                else:
+                    await self.page.evaluate(SCROLL_PAGE_JS, ["to", int(height or 0)])
 
             elif method == "scroll_to_element":
                 locator = params.get("locator", "")

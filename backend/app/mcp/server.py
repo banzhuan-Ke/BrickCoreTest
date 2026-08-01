@@ -43,7 +43,6 @@ MCP_DANGEROUS_OPS: tuple[str, ...] = (
     "preview_run_api_suite → confirm_run_api_suite",
     "preview_run_api_plan → confirm_run_api_plan",
     "preview_run_api_case → confirm_run_api_case",
-    "preview_run_qa_eval → confirm_run_qa_eval",
     "preview_run_ui_case → confirm_run_ui_case",
     "preview_run_app_case → confirm_run_app_case",
     "preview_run_ui_task → confirm_run_ui_task",
@@ -169,11 +168,6 @@ _register("confirm_run_api_suite", mcp_tools.tool_confirm_run_api_suite, "确认
 _register("confirm_run_api_plan", mcp_tools.tool_confirm_run_api_plan, "确认异步执行接口测试计划")
 _register("preview_run_api_case", mcp_tools.tool_preview_run_api_case, "预览单条接口用例执行")
 _register("confirm_run_api_case", mcp_tools.tool_confirm_run_api_case, "确认执行单条接口用例")
-if qa_eval_feature_enabled():
-    _register("list_qa_eval_sets", mcp_tools.tool_list_qa_eval_sets, "列出问答准确性评测集")
-    _register("get_qa_eval_run", mcp_tools.tool_get_qa_eval_run, "查询问答评测跑批进度")
-    _register("preview_run_qa_eval", mcp_tools.tool_preview_run_qa_eval, "预览问答准确性评测跑批")
-    _register("confirm_run_qa_eval", mcp_tools.tool_confirm_run_qa_eval, "确认提交问答准确性评测")
 _register("preview_run_ui_case", mcp_tools.tool_preview_run_ui_case, "预览单条 Web UI 用例执行")
 _register("confirm_run_ui_case", mcp_tools.tool_confirm_run_ui_case, "确认执行单条 Web UI 用例")
 _register("preview_run_app_case", mcp_tools.tool_preview_run_app_case, "预览单条 App 用例执行")

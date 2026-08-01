@@ -174,16 +174,19 @@
           </el-button>
           <el-button size="small" :loading="running" :disabled="!canRun" @click="runSingleStep">
 
-            执行选中步
+            执行当前步
 
           </el-button>
 
           <el-button size="small" :loading="running" :disabled="!canRun" @click="runThroughStep">
 
-            从选中步执行至末尾
+            从当前步执行至末尾
 
           </el-button>
 
+          <el-button size="small" @click="hotkeyDialogVisible = true">
+            快捷键设置
+          </el-button>
           <el-button size="small" type="danger" plain :loading="closing" @click="closeSession">
 
             关闭浏览器
@@ -193,6 +196,32 @@
         </div>
 
       </div>
+
+      <el-dialog v-model="hotkeyDialogVisible" title="交互调试快捷键" width="560px" destroy-on-close>
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="此处修改会保存到本机浏览器，并在打开/更新调试会话时下发到 Runner。执行器客户端设置里也可改本机默认。"
+          style="margin-bottom: 12px"
+        />
+        <div v-for="action in hotkeyActionList" :key="action" class="hotkey-row">
+          <span class="hotkey-label">{{ hotkeyActionLabels[action] }}</span>
+          <el-input
+            :model-value="hotkeyDraft[action] || '未绑定'"
+            readonly
+            class="hotkey-input"
+            @keydown="onHotkeyCapture(action, $event)"
+            placeholder="点击后按下组合键"
+          />
+          <el-button link type="danger" @click="clearHotkey(action)">清空</el-button>
+        </div>
+        <template #footer>
+          <el-button @click="resetHotkeysDraft">恢复默认</el-button>
+          <el-button @click="hotkeyDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="hotkeySaving" @click="saveHotkeys">保存</el-button>
+        </template>
+      </el-dialog>
 
 
 
@@ -208,7 +237,7 @@
 
         class="stale-alert"
 
-        title="编辑器步骤与会话快照不一致。请先点「同步最新步骤」；否则浏览器内工具条高亮/验证/执行仍用旧步骤（平台侧高亮会自动同步）。"
+        title="编辑器步骤已变更时会自动同步到 Runner；平台侧执行 / 高亮 / 验证也会先同步。若仍提示不一致，可手动点「同步最新步骤」。"
 
       />
 
@@ -218,7 +247,7 @@
         :closable="false"
         show-icon
         class="stale-alert"
-        title="拾取模式已开启：请在 Runner 浏览器中点击目标元素"
+        title="推荐：先手动悬停/等短弹窗 →「冻结页面」（默认 Ctrl+Shift+F，可在快捷键设置修改）→ 再点目标。直接「拾取」适合抓默认态"
       />
 
       <el-alert
@@ -283,6 +312,10 @@
     <el-dialog v-model="pickDialogVisible" title="拾取元素 — 回填定位器" width="680px" destroy-on-close>
       <p class="pick-dialog-tip">选择定位器用途：替换某个步骤，或在指定位置新增一步。</p>
       <p v-if="pickPreview.frame" class="pick-frame-hint">iframe：{{ pickPreview.frame }}</p>
+      <p v-if="pickMatchIndex > 1" class="pick-frame-hint">
+        同名匹配下标：{{ pickMatchIndex }}（写入步骤 params.index；若定位器已唯一可改为 1）
+      </p>
+      <p v-else-if="pickMatchIndex === 1" class="pick-index-hint">匹配下标：1</p>
 
       <div class="pick-apply-form">
         <div class="pick-form-row">
@@ -348,7 +381,7 @@
 
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
-import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 
 import { ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 
@@ -368,6 +401,18 @@ import { resolveDefaultStartUrl } from '@/utils/caseDescription.js'
 
 import { formatLocatorActionSummary, pickResultKey, splitCombinedLocator, stepHasLocator, suggestPickStepTemplate } from '@/utils/debugLocator.js'
 
+import {
+  DEFAULT_HOTKEYS,
+  HOTKEY_ACTIONS,
+  HOTKEY_ACTION_LABELS,
+  comboFromKeyboardEvent,
+  getSessionHotkeyOverride,
+  loadStoredHotkeys,
+  mergeHotkeys,
+  saveStoredHotkeys,
+} from '@/utils/uiDebugHotkeys.js'
+
+
 
 
 const props = defineProps({
@@ -382,7 +427,13 @@ const props = defineProps({
 
 
 
-const emit = defineEmits(['session-change', 'debug-hints-change', 'focus-step', 'apply-locator'])
+const emit = defineEmits([
+  'session-change',
+  'debug-hints-change',
+  'focus-step',
+  'apply-locator',
+  'run-selected-request',
+])
 
 
 
@@ -414,8 +465,19 @@ const resultExpanded = ref(true)
 const locatorBusy = ref(false)
 const pickModeActive = ref(false)
 const pickModeLoading = ref(false)
+const hotkeyDialogVisible = ref(false)
+const hotkeySaving = ref(false)
+const hotkeyActionList = HOTKEY_ACTIONS
+const hotkeyActionLabels = HOTKEY_ACTION_LABELS
+const hotkeyDraft = reactive({ ...DEFAULT_HOTKEYS })
+
 const pickDialogVisible = ref(false)
 const pickPreview = reactive({ locator: '', frame: '', element_locator: '', candidates: [], meta: {} })
+const pickMatchIndex = computed(() => {
+  const raw = pickPreview.meta?.matchIndex ?? pickPreview.meta?.match_index ?? 1
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1
+})
 const pickPollTimer = ref(null)
 const pickApplyMode = ref('replace')
 const pickTargetStepIndex = ref(0)
@@ -423,6 +485,8 @@ const pickInsertMethod = ref('click_ele')
 const ignoredPickKey = ref('')
 const handledPickKey = ref('')
 const handledFeedbackKey = ref('')
+const handledRunSelectedKey = ref('')
+const handledPickFreezeKey = ref('')
 const staleCheckTimer = ref(null)
 const mergedLastResult = ref(null)
 const lastEditorMap = ref([])
@@ -505,6 +569,10 @@ const locatorActionSummary = computed(() => {
   const result = session.value?.last_result
 
   if (!result?.type || result.type === 'run') return ''
+
+  if (['pick_freeze', 'page_freeze', 'run_selected_request', 'recording', 'record_stopped', 'closed'].includes(result.type)) {
+    return ''
+  }
 
   if (result.steps?.length) return ''
 
@@ -831,6 +899,20 @@ async function checkStepsStale() {
 
     stepsStale.value = !!data?.stale
 
+    // 变更后自动同步，保证浏览器工具条也用最新步骤（执行/高亮前另有兜底）
+    if (
+      stepsStale.value
+      && session.value?.status === 'ready'
+      && !running.value
+      && !syncing.value
+    ) {
+      const synced = await syncStepsFromEditor({ silent: true })
+      if (synced) {
+        lastSyncedSelectKey.value = ''
+        await syncSelectedStepToRunner(props.selectedStepIndex)
+      }
+    }
+
   } catch {
 
     stepsStale.value = false
@@ -880,84 +962,42 @@ async function waitUntilReady(timeoutMs = 120000) {
 
 
 async function ensureStepsForRun() {
-
   if (!stepsStale.value) return true
-
-  try {
-
-    await ElMessageBox.confirm(
-
-      '编辑器步骤与会话快照不一致。请选择执行方式：',
-
-      '步骤已变更',
-
-      {
-
-        confirmButtonText: '同步最新步骤并执行',
-
-        cancelButtonText: '仍用会话快照执行',
-
-        distinguishCancelAndClose: true,
-
-        type: 'warning',
-
-      },
-
-    )
-
-    const synced = await syncStepsFromEditor()
-
-    return synced
-
-  } catch (action) {
-
-    if (action === 'cancel') return true
-
-    return false
-
+  // 调试默认按编辑器最新步骤执行：不一致时自动同步，不再弹确认框
+  const synced = await syncStepsFromEditor({ quiet: true })
+  if (!synced) {
+    ElMessage.warning('自动同步最新步骤失败，请手动点「同步最新步骤」后重试')
   }
-
+  return synced
 }
 
-
-
-async function syncStepsFromEditor() {
-
+async function syncStepsFromEditor({ quiet = false, silent = false } = {}) {
   if (!session.value?.id) return false
-
   syncing.value = true
-
   try {
-
     await uiDebugApi.syncSteps(session.value.id, { steps: props.steps })
-
     const status = await waitUntilReady()
-
     if (status === 'ready') {
-
       stepsStale.value = false
       mergedLastResult.value = null
-
-      ElNotification.success('步骤已同步到 Runner')
-
+      if (!silent) {
+        if (quiet) {
+          ElMessage.success('已自动同步最新步骤')
+        } else {
+          ElNotification.success('步骤已同步到 Runner')
+        }
+      }
       return true
-
     }
-
     return false
-
   } catch (e) {
-
-    ElMessage.error(e?.response?.data?.detail || e?.message || '同步步骤失败')
-
+    if (!silent) {
+      ElMessage.error(e?.response?.data?.detail || e?.message || '同步步骤失败')
+    }
     return false
-
   } finally {
-
     syncing.value = false
-
   }
-
 }
 
 
@@ -976,23 +1016,19 @@ async function startSession() {
 
   try {
 
-    const res = await uiDebugApi.createSession({
-
+    const hotkeyOverride = getSessionHotkeyOverride(uStore.userInfo?.id)
+    const createPayload = {
       case_id: Number(props.caseId),
-
       env_id: openForm.env_id,
-
       browser_type: openForm.browser_type,
-
       config: false,
-
       device_id: openForm.device_id,
-
       steps: props.steps,
-
       auto_navigate: openForm.auto_navigate,
-
-    })
+    }
+    // 未在平台保存过快捷键时不下发，避免用默认表盖住执行器客户端偏好
+    if (hotkeyOverride) createPayload.hotkeys = hotkeyOverride
+    const res = await uiDebugApi.createSession(createPayload)
 
     session.value = parseSessionResponse(res)
 
@@ -1024,9 +1060,13 @@ async function startSession() {
 
 
 async function resolveEditorRunPlan(editorIndices) {
+  const valid = normalizeEditorIndices(editorIndices)
+  if (!valid.length) {
+    throw new Error('所选步骤下标无效')
+  }
   const res = await uiDebugApi.resolveRunSegments(session.value.id, {
     steps: props.steps,
-    editor_indices: editorIndices,
+    editor_indices: valid,
   })
   const data = parseCompareResponse(res)
   const segments = (data?.segments || []).map((row) => [row.from_index, row.through_index])
@@ -1037,14 +1077,26 @@ async function resolveEditorRunPlan(editorIndices) {
   }
 }
 
+/** 未选中（-1）时调试工具条默认对齐第 0 步，避免把 -1 传给后端 */
+function effectiveEditorStepIndex(editorIndex = props.selectedStepIndex) {
+  const idx = Number(editorIndex)
+  const len = props.steps?.length || 0
+  if (!len) return -1
+  if (!Number.isFinite(idx) || idx < 0) return 0
+  if (idx >= len) return len - 1
+  return idx
+}
+
 async function resolveEditorStepSessionIndex(editorIndex) {
+  const idx = effectiveEditorStepIndex(editorIndex)
+  if (idx < 0) return 0
   try {
-    const plan = await resolveEditorRunPlan([editorIndex])
-    if (plan.stale) return editorIndex
+    const plan = await resolveEditorRunPlan([idx])
+    if (plan.stale) return idx
     const first = plan.segments[0]
-    return first ? first[0] : editorIndex
+    return first ? first[0] : idx
   } catch {
-    return editorIndex
+    return idx
   }
 }
 
@@ -1054,16 +1106,21 @@ function normalizeEditorIndices(indices) {
     .sort((a, b) => a - b)
 }
 
-async function runSessionSegment(fromIndex, throughIndex) {
+async function runSessionSegment(fromIndex, throughIndex, timeoutMs) {
   if (!session.value?.id) return false
+  const stepCount = Math.max(1, throughIndex - fromIndex + 1)
+  // 多步回放常超过默认 120s；按步数放宽，避免「从这里开始录制」前置回放假死
+  const readyTimeout = timeoutMs ?? Math.max(120000, stepCount * 45000)
   try {
     await uiDebugApi.runSteps(session.value.id, { from_index: fromIndex, through_index: throughIndex })
-    const status = await waitUntilReady()
+    const status = await waitUntilReady(readyTimeout)
     if (status === 'ready') {
       return true
     }
     if (status === 'error') {
       ElMessage.error(session.value?.error || '调试执行异常')
+    } else if (status === 'running') {
+      ElMessage.warning(`执行超时（已等待 ${Math.round(readyTimeout / 1000)} 秒），请查看调试浏览器或缩短回放区间`)
     }
     return false
   } catch (e) {
@@ -1089,9 +1146,16 @@ async function runEditorIndices(editorIndices, { skipEnsure = false } = {}) {
   let editorMap = []
   let useDirectIndices = false
   try {
-    const plan = await resolveEditorRunPlan(valid)
+    let plan = await resolveEditorRunPlan(valid)
+    // 竞态兜底：标记未刷新但后端仍报 stale 时，再自动同步一次后重解析
     if (plan.stale) {
-      ElMessage.warning('步骤与会话不一致，将按编辑器下标直接映射到会话快照执行')
+      const synced = await syncStepsFromEditor({ quiet: true })
+      if (synced) {
+        plan = await resolveEditorRunPlan(valid)
+      }
+    }
+    if (plan.stale) {
+      ElMessage.warning('步骤与会话仍不一致，将按编辑器下标直接执行；建议手动同步后重试')
       segments = groupContiguousStepIndices(valid)
       useDirectIndices = true
     } else {
@@ -1161,11 +1225,19 @@ async function runSelectedSteps(indices) {
 }
 
 function runSingleStep() {
+  if (Number(props.selectedStepIndex) < 0) {
+    ElMessage.warning('请先选中一个步骤')
+    return Promise.resolve(false)
+  }
   return runEditorIndices([props.selectedStepIndex])
 }
 
 function runThroughStep() {
-  const idx = props.selectedStepIndex
+  const idx = Number(props.selectedStepIndex)
+  if (!Number.isFinite(idx) || idx < 0) {
+    ElMessage.warning('请先选中一个步骤')
+    return Promise.resolve(false)
+  }
   const indices = Array.from({ length: props.steps.length - idx }, (_, i) => idx + i)
   return runEditorIndices(indices)
 }
@@ -1265,8 +1337,15 @@ function consumePickResultFromSession() {
   if (pickDialogVisible.value) return false
   handledPickKey.value = key
   ignoredPickKey.value = key
-  pickModeActive.value = false
-  stopPickPolling()
+  const keepFrozenPick = !!(result.page_frozen || result.keep_pick_mode)
+  if (keepFrozenPick) {
+    // 冻结中连续拾取：保持拾取轮询，不自动解冻
+    pickModeActive.value = true
+    startPickPolling()
+  } else {
+    pickModeActive.value = false
+    stopPickPolling()
+  }
   openPickDialog(result)
   return true
 }
@@ -1309,6 +1388,52 @@ function surfaceLocatorFeedbackFromSession() {
   }
 }
 
+function consumePickFreezeFromSession() {
+  const result = session.value?.last_result
+  if (!result?.type) return
+  if (!['pick_freeze', 'page_freeze'].includes(result.type)) return
+  const key = [
+    result.type,
+    result.frozen ? '1' : '0',
+    result.message || '',
+    result.request_id || '',
+    result.hover_forced ?? '',
+    result.pinned_ui ?? '',
+  ].join('|')
+  if (!key || key === handledPickFreezeKey.value) return
+  handledPickFreezeKey.value = key
+  if (result.type === 'page_freeze') {
+    pickModeActive.value = !!result.pick_mode
+    if (result.pick_mode) startPickPolling()
+    else stopPickPolling()
+  }
+  const msg = result.message || (result.frozen ? '页面已冻结' : '已解冻')
+  if (result.status === 'fail') {
+    ElMessage.error(msg)
+  } else if (result.frozen) {
+    ElMessage.success(msg)
+  } else {
+    ElMessage.info(msg)
+  }
+}
+
+function consumeRunSelectedRequestFromSession() {
+  const result = session.value?.last_result
+  if (result?.type !== 'run_selected_request') return
+  if (result.status === 'fail') {
+    const key = locatorFeedbackKey(result)
+    if (key && key !== handledRunSelectedKey.value) {
+      handledRunSelectedKey.value = key
+      ElMessage.error(result.message || '工具条「执行勾选」失败')
+    }
+    return
+  }
+  const key = result.request_id || locatorFeedbackKey(result)
+  if (!key || key === handledRunSelectedKey.value) return
+  handledRunSelectedKey.value = key
+  emit('run-selected-request', { requestId: key })
+}
+
 async function refreshSession() {
 
   if (!session.value?.id) return
@@ -1337,6 +1462,8 @@ async function refreshSession() {
 
     } else {
       consumePickResultFromSession()
+      consumePickFreezeFromSession()
+      consumeRunSelectedRequestFromSession()
       // 平台侧主动 await 的高亮/验证会自行弹消息，避免重复；仅工具条/闲时轮询补提示
       if (!locatorBusy.value) {
         surfaceLocatorFeedbackFromSession()
@@ -1413,8 +1540,11 @@ function scheduleSyncSelectedStepToRunner(editorIndex = props.selectedStepIndex)
 
 async function syncSelectedStepToRunner(editorIndex = props.selectedStepIndex) {
   if (!session.value?.id || session.value.status !== 'ready') return
+  if (!(props.steps?.length > 0)) return
+  const idx = effectiveEditorStepIndex(editorIndex)
   try {
-    const sessionIndex = await resolveEditorStepSessionIndex(editorIndex)
+    const sessionIndex = await resolveEditorStepSessionIndex(idx)
+    if (!Number.isFinite(sessionIndex) || sessionIndex < 0) return
     const key = `${session.value.id}:${sessionIndex}`
     if (key === lastSyncedSelectKey.value) return
     lastSyncedSelectKey.value = key
@@ -1431,7 +1561,7 @@ async function highlightSelectedStep() {
   try {
     // 高亮/验证必须用编辑器最新定位器；步骤已变更时先同步
     if (stepsStale.value) {
-      const synced = await syncStepsFromEditor()
+      const synced = await syncStepsFromEditor({ quiet: true })
       if (!synced) {
         ElMessage.warning('请先同步步骤后再高亮')
         return
@@ -1458,7 +1588,7 @@ async function verifySelectedStep() {
   locatorBusy.value = true
   try {
     if (stepsStale.value) {
-      const synced = await syncStepsFromEditor()
+      const synced = await syncStepsFromEditor({ quiet: true })
       if (!synced) {
         ElMessage.warning('请先同步步骤后再验证')
         return
@@ -1526,6 +1656,55 @@ function startPickPolling() {
   }, 1200)
 }
 
+
+function loadHotkeyDraft() {
+  Object.assign(hotkeyDraft, loadStoredHotkeys(uStore.userInfo?.id))
+}
+
+function onHotkeyCapture(action, e) {
+  e.preventDefault()
+  e.stopPropagation()
+  const combo = comboFromKeyboardEvent(e)
+  if (!combo) return
+  // 冲突：清空占用者
+  for (const key of hotkeyActionList) {
+    if (key !== action && hotkeyDraft[key] === combo) hotkeyDraft[key] = ''
+  }
+  hotkeyDraft[action] = combo
+}
+
+function clearHotkey(action) {
+  hotkeyDraft[action] = ''
+}
+
+function resetHotkeysDraft() {
+  Object.assign(hotkeyDraft, { ...DEFAULT_HOTKEYS })
+}
+
+async function saveHotkeys() {
+  hotkeySaving.value = true
+  try {
+    const merged = saveStoredHotkeys(uStore.userInfo?.id, hotkeyDraft)
+    Object.assign(hotkeyDraft, merged)
+    if (session.value?.status === 'ready') {
+      await uiDebugApi.setHotkeys(session.value.id, { hotkeys: merged })
+      await waitUntilReady()
+      ElMessage.success('快捷键已保存并同步到调试浏览器')
+    } else if (session.value) {
+      ElMessage.warning('快捷键已保存到本机；请等会话就绪后再保存一次以同步到调试浏览器')
+    } else {
+      ElMessage.success('快捷键已保存；下次打开调试会话时生效')
+    }
+    hotkeyDialogVisible.value = false
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '保存快捷键失败')
+  } finally {
+    hotkeySaving.value = false
+  }
+}
+
+watch(hotkeyDialogVisible, (v) => { if (v) loadHotkeyDraft() })
+
 async function togglePickMode() {
   if (!session.value?.id) return
   if (pickModeActive.value) {
@@ -1554,7 +1733,11 @@ async function togglePickMode() {
     await waitUntilReady()
     pickModeActive.value = true
     startPickPolling()
-    ElNotification.info('请在 Runner 浏览器中点击要拾取的元素')
+    ElNotification.info({
+      title: '拾取模式',
+      message: '直接拾取≈防悬停抓默认态。悬停后/短弹窗：先操作再「冻结页面」（快捷键可在「快捷键设置」查看），然后拾取；结果在平台面板回填。',
+      duration: 8000,
+    })
   } catch (e) {
     ElMessage.error(e?.response?.data?.detail || e?.message || '开启拾取失败')
   } finally {
@@ -1574,7 +1757,7 @@ function pickInsertTemplate() {
     return {
       keyword: '鼠标悬停到元素上方',
       method: 'hover',
-      params: { locator: '', timeout: 20000 },
+      params: { locator: '', index: 1, timeout: 20000 },
     }
   }
   return {
@@ -1875,6 +2058,11 @@ defineExpose({
   color: var(--el-text-color-secondary);
   word-break: break-all;
 }
+.pick-index-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+}
 
 .bar-result.is-fail { color: var(--el-color-danger); }
 
@@ -2052,6 +2240,22 @@ defineExpose({
 
 }
 
+
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.hotkey-label {
+  width: 120px;
+  flex-shrink: 0;
+  font-size: 13px;
+}
+.hotkey-input {
+  flex: 1;
+}
 </style>
+
 
 

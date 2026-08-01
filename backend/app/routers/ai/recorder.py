@@ -7,6 +7,7 @@ AI 录制器路由
 """
 
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -240,6 +241,10 @@ class OptimizeRequest(BaseModel):
     use_page_context: bool = Field(
         default=True,
         description="使用录制原始操作中的可见文本辅助断言定位",
+    )
+    steps: Optional[list] = Field(
+        default=None,
+        description="可选：前端结果态已编辑的步骤；未传则使用会话中保存的 record.steps",
     )
 
 
@@ -806,6 +811,20 @@ async def _resolve_ai_config(ai_config_id: Optional[int]):
     return config
 
 
+async def _resolve_optimize_config(ai_config_id: Optional[int], scene: str):
+    """显式 ID 优先，否则走场景绑定（含参数覆盖所用的模型）。"""
+    from fastapi import HTTPException
+
+    from app.modules.ai.ai_scene_config import resolve_config_for_scene
+
+    if ai_config_id:
+        return await _resolve_ai_config(ai_config_id)
+    try:
+        return await resolve_config_for_scene(scene or "recorder_optimize", None)
+    except HTTPException:
+        return await _resolve_ai_config(None)
+
+
 async def _execute_step_optimize(
     original_steps: list,
     *,
@@ -831,10 +850,14 @@ async def _execute_step_optimize(
 
     start_time = time.time()
     total_tokens = 0
-    config = await _resolve_ai_config(ai_config_id)
+    config = await _resolve_optimize_config(ai_config_id, usage_scene)
 
     trimmed, opt_tokens, trim_meta = await _optimize_steps(
-        original_steps, description, config, step_module=step_module,
+        original_steps,
+        description,
+        config,
+        step_module=step_module,
+        scene=usage_scene,
     )
     total_tokens += opt_tokens
     assertion_steps: list = []
@@ -853,6 +876,7 @@ async def _execute_step_optimize(
                 raw_actions=actions,
                 config=config,
                 step_module=step_module,
+                scene=usage_scene,
             )
             total_tokens += assert_tokens
         else:
@@ -979,8 +1003,11 @@ async def optimize_record(
     record = await AiRecordSession.get_or_none(id=record_id)
     if not record:
         raise HTTPException(status_code=404, detail="录制会话不存在")
+
+    await _assert_record_access(record, user_info)
     
-    if not record.steps:
+    source_steps = body.steps if body.steps else record.steps
+    if not source_steps:
         raise HTTPException(status_code=400, detail="没有可优化的步骤")
     
     # 优先使用前端传入的 description，未传入则使用录制时保存的
@@ -988,7 +1015,7 @@ async def optimize_record(
 
     try:
         data = await _execute_step_optimize(
-            record.steps,
+            source_steps,
             description=description,
             ai_config_id=body.ai_config_id,
             append_assertions=body.append_assertions,
@@ -1016,15 +1043,21 @@ async def optimize_record(
     return StandardResponse(data=data)
 
 
-async def _optimize_steps(steps: list, description: str, config=None, step_module: str = "ui") -> tuple[list, int, dict]:
+async def _optimize_steps(
+    steps: list,
+    description: str,
+    config=None,
+    step_module: str = "ui",
+    scene: str = "recorder_optimize",
+) -> tuple[list, int, dict]:
     """
     使用 LLM 优化录制步骤（删除多余步骤 + 优化描述）
     
     返回 (优化后的步骤列表, tokens_used, 优化元信息)，不修改原始列表。
     """
     from app.modules.ai.ai_prompts import PromptManager
-    from app.core.llm.llm_client import LLMClientFactory
-    from app.core.platform.encryption import decrypt_value
+    from app.core.llm.llm_invoke import call_llm
+    from app.modules.ai.ai_scene_config import get_scene_llm_overrides
     from app.models.ai import AiConfig
 
     optimize_meta: dict = {
@@ -1077,32 +1110,32 @@ async def _optimize_steps(steps: list, description: str, config=None, step_modul
         optimize_meta["fallback_reason"] = "prompt_render_failed"
         return steps, 0, optimize_meta
     
-    # 调用 LLM
-    api_key = decrypt_value(config.api_key)
-    client = LLMClientFactory.create(
-        provider=config.provider,
-        api_key=api_key,
-        api_base=config.api_base,
-        model=config.model,
-        timeout=config.timeout,
+    # 场景绑定 timeout/max_tokens/temperature；大步骤量时抬高 max_tokens 下限
+    overrides = await get_scene_llm_overrides(scene or "recorder_optimize")
+    param_overrides = dict(overrides)
+    if "temperature" not in param_overrides:
+        param_overrides["temperature"] = 0.2
+    dyn_max_tokens = max(4096, min(len(steps) * 180, 16384))
+    base_max = int(
+        param_overrides.get("max_tokens")
+        or getattr(config, "max_tokens", None)
+        or 0
     )
-    
-    extra_body = {}
-    if config.thinking_enabled:
-        extra_body["thinking"] = {"type": "enabled"}
-    kwargs = {}
-    if config.thinking_enabled and config.reasoning_effort:
-        kwargs["reasoning_effort"] = config.reasoning_effort
-    result = await client.chat(
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.2,
-        max_tokens=max(4096, min(len(steps) * 180, 16384)),
-        extra_body=extra_body or None,
-        **kwargs,
-    )
+    param_overrides["max_tokens"] = max(base_max, dyn_max_tokens)
+
+    try:
+        result = await call_llm(
+            system_prompt,
+            user_prompt,
+            config,
+            min_timeout=60,
+            max_retries=1,
+            param_overrides=param_overrides,
+        )
+    except Exception as e:
+        logger.warning("[recorder.optimize] LLM 调用失败: %s", e)
+        optimize_meta["fallback_reason"] = "llm_call_failed"
+        return steps, 0, optimize_meta
     
     content = result.get("content", "")
     tokens_used = int(result.get("tokens") or 0)
@@ -1160,13 +1193,14 @@ async def _optimize_steps(steps: list, description: str, config=None, step_modul
         
         descriptions = data.get("descriptions", [])
         if len(descriptions) == len(steps):
+            updated = copy.deepcopy(steps)
             for i, desc in enumerate(descriptions):
                 if desc and isinstance(desc, str):
-                    steps[i]["desc"] = desc
+                    updated[i]["desc"] = desc
             logger.info("[recorder.optimize] 使用旧格式 descriptions 更新描述")
             optimize_meta["llm_applied"] = True
             optimize_meta["fallback_reason"] = "legacy_descriptions_only"
-            return steps, tokens_used, optimize_meta
+            return updated, tokens_used, optimize_meta
     except Exception as e:
         logger.warning(f"[recorder.optimize] 解析 LLM 返回的 JSON 失败: {e}, json_str={json_str[:500]}")
         optimize_meta["fallback_reason"] = "json_parse_failed"
