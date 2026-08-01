@@ -25,6 +25,39 @@ from app.core.platform.permissions import API_CASE_VIEW, API_CASE_EDIT, API_CASE
 router = APIRouter(tags=["接口测试用例"], dependencies=[Depends(is_authenticated), Depends(require_permissions(API_CASE_VIEW))])
 
 
+async def _find_case_usage_blockers(case_id: int, project_id: int) -> list[str]:
+    """查找阻止删除的引用：压测场景 / 接口套件。"""
+    blockers: list[str] = []
+    from app.models.perf import PerfScene
+    from app.models.http import ApiSuiteCase
+    from app.modules.perf.perf_journey import collect_journey_case_ids
+
+    scenes = await PerfScene.filter(project_id=project_id, is_del=False).all()
+    for scene in scenes:
+        used = False
+        for item in scene.scene_items or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                if int(item.get("case_id")) == int(case_id):
+                    used = True
+                    break
+            except (TypeError, ValueError):
+                continue
+        if not used:
+            journey_ids = collect_journey_case_ids(scene.config or {})
+            used = int(case_id) in {int(x) for x in journey_ids}
+        if used:
+            blockers.append(f"压测场景「{scene.name}」(#{scene.id})")
+
+    suite_links = await ApiSuiteCase.filter(case_id=case_id).prefetch_related("suite")
+    for link in suite_links:
+        suite = getattr(link, "suite", None)
+        if suite and not getattr(suite, "is_del", False):
+            blockers.append(f"接口套件「{suite.name}」(#{suite.id})")
+    return blockers
+
+
 def _normalize_assertions(assertions):
     """兼容旧字段名"""
     result = []
@@ -61,6 +94,8 @@ def _normalize_extractors(extractors):
 
 def _build_case_response(case, api, catalog):
     """构建统一的用例响应字典"""
+    if catalog is not None and getattr(catalog, "is_del", False):
+        catalog = None
     return {
         "id": case.id,
         "name": case.name,
@@ -160,6 +195,28 @@ async def create_test_case(item: ApiTestCaseCreate, username: str = Depends(get_
     return _build_case_response(case, api, catalog)
 
 
+def _parse_tag_filters(tag: Optional[str], tags: Optional[str]) -> list[str]:
+    """解析 tag / tags 查询参数，多标签取交集。"""
+    required: list[str] = []
+    if tag and str(tag).strip():
+        required.append(str(tag).strip())
+    if tags:
+        for part in str(tags).split(","):
+            t = part.strip()
+            if t and t not in required:
+                required.append(t)
+    return required
+
+
+def _case_has_all_tags(case_tags, required_tags: list[str]) -> bool:
+    if not required_tags:
+        return True
+    if not isinstance(case_tags, list):
+        return False
+    tag_set = {str(t) for t in case_tags if t is not None and str(t).strip()}
+    return all(t in tag_set for t in required_tags)
+
+
 @router.get("/case", summary="测试用例列表", response_model=ApiTestCaseListResponse)
 async def get_test_cases(
     project_id: int = Query(..., description="项目ID"),
@@ -168,6 +225,8 @@ async def get_test_cases(
     include_children: bool = Query(True, description="目录筛选是否包含子目录"),
     priority: Optional[str] = Query(None, description="优先级 P0/P1/P2/P3"),
     keyword: Optional[str] = Query(None, description="关键字"),
+    tag: Optional[str] = Query(None, description="单标签筛选"),
+    tags: Optional[str] = Query(None, description="多标签（逗号分隔，取交集）"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=5000)
 ):
@@ -186,9 +245,17 @@ async def get_test_cases(
     
     if keyword:
         query = query.filter(name__contains=keyword)
-    
-    total = await query.count()
-    cases = await query.order_by("-id").offset((page - 1) * size).limit(size).all()
+
+    required_tags = _parse_tag_filters(tag, tags)
+    if required_tags:
+        # JSON 标签交集：项目用例量通常可接受全量后内存筛选，保证分页 total 准确
+        all_cases = await query.order_by("-id").all()
+        filtered = [c for c in all_cases if _case_has_all_tags(c.tags, required_tags)]
+        total = len(filtered)
+        cases = filtered[(page - 1) * size: page * size]
+    else:
+        total = await query.count()
+        cases = await query.order_by("-id").offset((page - 1) * size).limit(size).all()
     
     result = []
     for case in cases:
@@ -226,6 +293,16 @@ async def update_test_case(case_id: int, item: ApiTestCaseUpdate, username: str 
         case.catalog_id = item.catalog_id
     else:
         case.catalog_id = None
+
+    # 更换关联接口（同项目校验）
+    if item.api_id is not None and int(item.api_id) != int(case.api_id or 0):
+        new_api = await ApiDefinition.get_or_none(id=item.api_id, is_del=False)
+        if not new_api:
+            raise HTTPException(status_code=404, detail="关联接口不存在")
+        if new_api.project_id != case.project_id:
+            raise HTTPException(status_code=400, detail="关联接口不属于当前项目")
+        case.api_id = new_api.id
+        case.api_version_snapshot = new_api.version
     
     case.name = item.name
     case.request_headers = item.request_headers or {}
@@ -265,6 +342,15 @@ async def delete_test_case(case_id: int):
     case = await ApiTestCase.get_or_none(id=case_id, is_del=False)
     if not case:
         raise HTTPException(status_code=404, detail="用例不存在")
+
+    blockers = await _find_case_usage_blockers(case_id, case.project_id)
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail="用例已被引用，无法删除：" + "；".join(blockers[:8])
+            + ("…" if len(blockers) > 8 else "")
+            + "。请先从压测场景/接口套件中移除后再删。",
+        )
     
     case.is_del = True
     await case.save()
@@ -276,15 +362,32 @@ async def batch_delete_test_cases(case_ids: List[int]):
     """批量删除测试用例（逻辑删除）"""
     if not case_ids:
         raise HTTPException(status_code=400, detail="请选择要删除的用例")
-    deleted = 0
+
+    blocked = []
+    deletable = []
     for case_id in case_ids:
         case = await ApiTestCase.get_or_none(id=case_id, is_del=False)
-        if case:
-            case.is_del = True
-            await case.save()
-            deleted += 1
-    return None
+        if not case:
+            continue
+        blockers = await _find_case_usage_blockers(case_id, case.project_id)
+        if blockers:
+            blocked.append(f"「{case.name}」→ {blockers[0]}")
+        else:
+            deletable.append(case)
 
+    if blocked:
+        raise HTTPException(
+            status_code=409,
+            detail="以下用例仍被引用，已取消本次批量删除："
+            + "；".join(blocked[:6])
+            + ("…" if len(blocked) > 6 else "")
+            + "。请先从压测场景/接口套件中移除。",
+        )
+
+    for case in deletable:
+        case.is_del = True
+        await case.save()
+    return None
 
 @router.post("/case/batch-update-catalog", summary="批量修改用例目录",
              dependencies=[Depends(require_permissions(API_CASE_EDIT))])
@@ -323,11 +426,14 @@ async def export_test_cases(item: ApiCaseBatchExportRequest):
             "api_path": api.path if api else "",
             "api_name": api.name if api else "",
             "request_headers": case.request_headers or {},
+            "global_header_policy": getattr(case, "global_header_policy", None) or {},
             "request_params": case.request_params or [],
             "request_body": case.request_body or {},
             "request_body_type": case.request_body_type or "json",
             "request_body_fields": case.request_body_fields or [],
+            "ws_steps": getattr(case, "ws_steps", None) or [],
             "assertions": case.assertions or [],
+            "assertion_groups": getattr(case, "assertion_groups", None) or [],
             "extractors": case.extractors or [],
             "depends_on": [],
             "timeout": case.timeout,
@@ -337,6 +443,7 @@ async def export_test_cases(item: ApiCaseBatchExportRequest):
             "pre_script": case.pre_script if hasattr(case, "pre_script") else None,
             "post_script": case.post_script if hasattr(case, "post_script") else None,
             "data_set": case.data_set if hasattr(case, "data_set") and case.data_set else [],
+            "db_assertions": getattr(case, "db_assertions", None) or [],
         })
     payload = {
         "meta": {
@@ -423,17 +530,21 @@ async def import_test_cases(
                 project_id=project_id,
                 catalog_id=catalog_id,
                 request_headers=c.get("request_headers") or {},
+                global_header_policy=c.get("global_header_policy") or {},
                 request_params=c.get("request_params") or [],
                 request_body=c.get("request_body") or {},
                 request_body_type=c.get("request_body_type") or "json",
                 request_body_fields=c.get("request_body_fields") or [],
+                ws_steps=c.get("ws_steps") or [],
                 assertions=c.get("assertions") or [],
+                assertion_groups=c.get("assertion_groups") or [],
                 extractors=c.get("extractors") or [],
                 depends_on=[],
                 timeout=c.get("timeout") or 30,
                 retry_count=c.get("retry_count") or 0,
                 tags=c.get("tags") or [],
                 priority=c.get("priority") or "P2",
+                db_assertions=c.get("db_assertions") or [],
                 create_by=username,
                 update_by=username,
             )

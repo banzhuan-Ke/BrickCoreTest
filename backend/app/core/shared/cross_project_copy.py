@@ -1,8 +1,9 @@
 """跨项目复制资产"""
 from __future__ import annotations
 
+import copy
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException
 
@@ -10,6 +11,13 @@ from app.core.shared.catalog_utils import resolve_catalog
 from app.models.http import ApiDefinition, ApiTestCase
 from app.models.sys import Project
 from app.models.ui import Case
+
+
+def _json_clone(value: Any, default: Any):
+    """深拷贝 JSON 字段，避免副本与原用例共用同一可变对象。"""
+    if value is None:
+        return copy.deepcopy(default)
+    return copy.deepcopy(value)
 
 
 async def ensure_target_project(target_project_id: int) -> Project:
@@ -52,15 +60,15 @@ async def copy_api_definition_to_project(
         path=api.path,
         description=api.description,
         base_url=api.base_url,
-        headers=api.headers,
-        global_header_policy=api.global_header_policy,
-        params=api.params,
-        body=api.body,
+        headers=_json_clone(api.headers, {}),
+        global_header_policy=_json_clone(api.global_header_policy, {}),
+        params=_json_clone(api.params, []),
+        body=_json_clone(api.body, {}),
         body_type=api.body_type,
-        body_fields=api.body_fields,
-        ws_config=api.ws_config,
-        grpc_config=getattr(api, "grpc_config", None) or {},
-        response_schema=api.response_schema,
+        body_fields=_json_clone(api.body_fields, []),
+        ws_config=_json_clone(api.ws_config, {}),
+        grpc_config=_json_clone(getattr(api, "grpc_config", None), {}),
+        response_schema=_json_clone(api.response_schema, {}),
         source=api.source,
         source_id=api.source_id,
         create_by=username,
@@ -80,7 +88,7 @@ async def copy_ui_case_to_project(
     return await Case.create(
         name=new_name or f"{case.name}_副本",
         project_id=target_project_id,
-        steps=case.steps,
+        steps=_json_clone(case.steps, []),
         level=case.level,
         catalog_id=target_catalog_id,
         description=case.description,
@@ -122,32 +130,36 @@ async def copy_api_case_to_project(
                 )
             target_api_id = match.id
 
-    depends_on = case.depends_on if case.project_id == target_project_id else []
+    depends_on = (
+        _json_clone(case.depends_on, [])
+        if case.project_id == target_project_id
+        else []
+    )
 
     return await ApiTestCase.create(
         name=new_name or f"{case.name}_副本",
         api_id=target_api_id,
         project_id=target_project_id,
         catalog_id=target_catalog_id,
-        request_headers=case.request_headers,
-        global_header_policy=case.global_header_policy,
-        request_params=case.request_params,
-        request_body=case.request_body,
-        request_body_type=case.request_body_type,
-        request_body_fields=case.request_body_fields,
-        ws_steps=case.ws_steps,
-        assertions=case.assertions,
-        assertion_groups=getattr(case, "assertion_groups", None) or [],
-        extractors=case.extractors,
+        request_headers=_json_clone(case.request_headers, {}),
+        global_header_policy=_json_clone(case.global_header_policy, {}),
+        request_params=_json_clone(case.request_params, []),
+        request_body=_json_clone(case.request_body, {}),
+        request_body_type=case.request_body_type or "json",
+        request_body_fields=_json_clone(case.request_body_fields, []),
+        ws_steps=_json_clone(case.ws_steps, []),
+        assertions=_json_clone(case.assertions, []),
+        assertion_groups=_json_clone(getattr(case, "assertion_groups", None), []),
+        extractors=_json_clone(case.extractors, []),
         depends_on=depends_on,
         timeout=case.timeout,
         retry_count=case.retry_count,
-        tags=case.tags,
+        tags=_json_clone(case.tags, []),
         priority=case.priority,
         pre_script=getattr(case, "pre_script", None),
         post_script=getattr(case, "post_script", None),
-        data_set=getattr(case, "data_set", None) or [],
-        db_assertions=getattr(case, "db_assertions", None) or [],
+        data_set=_json_clone(getattr(case, "data_set", None), []),
+        db_assertions=_json_clone(getattr(case, "db_assertions", None), []),
         api_version_snapshot=getattr(case, "api_version_snapshot", 1),
         create_by=username,
         update_by=username,

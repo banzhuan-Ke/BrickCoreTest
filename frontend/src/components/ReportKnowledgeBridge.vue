@@ -24,7 +24,7 @@ const props = defineProps({
 const router = useRouter()
 const { isCommunityEdition, loadCommunityEdition } = useCommunityEdition()
 const editionReady = ref(false)
-const showBridge = computed(() => props.visible && editionReady.value && !isCommunityEdition.value)
+const showBridge = computed(() => props.visible && editionReady.value)
 
 onMounted(async () => {
   await loadCommunityEdition()

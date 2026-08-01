@@ -5,6 +5,7 @@
     width="900px"
     destroy-on-close
     :close-on-click-modal="false"
+    :before-close="handleBeforeClose"
     class="ai-recorder-dialog"
   >
     <!-- ===== 配置态 ===== -->
@@ -124,14 +125,57 @@
       </div>
     </div>
 
+    <!-- skipConfig 过渡态：避免弹窗短暂空白 -->
+    <div
+      v-if="skipConfig && state === 'config' && !preparingReplay && !starting && !skipConfigStartFailed"
+      class="recorder-form"
+    >
+      <div class="recording-header">
+        <el-icon class="is-loading recording-icon" :size="32"><VideoCamera /></el-icon>
+        <div class="recording-info">
+          <h4>正在准备接录…</h4>
+          <p>请稍候</p>
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <el-button @click="cancelAttachFlow">取消</el-button>
+      </div>
+    </div>
+
+    <!-- skipConfig：回放前置步骤（先出弹窗，避免页面无反馈卡住） -->
+    <div
+      v-if="skipConfig && state === 'config' && preparingReplay && !skipConfigStartFailed"
+      class="recorder-form"
+    >
+      <div class="recording-header">
+        <el-icon class="is-loading recording-icon" :size="32"><VideoCamera /></el-icon>
+        <div class="recording-info">
+          <h4>正在回放前置步骤…</h4>
+          <p>
+            将先执行第 1～{{ (replayThroughIndex ?? 0) + 1 }} 步，成功后在当前调试浏览器中接录并插入到第
+            {{ (insertAtIndex ?? 0) + 1 }} 步。步骤较多时可能需要几分钟，请勿关闭调试浏览器。
+          </p>
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <el-button @click="cancelAttachFlow">取消</el-button>
+      </div>
+    </div>
+
     <!-- skipConfig 自动接录启动中 -->
-    <div v-if="skipConfig && state === 'config' && starting && !skipConfigStartFailed" class="recorder-form">
+    <div
+      v-if="skipConfig && state === 'config' && !preparingReplay && starting && !skipConfigStartFailed"
+      class="recorder-form"
+    >
       <div class="recording-header">
         <el-icon class="is-loading recording-icon" :size="32"><VideoCamera /></el-icon>
         <div class="recording-info">
           <h4>正在启动接录…</h4>
           <p>请稍候，将在当前交互调试浏览器中开始录制</p>
         </div>
+      </div>
+      <div class="dialog-footer">
+        <el-button @click="cancelAttachFlow">取消</el-button>
       </div>
     </div>
 
@@ -142,8 +186,8 @@
         请确认交互调试会话仍为就绪状态，然后重试；或关闭后从步骤行重新发起「从这里开始录制」。
       </p>
       <div class="dialog-footer">
-        <el-button @click="visible = false">关闭</el-button>
-        <el-button type="primary" :loading="starting" @click="handleStart">重试接录</el-button>
+        <el-button @click="cancelAttachFlow">关闭</el-button>
+        <el-button type="primary" :loading="starting" @click="retryAttachFlow">重试接录</el-button>
       </div>
     </div>
 
@@ -476,7 +520,9 @@ import { useOnlineDevices } from '@/composables/useOnlineDevices.js'
 import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
 import LocatorSelector from '@/components/LocatorSelector.vue'
 
-const { aiConfigId, enabledConfigs, loadingConfigs, loadConfigs } = useAiConfigSelect()
+const { aiConfigId, enabledConfigs, loadingConfigs, loadConfigs } = useAiConfigSelect({
+  scene: 'recorder_optimize',
+})
 
 const props = defineProps({
   modelValue: Boolean,
@@ -492,9 +538,11 @@ const props = defineProps({
   insertAtIndex: { type: Number, default: null },
   debugSessionId: { type: Number, default: null },
   lockApplyMode: { type: Boolean, default: false },
+  /** 接录前需回放的编辑器下标（含）；null 表示无需回放直接启动 */
+  replayThroughIndex: { type: Number, default: null },
 })
 
-const emit = defineEmits(['update:modelValue', 'apply'])
+const emit = defineEmits(['update:modelValue', 'apply', 'prepare-replay'])
 
 const visible = computed({
   get: () => props.modelValue,
@@ -511,6 +559,9 @@ const saveVarName = ref('')
 const saveVarSource = ref('text')
 const savingVariable = ref(false)
 const skipConfigStartFailed = ref(false)
+const preparingReplay = ref(false)
+/** 取消接录流程时递增，避免回放完成后仍自动启动 */
+let attachFlowEpoch = 0
 
 // ===== 表单 =====
 const form = reactive({
@@ -690,7 +741,87 @@ let startTime = 0
 
 const shouldCloseOnStartError = () => props.skipConfig && !props.lockApplyMode
 
+const bumpAttachEpoch = () => {
+  attachFlowEpoch += 1
+  return attachFlowEpoch
+}
+
+const cancelAttachFlow = () => {
+  bumpAttachEpoch()
+  preparingReplay.value = false
+  starting.value = false
+  skipConfigStartFailed.value = false
+  visible.value = false
+}
+
+const retryAttachFlow = async () => {
+  skipConfigStartFailed.value = false
+  if (props.replayThroughIndex != null && props.replayThroughIndex >= 0) {
+    preparingReplay.value = true
+    emit('prepare-replay', props.replayThroughIndex)
+    return
+  }
+  await handleStart()
+}
+
+const startAfterPrepare = async () => {
+  const epoch = attachFlowEpoch
+  if (!visible.value || epoch !== attachFlowEpoch) return
+  preparingReplay.value = false
+  skipConfigStartFailed.value = false
+  if (!visible.value || epoch !== attachFlowEpoch) return
+  await handleStart()
+}
+
+const markPrepareFailed = (message) => {
+  preparingReplay.value = false
+  starting.value = false
+  skipConfigStartFailed.value = true
+  if (message) ElMessage.warning(message)
+}
+
+const abortRecordingQuiet = async () => {
+  stopPolling()
+  stopElapsedTimer()
+  if (!recordId.value) return
+  try {
+    await aiRecordApi.stop(recordId.value, recordControlPayload())
+  } catch {
+    /* 关闭弹窗时尽力停止即可 */
+  }
+}
+
+const handleBeforeClose = async (done) => {
+  if (preparingReplay.value || (props.skipConfig && state.value === 'config' && starting.value)) {
+    bumpAttachEpoch()
+    preparingReplay.value = false
+    starting.value = false
+    done()
+    return
+  }
+  if (state.value === 'recording' && recordId.value) {
+    try {
+      await ElMessageBox.confirm(
+        '录制仍在进行。关闭将停止录制，未应用的步骤不会写入用例。是否关闭？',
+        '退出录制',
+        { type: 'warning', confirmButtonText: '停止并关闭', cancelButtonText: '继续录制' },
+      )
+    } catch {
+      return
+    }
+    bumpAttachEpoch()
+    await abortRecordingQuiet()
+    state.value = 'config'
+    done()
+    return
+  }
+  bumpAttachEpoch()
+  done()
+}
+
 const handleStart = async () => {
+  const flowEpoch = attachFlowEpoch
+  if (!visible.value) return
   const attachDebug = props.debugSessionId || activeDebugSessionId.value
   if (!attachDebug && !form.url.trim()) {
     ElMessage.warning('请输入目标页面地址')
@@ -723,6 +854,16 @@ const handleStart = async () => {
       payload.debug_session_id = debugSid
     }
     const res = await aiRecordApi.start(payload)
+    if (flowEpoch !== attachFlowEpoch || !visible.value) {
+      // 用户已取消：若后端已建会话则尽力停止
+      const rid = res?.data?.data?.record_id
+      if (rid) {
+        try {
+          await aiRecordApi.stop(rid, debugSid ? { debug_session_id: debugSid } : {})
+        } catch { /* ignore */ }
+      }
+      return
+    }
     // axios response: res.status = HTTP 状态码, res.data = StandardResponse
     if (res.status === 200 && res.data?.code === 200) {
       recordId.value = res.data.data.record_id
@@ -746,6 +887,7 @@ const handleStart = async () => {
       }
     }
   } catch (e) {
+    if (flowEpoch !== attachFlowEpoch || !visible.value) return
     ElMessage.error(e.response?.data?.detail || '启动录制失败')
     if (shouldCloseOnStartError()) {
       visible.value = false
@@ -1012,6 +1154,19 @@ const handleOptimize = async () => {
     ElMessage.warning('录制会话不存在')
     return
   }
+  // 把结果态编辑过的 params JSON 写回 steps，再交给后端
+  for (let i = 0; i < steps.value.length; i++) {
+    try {
+      const parsed = JSON.parse(stepParamsJson.value[i] || '{}')
+      const existingLocator = steps.value[i].params?.locator
+      steps.value[i].params = {
+        ...parsed,
+        ...(existingLocator !== undefined ? { locator: existingLocator } : {}),
+      }
+    } catch {
+      /* 格式错误时保留已有 params */
+    }
+  }
   optimizing.value = true
   try {
     const res = await aiRecordApi.optimize(recordId.value, {
@@ -1019,6 +1174,8 @@ const handleOptimize = async () => {
       ai_config_id: aiConfigId.value || undefined,
       append_assertions: optimizeOptions.append_assertions,
       use_page_context: optimizeOptions.use_page_context,
+      // 结果态已编辑步骤（含 pre_wait 等），避免后端只用 DB 里未编辑的原始步骤
+      steps: steps.value,
     })
     if (res.status === 200 && res.data?.code === 200) {
       const d = res.data.data || {}
@@ -1067,7 +1224,12 @@ const handleOptimize = async () => {
       ElMessage.error(res.data?.message || 'AI 优化失败')
     }
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || 'AI 优化失败')
+    const detail = e.response?.data?.detail
+    if (e.code === 'ECONNABORTED' || /timeout/i.test(String(e.message || ''))) {
+      ElMessage.error('AI 优化超时（步骤较多或已开断言会更久）。可在「AI 场景绑定」调高 timeout，或先关掉「补充断言」再试')
+    } else {
+      ElMessage.error(detail || e.message || 'AI 优化失败')
+    }
   } finally {
     optimizing.value = false
   }
@@ -1116,6 +1278,7 @@ const handleApply = async () => {
 const resetState = () => {
   state.value = 'config'
   skipConfigStartFailed.value = false
+  preparingReplay.value = false
   form.url = props.initialUrl || ''
   form.device_id = props.presetDeviceId || ''
   description.value = props.initialDescription || ''
@@ -1182,6 +1345,7 @@ const stepTagType = (method) => {
 
 watch(() => props.modelValue, async (val) => {
   if (val) {
+    bumpAttachEpoch()
     resetState()
     applyPresetValues()
     syncApplyModeFromProps()
@@ -1195,8 +1359,17 @@ watch(() => props.modelValue, async (val) => {
     applyPresetValues()
     if (props.skipConfig && props.presetMode) {
       await nextTick()
-      handleStart()
+      if (!visible.value) return
+      if (props.replayThroughIndex != null && props.replayThroughIndex >= 0) {
+        preparingReplay.value = true
+        emit('prepare-replay', props.replayThroughIndex)
+        return
+      }
+      await handleStart()
     }
+  } else {
+    bumpAttachEpoch()
+    preparingReplay.value = false
   }
 })
 
@@ -1208,9 +1381,15 @@ watch(() => props.presetDeviceId, (id) => {
   if (id) form.device_id = id
 })
 
-defineExpose({ recordId })
+defineExpose({
+  recordId,
+  startAfterPrepare,
+  markPrepareFailed,
+  cancelAttachFlow,
+})
 
 onUnmounted(() => {
+  bumpAttachEpoch()
   stopPolling()
   stopElapsedTimer()
 })

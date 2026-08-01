@@ -1,3 +1,10 @@
-/** CE 占位：迭代资料库子路由开发测试中，后续放出 */
-export const knowledgePackChildRoutes = []
+/** CE：定制文档页签可见，实现由 stub 锁定（无行业包 API） */
+export const knowledgePackChildRoutes = [
+  {
+    path: 'pro-custom',
+    name: 'knowledgePackWizard',
+    component: () => import('./views/KnowledgePackWizard.vue'),
+    meta: { title: '定制文档', permission: 'knowledge:view' }
+  }
+]
 export default knowledgePackChildRoutes

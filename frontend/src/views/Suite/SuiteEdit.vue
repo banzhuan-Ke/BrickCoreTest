@@ -1,51 +1,10 @@
 <template>
   <el-container class="suite-edit-container">
-    <!-- 左侧：关键字面板 -->
-    <el-aside width="280px" class="keyword-sidebar">
-      <div class="sidebar-header">
-        <h3>前置步骤操作</h3>
-      </div>
-      <div class="keyword-list">
-        <el-collapse v-model="activeGroups" class="keyword-collapse">
-          <el-collapse-item
-            v-for="group in keywordGroups"
-            :key="group.groupId"
-            :name="group.groupId"
-            class="keyword-group"
-          >
-            <template #title>
-              <div class="group-title">
-                <el-icon><component :is="group.icon" /></el-icon>
-                <span>{{ group.name }}</span>
-              </div>
-            </template>
-
-            <VueDraggable
-              :modelValue="group.items"
-              :group="{ name: 'steps', pull: 'clone', put: false }"
-              :sort="false"
-              :clone="cloneKeyword"
-              :animation="200"
-              target=".keyword-items"
-              class="draggable-source"
-            >
-              <div class="keyword-items">
-                <div
-                  v-for="(item, itemIndex) in group.items"
-                  :key="`${group.groupId}_${item.method}_${itemIndex}`"
-                  class="keyword-item"
-                  :data-step="JSON.stringify(item)"
-                >
-                  <el-icon><component :is="item.icon" /></el-icon>
-                  <span>{{ item.name }}</span>
-                  <el-icon class="drag-icon"><Rank /></el-icon>
-                </div>
-              </div>
-            </VueDraggable>
-          </el-collapse-item>
-        </el-collapse>
-      </div>
-    </el-aside>
+    <KeywordSidebar
+      v-model="activeGroups"
+      title="前置步骤操作"
+      :groups="keywordGroups"
+    />
 
     <!-- 中间 + 右侧（可拖拽调整宽度） -->
     <div class="suite-workspace">
@@ -112,10 +71,19 @@
             <el-button size="small" plain type="primary" @click="fragmentPickerVisible = true">插入片段</el-button>
             <el-text type="info" size="small">拖拽左侧操作到此处</el-text>
           </div>
-          <StepEditor v-model:steps="suiteInfo.pre_actions" />
+          <StepEditor
+            v-model:steps="suiteInfo.pre_actions"
+            :debug-selected-index="selectedStepIndex"
+            @debug-select-step="selectedStepIndex = $event"
+          />
         </div>
 
-        <FragmentPickerDialog v-model="fragmentPickerVisible" @insert="onFragmentInsert" />
+        <FragmentPickerDialog
+          v-model="fragmentPickerVisible"
+          :selected-step-index="selectedStepIndex"
+          :steps-count="suiteInfo.pre_actions?.length || 0"
+          @insert="onFragmentInsert"
+        />
 
         <el-collapse class="suite-hooks-collapse">
           <el-collapse-item title="数据工厂（前置/后置 SQL）" name="sql">
@@ -179,23 +147,17 @@
 <script setup>
 import { reactive, ref, computed, onMounted, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { VueDraggable } from 'vue-draggable-plus'
-import { StepEditor } from '@/components/StepEditor'
+import { StepEditor, KeywordSidebar } from '@/components/StepEditor'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import { UserStore } from '@/stores/module/UserStore'
 import http from '@/api/index'
 import { ElNotification } from 'element-plus'
 import ActionGroup from '@/datas/ActionGroup.js'
-import { cloneKeywordForDrag } from '@/utils/stepHelper'
 import {
-  Rank, Check, Close,
-  ChromeFilled, Position, Mouse,
-  CircleCheck, Refresh,
-  DocumentCopy, View, Timer,
-  ArrowDown, Delete,
+  Check, Close,
   Document, Edit, Clock, Search,
-  MessageBox, MoreFilled, Share
+  MessageBox, MoreFilled, Share, Mouse
 } from '@element-plus/icons-vue'
 import SuiteCaseList from './componets/SuiteCaseList.vue'
 import CaseSet from './componets/CaseSet.vue'
@@ -203,6 +165,7 @@ import DbAssertionsEditor from '@/views/ApiModule/components/DbAssertionsEditor.
 import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
 import { dataFactoryApi } from '@/api/modules/dataFactory'
 import { ElMessage } from 'element-plus'
+import { insertStepIntoList, resolveInsertAfterIndex } from '@/utils/stepHelper'
 import { useSplitPanelResize } from '@/composables/useSplitPanelResize'
 
 const { rightWidth, isResizing, onResizeStart } = useSplitPanelResize({
@@ -217,6 +180,7 @@ const userStore = UserStore()
 
 const suiteId = route.params.id
 const fragmentPickerVisible = ref(false)
+const selectedStepIndex = ref(-1)
 const formRef = ref()
 const suiteCaseListRef = ref()
 const saving = ref(false)
@@ -294,8 +258,6 @@ const keywordGroups = computed(() => {
   }))
 })
 
-const cloneKeyword = cloneKeywordForDrag
-
 // 表单校验规则
 const formRules = {
   name: [{ required: true, message: '请输入套件名称', trigger: 'blur' }],
@@ -303,10 +265,14 @@ const formRules = {
   catalog_id: [{ required: true, message: '请选择所属目录', trigger: 'change' }]
 }
 
-function onFragmentInsert(refStep) {
+function onFragmentInsert(payload) {
+  const refStep = payload?.step || payload
   if (!refStep) return
-  suiteInfo.pre_actions = [...(suiteInfo.pre_actions || []), refStep]
-  ElMessage.success(`已插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
+  const insertAt = payload?.insertAt ?? resolveInsertAfterIndex(suiteInfo.pre_actions?.length || 0, selectedStepIndex.value)
+  const { steps, insertAt: at } = insertStepIntoList(suiteInfo.pre_actions, refStep, insertAt)
+  suiteInfo.pre_actions = steps
+  selectedStepIndex.value = at
+  ElMessage.success(`已在第 ${at + 1} 步插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
 }
 
 // 获取套件详情

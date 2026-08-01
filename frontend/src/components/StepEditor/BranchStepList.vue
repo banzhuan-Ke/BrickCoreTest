@@ -1,5 +1,5 @@
 <template>
-  <div class="branch-step-list">
+  <div class="branch-step-list" :class="{ 'is-empty': localSteps.length === 0 }">
     <VueDraggable
       v-model="localSteps"
       :group="{ name: 'steps', pull: false, put: true }"
@@ -7,6 +7,7 @@
       :ghost-class="'ghost'"
       :drag-class="'dragging'"
       :chosen-class="'chosen'"
+      :empty-insert-threshold="80"
       handle=".step-drag-handle"
       filter=".btn, button, .el-button, .step-select-box, a, input, textarea"
       :prevent-on-filter="true"
@@ -14,7 +15,7 @@
       @add="onStepAdd"
       class="draggable-container"
     >
-      <div class="draggable-content">
+      <div class="draggable-content" :class="{ 'is-drop-empty': localSteps.length === 0 }">
         <StepItem
           v-for="(subStep, sIndex) in localSteps"
           :key="subStep.id || `step_${sIndex}_${Date.now()}`"
@@ -32,8 +33,8 @@
         />
       </div>
     </VueDraggable>
-    
-    <!-- 空状态提示 -->
+
+    <!-- 空态仅作视觉提示，不拦截拖放（与主步骤列表一致） -->
     <div v-if="localSteps.length === 0" class="empty-hint">
       <el-text type="info" size="small">
         <el-icon><Plus /></el-icon>
@@ -44,7 +45,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, inject, nextTick } from 'vue'
+import { ref, watch, inject, nextTick } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
 import { Plus } from '@element-plus/icons-vue'
 import StepItem from './StepItem.vue'
@@ -85,10 +86,43 @@ function onExpandFragment(stepIndex, { expanded }) {
   updateParent(steps)
 }
 
-// 处理拖拽添加步骤
+function resolveDragPayload(item) {
+  const rawAttr = item?.dataset?.step || item?.getAttribute?.('data-step') || ''
+  if (rawAttr) {
+    try {
+      return JSON.parse(rawAttr)
+    } catch {
+      /* fall through */
+    }
+  }
+  // 兼容 clone 后丢失 data-step：从 Sortable 临时节点上的绑定数据兜底
+  if (item && typeof item === 'object') {
+    const fallback = {
+      keyword: item.keyword || item.name || '',
+      name: item.name || item.keyword || '',
+      method: item.method || '',
+      params: item.params || {},
+      is_container: item.is_container,
+      branches: item.branches,
+    }
+    if (fallback.method) return fallback
+  }
+  return {}
+}
+
 function onStepAdd(evt) {
   const { item, newIndex } = evt
-  const rawData = JSON.parse(item.dataset.step || '{}')
+  let rawData = resolveDragPayload(item)
+  if (!rawData?.method) {
+    const placeholder = localSteps.value.find((s) => s && s._keywordDragPlaceholder)
+    if (placeholder) {
+      rawData = placeholder
+    }
+  }
+  if (!rawData?.method) {
+    ElMessage.warning('未能识别拖入的步骤，请重试')
+    return
+  }
   const { steps } = applyKeywordDragStep(localSteps.value, rawData, newIndex)
   updateParent(steps)
   ElMessage.success('步骤已添加')
@@ -128,13 +162,8 @@ function openSubStepEdit(index) {
 
 function handleAddBranch(stepIndex) {
   const step = localSteps.value[stepIndex]
-  
-  // 创建新的 branches 数组
   const branches = step.branches ? [...step.branches] : []
-  
-  // 找到ELSE分支的位置
   const elseIndex = branches.findIndex(b => b.condition?.type === 'else')
-  
   const newBranch = {
     id: `branch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     name: `分支${branches.length}`,
@@ -145,14 +174,11 @@ function handleAddBranch(stepIndex) {
     },
     steps: []
   }
-  
-  // 在ELSE分支之前插入
   if (elseIndex >= 0) {
     branches.splice(elseIndex, 0, newBranch)
   } else {
     branches.push(newBranch)
   }
-  
   updateSubStep(stepIndex, { ...step, branches })
   ElMessage.success('分支已添加')
 }
@@ -160,44 +186,63 @@ function handleAddBranch(stepIndex) {
 function handleDeleteBranch(stepIndex, branchIndex) {
   const step = localSteps.value[stepIndex]
   const branch = step.branches[branchIndex]
-  
   if (branch.condition?.type === 'else') {
     ElMessage.warning('ELSE分支不能删除')
     return
   }
-  
-  // 创建新的 branches 数组
   const branches = step.branches.filter((_, i) => i !== branchIndex)
-  
   updateSubStep(stepIndex, { ...step, branches })
   ElMessage.success('分支已删除')
 }
-
 </script>
 
 <style scoped lang="scss">
 .branch-step-list {
-  min-height: 50px;
+  position: relative;
+  min-height: 56px;
+
+  &.is-empty {
+    .draggable-container {
+      min-height: 72px;
+      width: 100%;
+    }
+
+    .empty-hint {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 1;
+    }
+  }
 }
 
 .draggable-container {
-  min-height: 50px;
+  min-height: 40px;
 }
 
 .draggable-content {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
+
+  &.is-drop-empty {
+    min-height: 72px;
+    width: 100%;
+  }
 }
 
 .empty-hint {
-  padding: 20px;
+  padding: 16px;
   text-align: center;
   background: var(--el-fill-color-light);
   border-radius: 4px;
   border: 2px dashed var(--el-border-color);
   color: var(--el-text-color-secondary);
-  
+
   .el-icon {
     margin-right: 4px;
   }

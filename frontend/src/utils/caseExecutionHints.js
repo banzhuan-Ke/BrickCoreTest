@@ -5,13 +5,31 @@ export function parseExecutionIdQuery(raw) {
   return Number.isFinite(id) && id > 0 ? id : undefined
 }
 
-export function getStepExecutionHint(executionHints, stepIndex) {
-  if (!executionHints?.step_failures?.length) return null
-  const idx = Number(stepIndex)
-  const matches = executionHints.step_failures.filter((item) => Number(item.step_index) === idx)
-  if (!matches.length) return null
+function pickPreferredFailure(matches) {
+  if (!matches?.length) return null
   return matches.find((item) => ['fail', 'failed', 'error'].includes(String(item?.status || '').toLowerCase()))
     || matches[matches.length - 1]
+}
+
+/**
+ * @param {object|null} executionHints
+ * @param {number} stepIndex 编辑器步骤下标（0-based）
+ * @param {object|null} step 当前步骤对象（优先用 step.id 对齐历史失败）
+ */
+export function getStepExecutionHint(executionHints, stepIndex, step = null) {
+  if (!executionHints?.step_failures?.length) return null
+  const failures = executionHints.step_failures.filter((item) => item && !item.unresolved)
+
+  const stepId = step?.id != null ? String(step.id).trim() : ''
+  if (stepId) {
+    const byId = failures.filter((item) => item.step_id && String(item.step_id).trim() === stepId)
+    if (byId.length) return pickPreferredFailure(byId)
+  }
+
+  const idx = Number(stepIndex)
+  const matches = failures.filter((item) => Number(item.step_index) === idx)
+  if (!matches.length) return null
+  return pickPreferredFailure(matches)
 }
 
 export function formatExecutionHintStatus(status) {

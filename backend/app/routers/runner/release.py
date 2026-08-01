@@ -10,6 +10,7 @@ from app.core.runner.runner_release import (
     PERF_PACKAGE_FILENAME,
     PERF_PACKAGE_FILENAME_MAC,
     build_client_release_info,
+    resolve_patch_file,
     runner_package_path,
     perf_package_path,
 )
@@ -58,6 +59,30 @@ async def runner_client_download(
         path,
         media_type="application/zip",
         filename=PACKAGE_FILENAME,
+    )
+
+
+@router.get(
+    "/client-patch/{channel_id}",
+    summary="下载 Runner 分层增量包（加密 .bcpack，需登录）",
+)
+async def runner_client_patch_download(
+    channel_id: str,
+    request: Request,
+    _user_info: dict = Depends(is_authenticated_from_header_or_query),
+):
+    resolved = resolve_patch_file(channel_id)
+    if not resolved:
+        hint = build_client_release_info(_request_base_url(request)).get("update_patches_hint", "")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"增量包不可用（channel={channel_id}）。请将 patches 上传到：{hint}",
+        )
+    path, filename = resolved
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=filename,
     )
 
 

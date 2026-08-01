@@ -48,6 +48,43 @@
         :env-id="selectedEnvId"
         :samples="previewSamples"
       />
+
+      <div v-if="!isWsApi" class="worker-selector">
+        <el-checkbox v-model="viaWorker" @change="onViaWorkerChange">经执行机发送</el-checkbox>
+        <el-select
+          v-model="selectedWorkerId"
+          placeholder="选择在线空闲执行机"
+          size="small"
+          clearable
+          filterable
+          :disabled="!viaWorker"
+          style="width: 280px; margin-left: 8px;"
+        >
+          <el-option
+            v-for="w in idleWorkers"
+            :key="w.id"
+            :label="`${w.name} (#${w.id}) · ${w.host} · 引擎 ${w.engine_version || '?'}`"
+            :value="w.id"
+          />
+        </el-select>
+        <el-button
+          link
+          type="primary"
+          size="small"
+          style="margin-left: 4px;"
+          :loading="workersLoading"
+          @click="loadWorkers"
+        >刷新</el-button>
+        <el-tooltip
+          content="平台服务器访问不到被测系统时，勾选后由 BrickCorePerf / Runner 压测执行机代发请求。不勾选则仍由平台本机发送。执行机引擎需 ≥ 1.0.0。"
+          placement="top"
+        >
+          <span class="worker-hint">?</span>
+        </el-tooltip>
+        <span v-if="viaWorker && !idleWorkers.length" class="worker-warn">
+          暂无可用执行机（需在线空闲且引擎 ≥ {{ MIN_API_DEBUG_ENGINE }}）
+        </span>
+      </div>
       
       <!-- 请求配置 -->
       <div v-if="isWsApi" class="request-panel">
@@ -56,6 +93,9 @@
           <el-input v-model="request.url" placeholder="ws://host/path 或 /ws/echo" size="small" />
           <el-button type="primary" size="small" @click="sendWsRequest" :loading="loading" icon="Promotion">
             执行
+          </el-button>
+          <el-button type="success" size="small" plain :loading="savingCase" @click="openSaveAsCase">
+            {{ saveCaseButtonLabel }}
           </el-button>
         </div>
         <el-tabs v-model="activeTab" class="debug-tabs">
@@ -89,6 +129,9 @@
           </el-input>
           <el-button type="primary" size="small" @click="sendRequest" :loading="loading" icon="Promotion">
             发送
+          </el-button>
+          <el-button type="success" size="small" plain :loading="savingCase" @click="openSaveAsCase">
+            {{ saveCaseButtonLabel }}
           </el-button>
         </div>
         
@@ -264,13 +307,81 @@
     :project-id="proStore.projectInfo?.id"
     @insert="onDfTagInsert"
   />
+
+  <el-dialog v-model="saveCaseVisible" title="保存为用例" width="480px" append-to-body destroy-on-close>
+    <el-form label-width="80px">
+      <el-form-item label="用例名称" required>
+        <el-input v-model="saveCaseName" maxlength="100" placeholder="用例名称" />
+      </el-form-item>
+      <el-alert
+        v-if="fromPerfScene"
+        type="info"
+        :closable="false"
+        show-icon
+        title="保存成功后将返回压测场景，并把新用例追加到对应链路阶段。"
+      />
+    </el-form>
+    <template #footer>
+      <el-button @click="saveCaseVisible = false">取消</el-button>
+      <el-button type="primary" :loading="savingCase" @click="submitSaveAsCase">
+        {{ saveCaseButtonLabel }}
+      </el-button>
+    </template>
+  </el-dialog>
+
+  <el-dialog
+    v-model="extractorWizard.visible"
+    title="建议提取变量"
+    width="560px"
+    append-to-body
+    :close-on-click-modal="false"
+    @closed="onExtractorWizardClosed"
+  >
+    <el-alert
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px;"
+      title="根据本次调试响应，建议以下 JSONPath 提取项。勾选后写入用例，可在链路后续步骤用 ${变量名} 引用。"
+    />
+    <el-table :data="extractorWizard.suggestions" size="small" border max-height="320">
+      <el-table-column width="50" align="center">
+        <template #default="{ row }">
+          <el-checkbox v-model="row.checked" />
+        </template>
+      </el-table-column>
+      <el-table-column prop="name" label="变量名" width="120">
+        <template #default="{ row }">
+          <el-input v-model="row.name" size="small" />
+        </template>
+      </el-table-column>
+      <el-table-column prop="path" label="JSONPath" min-width="180">
+        <template #default="{ row }">
+          <el-input v-model="row.path" size="small" />
+        </template>
+      </el-table-column>
+      <el-table-column label="示例值" min-width="120" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.sample }}</template>
+      </el-table-column>
+    </el-table>
+    <template #footer>
+      <el-button @click="skipExtractorWizard">跳过</el-button>
+      <el-button type="primary" :loading="extractorWizard.saving" @click="confirmExtractorWizard">
+        写入提取项
+      </el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
 import { ref, reactive, computed, watch, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import http from '@/api/index'
+import { httpCaseApi } from '@/api/modules/http'
+import { perfWorkerApi } from '@/api/modules/perf'
+import { parseWorkerList, filterOnlineWorkers } from '@/views/Perf/perfWorkerUtils'
 import EnvVarQuickEdit from '@/components/EnvVarQuickEdit.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
@@ -291,6 +402,8 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue'])
 
+const route = useRoute()
+const router = useRouter()
 const proStore = ProjectStore()
 const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
 const activeTab = ref('params')
@@ -300,8 +413,307 @@ const response = ref(null)
 const wsSteps = ref([])
 const customBaseUrl = ref('')
 const selectedEnvId = ref(null)
+const viaWorker = ref(false)
+const selectedWorkerId = ref(null)
+const workersLoading = ref(false)
+const workerList = ref([])
+/** 经执行机调试最少引擎版本（与后端门禁一致） */
+const MIN_API_DEBUG_ENGINE = '1.0.0'
+
+function parseEngineParts(v) {
+  return String(v || '0')
+    .split(/[^\d]+/)
+    .filter(Boolean)
+    .map((n) => Number(n) || 0)
+}
+
+function engineAtLeast(version, minimum) {
+  const a = parseEngineParts(version)
+  const b = parseEngineParts(minimum)
+  const len = Math.max(a.length, b.length)
+  for (let i = 0; i < len; i += 1) {
+    const x = a[i] || 0
+    const y = b[i] || 0
+    if (x > y) return true
+    if (x < y) return false
+  }
+  return true
+}
+
+const idleWorkers = computed(() =>
+  filterOnlineWorkers(workerList.value).filter(
+    (w) => w.status !== 'busy' && engineAtLeast(w.engine_version, MIN_API_DEBUG_ENGINE)
+  )
+)
 const varEditVisible = ref(false)
 const tagPickerVisible = ref(false)
+const saveCaseVisible = ref(false)
+const saveCaseName = ref('')
+const savingCase = ref(false)
+const extractorWizard = reactive({
+  visible: false,
+  saving: false,
+  caseId: null,
+  suggestions: [],
+  pendingRedirect: false
+})
+
+const fromPerfScene = computed(() => {
+  const v = route.query.from_perf_scene
+  return v != null && String(v).length > 0
+})
+const saveCaseButtonLabel = computed(() =>
+  fromPerfScene.value ? '保存并返回压测场景' : '保存为用例'
+)
+
+const parseJsonBody = (body) => {
+  if (body == null) return null
+  if (typeof body === 'object') return body
+  if (typeof body !== 'string') return null
+  const text = body.trim()
+  if (!text || (text[0] !== '{' && text[0] !== '[')) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+const formatSample = (val) => {
+  if (val == null) return ''
+  if (typeof val === 'object') {
+    try {
+      const s = JSON.stringify(val)
+      return s.length > 80 ? `${s.slice(0, 80)}…` : s
+    } catch {
+      return String(val)
+    }
+  }
+  const s = String(val)
+  return s.length > 80 ? `${s.slice(0, 80)}…` : s
+}
+
+const getBySimplePath = (obj, dotted) => {
+  const parts = dotted.split('.').filter(Boolean)
+  let cur = obj
+  for (const p of parts) {
+    if (cur == null || typeof cur !== 'object') return undefined
+    cur = cur[p]
+  }
+  return cur
+}
+
+/** 浅层启发式建议 JSONPath 提取项 */
+const suggestExtractorsFromResponse = (body) => {
+  const data = parseJsonBody(body)
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return []
+
+  const suggestions = []
+  const seenPath = new Set()
+  const push = (name, path, sample, checked = false) => {
+    if (!name || !path || seenPath.has(path)) return
+    seenPath.add(path)
+    suggestions.push({ name, source: 'json', path, sample: formatSample(sample), checked })
+  }
+
+  const preferred = [
+    ['token', 'data.token', true],
+    ['access_token', 'data.access_token', true],
+    ['token', 'token', true],
+    ['access_token', 'access_token', true],
+    ['id', 'data.id', true],
+    ['id', 'id', false],
+  ]
+  for (const [name, dotted, checked] of preferred) {
+    const val = getBySimplePath(data, dotted)
+    if (val !== undefined && val !== null && typeof val !== 'object') {
+      push(name, `$.${dotted}`, val, checked)
+    }
+  }
+
+  for (const key of Object.keys(data).slice(0, 15)) {
+    const val = data[key]
+    if (val !== null && typeof val !== 'object') {
+      push(key, `$.${key}`, val, false)
+    }
+  }
+
+  const nested = data.data
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    for (const key of Object.keys(nested).slice(0, 10)) {
+      const val = nested[key]
+      if (val !== null && typeof val !== 'object') {
+        push(key, `$.data.${key}`, val, false)
+      }
+    }
+  }
+
+  return suggestions
+}
+
+const redirectAfterSaveCase = (caseId) => {
+  if (!fromPerfScene.value || !caseId) return
+  const sceneRef = String(route.query.from_perf_scene)
+  const phaseIndex = route.query.phase_index != null ? String(route.query.phase_index) : '0'
+  if (sceneRef === 'new') {
+    router.push({
+      path: '/perf-scene/add',
+      query: { append_case_id: String(caseId), phase_index: phaseIndex }
+    })
+  } else {
+    router.push({
+      path: `/perf-scene/edit/${sceneRef}`,
+      query: { append_case_id: String(caseId), phase_index: phaseIndex }
+    })
+  }
+}
+
+const finishSaveAsCaseFlow = (caseId) => {
+  extractorWizard.visible = false
+  extractorWizard.caseId = null
+  extractorWizard.suggestions = []
+  extractorWizard.pendingRedirect = false
+  emit('update:modelValue', false)
+  redirectAfterSaveCase(caseId)
+}
+
+const skipExtractorWizard = () => {
+  const caseId = extractorWizard.caseId
+  finishSaveAsCaseFlow(caseId)
+}
+
+const onExtractorWizardClosed = () => {
+  if (extractorWizard.pendingRedirect && extractorWizard.caseId) {
+    const caseId = extractorWizard.caseId
+    extractorWizard.pendingRedirect = false
+    extractorWizard.caseId = null
+    emit('update:modelValue', false)
+    redirectAfterSaveCase(caseId)
+  }
+}
+
+const buildCaseUpdatePayload = (detail, extractors) => ({
+  name: detail.name,
+  catalog_id: detail.catalog_id ?? null,
+  priority: detail.priority || 'P2',
+  timeout: detail.timeout ?? 30,
+  retry_count: detail.retry_count ?? 0,
+  tags: Array.isArray(detail.tags) ? detail.tags : [],
+  request_headers: detail.request_headers || {},
+  request_params: detail.request_params || [],
+  request_body: detail.request_body ?? {},
+  request_body_type: detail.request_body_type || 'json',
+  request_body_fields: detail.request_body_fields || [],
+  ws_steps: detail.ws_steps || [],
+  assertions: detail.assertions || [],
+  assertion_groups: detail.assertion_groups || [],
+  extractors,
+  depends_on: detail.depends_on || null,
+  pre_script: detail.pre_script || null,
+  post_script: detail.post_script || null,
+  data_set: detail.data_set || [],
+  db_assertions: detail.db_assertions || [],
+  global_header_policy: detail.global_header_policy || {}
+})
+
+const confirmExtractorWizard = async () => {
+  const selected = extractorWizard.suggestions
+    .filter(s => s.checked && (s.name || '').trim() && (s.path || '').trim())
+    .map(s => ({
+      name: String(s.name).trim(),
+      source: 'json',
+      path: String(s.path).trim(),
+      description: ''
+    }))
+  if (!selected.length) {
+    ElMessage.warning('请至少勾选一项提取变量，或点击跳过')
+    return
+  }
+  const caseId = extractorWizard.caseId
+  if (!caseId) return
+  extractorWizard.saving = true
+  try {
+    const detailRes = await httpCaseApi.getDetail(caseId)
+    const detail = detailRes.data?.data ?? detailRes.data ?? detailRes
+    await httpCaseApi.update(caseId, buildCaseUpdatePayload(detail, selected))
+    ElMessage.success(`已写入 ${selected.length} 个提取项`)
+    extractorWizard.pendingRedirect = false
+    finishSaveAsCaseFlow(caseId)
+  } catch (err) {
+    console.error(err)
+    ElMessage.error(extractApiErrorMessage(err) || '写入提取项失败')
+  } finally {
+    extractorWizard.saving = false
+  }
+}
+
+const openSaveAsCase = () => {
+  if (!props.api?.id) {
+    ElMessage.warning('缺少接口信息，无法保存用例')
+    return
+  }
+  if (!proStore.projectInfo?.id) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  saveCaseName.value = `${props.api.name || '接口'}-调试`
+  saveCaseVisible.value = true
+}
+
+const submitSaveAsCase = async () => {
+  const name = (saveCaseName.value || '').trim()
+  if (!name) {
+    ElMessage.warning('请填写用例名称')
+    return
+  }
+  if (!props.api?.id) {
+    ElMessage.warning('缺少接口信息')
+    return
+  }
+  savingCase.value = true
+  try {
+    const payload = {
+      name,
+      api_id: props.api.id,
+      project_id: proStore.projectInfo.id,
+      catalog_id: props.api.catalog_id ?? null,
+      request_headers: headersToCaseDict(request.headers),
+      request_params: (request.params || [])
+        .filter(p => p?.name)
+        .map(p => ({
+          name: p.name,
+          value: p.value ?? '',
+          type: p.type || 'string',
+          required: !!p.required
+        })),
+      request_body: parseBodyForCase(),
+      request_body_type: request.body_type || 'json',
+      request_body_fields: mapBodyFields(request.body_fields),
+      ws_steps: isWsApi.value ? (wsSteps.value || []).map(s => ({ ...s })) : []
+    }
+    const res = await httpCaseApi.create(payload)
+    const data = res.data?.data ?? res.data ?? res
+    const caseId = data?.id
+    ElMessage.success(caseId ? `用例已保存 #${caseId}` : '用例已保存')
+    saveCaseVisible.value = false
+
+    const suggestions = suggestExtractorsFromResponse(response.value?.body)
+    if (caseId && suggestions.length) {
+      extractorWizard.caseId = caseId
+      extractorWizard.suggestions = suggestions
+      extractorWizard.pendingRedirect = !!fromPerfScene.value
+      extractorWizard.visible = true
+      return
+    }
+    emit('update:modelValue', false)
+    redirectAfterSaveCase(caseId)
+  } catch (err) {
+    console.error(err)
+    ElMessage.error(extractApiErrorMessage(err) || '保存用例失败')
+  } finally {
+    savingCase.value = false
+  }
+}
 
 async function onDfTagInsert(refStr) {
   const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
@@ -551,7 +963,43 @@ watch(() => [props.modelValue, props.api?.id], ([visible, id]) => {
   if (visible && id) {
     nextTick(() => fetchApiDetail(id))
   }
+  if (visible) {
+    loadWorkers()
+  }
 })
+
+const loadWorkers = async () => {
+  const pid = proStore.projectInfo?.id
+  if (!pid) {
+    workerList.value = []
+    return
+  }
+  workersLoading.value = true
+  try {
+    const res = await perfWorkerApi.getList({ project_id: pid })
+    workerList.value = parseWorkerList(res)
+    if (
+      selectedWorkerId.value &&
+      !idleWorkers.value.some((w) => w.id === selectedWorkerId.value)
+    ) {
+      selectedWorkerId.value = null
+    }
+  } catch (e) {
+    console.error(e)
+    workerList.value = []
+  } finally {
+    workersLoading.value = false
+  }
+}
+
+const onViaWorkerChange = (checked) => {
+  if (checked) {
+    loadWorkers()
+    if (!selectedWorkerId.value && idleWorkers.value.length === 1) {
+      selectedWorkerId.value = idleWorkers.value[0].id
+    }
+  }
+}
 
 // 弹窗关闭后重置
 const handleClosed = () => {
@@ -561,6 +1009,33 @@ const handleClosed = () => {
   request.base_url = ''
   request.body_fields = []
   bodyText.value = ''
+  viaWorker.value = false
+  selectedWorkerId.value = null
+}
+
+const headersToCaseDict = (headers) => {
+  if (!Array.isArray(headers)) return headers && typeof headers === 'object' ? { ...headers } : {}
+  const out = {}
+  for (const h of headers) {
+    const key = h?.key || h?.name
+    if (key) out[key] = h.value ?? ''
+  }
+  return out
+}
+
+const parseBodyForCase = () => {
+  if (isWsApi.value) return {}
+  if (['form-data', 'binary'].includes(request.body_type)) return {}
+  if (request.body_type === 'json') {
+    const text = (bodyText.value || '').trim()
+    if (!text) return {}
+    try {
+      return JSON.parse(text)
+    } catch {
+      return { raw: text }
+    }
+  }
+  return bodyText.value || ''
 }
 
 const addParam = () => {
@@ -630,6 +1105,24 @@ const sendRequest = async () => {
   }
   if (!validateBeforeSend(fullUrl)) return
 
+  if (viaWorker.value) {
+    if (!selectedWorkerId.value) {
+      ElMessage.warning('请选择在线空闲执行机，或取消「经执行机发送」')
+      return
+    }
+    if (!idleWorkers.value.some((w) => w.id === selectedWorkerId.value)) {
+      ElMessage.warning('所选执行机已不可用，请刷新后重选')
+      return
+    }
+    if (
+      request.body_type === 'form-data' &&
+      request.body_fields.some((f) => f.field_type === 'file')
+    ) {
+      ElMessage.warning('经执行机发送暂不支持带文件的 form-data，请去掉文件字段或取消勾选')
+      return
+    }
+  }
+
   loading.value = true
   try {
 
@@ -649,7 +1142,7 @@ const sendRequest = async () => {
 
     request.body = body
 
-    const res = await http.apiModuleApi.debugApi({
+    const payload = {
       method: request.method,
       url: fullUrl,
       headers: request.headers,
@@ -660,11 +1153,19 @@ const sendRequest = async () => {
       timeout: 30,
       env_id: selectedEnvId.value || undefined,
       project_id: proStore.projectInfo?.id || undefined,
-    })
+    }
+    if (viaWorker.value && selectedWorkerId.value) {
+      payload.worker_id = selectedWorkerId.value
+    }
+
+    const res = await http.apiModuleApi.debugApi(payload)
 
     if (res.status === 200) {
       response.value = res.data
       responseTab.value = 'body'
+      if (res.data?.via_worker) {
+        ElMessage.success(`已由执行机 #${res.data.worker_id} 代发`)
+      }
     }
   } catch (error) {
     ElMessage.error(extractApiErrorMessage(error))
@@ -758,6 +1259,38 @@ const sendWsRequest = async () => {
     color: var(--el-text-color-secondary);
     margin-left: 10px;
   }
+}
+
+.worker-selector {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 15px;
+  background: var(--el-fill-color-blank);
+  border: 1px dashed var(--el-border-color);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.worker-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 4px;
+  border-radius: 50%;
+  border: 1px solid var(--el-border-color);
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  cursor: help;
+}
+
+.worker-warn {
+  color: var(--el-color-warning);
+  font-size: 12px;
+  margin-left: 4px;
 }
 
 .request-panel, .response-panel {

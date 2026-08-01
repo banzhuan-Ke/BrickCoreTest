@@ -1,51 +1,6 @@
 <template>
   <el-container class="case-edit-container">
-    <!-- 左侧：关键字面板 -->
-    <el-aside width="280px" class="keyword-sidebar">
-      <div class="sidebar-header">
-        <h3>操作选项</h3>
-      </div>
-      <div class="keyword-list">
-        <el-collapse v-model="activeGroups" class="keyword-collapse">
-          <el-collapse-item
-            v-for="group in keywordGroups"
-            :key="group.groupId"
-            :name="group.groupId"
-            class="keyword-group"
-          >
-            <template #title>
-              <div class="group-title">
-                <el-icon><component :is="group.icon" /></el-icon>
-                <span>{{ group.name }}</span>
-              </div>
-            </template>
-            
-            <VueDraggable
-              :modelValue="group.items"
-              :group="{ name: 'steps', pull: 'clone', put: false }"
-              :sort="false"
-              :clone="cloneKeyword"
-              :animation="200"
-              target=".keyword-items"
-              class="draggable-source"
-            >
-              <div class="keyword-items">
-                <div
-                  v-for="(item, itemIndex) in group.items"
-                  :key="`${group.groupId}_${item.method}_${itemIndex}`"
-                  class="keyword-item"
-                  :data-step="JSON.stringify(item)"
-                >
-                  <el-icon><component :is="item.icon" /></el-icon>
-                  <span>{{ item.name }}</span>
-                  <el-icon class="drag-icon"><Rank /></el-icon>
-                </div>
-              </div>
-            </VueDraggable>
-          </el-collapse-item>
-        </el-collapse>
-      </div>
-    </el-aside>
+    <KeywordSidebar v-model="activeGroups" :groups="keywordGroups" />
     
     <!-- 右侧：用例编辑区 -->
     <el-main class="case-main">
@@ -157,6 +112,7 @@
           @debug-hints-change="debugExecutionHints = $event"
           @focus-step="onDebugSelectStep"
           @apply-locator="applyDebugLocator"
+          @run-selected-request="onToolbarRunSelected"
         />
 
         <!-- 步骤编辑器 -->
@@ -186,13 +142,19 @@
           :through-index="debugThroughIndex"
         />
 
-        <FragmentPickerDialog v-model="fragmentPickerVisible" @insert="onFragmentInsert" />
+        <FragmentPickerDialog
+          v-model="fragmentPickerVisible"
+          :selected-step-index="selectedStepIndex"
+          :steps-count="caseInfo.steps?.length || 0"
+          @insert="onFragmentInsert"
+        />
 
         <!-- AI 生成弹窗 -->
         <UiCaseGenerator v-model="aiDialogVisible" @apply="handleAiApply" />
         
         <!-- AI 录制弹窗 -->
         <UiCaseRecorder
+          ref="recorderRef"
           v-model="recordDialogVisible"
           :initial-description="recordingDescription"
           :initial-url="recordingInitialUrl"
@@ -204,6 +166,8 @@
           :preset-mode="recordPreset.presetMode"
           :skip-config="recordPreset.skipConfig"
           :lock-apply-mode="recordPreset.lockApplyMode"
+          :replay-through-index="recordPreset.replayThroughIndex"
+          @prepare-replay="onPrepareReplayForRecord"
           @apply="handleRecorderApply"
         />
 
@@ -234,8 +198,7 @@
 <script setup>
 import { reactive, ref, onMounted, computed, provide, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { VueDraggable } from 'vue-draggable-plus'
-import { StepEditor } from '@/components/StepEditor'
+import { StepEditor, KeywordSidebar } from '@/components/StepEditor'
 import UiCaseGenerator from '@/views/AI/components/UiCaseGenerator.vue'
 import UiCaseRecorder from '@/views/AI/components/UiCaseRecorder.vue'
 import UiCaseStepOptimizeDialog from '@/views/AI/components/UiCaseStepOptimizeDialog.vue'
@@ -253,19 +216,14 @@ import http from '@/api/index'
 import { ElNotification, ElMessage, ElMessageBox } from 'element-plus'
 import dateTools from '@/tools/dateTools'
 import ActionGroup from '@/datas/ActionGroup.js'
-import { cloneKeywordForDrag } from '@/utils/stepHelper'
 import { applyPickLocatorToSteps } from '@/utils/debugLocator.js'
 import { parseExecutionIdQuery } from '@/utils/caseExecutionHints'
 import { formatDebugStepRange } from '@/utils/debugSession.js'
+import { insertStepIntoList, resolveInsertAfterIndex } from '@/utils/stepHelper'
 import {
-  Rank, Check, Close,
-  ChromeFilled, Position, Mouse,
-  CircleCheck, Refresh, SwitchButton,
-  DocumentCopy, Upload, Download, 
-  FullScreen, View, Timer,
-  ArrowDown, ArrowUp, Delete,
+  Check, Close,
   Document, Edit, Clock, Search,
-  MessageBox, MoreFilled, Share, WarningFilled
+  MessageBox, MoreFilled, Share, WarningFilled, Mouse
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -274,13 +232,16 @@ const userStore = UserStore()
 const proStore = ProjectStore()
 const varInsertEnvId = ref(proStore.envList[0]?.id || null)
 const debugPanelRef = ref(null)
+const recorderRef = ref(null)
 const stepEditorRef = ref(null)
-const selectedStepIndex = ref(0)
+const selectedStepIndex = ref(-1)
 const debugHighlightIndices = ref([])
 const pendingDebugIndices = ref(null)
 const pendingDebugFromStep = ref(null)
 const pendingDebugQueryStep = ref(null)
 const interactiveSession = ref(null)
+/** 取消「从这里开始录制」回放时递增，避免回放结束后仍启动接录 */
+let recordPrepareEpoch = 0
 const recordPreset = reactive({
   defaultApplyMode: 'append',
   insertAtIndex: null,
@@ -289,6 +250,7 @@ const recordPreset = reactive({
   presetMode: false,
   skipConfig: false,
   lockApplyMode: false,
+  replayThroughIndex: null,
 })
 provide('varInsertEnvId', varInsertEnvId)
 provide('interactiveDebugSession', interactiveSession)
@@ -315,7 +277,8 @@ watch(interactiveSession, async (sess, prev) => {
     if (prev?.status === 'ready' && sess?.id === prev?.id) return
     pendingDebugFromStep.value = null
     await nextTick()
-    await continueRecordFromStep(fromStep)
+    // 刚打开调试时页面多在起点，需回放前置步再接录
+    await continueRecordFromStep(fromStep, { forceReplay: true })
     return
   }
   const queryStep = pendingDebugQueryStep.value
@@ -335,6 +298,10 @@ const aiDialogVisible = ref(false)
 const recordDialogVisible = ref(false)
 const optimizeDialogVisible = ref(false)
 const debugDialogVisible = ref(false)
+
+watch(recordDialogVisible, (open) => {
+  if (!open) recordPrepareEpoch += 1
+})
 const debugThroughIndex = ref(0)
 const debugExecutionHints = ref(null)
 const executionHints = ref(null)
@@ -387,25 +354,6 @@ const keywordGroups = computed(() => {
     }))
   }))
 })
-
-// 扁平化的关键字列表（用于拖拽）
-const keywordList = computed(() => {
-  const list = []
-  ActionGroup.forEach(group => {
-    group.items.forEach(item => {
-      list.push({
-        name: item.keyword,
-        keyword: item.keyword,
-        method: item.method,
-        icon: iconMap[group.groupIcon] || Document,
-        params: { ...item.params }
-      })
-    })
-  })
-  return list
-})
-
-const cloneKeyword = cloneKeywordForDrag
 
 // 表单校验规则
 const formRules = {
@@ -491,10 +439,15 @@ function goBack() {
 }
 
 // AI 生成/录制步骤应用到用例（编辑页：替换全部步骤）
-function onFragmentInsert(refStep) {
+function onFragmentInsert(payload) {
+  const refStep = payload?.step || payload
   if (!refStep) return
-  caseInfo.steps = [...(caseInfo.steps || []), refStep]
-  ElMessage.success(`已插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
+  const insertAt = payload?.insertAt ?? resolveInsertAfterIndex(caseInfo.steps?.length || 0, selectedStepIndex.value)
+  const { steps, insertAt: at } = insertStepIntoList(caseInfo.steps, refStep, insertAt)
+  caseInfo.steps = steps
+  selectedStepIndex.value = at
+  debugHighlightIndices.value = [at]
+  ElMessage.success(`已在第 ${at + 1} 步插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
 }
 
 function handleAiApply(payload) {
@@ -516,6 +469,7 @@ function openRecordDialog() {
   const stepsLen = caseInfo.steps?.length || 0
   const sel = selectedStepIndex.value
   const canInsertAfter = stepsLen > 0 && sel >= 0 && sel < stepsLen
+  recordPrepareEpoch += 1
   Object.assign(recordPreset, {
     defaultApplyMode: stepsLen ? 'append' : 'replace',
     insertAtIndex: canInsertAfter ? sel + 1 : null,
@@ -524,6 +478,7 @@ function openRecordDialog() {
     presetMode: false,
     skipConfig: false,
     lockApplyMode: false,
+    replayThroughIndex: null,
   })
   recordDialogVisible.value = true
 }
@@ -542,16 +497,63 @@ function handleRecorderApply(payload) {
   }
 }
 
-async function continueRecordFromStep(index) {
+async function onPrepareReplayForRecord(throughIndex) {
+  const epoch = recordPrepareEpoch
+  const through = Number(throughIndex)
+  if (!Number.isFinite(through) || through < 0) {
+    await recorderRef.value?.startAfterPrepare?.()
+    return
+  }
+  const ok = await debugPanelRef.value?.runFromStartThrough(through)
+  if (epoch !== recordPrepareEpoch || !recordDialogVisible.value) return
+  if (ok !== true) {
+    recorderRef.value?.markPrepareFailed?.('前置步骤未全部执行成功，请检查登录段后再接录')
+    return
+  }
+  await recorderRef.value?.startAfterPrepare?.()
+}
+
+/**
+ * 调试已就绪时接录。
+ * @param {number} index 插入位置（0-based）
+ * @param {{ forceReplay?: boolean }} [opts]
+ *   forceReplay：刚打开调试、页面尚在起点时，必须先回放前置步（不弹二选一）
+ */
+async function continueRecordFromStep(index, opts = {}) {
   const sess = interactiveSession.value
   if (sess?.status !== 'ready') return
-  if (index > 0) {
-    const ok = await debugPanelRef.value?.runFromStartThrough(index - 1)
-    if (ok !== true) {
-      ElMessage.warning('前置步骤未全部执行成功，请检查登录段后再接录')
-      return
+
+  let replayThroughIndex = null
+  const forceReplay = !!opts.forceReplay
+
+  if (index > 0 && forceReplay) {
+    replayThroughIndex = index - 1
+  } else if (index > 0) {
+    try {
+      await ElMessageBox.confirm(
+        `将在当前调试浏览器中接录，新步骤插入到第 ${index + 1} 步。\n\n` +
+          '若浏览器已停留在目标页面（例如刚「调试到此步」或手动执行过），请选「直接接录」。\n' +
+          '若页面还在起点/状态不对，请选「先回放再接录」。',
+        '从这里开始录制',
+        {
+          confirmButtonText: '直接接录',
+          cancelButtonText: '先回放再接录',
+          distinguishCancelAndClose: true,
+          type: 'info',
+        },
+      )
+      replayThroughIndex = null
+    } catch (action) {
+      // Element Plus：cancel=点「先回放再接录」，close=点右上角关闭
+      if (action === 'cancel') {
+        replayThroughIndex = index - 1
+      } else {
+        return
+      }
     }
   }
+
+  recordPrepareEpoch += 1
   Object.assign(recordPreset, {
     defaultApplyMode: 'insert',
     insertAtIndex: index,
@@ -560,6 +562,7 @@ async function continueRecordFromStep(index) {
     presetMode: true,
     skipConfig: true,
     lockApplyMode: true,
+    replayThroughIndex,
   })
   recordDialogVisible.value = true
 }
@@ -581,7 +584,7 @@ async function openRecordFromStep(index) {
   }
   try {
     await ElMessageBox.confirm(
-      `将从第 1 步自动执行到第 ${index} 步（含登录），然后在当前页继续录制并插入到第 ${index + 1} 步。`,
+      `将打开交互调试，并从第 1 步执行到第 ${index} 步，然后在当前调试浏览器中接录、插入到第 ${index + 1} 步。`,
       '从这里开始录制',
       {
         confirmButtonText: '打开交互调试',
@@ -675,6 +678,15 @@ function onDebugSelectStep(index) {
   selectedStepIndex.value = idx
   debugHighlightIndices.value = [idx]
   // 选中态经 selectedStepIndex → DebugPanel watch 同步到 Runner，避免重复 select-step 请求
+}
+
+async function onToolbarRunSelected() {
+  const indices = stepEditorRef.value?.getSelectedIndices?.() || []
+  if (!indices.length) {
+    ElMessage.warning('请先在步骤列表勾选要执行的步骤')
+    return
+  }
+  await onDebugSelectedSteps(indices)
 }
 
 async function onDebugSelectedSteps(indices) {

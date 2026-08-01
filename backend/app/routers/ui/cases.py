@@ -248,7 +248,7 @@ async def get_case_execution_hints(
     if not record:
         return build_execution_hints_response(None)
 
-    return build_execution_hints_response(record)
+    return build_execution_hints_response(record, case_steps=case.steps or [])
 
 
 class CopyCaseRequest(BaseModel):

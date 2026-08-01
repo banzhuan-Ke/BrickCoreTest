@@ -47,7 +47,7 @@ METHOD_DEFAULTS = {
     "open_url": {"url": "", "wait_until": "domcontentloaded", "timeout": 30000},
     "wait_for_time": {"timeout": 2000},
     "wait_for_element": {"locator": "", "timeout": 20000},
-    "hover": {"locator": "", "wait_time": 500},
+    "hover": {"locator": "", "index": 1, "wait_time": 500},
     "press_key": {"key": "", "locator": "", "timeout": 20000},
     "scroll": {"height": 0},
     "scroll_to_element": {"locator": "", "index": 1, "timeout": 20000},

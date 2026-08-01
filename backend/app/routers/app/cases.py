@@ -98,7 +98,7 @@ async def get_case_execution_hints(
     if not record:
         return build_execution_hints_response(None)
 
-    return build_execution_hints_response(record)
+    return build_execution_hints_response(record, case_steps=case.steps or [])
 
 
 @router.put("/{case_id}", response_model=AppCaseSchemas, dependencies=[Depends(require_permissions(APP_CASE_EDIT))])

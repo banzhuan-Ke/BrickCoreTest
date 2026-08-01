@@ -29,8 +29,8 @@
       <el-table-column prop="env_name" label="执行环境" width="120" />
       <el-table-column label="执行方式" width="100">
         <template #default="{ row }">
-          <el-tag v-if="row.use_workers" type="warning" size="small">Worker</el-tag>
-          <el-tag v-else type="info" size="small">本机</el-tag>
+          <el-tag v-if="row.use_workers !== false" type="warning" size="small">Worker</el-tag>
+          <el-tag v-else type="info" size="small">历史·本机</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="任务类型" width="110">

@@ -30,6 +30,7 @@
       <el-tab-pane label="自愈与 AI Act" name="heal" />
       <el-tab-pane label="录制与调试" name="recording" />
       <el-tab-pane label="失败分析" name="failure" />
+      <el-tab-pane label="压测 AI" name="perf" />
       <el-tab-pane label="功能用例" name="cases" />
     </el-tabs>
 
@@ -134,6 +135,30 @@
         </el-form-item>
       </template>
 
+      <template v-else-if="activeSection === 'perf'">
+        <p v-if="compactHint" class="section-lead">
+          压测报告 AI 分析总开关与启动弹窗默认勾选策略。
+          绑定模型请到「AI 配置 → 场景绑定」中的「性能测试」分组（压测单次报告分析 / 压测增强报告分析）。
+        </p>
+        <el-form-item label="启用压测 AI 分析">
+          <el-switch v-model="execSettings.perf_ai_analysis_enabled" />
+          <div class="form-tip">关闭后，启动弹窗不可勾选，报告页仍可手动尝试（API 会拒绝）或仅展示已有结果</div>
+        </el-form-item>
+        <el-form-item label="启动时默认勾选">
+          <el-switch
+            v-model="execSettings.perf_ai_analysis_default_on_run"
+            :disabled="!execSettings.perf_ai_analysis_enabled"
+          />
+          <div class="form-tip">开启后，执行压测弹窗默认勾选「执行完成后 AI 分析」</div>
+        </el-form-item>
+        <el-form-item label="允许启动弹窗覆盖">
+          <el-switch
+            v-model="execSettings.perf_ai_analysis_allow_run_override"
+            :disabled="!execSettings.perf_ai_analysis_enabled"
+          />
+        </el-form-item>
+      </template>
+
       <template v-else-if="activeSection === 'cases'">
         <p v-if="compactHint" class="section-lead">需求功能用例生成时的参考条数 / AI 自定软区间系数。</p>
         <el-form-item label="默认 AI 自定条数">
@@ -206,11 +231,11 @@ import { UserStore } from '@/stores/module/UserStore.js'
 import { validateDefaultStartUrl } from '@/utils/caseDescription.js'
 
 const props = defineProps({
-  /** heal | recording | failure | cases | all（all 时展示内部分页） */
+  /** heal | recording | failure | perf | cases | all（all 时展示内部分页） */
   section: {
     type: String,
     default: 'all',
-    validator: (v) => ['heal', 'recording', 'failure', 'cases', 'all'].includes(v),
+    validator: (v) => ['heal', 'recording', 'failure', 'perf', 'cases', 'all'].includes(v),
   },
   /** 在项目设置页内嵌时隐藏重复的项目提示 */
   compactHint: { type: Boolean, default: false },
@@ -242,6 +267,9 @@ const execSettings = reactive({
   failure_analysis_enabled: true,
   failure_analysis_default_on_report: true,
   failure_analysis_allow_run_override: true,
+  perf_ai_analysis_enabled: false,
+  perf_ai_analysis_default_on_run: false,
+  perf_ai_analysis_allow_run_override: true,
   requirement_case: {
     auto_count_enabled_default: false,
     auto_count_min_floor: 4,
@@ -291,6 +319,11 @@ const SECTION_PAYLOAD_KEYS = {
     'failure_analysis_default_on_report',
     'failure_analysis_allow_run_override',
   ],
+  perf: [
+    'perf_ai_analysis_enabled',
+    'perf_ai_analysis_default_on_run',
+    'perf_ai_analysis_allow_run_override',
+  ],
   cases: ['requirement_case'],
 }
 
@@ -310,6 +343,9 @@ const buildSavePayload = () => {
       failure_analysis_enabled: execSettings.failure_analysis_enabled,
       failure_analysis_default_on_report: execSettings.failure_analysis_default_on_report,
       failure_analysis_allow_run_override: execSettings.failure_analysis_allow_run_override,
+      perf_ai_analysis_enabled: execSettings.perf_ai_analysis_enabled,
+      perf_ai_analysis_default_on_run: execSettings.perf_ai_analysis_default_on_run,
+      perf_ai_analysis_allow_run_override: execSettings.perf_ai_analysis_allow_run_override,
       requirement_case: { ...execSettings.requirement_case },
     }
   }

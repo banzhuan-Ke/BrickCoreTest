@@ -10,11 +10,18 @@
     <div class="steps-toolbar">
       <el-button plain type="primary" @click="fragmentPickerVisible = true">插入片段</el-button>
     </div>
-    <StepEditor v-model:steps="form.steps" module="app" />
+    <StepEditor
+      v-model:steps="form.steps"
+      module="app"
+      :debug-selected-index="selectedStepIndex"
+      @debug-select-step="selectedStepIndex = $event"
+    />
     <FragmentPickerDialog
       v-model="fragmentPickerVisible"
       domain="app"
       :exclude-fragment-id="isNew ? null : fragmentId"
+      :selected-step-index="selectedStepIndex"
+      :steps-count="form.steps?.length || 0"
       @insert="onFragmentInsert"
     />
     <div style="margin-top: 20px;">
@@ -32,6 +39,7 @@ import { StepEditor } from '@/components/StepEditor'
 import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
 import { appFragmentApi } from '@/api/modules/app'
 import { ProjectStore } from '@/stores/module/ProjectStore'
+import { insertStepIntoList, resolveInsertAfterIndex } from '@/utils/stepHelper'
 
 const route = useRoute()
 const router = useRouter()
@@ -43,6 +51,7 @@ const isNew = computed(() => !fragmentId || route.name === 'appFragmentNew')
 const formRef = ref()
 const saving = ref(false)
 const fragmentPickerVisible = ref(false)
+const selectedStepIndex = ref(-1)
 
 const form = reactive({
   name: '',
@@ -54,8 +63,14 @@ const form = reactive({
 
 const rules = { name: [{ required: true, message: '请输入片段名称', trigger: 'blur' }] }
 
-function onFragmentInsert(refStep) {
-  form.steps = [...(form.steps || []), refStep]
+function onFragmentInsert(payload) {
+  const refStep = payload?.step || payload
+  if (!refStep) return
+  const insertAt = payload?.insertAt ?? resolveInsertAfterIndex(form.steps?.length || 0, selectedStepIndex.value)
+  const { steps, insertAt: at } = insertStepIntoList(form.steps, refStep, insertAt)
+  form.steps = steps
+  selectedStepIndex.value = at
+  ElMessage.success(`已在第 ${at + 1} 步插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
 }
 
 async function loadDetail() {

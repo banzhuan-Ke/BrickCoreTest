@@ -26,7 +26,7 @@ if [[ "$MODE" != "backend" && "$MODE" != "frontend" && "$MODE" != "nginx" && "$M
     echo "用法: ./restart.sh [backend|frontend|nginx|all]"
     echo "  backend  - 只更新并重建后端容器"
     echo "  frontend - 只构建前端并重启 Nginx（服务器内存不足时可能失败）"
-    echo "  nginx    - 只重启 Nginx"
+    echo "  nginx    - 重建 Nginx（force-recreate，可应用新 volume）"
     echo "  all      - 完整更新前后端（默认）"
     echo ""
     echo "环境变量: AUTO_AERICH=1 GIT_BRANCH=..."
@@ -131,10 +131,13 @@ if [ "$MODE" == "backend" ] || [ "$MODE" == "all" ]; then
     fi
 fi
 
-# 4. 重启 Nginx
+# 4. 重建 Nginx（需 recreate：仅 restart 不会应用新 volume/端口等 compose 变更）
 if [ "$MODE" == "frontend" ] || [ "$MODE" == "nginx" ] || [ "$MODE" == "all" ]; then
-    echo "[4] 重启 Nginx..."
-    docker compose restart nginx
+    echo "[4] 重建 Nginx..."
+    if ! docker compose up -d --force-recreate nginx; then
+        log_error "Nginx 重建失败"
+        exit 1
+    fi
 fi
 
 echo ""

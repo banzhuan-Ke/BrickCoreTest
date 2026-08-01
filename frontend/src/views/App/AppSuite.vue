@@ -4,6 +4,12 @@
       <el-button v-if="canEdit" type="primary" size="small" icon="Plus" @click="router.push({ name: 'appSuiteAdd' })">套件</el-button>
     </template>
     <template #main>
+      <CatalogListLayout
+        :project-id="proStore.projectInfo.id"
+        v-model="searchForm.catalog_id"
+        all-node-label="全部套件"
+        @change="() => { page.page = 1; loadList() }"
+      >
       <div style="margin-bottom: 15px; display: flex; gap: 10px;">
         <el-input v-model="searchForm.name" placeholder="搜索套件名称" clearable style="width: 180px;" @keyup.enter="loadList" />
         <el-button type="primary" icon="Search" @click="loadList">搜索</el-button>
@@ -23,6 +29,7 @@
           </template>
         </el-table-column>
       </el-table>
+      </CatalogListLayout>
     </template>
     <template #bottom>
       <el-pagination v-model:current-page="page.page" v-model:page-size="page.size" :total="page.total" layout="total, prev, pager, next" @current-change="loadList" @size-change="loadList" />
@@ -40,6 +47,7 @@ import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
+import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import AppRunDialog from '@/components/AppRunDialog.vue'
 import AppSuiteRecord from '@/views/App/components/AppSuiteRecord.vue'
 import { appSuiteApi, appExecApi } from '@/api'
@@ -54,7 +62,7 @@ const canExecute = computed(() => uStore.hasPermission('app_suite:execute'))
 
 const suiteList = ref([])
 const page = reactive({ page: 1, size: 10, total: 0 })
-const searchForm = reactive({ name: '' })
+const searchForm = reactive({ name: '', catalog_id: null })
 const runDlg = ref(false)
 const running = ref(false)
 const runSuiteId = ref(null)
@@ -62,7 +70,14 @@ const recordDlg = ref(false)
 const recordSuite = ref({ id: null })
 
 async function loadList() {
-  const res = await appSuiteApi.list({ project_id: proStore.projectInfo.id, page: page.page, size: page.size, name: searchForm.name || undefined })
+  const catalogId = searchForm.catalog_id && searchForm.catalog_id !== 'all' ? searchForm.catalog_id : undefined
+  const res = await appSuiteApi.list({
+    project_id: proStore.projectInfo.id,
+    page: page.page,
+    size: page.size,
+    name: searchForm.name || undefined,
+    catalog_id: catalogId
+  })
   suiteList.value = res.data?.data || []
   page.total = res.data?.total || 0
 }

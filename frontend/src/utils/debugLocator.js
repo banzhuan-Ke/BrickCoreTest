@@ -163,20 +163,27 @@ export function applyPickLocatorToSteps(steps, payload, options = {}) {
 
 export function formatLocatorActionSummary(lastResult) {
   if (!lastResult?.type) return ''
-  if (lastResult.type === 'verify') {
-    const status = lastResult.status
-    if (status === 'success') return `定位器验证通过：${lastResult.message || ''}`
-    if (status === 'ambiguous') return `定位器匹配 ${lastResult.match_count} 个：${lastResult.message || ''}`
-    return `定位器验证失败：${lastResult.message || ''}`
-  }
   if (lastResult.type === 'highlight') {
+    const idx = lastResult.index ?? 1
+    const count = lastResult.match_count
+    const indexHint = idx > 1 ? `（下标 ${idx}${count != null ? ` / 共 ${count}` : ''}）` : (count != null && count > 1 ? `（匹配 ${count} 个，取第 1 个可见）` : '')
     return lastResult.status === 'success'
-      ? `已高亮步骤 ${(lastResult.step_index ?? 0) + 1} 的定位器`
+      ? `已高亮步骤 ${(lastResult.step_index ?? 0) + 1} 的定位器${indexHint}`
       : `高亮失败：${lastResult.message || ''}`
   }
   if (lastResult.type === 'pick') {
     const frameHint = lastResult.frame ? `（iframe: ${lastResult.frame}）` : ''
-    return `已拾取元素：${lastResult.locator || ''}${frameHint}`
+    const idx = lastResult.match_index ?? lastResult.meta?.matchIndex ?? 1
+    const indexHint = idx > 1 ? `（下标 ${idx}）` : ''
+    return `已拾取元素：${lastResult.locator || ''}${frameHint}${indexHint}`
+  }
+  if (lastResult.type === 'verify') {
+    const status = lastResult.status
+    const idx = lastResult.index ?? 1
+    const indexHint = idx > 1 ? `（下标 ${idx}）` : ''
+    if (status === 'success') return `定位器验证通过${indexHint}：${lastResult.message || ''}`
+    if (status === 'ambiguous') return `定位器匹配 ${lastResult.match_count} 个${indexHint}：${lastResult.message || ''}`
+    return `定位器验证失败${indexHint}：${lastResult.message || ''}`
   }
   if (lastResult.type === 'clear_highlight') {
     return lastResult.message || '已取消高亮'

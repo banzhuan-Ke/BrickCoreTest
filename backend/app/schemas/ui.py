@@ -267,6 +267,12 @@ class DebugSessionCreateForm(BaseModel):
     auto_navigate: bool = Field(default=True, description="打开浏览器后自动导航到环境地址或首步 open_url")
     ai_heal_enabled: Optional[bool] = Field(default=None, description="是否启用 AI 定位器自愈")
     ai_act_enabled: Optional[bool] = Field(default=None, description="是否启用 AI Act")
+    hotkeys: Optional[dict] = Field(default=None, description="交互调试工具条快捷键覆盖（可选）")
+
+
+class DebugSessionHotkeysForm(BaseModel):
+    """更新当前调试会话工具条快捷键"""
+    hotkeys: dict = Field(default_factory=dict, description="快捷键覆盖表")
 
 
 class DebugSessionSyncForm(BaseModel):

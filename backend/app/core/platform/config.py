@@ -2,6 +2,8 @@
 核心配置文件
 """
 import os
+from pathlib import Path
+
 import app
 
 # ========================= 项目路径配置（Docker / 本地直接运行均兼容） =========================
@@ -11,6 +13,15 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 AVATAR_DIR = os.path.join(STATIC_DIR, "avatars")
 LOGIN_BG_DIR = os.path.join(STATIC_DIR, "login-bg")
 BROWSER_LAB_DIR = os.path.join(STATIC_DIR, "browser_lab")
+
+# aerich / 直接 import 配置时也会读到 backend/.env（不仅 run_new.py）
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(BASE_DIR) / ".env")
+    load_dotenv(Path(BASE_DIR).parent / ".env")
+except ImportError:
+    pass
 
 BROWSER_LAB_MAX_CONCURRENT = int(os.getenv("BROWSER_LAB_MAX_CONCURRENT", "2"))
 BROWSER_LAB_DAILY_LIMIT = int(os.getenv("BROWSER_LAB_DAILY_LIMIT", "0"))
@@ -92,13 +103,13 @@ ALGORITHM = "HS256"
 TOKEN_TIMEOUT = 60 * 60 * 24 * 1
 # Runner 客户端会话 token 有效期（秒），默认 7 天
 RUNNER_TOKEN_TIMEOUT = int(os.getenv("RUNNER_TOKEN_TIMEOUT", str(60 * 60 * 24 * 7)))
-RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.0.3")
-# 定位策略打分（recorder_locator_rank）所需最低引擎版本
-RUNNER_ENGINE_VERSION_MIN = os.getenv("RUNNER_ENGINE_VERSION_MIN", "1.0.3")
+RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.1.1")
+# 引擎最低版本（压测 / 录制等能力通用门禁）
+RUNNER_ENGINE_VERSION_MIN = os.getenv("RUNNER_ENGINE_VERSION_MIN", "1.0.0")
 RUNNER_CLIENT_VERSION_MIN = os.getenv("RUNNER_CLIENT_VERSION_MIN", "1.3.8")
-RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.4.5")
+RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.5.5")
 # 平台产品版本（页脚、/runner/version 展示，与 Runner 客户端版本独立）
-PLATFORM_VERSION = os.getenv("PLATFORM_VERSION", "1.4.0")
+PLATFORM_VERSION = os.getenv("PLATFORM_VERSION", "1.5.0")
 # Runner 客户端安装包下载地址（zip 或文档页）；为空时客户端根据平台地址推导
 RUNNER_CLIENT_DOWNLOAD_URL = os.getenv("RUNNER_CLIENT_DOWNLOAD_URL", "").strip()
 # Phase 6：connect 下发按设备隔离的 MQ/Redis 凭证（需 RabbitMQ Management + Redis ACL）

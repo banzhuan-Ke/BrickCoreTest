@@ -35,6 +35,7 @@ class StreamParserConfigTestRequest(BaseModel):
     lines: List[str] = Field(default_factory=list)
     parser_options: dict = Field(default_factory=dict)
     success_rule: dict = Field(default_factory=dict)
+    debug_match_views: bool = Field(True, description="返回整形后的 match_view 样本，便于排错")
 
 
 @router.get("/builtin-parsers", summary="内置解析器类型列表")
@@ -64,6 +65,7 @@ async def test_stream_parser_config_api(
             lines=body.lines,
             parser_options=body.parser_options,
             success_rule=body.success_rule,
+            debug_match_views=body.debug_match_views,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

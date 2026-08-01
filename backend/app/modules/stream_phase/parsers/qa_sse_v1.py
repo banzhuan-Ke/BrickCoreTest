@@ -54,7 +54,7 @@ def _is_meaningful_delta(delta: Any) -> bool:
 
 
 def _extract_think_text(delta: Any) -> str:
-    """解析 think / think_answer 的 delta（与问答准确性评测一致）。"""
+    """解析 think / think_answer 的 delta。"""
     if not delta:
         return ""
     if isinstance(delta, str):
@@ -92,7 +92,7 @@ def _dedupe_refs(refs: list[tuple[str, float]]) -> list[tuple[str, float]]:
 
 
 def parse_qa_sse_content(lines: list[str]) -> dict[str, Any]:
-    """仅提取答案/思考/引用（供问答准确性评测复用，无阶段计时）。"""
+    """仅提取答案/思考/引用（无阶段计时）。"""
     result = parse_stream(lines, start_time=time.time(), status_code=200)
     extras = result.get("extras") or {}
     answer = extras.get("answer") or extras.get("answer_preview") or ""

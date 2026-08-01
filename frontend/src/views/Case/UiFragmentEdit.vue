@@ -1,50 +1,6 @@
 <template>
   <el-container class="case-edit-container">
-    <el-aside width="280px" class="keyword-sidebar">
-      <div class="sidebar-header">
-        <h3>操作选项</h3>
-      </div>
-      <div class="keyword-list">
-        <el-collapse v-model="activeGroups" class="keyword-collapse">
-          <el-collapse-item
-            v-for="group in keywordGroups"
-            :key="group.groupId"
-            :name="group.groupId"
-            class="keyword-group"
-          >
-            <template #title>
-              <div class="group-title">
-                <el-icon><component :is="group.icon" /></el-icon>
-                <span>{{ group.name }}</span>
-              </div>
-            </template>
-
-            <VueDraggable
-              :modelValue="group.items"
-              :group="{ name: 'steps', pull: 'clone', put: false }"
-              :sort="false"
-              :clone="cloneKeyword"
-              :animation="200"
-              target=".keyword-items"
-              class="draggable-source"
-            >
-              <div class="keyword-items">
-                <div
-                  v-for="(item, itemIndex) in group.items"
-                  :key="`${group.groupId}_${item.method}_${itemIndex}`"
-                  class="keyword-item"
-                  :data-step="JSON.stringify(item)"
-                >
-                  <el-icon><component :is="item.icon" /></el-icon>
-                  <span>{{ item.name }}</span>
-                  <el-icon class="drag-icon"><Rank /></el-icon>
-                </div>
-              </div>
-            </VueDraggable>
-          </el-collapse-item>
-        </el-collapse>
-      </div>
-    </el-aside>
+    <KeywordSidebar v-model="activeGroups" :groups="keywordGroups" />
 
     <el-main class="case-main">
       <el-card class="edit-card">
@@ -79,10 +35,20 @@
             <span>片段步骤</span>
             <el-text type="info" size="small">编辑步骤时在弹窗内插入变量/工具/标签</el-text>
           </div>
-          <StepEditor v-model:steps="form.steps" />
+          <StepEditor
+            v-model:steps="form.steps"
+            :debug-selected-index="selectedStepIndex"
+            @debug-select-step="selectedStepIndex = $event"
+          />
         </div>
 
-        <FragmentPickerDialog v-model="fragmentPickerVisible" :exclude-fragment-id="isNew ? null : fragmentId" @insert="onFragmentInsert" />
+        <FragmentPickerDialog
+          v-model="fragmentPickerVisible"
+          :exclude-fragment-id="isNew ? null : fragmentId"
+          :selected-step-index="selectedStepIndex"
+          :steps-count="form.steps?.length || 0"
+          @insert="onFragmentInsert"
+        />
         <UiCaseGenerator v-model="aiDialogVisible" @apply="handleAiApply" />
         <UiCaseRecorder
           v-model="recordDialogVisible"
@@ -109,8 +75,7 @@
 <script setup>
 import { reactive, ref, computed, onMounted, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { VueDraggable } from 'vue-draggable-plus'
-import { StepEditor } from '@/components/StepEditor'
+import { StepEditor, KeywordSidebar } from '@/components/StepEditor'
 import UiCaseGenerator from '@/views/AI/components/UiCaseGenerator.vue'
 import UiCaseRecorder from '@/views/AI/components/UiCaseRecorder.vue'
 import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
@@ -120,10 +85,10 @@ import { mergeRecorderSteps } from '@/utils/recorderStepMerge.js'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
 import ActionGroup from '@/datas/ActionGroup.js'
-import { cloneKeywordForDrag } from '@/utils/stepHelper'
+import { insertStepIntoList, resolveInsertAfterIndex } from '@/utils/stepHelper'
 import { ElNotification, ElMessage } from 'element-plus'
 import {
-  Rank, Check, Close, Document, Edit, Mouse, Clock, Search, MessageBox, MoreFilled, Share, Collection
+  Check, Close, Document, Edit, Mouse, Clock, Search, MessageBox, MoreFilled, Share, Collection
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -135,6 +100,7 @@ const saving = ref(false)
 const aiDialogVisible = ref(false)
 const recordDialogVisible = ref(false)
 const fragmentPickerVisible = ref(false)
+const selectedStepIndex = ref(-1)
 const varInsertEnvId = ref(proStore.envList[0]?.id || null)
 provide('varInsertEnvId', varInsertEnvId)
 const activeGroups = ref(['1', '2', '2b', '3', '4', '5', '6', '7', '8'])
@@ -170,8 +136,6 @@ const keywordGroups = computed(() =>
     })),
   }))
 )
-
-const cloneKeyword = cloneKeywordForDrag
 
 async function loadDetail() {
   if (isNew.value) return
@@ -230,10 +194,14 @@ function goBack() {
   userStore.deleteTabs(route.path)
 }
 
-function onFragmentInsert(refStep) {
+function onFragmentInsert(payload) {
+  const refStep = payload?.step || payload
   if (!refStep) return
-  form.steps = [...(form.steps || []), refStep]
-  ElMessage.success(`已插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
+  const insertAt = payload?.insertAt ?? resolveInsertAfterIndex(form.steps?.length || 0, selectedStepIndex.value)
+  const { steps, insertAt: at } = insertStepIntoList(form.steps, refStep, insertAt)
+  form.steps = steps
+  selectedStepIndex.value = at
+  ElMessage.success(`已在第 ${at + 1} 步插入片段「${refStep.params?.fragment_name || refStep.desc}」`)
 }
 
 function handleAiApply(payload) {

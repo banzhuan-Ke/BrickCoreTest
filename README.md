@@ -1,6 +1,6 @@
 # BrickCore 自动化测试平台
 
-> **当前版本 v1.4.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
+> **当前版本 v1.5.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
 
 覆盖 **Web UI、App、接口、性能、AI** 等测试能力，支持私有化部署、文档中心与执行器网盘分发。平台源码见本仓库；Web / App / 压测执行请配合下方 **BrickCoreRunner** 安装包使用。
 
@@ -8,6 +8,7 @@
 
 - **一站式**：Web / App / 接口 / 性能 / AI 测试统一入口，资产与权限集中管理
 - **AI 辅助**：需求→功能用例、接口用例生成、失败分析、平台助手「小测」、MCP 外部接入
+- **迭代资料库**：文件夹、检索/问答、通用报告向导与 Embedding（可选）
 - **录制与自愈**：Web 录制回放、交互调试、定位器自愈，降低脚本维护成本
 - **可私有化**：源码可自建；内置文档中心，上手成本低
 - **执行方便**：桌面执行器网盘分发，支持 Windows / macOS；压测可选用精简 Worker
@@ -37,20 +38,22 @@
 | **App 自动化** | 用例/元素库/元素探查/套件/计划/定时任务/片段；真机调度需 Runner 勾选 **App 自动化** |
 | **接口自动化** | Swagger/Postman 导入、测试计划、WebSocket、数据工厂、Mock、定时执行 |
 | **性能测试** | 流式/SSE 阶段、业务链路、CSV 参数化、分布式 Worker、HTML 报告 |
-| **AI 测试** | 需求→功能用例、智能浏览器、失败分析、平台助手「小测」、MCP 外部接入（迭代资料库开发测试中，后续放出） |
+| **AI 测试** | 需求→功能用例、智能浏览器、失败分析、平台助手「小测」、MCP 外部接入、**迭代资料库** |
 | **平台能力** | 统一测试目录、数据看板、RBAC、文档中心、邮件/钉钉/企微通知 |
+
+> **定制文档** 页签已预留；行业定制方案/报告等需联系管理员开通定制开发，默认不可生成下载。
 
 详细说明见 [docs-site/](docs-site/) 或演示站 [文档中心](http://180.76.142.97/showcase/docs/)。
 
 ---
 
-![输入图片说明](assets/readme/image.png)
+![功能截图](assets/readme/image.png)
 
-![输入图片说明](assets/readme/image2.png)
+![功能截图](assets/readme/image2.png)
 
-![输入图片说明](assets/readme/image3.png)
+![功能截图](assets/readme/image3.png)
 
-![输入图片说明](assets/readme/image4.png)
+![功能截图](assets/readme/image4.png)
 
 ## 功能演示
 
@@ -73,7 +76,7 @@
 
 ## 执行器下载（BrickCoreRunner）
 
-**Web 录制、UI 执行、App 真机、分布式压测 Worker** 需安装 **BrickCoreRunner** 客户端。
+**Web 录制、UI 执行、App 真机、分布式压测 Worker** 需安装 **BrickCoreRunner** 客户端（建议 **v1.5.5**，引擎 **1.1.1**）。
 
 **百度网盘**（提取码 **`9gbi`**）：
 
@@ -141,7 +144,7 @@ docker exec -it fastapi_backend aerich upgrade
 | 平台 | admin | BrickCore123456 |
 | MySQL | admin | BrickCore123456 |
 
-升级至 **v1.4.0** 时务必执行 `aerich upgrade`，并重新构建前端。
+升级至 **v1.5.0** 时务必执行 `aerich upgrade`，并重新构建前端。
 
 ---
 
@@ -162,12 +165,12 @@ docker exec -it fastapi_backend aerich upgrade
 | 文档 | 说明 |
 |------|------|
 | [docs-site/](docs-site/) | 平台使用说明（与登录后「文档中心」内置文档同源） |
-| [版本更新记录](docs-site/guide/release-notes.md) | **v1.4.0** 变更与升级指引 |
+| [版本更新记录](docs-site/guide/release-notes.md) | **v1.5.0** 变更与升级指引 |
 | [亮点功能](docs-site/guide/highlights.md) | 能力总览与快速跳转 |
 | [Docker 部署](docs-site/guide/docker-deploy.md) | 云服务器自建（Linux） |
 | [Windows 部署](docs-site/guide/windows-deploy.md) | Windows 本机 Docker / 无 Docker 开发 |
 
-当前公开仓为 **v1.4.0**。迭代资料库等能力开发测试中，后续放出。
+当前公开仓为 **v1.5.0**。通用迭代资料库已开放；定制文档页签预留，需联系管理员开通定制开发。
 
 问题与建议：[Issues](https://gitee.com/BanZhuanKeOrz/BrickCore/issues) 或下方交流群。
 
@@ -187,7 +190,7 @@ BrickCoreRunner 安装包为配套客户端（网盘 / 平台内下载），使�
 
 <p align="center">
   <img src="assets/readme/image-wechat-group-brickcore.png" width="260" alt="BrickCoreAI 测试平台交流群" /><br />
-  <sub>微信扫码加入 · 交流部署、用例编写与版本动态</sub>
+  <sub>微信扫码加入 · 交流部署、用例编写与版本动态 · 二维码约 7 天有效（当前至 8 月 8 日前）</sub>
 </p>
 
 ---

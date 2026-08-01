@@ -92,11 +92,12 @@ services:
       INTERNAL_API_KEY: brickcore-internal-demo
       BRICKCORE_EDITION: ce
       # 页脚 / GET /runner/version（与 Runner 客户端版本独立）
-      PLATFORM_VERSION: "1.4.0"
+      PLATFORM_VERSION: "1.5.0"
       # Runner 客户端版本门槛与推荐包（与网盘 zip 内 VERSION.txt 对齐；可按环境临时调整 MIN）
-      RUNNER_CLIENT_VERSION_LATEST: "1.4.5"
+      RUNNER_CLIENT_VERSION_LATEST: "1.5.5"
       RUNNER_CLIENT_VERSION_MIN: "1.3.8"
-      RUNNER_ENGINE_VERSION: "1.0.3"
+      RUNNER_ENGINE_VERSION: "1.1.1"
+      RUNNER_ENGINE_VERSION_MIN: "1.0.0"
     depends_on:
       mysql:
         condition: service_healthy

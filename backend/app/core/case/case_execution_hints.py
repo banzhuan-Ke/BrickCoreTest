@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.modules.ui.ui_case_status import normalize_ui_case_status
-from app.modules.ui.ui_result_extract import build_case_execution_hints
+from app.modules.ui.ui_result_extract import build_case_execution_hints, remap_step_failures_to_case_steps
 
 _FAIL_STATUSES = frozenset({"fail", "error"})
 
@@ -41,7 +41,10 @@ async def resolve_latest_failure_record(model: Any, case_id: int, execution_id: 
     return None
 
 
-def build_execution_hints_response(record: Any | None) -> dict[str, Any]:
+def build_execution_hints_response(
+    record: Any | None,
+    case_steps: list[Any] | None = None,
+) -> dict[str, Any]:
     if not record:
         return {
             "has_failure": False,
@@ -54,4 +57,9 @@ def build_execution_hints_response(record: Any | None) -> dict[str, Any]:
             "step_failures": [],
         }
     hints = build_case_execution_hints(getattr(record, "result_data", None))
-    return enrich_execution_hints_from_record(hints, record)
+    hints = enrich_execution_hints_from_record(hints, record)
+    hints["step_failures"] = remap_step_failures_to_case_steps(
+        hints.get("step_failures"),
+        case_steps,
+    )
+    return hints

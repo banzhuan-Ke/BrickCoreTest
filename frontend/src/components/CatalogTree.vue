@@ -312,9 +312,15 @@ const hasChildren = (catalogId) => {
 const handleDelete = async (data) => {
   try {
     const cascade = hasChildren(data.id)
-    const message = cascade
+    const assetHint = badgeForNode(data)
+    let message = cascade
       ? '该目录下存在子目录，是否一并删除？'
       : '确认删除该目录吗？'
+    if (assetHint) {
+      message += `\n\n注意：目录（含子目录）下仍有约 ${assetHint} 项资产。若仍有接口/用例等，删除会被拒绝，请先移出或删除资产。`
+    } else {
+      message += '\n\n若目录内仍有接口、用例等资产，删除将被拒绝。'
+    }
     await ElMessageBox.confirm(message, '提示', {
       type: 'warning',
       confirmButtonText: cascade ? '一并删除' : '确认',
@@ -326,7 +332,11 @@ const handleDelete = async (data) => {
     emit('changed')
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error(error.response?.data?.detail || '删除失败')
+      const detail = error.response?.data?.detail
+      const msg = Array.isArray(detail)
+        ? detail.map((d) => d.msg || d).join('；')
+        : (detail || '删除失败')
+      ElMessage.error(msg)
     }
   }
 }

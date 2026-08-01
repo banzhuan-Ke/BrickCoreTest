@@ -590,17 +590,7 @@ const secondaryEntries = computed(() => {
     icon: Document,
     disabled: !canAiTest.value
   },
-  {
-    name: '问答准确性评测',
-    desc: '标准集 · 被测 API · LLM 打分',
-    path: '/ai-qa-eval',
-    icon: ChatLineRound,
-    disabled: !canAiTest.value
-  }
   ]
-  if (isCommunityEdition.value) {
-    return items.filter((item) => item.path !== '/ai-qa-eval' && item.path !== '/ai-knowledge/folders')
-  }
   return items
 })
 

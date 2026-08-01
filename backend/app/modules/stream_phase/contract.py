@@ -41,6 +41,7 @@ def default_stream_profile(parser_id: str = "qa_sse_v1") -> dict[str, Any]:
         "parser_options": {},
         "success_rule": {"type": "phase_exists", "phase": "first_char"},
         "timeout_seconds": 600,
+        "report_highlight_phases": [],
     }
 
 
@@ -57,6 +58,22 @@ def normalize_stream_profile(config: dict) -> dict[str, Any]:
         profile["timeout_seconds"] = 600
     if "parser_options" not in profile:
         profile["parser_options"] = {}
+    # sse_parser_config_id 为可选溯源字段，有则原样透传，Runner 忽略未知字段
+    if "sse_parser_config_id" in profile and profile["sse_parser_config_id"] is None:
+        profile.pop("sse_parser_config_id", None)
+    raw_hl = profile.get("report_highlight_phases")
+    if isinstance(raw_hl, list):
+        seen: set[str] = set()
+        cleaned: list[str] = []
+        for k in raw_hl:
+            key = str(k).strip() if k is not None else ""
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(key)
+        profile["report_highlight_phases"] = cleaned
+    else:
+        profile["report_highlight_phases"] = []
     return profile
 
 

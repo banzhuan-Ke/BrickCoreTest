@@ -575,11 +575,12 @@ async def generate_assertion_steps(
     raw_actions: list,
     config,
     step_module: str = "ui",
+    scene: str = "recorder_optimize",
 ) -> tuple[list, int, Optional[str]]:
     """第二阶段：基于描述 + 页面快照生成断言步骤（仅追加，不改已有操作）。返回 (断言列表, tokens, 跳过原因)。"""
     from app.modules.ai.ai_prompts import PromptManager
-    from app.core.llm.llm_client import LLMClientFactory
-    from app.core.platform.encryption import decrypt_value
+    from app.core.llm.llm_invoke import call_llm
+    from app.modules.ai.ai_scene_config import get_scene_llm_overrides
     from app.routers.ai.generate import _normalize_ui_steps
 
     module = (step_module or "ui").strip().lower()
@@ -612,31 +613,26 @@ async def generate_assertion_steps(
         logger.warning("[recorder.assert] Prompt 渲染失败: %s", e)
         return [], 0, "prompt_render_failed"
 
-    api_key = decrypt_value(config.api_key)
-    client = LLMClientFactory.create(
-        provider=config.provider,
-        api_key=api_key,
-        api_base=config.api_base,
-        model=config.model,
-        timeout=config.timeout,
+    overrides = await get_scene_llm_overrides(scene or "recorder_optimize")
+    param_overrides = dict(overrides)
+    if "temperature" not in param_overrides:
+        param_overrides["temperature"] = 0.2
+    # 断言 JSON 较短；保留场景覆盖，但至少 2048
+    base_max = int(
+        param_overrides.get("max_tokens")
+        or getattr(config, "max_tokens", None)
+        or 0
     )
-    extra_body = {}
-    if config.thinking_enabled:
-        extra_body["thinking"] = {"type": "enabled"}
-    kwargs = {}
-    if config.thinking_enabled and config.reasoning_effort:
-        kwargs["reasoning_effort"] = config.reasoning_effort
+    param_overrides["max_tokens"] = max(2048, min(base_max or 2048, 8192))
 
     try:
-        result = await client.chat(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            max_tokens=2048,
-            extra_body=extra_body or None,
-            **kwargs,
+        result = await call_llm(
+            system_prompt,
+            user_prompt,
+            config,
+            min_timeout=60,
+            max_retries=1,
+            param_overrides=param_overrides,
         )
     except Exception as e:
         logger.warning("[recorder.assert] LLM 调用失败: %s", e)

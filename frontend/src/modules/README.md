@@ -6,7 +6,6 @@
 
 | 模块 | 路径 | 说明 |
 |------|------|------|
-| qa-eval | `modules/qa-eval/views/` | 问答准确性评测页；API 仍在 `api/modules/ai.js` 的 `qaEvalApi` |
 
 ## 规划映射（逐步迁移，不拆单文件内容）
 

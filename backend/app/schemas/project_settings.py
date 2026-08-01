@@ -35,6 +35,9 @@ class AiExecutionSettingsBody(BaseModel):
     failure_analysis_enabled: Optional[bool] = Field(None, description="项目是否允许失败 AI 分析")
     failure_analysis_default_on_report: Optional[bool] = Field(None, description="报告页默认是否展示失败 AI 分析入口")
     failure_analysis_allow_run_override: Optional[bool] = Field(None, description="是否允许运行弹窗单次覆盖")
+    perf_ai_analysis_enabled: Optional[bool] = Field(None, description="项目是否允许压测报告 AI 分析")
+    perf_ai_analysis_default_on_run: Optional[bool] = Field(None, description="启动压测时默认是否勾选执行后 AI 分析")
+    perf_ai_analysis_allow_run_override: Optional[bool] = Field(None, description="是否允许启动弹窗单次覆盖")
     requirement_case: Optional[RequirementCaseSettingsBody] = Field(
         default=None,
         description="功能用例生成策略（条数模式软上下限等）",

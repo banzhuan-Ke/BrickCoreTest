@@ -4,6 +4,8 @@ export const ParamsMap = {
     open_url: '网页地址',
     tag: '页面标签名',
     index: '顺序索引',
+    source_index: '起始元素顺序索引',
+    target_index: '目标元素顺序索引',
     title: '网页标题',
     url: '页面url地址',
     name: '截图名称',

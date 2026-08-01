@@ -18,6 +18,7 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "runner_viewport_width": 1920,
     "runner_viewport_height": 1080,
     "runner_case_error_retries": 1,
+    "ui_debug_hotkeys": {},
 }
 
 

@@ -14,7 +14,9 @@ class PerfScene(models.Model):
         "models.TestCatalog", null=True, related_name="perf_scenes", description="所属目录"
     )
 
-    # 场景项：关联的 API 用例列表 [{case_id, weight(权重), delay_ms(请求间隔)}]
+    # 场景项：关联的 API 用例列表
+    # [{case_id, weight, delay_ms, delay_mode, delay_ms_min, delay_ms_max}]
+    # delay_mode: fixed（默认，用 delay_ms）| random（均匀抽样 delay_ms_min~delay_ms_max）
     scene_items = fields.JSONField(default=list, description="场景用例项")
 
     # 压测配置
@@ -39,6 +41,10 @@ class PerfScene(models.Model):
     #   "row_count": 1000
     # }
     csv_config = fields.JSONField(default=dict, description="CSV配置")
+
+    # 基线钉选：报告自动对比该记录，并可按阈值告警
+    baseline_record_id = fields.IntField(null=True, description="钉选基线执行记录ID")
+    baseline_policy = fields.JSONField(default=dict, description="基线阈值策略")
 
     is_del = fields.BooleanField(default=False, description="是否删除")
     create_time = fields.DatetimeField(auto_now_add=True)
@@ -93,6 +99,9 @@ class PerfRecord(models.Model):
     # SSE 问答阶段压测
     phase_metrics = fields.JSONField(default=dict, null=True, description="阶段指标聚合")
     request_details = fields.JSONField(default=list, null=True, description="请求阶段明细")
+
+    # AI 分析结果：{status, summary, highlights, risks, recommendations, error, generated_at}
+    ai_analysis = fields.JSONField(null=True, description="AI 分析结果")
 
     started_at = fields.DatetimeField(null=True, description="开始时间")
     ended_at = fields.DatetimeField(null=True, description="结束时间")
@@ -155,6 +164,52 @@ class PerfWorker(models.Model):
     class Meta:
         table = "perf_worker"
         table_description = "性能测试Worker节点"
+
+
+class PerfJourneyTemplate(models.Model):
+    """业务链路模板（项目级，可复用到多个压测场景）"""
+    id = fields.IntField(pk=True, description="模板ID")
+    project = fields.ForeignKeyField(
+        "models.Project", related_name="perf_journey_templates", description="所属项目"
+    )
+    name = fields.CharField(max_length=100, description="模板名称")
+    description = fields.TextField(null=True, description="描述")
+    journey = fields.JSONField(default=dict, description="链路配置（与 PerfScene.config.journey 同结构）")
+    source_scene_id = fields.IntField(null=True, description="来源场景ID")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+    create_by = fields.CharField(max_length=50, description="创建人")
+
+    class Meta:
+        table = "perf_journey_template"
+        table_description = "性能测试业务链路模板"
+
+
+class PerfComparisonReport(models.Model):
+    """性能测试增强报告（对比 / 汇总，2–10 条）"""
+    id = fields.IntField(pk=True, description="增强报告ID")
+    project = fields.ForeignKeyField(
+        "models.Project", related_name="perf_comparison_reports", description="所属项目"
+    )
+    title = fields.CharField(max_length=200, description="报告标题")
+    kind = fields.CharField(
+        max_length=20,
+        default="compare",
+        description="报告类型: compare=对比 / merge=汇总 / hybrid=合并+对比",
+    )
+    record_ids = fields.JSONField(default=list, description="参与对比的执行记录ID列表")
+    reference_record_id = fields.IntField(description="基准记录ID")
+    snapshot = fields.JSONField(default=dict, description="对比快照（指标矩阵等）")
+    ai_analysis = fields.JSONField(null=True, description="AI 分析结果")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+    create_by = fields.CharField(max_length=50, description="创建人")
+
+    class Meta:
+        table = "perf_comparison_report"
+        table_description = "性能测试增强报告"
 
 
 class PerfCronJob(models.Model):

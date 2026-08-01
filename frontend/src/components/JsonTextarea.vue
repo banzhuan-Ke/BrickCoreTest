@@ -89,7 +89,13 @@ function handleCompact() {
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+}
+
+.json-textarea :deep(.el-textarea__inner) {
+  padding: 10px 12px;
+  line-height: 1.55;
+  box-sizing: border-box;
 }
 
 .json-textarea--toolbar :deep(.el-textarea__inner) {

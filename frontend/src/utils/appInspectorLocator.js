@@ -14,20 +14,137 @@ function escapePyString(value) {
  * @returns {{ by: string, value: string|object, index: number }|null}
  */
 export function suggestLocator(node) {
-  if (!node) return null
+  const candidates = buildLocatorCandidates(node)
+  return candidates[0] || null
+}
+
+/** 候选定位去重键 */
+export function locatorCandidateKey(loc) {
+  if (!loc || typeof loc !== 'object') return ''
+  const by = String(loc.by || '').trim().toLowerCase()
+  const idx = Number(loc.index) > 0 ? Number(loc.index) : 1
+  const v = loc.value
+  const vs = typeof v === 'object' && v != null ? JSON.stringify(v) : String(v ?? '').trim()
+  return `${by}::${vs}::${idx}`
+}
+
+function _asCandidate(loc) {
+  if (!loc?.by) return null
+  const by = String(loc.by).trim()
+  const index = Number(loc.index) > 0 ? Number(loc.index) : 1
+  if (by === 'coordinates') {
+    if (!loc.value || typeof loc.value !== 'object') return null
+    return { by, value: { x: loc.value.x, y: loc.value.y }, index }
+  }
+  const value = loc.value
+  if (value == null || String(value).trim() === '') return null
+  return { by, value, index }
+}
+
+/**
+ * 从控件节点生成有序候选定位（最优在前，对齐 Web 录制 meta.candidates）
+ * 优先级：resource_id → text → description → class → xpath → coordinates
+ */
+export function buildLocatorCandidates(node) {
+  if (!node) return []
+  const out = []
+  const push = (loc) => {
+    const item = _asCandidate(loc)
+    if (!item) return
+    const key = locatorCandidateKey(item)
+    if (out.some((x) => locatorCandidateKey(x) === key)) return
+    out.push(item)
+  }
+
   const rid = (node.resource_id || '').trim()
-  if (rid) return { by: 'resource_id', value: rid, index: 1 }
   const text = (node.text || '').trim()
-  if (text) return { by: 'text', value: text, index: 1 }
   const desc = (node.content_desc || '').trim()
-  if (desc) return { by: 'description', value: desc, index: 1 }
+  const cls = (node.class || '').trim()
+
+  if (rid) push({ by: 'resource_id', value: rid, index: 1 })
+  if (text) push({ by: 'text', value: text, index: 1 })
+  if (desc) push({ by: 'description', value: desc, index: 1 })
+  if (cls) push({ by: 'class', value: cls, index: 1 })
+
+  const xpath = suggestXpath(node)
+  if (xpath) push({ by: 'xpath', value: xpath, index: 1 })
+
   const bounds = node.rect
   if (bounds?.width > 0 && bounds?.height > 0) {
     const cx = bounds.x + Math.floor(bounds.width / 2)
     const cy = bounds.y + Math.floor(bounds.height / 2)
-    return { by: 'coordinates', value: { x: cx, y: cy }, index: 1 }
+    push({ by: 'coordinates', value: { x: cx, y: cy }, index: 1 })
   }
-  return null
+  return out
+}
+
+/** 候选展示文案 */
+export function formatLocatorCandidateLabel(loc) {
+  if (!loc?.by) return ''
+  if (loc.by === 'coordinates' && loc.value && typeof loc.value === 'object') {
+    return `coordinates (${loc.value.x}, ${loc.value.y})`
+  }
+  const v = typeof loc.value === 'object' ? JSON.stringify(loc.value) : String(loc.value ?? '')
+  const short = v.length > 48 ? `${v.slice(0, 48)}…` : v
+  return `${loc.by} = ${short}`
+}
+
+/**
+ * 探查保存 / 回填用：默认最优定位 + 全量候选（类似 Web 录制 params.locator + meta.candidates）
+ * @param {object|null} node
+ * @param {{ by: string, value: any, index?: number }|null} preferred 用户选定的默认定位
+ */
+export function buildNativeLocatorPayload(node, preferred = null) {
+  const candidates = buildLocatorCandidates(node)
+  if (!candidates.length) return null
+
+  let primary = _asCandidate(preferred)
+  if (!primary || !candidates.some((c) => locatorCandidateKey(c) === locatorCandidateKey(primary))) {
+    primary = candidates[0]
+  }
+  const rest = candidates.filter((c) => locatorCandidateKey(c) !== locatorCandidateKey(primary))
+  const ordered = [primary, ...rest]
+
+  return {
+    by: primary.by,
+    value: primary.value,
+    index: primary.index || 1,
+    candidates: ordered,
+    meta: {
+      class: node?.class || '',
+      package: node?.package || '',
+      resource_id: node?.resource_id || '',
+      text: node?.text || '',
+      content_desc: node?.content_desc || '',
+      rect: node?.rect || null,
+    },
+  }
+}
+
+/** 将某候选设为默认（保持 candidates 列表，选中项置顶） */
+export function promoteLocatorCandidate(locator, candidate) {
+  if (!locator || typeof locator !== 'object') return locator
+  const pick = _asCandidate(candidate)
+  if (!pick) return locator
+  const existing = Array.isArray(locator.candidates)
+    ? locator.candidates.map(_asCandidate).filter(Boolean)
+    : []
+  const rest = existing.filter((c) => locatorCandidateKey(c) !== locatorCandidateKey(pick))
+  const others = buildLocatorCandidatesFromPrimary(locator).filter(
+    (c) => locatorCandidateKey(c) !== locatorCandidateKey(pick)
+      && !rest.some((r) => locatorCandidateKey(r) === locatorCandidateKey(c))
+  )
+  locator.by = pick.by
+  locator.value = pick.value
+  locator.index = pick.index || 1
+  locator.candidates = [pick, ...rest, ...others]
+  return locator
+}
+
+function buildLocatorCandidatesFromPrimary(locator) {
+  if (!locator?.by) return []
+  const item = _asCandidate(locator)
+  return item ? [item] : []
 }
 
 /** 备选 XPath（多属性组合，尽量稳定） */

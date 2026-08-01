@@ -14,7 +14,6 @@ const pageSteps = [
         params: {
             url: '',
             wait_until: 'domcontentloaded',
-            timeout: 30000
         }
     },
     {
@@ -22,14 +21,12 @@ const pageSteps = [
         method: "refresh",
         params: {
             wait_until: 'commit',
-            timeout: 30000
         }
     },
     {
         keyword: '页面后退',
         method: "go_back",
         params: {
-            timeout: 30000,
             fallback_url: ''
         }
     },
@@ -86,6 +83,7 @@ const pageSteps = [
         keyword: '滚动到指定高度位置',
         method: "scroll_to_height",
         params: {
+            position: "height",
             height: 0,
         }
     },
@@ -95,7 +93,6 @@ const pageSteps = [
         params: {
             locator: '',
             index: 1,
-            timeout: 20000
         }
     },
     {
@@ -127,7 +124,7 @@ const elementSteps = [
         params: {
             locator: '',
             value: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -137,7 +134,9 @@ const elementSteps = [
             locator: "",
             index: 1,
             force: false,
-            timeout: 20000,
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
             wait_download: false,
             save_path: '',
             var_name: '',
@@ -155,7 +154,9 @@ const elementSteps = [
             locator: "",
             index: 1,
             force: false,
-            timeout: 20000
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
         }
     },
     {
@@ -163,7 +164,7 @@ const elementSteps = [
         method: "clear_value",
         params: {
             locator: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -171,7 +172,10 @@ const elementSteps = [
         method: "set_checked",
         params: {
             locator: "",
-            timeout: 20000
+            index: 1,
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
         }
     },
     {
@@ -179,7 +183,7 @@ const elementSteps = [
         method: "hover",
         params: {
             locator: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -187,7 +191,7 @@ const elementSteps = [
         method: "focus_element",
         params: {
             locator: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -196,7 +200,10 @@ const elementSteps = [
         params: {
             locator: "",
             value: "",
-            timeout: 20000
+            index: 1,
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
         }
     },
     {
@@ -205,7 +212,7 @@ const elementSteps = [
         params: {
             locator: "",
             value: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -214,11 +221,12 @@ const elementSteps = [
         params: {
             start_selector: "",
             end_selector: "",
+            source_index: 1,
+            target_index: 1,
             source_position_x: "",
             source_position_y: "",
             target_position_x: "",
             target_position_y: "",
-            timeout: 20000
         }
     },
     {
@@ -227,6 +235,7 @@ const elementSteps = [
         params: {
             locator: "",
             delay: 0.1,
+            index: 1,
         }
     },
     {
@@ -237,7 +246,6 @@ const elementSteps = [
             index: 1,
             exact: false,
             force: false,
-            timeout: 20000,
             wait_download: false,
             save_path: '',
             var_name: '',
@@ -257,7 +265,6 @@ const visionSteps = [
         params: {
             template: '',
             threshold: 0.8,
-            timeout: 20000,
         },
     },
     {
@@ -267,7 +274,6 @@ const visionSteps = [
             template: '',
             value: '',
             threshold: 0.8,
-            timeout: 20000,
             clear_first: true,
         },
     },
@@ -277,7 +283,6 @@ const visionSteps = [
         params: {
             template: '',
             threshold: 0.8,
-            timeout: 20000,
         },
     },
     {
@@ -286,7 +291,6 @@ const visionSteps = [
         params: {
             template: '',
             threshold: 0.8,
-            timeout: 20000,
         },
     },
     {
@@ -295,7 +299,6 @@ const visionSteps = [
         params: {
             template: '',
             threshold: 0.8,
-            timeout: 20000,
         },
     },
 ]
@@ -337,8 +340,12 @@ const mouseSteps = [
         keyword: '鼠标滚动',
         method: "mouse_wheel",
         params: {
+            direction: 'down',
+            amount: 600,
             x: 0,
-            y: 0
+            y: 600,
+            cursor_x: '',
+            cursor_y: '',
         }
     },
     {
@@ -365,7 +372,7 @@ const IframeSteps = [
             frame: "",
             locator: '',
             value: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -377,7 +384,6 @@ const IframeSteps = [
             index: 1,
             button: "left",
             force: false,
-            timeout: 20000
         }
     },
     {
@@ -386,7 +392,7 @@ const IframeSteps = [
         params: {
             frame: "",
             locator: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -395,7 +401,7 @@ const IframeSteps = [
         params: {
             frame: "",
             locator: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -405,7 +411,7 @@ const IframeSteps = [
             frame: "",
             locator: "",
             value: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -415,7 +421,7 @@ const IframeSteps = [
             frame: "",
             value: "",
             locator: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -425,6 +431,7 @@ const IframeSteps = [
             frame: "",
             locator: "",
             delay: 0.1,
+            index: 1,
         }
     },
     {
@@ -434,11 +441,12 @@ const IframeSteps = [
             frame: "",
             start_selector: "",
             end_selector: '',
+            source_index: 1,
+            target_index: 1,
             source_position_x: "",
             source_position_y: "",
             target_position_x: "",
             target_position_y: "",
-            timeout: 20000
         }
     }
 ]
@@ -473,7 +481,7 @@ const waitSteps = [
         method: "wait_for_element",
         params: {
             locator: "",
-            timeout: 20000
+            index: 1,
         }
     },
     {
@@ -482,7 +490,6 @@ const waitSteps = [
         params: {
             locator: "",
             index: 1,
-            timeout: 20000
         }
     },
     {
@@ -492,7 +499,6 @@ const waitSteps = [
             locator: "",
             text: '',
             index: 1,
-            timeout: 20000
         }
     },
     {
@@ -502,7 +508,6 @@ const waitSteps = [
             locator: "",
             stable_ms: 500,
             index: 1,
-            timeout: 20000
         }
     },
     {
@@ -511,7 +516,6 @@ const waitSteps = [
         params: {
             url: '',
             use_regex: false,
-            timeout: 20000
         }
     },
     {
@@ -521,7 +525,6 @@ const waitSteps = [
             url: '',
             method: '',
             status: '',
-            timeout: 30000
         }
     },
     {
@@ -554,7 +557,8 @@ const assertSteps = [
         method: "kw_assert_value",
         params: {
             locator: "",
-            value: ""
+            value: "",
+            index: 1,
         }
     },
     {
@@ -563,7 +567,8 @@ const assertSteps = [
         params: {
             locator: "",
             text: "",
-            match_mode: "exact"
+            match_mode: "exact",
+            index: 1,
         }
     },
     {
@@ -571,7 +576,8 @@ const assertSteps = [
         method: "kw_assert_element_text_contains",
         params: {
             locator: "",
-            text: ""
+            text: "",
+            index: 1,
         }
     },
     {
@@ -588,7 +594,6 @@ const assertSteps = [
             text: "",
             locator: "",
             index: 1,
-            timeout: 5000
         }
     },
     {
@@ -618,7 +623,8 @@ const assertSteps = [
         params: {
             locator: "",
             attr_name: "",
-            value: ""
+            value: "",
+            index: 1,
         }
     },
     {
@@ -628,7 +634,6 @@ const assertSteps = [
             locator: "",
             attr_name: "",
             index: 1,
-            timeout: 5000
         }
     },
     {
@@ -757,6 +762,7 @@ const otherSteps = [
         method: "upload_file",
         params: {
             locator: '',
+            index: 1,
             upload_mode: 'single',
             file_path: '',
             file_key: '',
@@ -767,7 +773,6 @@ const otherSteps = [
             folder_key: '',
             folder_bucket: '',
             folder_name: '',
-            timeout: 20000
         }
     },
     {
@@ -777,7 +782,6 @@ const otherSteps = [
             locator: '',
             var_name: '',
             index: 1,
-            timeout: 20000
         }
     },
     {
@@ -788,7 +792,6 @@ const otherSteps = [
             attr_name: '',
             var_name: '',
             index: 1,
-            timeout: 20000
         }
     },
     {
@@ -807,7 +810,6 @@ const otherSteps = [
             url: '',
             method: '',
             status: '',
-            timeout: 30000
         }
     }
 ]

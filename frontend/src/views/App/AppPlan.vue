@@ -4,6 +4,12 @@
       <el-button v-if="canEdit" type="primary" size="small" icon="Plus" @click="showAdd = true">计划</el-button>
     </template>
     <template #main>
+      <CatalogListLayout
+        :project-id="proStore.projectInfo.id"
+        v-model="filterCatalogId"
+        all-node-label="全部计划"
+        @change="() => loadList()"
+      >
       <el-table :data="planList" stripe :header-cell-style="{ 'text-align': 'center' }" :cell-style="{ 'text-align': 'center' }">
         <el-table-column type="index" label="序号" width="70" />
         <el-table-column prop="name" label="计划名称" min-width="160" />
@@ -18,6 +24,7 @@
           </template>
         </el-table-column>
       </el-table>
+      </CatalogListLayout>
     </template>
   </PageCard>
 
@@ -49,6 +56,7 @@ import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
+import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import AppRunDialog from '@/components/AppRunDialog.vue'
 import AppPlanRecord from '@/views/App/components/AppPlanRecord.vue'
 import { appPlanApi, appExecApi } from '@/api'
@@ -62,6 +70,7 @@ const canEdit = computed(() => uStore.hasPermission('app_plan:edit'))
 const canExecute = computed(() => uStore.hasPermission('app_plan:execute'))
 
 const planList = ref([])
+const filterCatalogId = ref(null)
 const showAdd = ref(false)
 const addForm = reactive({ name: '' })
 const runDlg = ref(false)
@@ -73,7 +82,13 @@ const recordDlg = ref(false)
 const recordPlan = ref({ id: null })
 
 async function loadList() {
-  const res = await appPlanApi.list({ project_id: proStore.projectInfo.id, page: 1, size: 100 })
+  const catalogId = filterCatalogId.value && filterCatalogId.value !== 'all' ? filterCatalogId.value : undefined
+  const res = await appPlanApi.list({
+    project_id: proStore.projectInfo.id,
+    page: 1,
+    size: 100,
+    catalog_id: catalogId
+  })
   planList.value = res.data?.data || []
 }
 

@@ -11,7 +11,12 @@ from app.models.perf import PerfScene
 from app.models.app import AppCase, AppSuite, AppPlan
 from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
 from app.core.platform.permissions import MODULE_VIEW, MODULE_EDIT
-from app.core.shared.catalog_utils import build_catalog_tree, resolve_catalog, apply_catalog_filter
+from app.core.shared.catalog_utils import (
+    build_catalog_tree,
+    resolve_catalog,
+    apply_catalog_filter,
+    get_catalog_subtree_ids,
+)
 
 router = APIRouter(prefix="/catalogs", tags=["测试目录"], dependencies=[Depends(is_authenticated)])
 
@@ -338,27 +343,108 @@ async def update_catalog(catalog_id: int, item: TestCatalogUpdate):
     return catalog
 
 
+def _format_catalog_asset_block_message(total: dict, *, scope: str) -> str:
+    """组装「目录仍有资产，禁止删除」的提示文案。"""
+    labels = (
+        ("api_defs", "接口"),
+        ("api_cases", "接口用例"),
+        ("api_suites", "接口套件"),
+        ("api_plans", "接口计划"),
+        ("ui_cases", "Web 用例"),
+        ("ui_suites", "Web 套件"),
+        ("ui_tasks", "Web 计划"),
+        ("app_cases", "App 用例"),
+        ("app_suites", "App 套件"),
+        ("app_plans", "App 计划"),
+        ("perf_scenes", "性能场景"),
+    )
+    parts = [f"{label} {total[key]} 个" for key, label in labels if total.get(key)]
+    joined = "、".join(parts) if parts else "关联资产"
+    return (
+        f"{scope}仍有资产（{joined}），无法删除。"
+        "请先将资产移到其他目录或删除后再试。"
+    )
+
+
+async def _sum_asset_counts_for_catalogs(catalog_ids: List[int], project_id: int) -> dict:
+    """汇总一批目录下的各类型资产数量（仅当前项目）。"""
+    empty = {
+        "api_defs": 0,
+        "api_cases": 0,
+        "api_suites": 0,
+        "api_plans": 0,
+        "ui_cases": 0,
+        "ui_suites": 0,
+        "ui_tasks": 0,
+        "app_cases": 0,
+        "app_suites": 0,
+        "app_plans": 0,
+        "perf_scenes": 0,
+    }
+    if not catalog_ids:
+        return empty
+
+    api_counts = await _count_by_catalog(ApiDefinition, catalog_ids, project_id)
+    case_counts = await _count_by_catalog(ApiTestCase, catalog_ids, project_id)
+    ui_case_counts = await _count_by_catalog(Case, catalog_ids, project_id)
+    app_case_counts = await _count_by_catalog(AppCase, catalog_ids, project_id)
+    ui_suite_counts = await _count_by_catalog(Suite, catalog_ids, project_id)
+    app_suite_counts = await _count_by_catalog(AppSuite, catalog_ids, project_id)
+    api_suite_counts = await _count_by_catalog(ApiTestSuite, catalog_ids, project_id)
+    ui_task_counts = await _count_by_catalog(Task, catalog_ids, project_id)
+    app_plan_counts = await _count_by_catalog(AppPlan, catalog_ids, project_id)
+    api_plan_counts = await _count_by_catalog(ApiTestPlan, catalog_ids, project_id)
+    perf_scene_counts = await _count_by_catalog(PerfScene, catalog_ids, project_id)
+
+    def _sum(m: Dict[int, int]) -> int:
+        return sum(m.get(cid, 0) for cid in catalog_ids)
+
+    return {
+        "api_defs": _sum(api_counts),
+        "api_cases": _sum(case_counts),
+        "api_suites": _sum(api_suite_counts),
+        "api_plans": _sum(api_plan_counts),
+        "ui_cases": _sum(ui_case_counts),
+        "ui_suites": _sum(ui_suite_counts),
+        "ui_tasks": _sum(ui_task_counts),
+        "app_cases": _sum(app_case_counts),
+        "app_suites": _sum(app_suite_counts),
+        "app_plans": _sum(app_plan_counts),
+        "perf_scenes": _sum(perf_scene_counts),
+    }
+
+
 @router.delete("/{catalog_id}", summary="删除目录", status_code=status.HTTP_204_NO_CONTENT,
                dependencies=[Depends(require_permissions(MODULE_EDIT))])
-async def delete_catalog(catalog_id: int):
+async def delete_catalog(
+    catalog_id: int,
+    cascade: bool = Query(False, description="是否连同子目录一并删除（子树内须无资产）"),
+):
+    """删除目录：目录（或 cascade 时整棵子树）内仍有资产时拒绝删除，避免接口等资产 catalog_id 被置空后表现异常。"""
     catalog = await TestCatalog.get_or_none(id=catalog_id, is_del=False)
     if not catalog:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="目录不存在或已被删除")
 
-    parent_id = catalog.parent_id
-    await TestCatalog.filter(parent_id=catalog_id, is_del=False).update(parent_id=parent_id)
+    child_count = await TestCatalog.filter(parent_id=catalog_id, is_del=False).count()
+    if child_count and not cascade:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"目录下存在 {child_count} 个子目录，请先删除子目录，或勾选一并删除（子树内须无资产）",
+        )
 
-    await Case.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
-    await Suite.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
-    await Task.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
-    await AppCase.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
-    await AppSuite.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
-    await AppPlan.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
-    await ApiDefinition.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
-    await ApiTestCase.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
-    await ApiTestSuite.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
-    await ApiTestPlan.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
-    await PerfScene.filter(catalog_id=catalog_id, is_del=False).update(catalog_id=None)
+    if cascade:
+        target_ids = await get_catalog_subtree_ids(catalog.project_id, catalog_id)
+        scope = "该目录及其子目录"
+    else:
+        target_ids = [catalog_id]
+        scope = "该目录"
 
-    catalog.is_del = True
-    await catalog.save()
+    asset_total = await _sum_asset_counts_for_catalogs(target_ids, catalog.project_id)
+    if any(asset_total.values()):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=_format_catalog_asset_block_message(asset_total, scope=scope),
+        )
+
+    # 无资产：软删除目标目录（cascade 时含整棵子树）。不再把资产 catalog_id 置空。
+    await TestCatalog.filter(id__in=target_ids, is_del=False).update(is_del=True)

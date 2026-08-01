@@ -16,6 +16,7 @@
         <el-tab-pane v-if="canExecution" label="自愈与 AI Act" name="heal" />
         <el-tab-pane v-if="canExecution" label="录制与调试" name="recording" />
         <el-tab-pane v-if="canExecution" label="失败分析" name="failure" />
+        <el-tab-pane v-if="canExecution" label="压测 AI" name="perf" />
         <el-tab-pane v-if="canExecution" label="功能用例" name="cases" />
         <el-tab-pane v-if="canNotify" label="通知渠道" name="notify" />
       </el-tabs>
@@ -62,7 +63,7 @@ const canNotify = computed(() => uStore.hasPermission('notification_config:view'
 const canNotifyEdit = computed(() => uStore.hasPermission('notification_config:edit'))
 const hasAnyTab = computed(() => canExecution.value || canNotify.value)
 
-const EXEC_TABS = new Set(['heal', 'recording', 'failure', 'cases'])
+const EXEC_TABS = new Set(['heal', 'recording', 'failure', 'perf', 'cases'])
 const activeTab = ref('heal')
 const execSection = ref('heal')
 const isExecTab = computed(() => EXEC_TABS.has(activeTab.value))

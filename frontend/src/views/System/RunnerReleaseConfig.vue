@@ -29,6 +29,19 @@
           </span>
           <span v-else class="text-muted">未上传 — 将 BrickCoreRunner.zip 放到 static/runner/</span>
         </el-form-item>
+        <el-form-item label="分层增量包：">
+          <div v-if="form.update_patches_available && (form.update_channels || []).length">
+            <div v-for="ch in form.update_channels" :key="ch.id" class="patch-row">
+              <el-tag size="small" :type="ch.available ? 'success' : 'info'">{{ ch.id }}</el-tag>
+              <span>{{ ch.filename || '-' }} · {{ formatSize(ch.size) }}</span>
+              <span v-if="!ch.available" class="text-muted">（清单有记录但文件缺失）</span>
+            </div>
+          </div>
+          <span v-else class="text-muted">
+            未上传 — 将 dist/patches/* 放到 static/runner/patches/（含 update_manifest.json）
+          </span>
+          <div class="field-hint">正式打包会生成加密 .bcpack；客户端优先增量更新，底座变更仍用整包</div>
+        </el-form-item>
         <el-form-item label="精简压测包 Win：">
           <span v-if="form.perf_package_available">
             已就绪（{{ formatSize(form.perf_package_size_bytes) }}）
@@ -77,6 +90,9 @@ const form = reactive({
   perf_package_size_bytes: 0,
   perf_package_mac_available: false,
   perf_package_mac_size_bytes: 0,
+  update_channels: [],
+  update_patches_available: false,
+  update_patches_hint: '',
   using_env_fallback: false,
   update_by: '',
   update_time: ''
@@ -133,5 +149,12 @@ onMounted(loadConfig)
 }
 .text-muted {
   color: #909399;
+}
+.patch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 13px;
 }
 </style>

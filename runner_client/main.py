@@ -363,6 +363,7 @@ class MainWindow(QMainWindow):
         self.recording_poll_timer.setInterval(1000)
         self.recording_poll_timer.timeout.connect(self._poll_active_recording)
 
+        QTimer.singleShot(100, self._refresh_version_badge)
         QTimer.singleShot(300, self._check_version_on_startup)
 
     def _check_runner_runtime(self) -> None:
@@ -1103,21 +1104,34 @@ class MainWindow(QMainWindow):
         worker.result_ready.connect(self._on_version_info_ready)
         worker.start()
 
+    def _installed_package_version(self) -> str:
+        from runner_client.app.layered_updater import package_version
+
+        return package_version(baked_fallback=__version__)
+
+    def _refresh_version_badge(self) -> None:
+        pkg = self._installed_package_version()
+        if pkg != __version__:
+            self.version_label.setText(f"v{pkg}（GUI {__version__}）")
+        else:
+            self.version_label.setText(f"v{pkg}")
+
     def _on_version_info_ready(self, info: object) -> None:
         self._version_info = info if isinstance(info, dict) else None
         self._schedule_api_health_probe(force=True)
         if not self._version_info:
             return
+        current = self._installed_package_version()
         latest = self._version_info.get("runner_client_version_latest") or ""
         minimum = self._version_info.get("runner_client_version_min") or ""
-        if minimum and compare_version(__version__, minimum) < 0:
+        if minimum and compare_version(current, minimum) < 0:
             self._show_version_dialog(
-                f"当前客户端 {__version__} 低于平台要求 {minimum}，请尽快升级。",
+                f"当前客户端 {current} 低于平台要求 {minimum}，请尽快升级。",
                 force=True,
             )
-        elif latest and compare_version(__version__, latest) < 0:
+        elif latest and compare_version(current, latest) < 0:
             self._show_version_dialog(
-                f"发现新版本 {latest}（当前 {__version__}），建议升级。",
+                f"发现新版本 {latest}（当前 {current}），建议升级。",
                 force=False,
             )
 
@@ -1132,40 +1146,123 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "检查更新", "无法获取平台版本信息")
             return
         self._version_info = info
+        current = self._installed_package_version()
         latest = info.get("runner_client_version_latest") or ""
-        if latest and compare_version(__version__, latest) < 0:
-            self._show_version_dialog(f"发现新版本 {latest}（当前 {__version__}）", force=False)
+        if latest and compare_version(current, latest) < 0:
+            self._show_version_dialog(f"发现新版本 {latest}（当前 {current}）", force=False)
         else:
-            QMessageBox.information(self, "检查更新", f"当前已是最新版本（{__version__}）")
+            QMessageBox.information(self, "检查更新", f"当前已是最新版本（{current}）")
 
     def _show_version_dialog(self, message: str, force: bool = False) -> None:
         download = BrickCoreApi.resolve_download_url(self._current_server_url(), self._version_info)
         package_available = bool(self._version_info and self._version_info.get("package_available"))
+        patches_available = bool(self._version_info and self._version_info.get("update_patches_available"))
         box = QMessageBox(self)
         box.setWindowTitle("客户端更新")
         box.setText(message)
         extra = []
+        if patches_available:
+            extra.append("平台已提供加密分层增量包，可点击「一键增量更新」（需已登录；将自动覆盖并重启）。")
         if package_available:
-            extra.append("平台已提供安装包，可点击「下载安装包」（需已登录）。")
+            extra.append("也可下载完整安装包后手动解压覆盖。")
         if download:
-            extra.append(f"静态地址：\n{download}")
+            extra.append(f"外链/静态地址：\n{download}")
         if extra:
             box.setInformativeText("\n".join(extra))
+        patch_btn = None
+        if patches_available:
+            patch_btn = box.addButton("一键增量更新", QMessageBox.ButtonRole.AcceptRole)
         dl_btn = None
         if package_available:
-            dl_btn = box.addButton("下载安装包", QMessageBox.ButtonRole.ActionRole)
+            dl_btn = box.addButton("下载完整包", QMessageBox.ButtonRole.ActionRole)
         open_btn = None
         if download:
             open_btn = box.addButton("在浏览器打开", QMessageBox.ButtonRole.ActionRole)
-        box.addButton(QMessageBox.StandardButton.Ok)
+        box.addButton(QMessageBox.StandardButton.Cancel)
         if force:
             box.setIcon(QMessageBox.Icon.Warning)
         box.exec()
         clicked = box.clickedButton()
-        if clicked == dl_btn:
+        if clicked == patch_btn:
+            self._apply_layered_update()
+        elif clicked == dl_btn:
             self._download_client_package()
         elif clicked == open_btn and download:
             QDesktopServices.openUrl(QUrl(download))
+
+    def _apply_layered_update(self) -> None:
+        base_url = self._current_server_url()
+        if not base_url:
+            QMessageBox.warning(self, "更新", "请先选择服务器地址")
+            return
+        api = self.api if self.api and self.api.base_url.rstrip("/") == base_url.rstrip("/") else None
+        if api is None:
+            api = BrickCoreApi(base_url)
+            if self.api and self.api.user_token:
+                api.user_token = self.api.user_token
+                api.username = self.api.username
+        if not api.user_token:
+            QMessageBox.warning(self, "更新", "请先登录平台后再增量更新")
+            return
+        if self._online:
+            reply = QMessageBox.question(
+                self,
+                "更新",
+                "更新前需要下线并退出客户端，是否继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            self._on_disconnect()
+        else:
+            reply = QMessageBox.question(
+                self,
+                "更新",
+                "增量更新将退出客户端并覆盖安装目录，是否继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        # 重新拉版本信息，避免本地缓存清单过期
+        info = api.fetch_version_info() or self._version_info or {}
+        self._version_info = info
+        self._set_status("正在准备增量更新…")
+        QApplication.processEvents()
+        try:
+            from runner_client.app.layered_updater import launch_apply_helper, prepare_layered_update
+
+            result = prepare_layered_update(
+                api,
+                info,
+                baked_gui_version=__version__,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "增量更新失败", str(exc))
+            self._set_status("增量更新失败")
+            return
+
+        action = result.get("action")
+        if action == "none":
+            QMessageBox.information(self, "检查更新", "当前已是最新版本")
+            return
+        if action != "patch" or not result.get("helper_script"):
+            QMessageBox.information(
+                self,
+                "增量不可用",
+                f"{result.get('reason') or '请改用完整安装包更新。'}",
+            )
+            self._download_client_package()
+            return
+
+        helper = Path(result["helper_script"])
+        launch_apply_helper(helper)
+        QMessageBox.information(
+            self,
+            "即将重启",
+            "增量包已准备完成，客户端将退出并由更新助手覆盖文件后自动重启。",
+        )
+        QApplication.quit()
 
     def _download_client_package(self) -> None:
         base_url = self._current_server_url()
@@ -1319,9 +1416,19 @@ class MainWindow(QMainWindow):
 
         if self._needs_ui_role(execution_role):
             latest = self.connect_data.get("client_version_latest") or ""
-            if latest and compare_version(__version__, latest) < 0:
+            pkg = self._installed_package_version()
+            pkg_behind = bool(latest) and compare_version(pkg, latest) < 0
+            gui_behind = bool(latest) and compare_version(__version__, latest) < 0
+            if pkg_behind or gui_behind:
+                # 刷新版本清单，便于对话框展示「一键增量更新」
+                try:
+                    info = BrickCoreApi(base_url).fetch_version_info()
+                    if info:
+                        self._version_info = info
+                except Exception:
+                    pass
                 self._show_version_dialog(
-                    f"当前客户端 {__version__}，平台最新 {latest}。",
+                    f"当前客户端 {pkg}，平台最新 {latest}。",
                     force=False,
                 )
 
@@ -1339,6 +1446,9 @@ class MainWindow(QMainWindow):
                     name=perf_name,
                     project_id=project_id,
                     max_concurrent=self.perf_max_concurrent_spin.value(),
+                    # UI 角色上线后才有 runner_token；纯压测依赖登录 JWT（Authorization Bearer）
+                    runner_token=self.api.runner_token if self.api else None,
+                    access_token=self.api.user_token if self.api else None,
                 )
                 started_parts.append("压测")
         except Exception as exc:

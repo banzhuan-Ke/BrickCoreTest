@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 from app.modules.assistant.assistant_session import load_session_messages, save_session_messages
-from app.models.ai import AiQaEvalRun
 from app.models.http import ApiPlanRunRecord, ApiSuiteRunRecord
 from app.models.ui import UiCaseExecution, UiPlanExecution, UiSuiteExecution
 
@@ -19,7 +18,6 @@ _TERMINAL_API = frozenset({"success", "failed", "partial"})
 _TERMINAL_UI_PLAN = frozenset({"执行完成"})
 _TERMINAL_UI_SUITE = frozenset({"执行完成"})
 _TERMINAL_UI_CASE = frozenset({"success", "fail", "error", "skip", "no_run"})
-_TERMINAL_QA = frozenset({"completed", "failed", "cancelled"})
 
 _TRIGGER_LABELS = {"manual": "手动", "assistant": "小测", "cron": "定时任务"}
 
@@ -57,10 +55,6 @@ def build_execution_watch(action: str, result: dict[str, Any]) -> dict[str, Any]
         rid = result.get("execution_id")
         if rid:
             return {"action": action, "record_type": "ui_case", "record_id": int(rid)}
-    elif action == "run_qa_eval":
-        rid = result.get("run_id")
-        if rid:
-            return {"action": action, "record_type": "qa_eval", "record_id": int(rid)}
     elif action == "run_perf_scene":
         rid = result.get("record_id")
         if rid:
@@ -145,22 +139,6 @@ async def _snapshot(record_type: str, record_id: int) -> tuple[str, dict[str, An
             "trigger_source": ts,
             "trigger_label": _TRIGGER_LABELS.get(ts, ts),
         }
-    if record_type == "qa_eval":
-        rec = await AiQaEvalRun.get_or_none(id=record_id)
-        if not rec:
-            return None
-        extra = rec.extra if isinstance(rec.extra, dict) else {}
-        ts = extra.get("trigger_source") or "manual"
-        return rec.status, {
-            "status": rec.status,
-            "total_count": rec.total_count,
-            "passed_count": rec.passed_count,
-            "failed_count": rec.failed_count,
-            "pass_rate": rec.pass_rate,
-            "run_name": extra.get("run_name") or f"跑批 #{rec.id}",
-            "trigger_source": ts,
-            "trigger_label": _TRIGGER_LABELS.get(ts, ts),
-        }
     if record_type == "perf":
         from app.models.perf import PerfRecord
 
@@ -184,8 +162,6 @@ def _is_terminal(record_type: str, status: str) -> bool:
         return st in _TERMINAL_UI_SUITE
     if record_type == "ui_case":
         return st in _TERMINAL_UI_CASE
-    if record_type == "qa_eval":
-        return st in _TERMINAL_QA
     if record_type == "perf":
         return st in ("success", "failed", "completed", "error")
     return False
@@ -215,15 +191,6 @@ def _format_follow_up(record_type: str, record_id: int, data: dict[str, Any]) ->
     elif record_type == "ui_case":
         lines.append(f"- **状态**：{data.get('status')}")
         lines.append(f"- **触发方式**：{data.get('trigger_label', '—')}")
-    elif record_type == "qa_eval":
-        lines.append(f"- **状态**：{data.get('status')}")
-        lines.append(f"- **触发方式**：{data.get('trigger_label', '—')}")
-        lines.append(
-            f"- **题目**：共 {data.get('total_count', 0)}，通过 {data.get('passed_count', 0)}，"
-            f"未通过 {data.get('failed_count', 0)}"
-        )
-        if data.get("pass_rate") is not None:
-            lines.append(f"- **通过率**：{float(data['pass_rate']):.2f}%")
     else:
         lines.append(f"- **状态**：{data.get('status', 'unknown')}")
 

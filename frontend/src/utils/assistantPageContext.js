@@ -83,7 +83,6 @@ export function buildAssistantPageContext(route) {
       ctx.page_hint = 'functional_cases'
       break
     case 'aiQaEval':
-      ctx.page_hint = 'qa_eval'
       break
     case 'caseList':
     case 'taskList':

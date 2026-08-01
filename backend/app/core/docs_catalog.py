@@ -11,9 +11,10 @@ from app.core.edition import is_community_edition
 
 
 def _resolve_repo_root() -> Path:
-    """定位 docs-site 所在目录（本地 monorepo 根或 Docker /app）。"""
+    """定位 docs-site 所在目录（本地 monorepo 根、backend 旁路副本或 Docker /app）。"""
     here = Path(__file__).resolve()
-    for root in (here.parents[2], here.parents[3]):
+    # core→app→backend→repo；兼容旧路径与 Docker /app
+    for root in here.parents[:6]:
         if (root / "docs-site" / "index.md").is_file():
             return root
     return here.parents[3]

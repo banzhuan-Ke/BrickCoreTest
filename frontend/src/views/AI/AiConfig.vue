@@ -509,11 +509,12 @@ const overrideDialog = reactive({
     min_timeout: null
   }
 })
-const sceneGroupOrder = ['assistant', 'generate', 'analysis', 'vision', 'other']
+const sceneGroupOrder = ['assistant', 'generate', 'analysis', 'perf', 'vision', 'other']
 const sceneGroupLabels = {
   assistant: '平台助手',
   generate: '用例生成',
   analysis: '失败分析',
+  perf: '性能测试',
   vision: 'Vision',
   other: '其他'
 }
@@ -578,11 +579,15 @@ const loadSceneBindings = async () => {
   try {
     const res = await aiConfigApi.getSceneBindings()
     if (res.data?.code === 200) {
-      sceneBindings.value = (res.data.data?.bindings || []).map(b => ({
+      const options = res.data.data?.config_options || []
+      const optionIds = new Set(options.map((c) => c.id))
+      sceneBindings.value = (res.data.data?.bindings || []).map((b) => ({
         ...b,
+        // 失效 ID 在下拉中不可见但仍会提交，这里统一清成跟随默认
+        config_id: b.config_id && optionIds.has(b.config_id) ? b.config_id : null,
         overrides: b.overrides || {}
       }))
-      sceneConfigOptions.value = res.data.data?.config_options || []
+      sceneConfigOptions.value = options
       sceneMeta.has_enabled_config = res.data.data?.has_enabled_config !== false
       sceneMeta.unbound_count = res.data.data?.unbound_count ?? 0
     }
@@ -596,20 +601,24 @@ const loadSceneBindings = async () => {
 const saveSceneBindings = async () => {
   sceneSaving.value = true
   try {
+    const optionIds = new Set(sceneConfigOptions.value.map((c) => c.id))
     const res = await aiConfigApi.saveSceneBindings({
-      bindings: sceneBindings.value.map(b => ({
+      bindings: sceneBindings.value.map((b) => ({
         scene: b.scene,
-        config_id: b.config_id ?? null,
+        config_id: b.config_id && optionIds.has(b.config_id) ? b.config_id : null,
         overrides: b.overrides || {}
       }))
     })
     if (res.data?.code === 200) {
       ElMessage.success('场景绑定已保存')
-      sceneBindings.value = (res.data.data?.bindings || []).map(b => ({
+      const options = res.data.data?.config_options || []
+      const ids = new Set(options.map((c) => c.id))
+      sceneBindings.value = (res.data.data?.bindings || []).map((b) => ({
         ...b,
+        config_id: b.config_id && ids.has(b.config_id) ? b.config_id : null,
         overrides: b.overrides || {}
       }))
-      sceneConfigOptions.value = res.data.data?.config_options || []
+      sceneConfigOptions.value = options
       sceneMeta.has_enabled_config = res.data.data?.has_enabled_config !== false
       sceneMeta.unbound_count = res.data.data?.unbound_count ?? 0
     }
@@ -798,7 +807,12 @@ const sceneTypeMap = {
   requirement_case: '需求生成用例',
   failure_analysis: '失败分析',
   report_summary: '报告摘要',
-  test_data: '测试数据生成'
+  test_data: '测试数据生成',
+  perf_report_analysis: '压测单次报告分析',
+  perf_compare_analysis: '性能测试报告分析',
+  performance_report: '性能测试报告（资料库）',
+  iteration_report: '迭代自动化测试报告',
+  functional_report: '功能测试报告'
 }
 
 const promptVariables = computed(() => {

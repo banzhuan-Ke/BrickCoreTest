@@ -1,4 +1,4 @@
-﻿"""
+"""
 AI 测试模块路由聚合
 """
 from fastapi import APIRouter
@@ -6,6 +6,8 @@ from app.routers.ai.config import router as config_router
 from app.routers.ai.embed_config import router as embed_config_router
 from app.routers.ai.prompts import router as prompts_router
 from app.routers.ai.generate import router as generate_router
+from app.routers.ai.perf_scene_generate import router as perf_scene_generate_router
+from app.routers.ai.stream_parser_rules_generate import router as stream_parser_rules_generate_router
 from app.routers.ai.recorder import router as recorder_router
 from app.routers.ai.requirements import router as requirements_router
 from app.routers.ai.test_analysis import router as test_analysis_router
@@ -14,10 +16,7 @@ from app.routers.ai.analyze import router as analyze_router
 from app.routers.ai.functional_cases import router as functional_cases_router
 from app.routers.ai.usage_logs import router as usage_logs_router
 from app.routers.ai.browser_lab import router as browser_lab_router
-from app.core.platform.edition import (
-    knowledge_feature_enabled,
-    qa_eval_feature_enabled,
-)
+from app.core.platform.edition import knowledge_feature_enabled
 
 ai_router = APIRouter(prefix="/ai", tags=["AI测试"])
 
@@ -26,6 +25,8 @@ ai_router.include_router(config_router)
 ai_router.include_router(embed_config_router)
 ai_router.include_router(prompts_router)
 ai_router.include_router(generate_router)
+ai_router.include_router(perf_scene_generate_router)
+ai_router.include_router(stream_parser_rules_generate_router)
 ai_router.include_router(recorder_router)
 ai_router.include_router(functional_cases_router)
 ai_router.include_router(requirements_router)
@@ -33,10 +34,6 @@ ai_router.include_router(test_analysis_router)
 ai_router.include_router(workbench_router)
 ai_router.include_router(analyze_router)
 ai_router.include_router(usage_logs_router)
-if qa_eval_feature_enabled():
-    from app.routers.ai.qa_eval import router as qa_eval_router
-
-    ai_router.include_router(qa_eval_router)
 ai_router.include_router(browser_lab_router)
 
 if knowledge_feature_enabled():

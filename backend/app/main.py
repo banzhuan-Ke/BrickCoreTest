@@ -82,10 +82,28 @@ import secrets
 import base64
 import os
 
-# 定义允许的来源列表，本地：http://localhost:8080，线上：https://example.com  h和110行关联
-ALLOWED_ORIGINS = ["http://localhost:8080", "http://localhost:8000", "http://localhost",
-                   "http://47.111.226.241", "http://47.111.226.241:8000",
-                   "http://47.111.226.241:81", "http://47.111.226.241:80", "http://47.111.226.241"]
+# CORS 允许来源：默认仅本地开发；正式/局域网 IP 用环境变量追加，勿把生产 IP 写进公开仓源码
+# 例：CORS_ALLOWED_ORIGINS=http://192.168.1.100:8080,http://your.domain
+def _cors_allowed_origins() -> list[str]:
+    defaults = [
+        "http://localhost:8080",
+        "http://localhost:8000",
+        "http://localhost",
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:8000",
+    ]
+    raw = (os.getenv("CORS_ALLOWED_ORIGINS") or "").strip()
+    extras = [x.strip() for x in raw.split(",") if x.strip()]
+    seen: set[str] = set()
+    out: list[str] = []
+    for origin in defaults + extras:
+        if origin not in seen:
+            seen.add(origin)
+            out.append(origin)
+    return out
+
+
+ALLOWED_ORIGINS = _cors_allowed_origins()
 
 # 高频探活/心跳不写 access 日志，避免执行器客户端长期在线时日志膨胀
 _ACCESS_LOG_QUIET_PATHS = (
@@ -270,6 +288,18 @@ async def redoc_html(request: Request):
 
 
 # 接口文档的静态文件路径（统一从 config 读取，避免工作目录问题）
+# 增量 .bcpack 仅允许经鉴权接口下载，禁止走公开 /static
+@app.middleware("http")
+async def block_public_runner_patches(request: Request, call_next):
+    path = (request.url.path or "").replace("\\", "/").lower()
+    if path.startswith("/static/runner/patches/") or path.endswith(".bcpack"):
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "请登录后通过 /runner/client-patch/{channel} 下载增量包"},
+        )
+    return await call_next(request)
+
+
 app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
 
 

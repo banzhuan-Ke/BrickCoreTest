@@ -754,3 +754,160 @@ async def get_analysis_detail(
     if not record:
         raise HTTPException(status_code=404, detail="分析记录不存在")
     return StandardResponse(data=_analysis_to_response(record))
+
+
+class PerfCompareAnalyzeRequest(BaseModel):
+    comparison_report_id: int = Field(..., description="PerfComparisonReport.id")
+    ai_config_id: Optional[int] = None
+    force_refresh: bool = False
+    async_mode: bool = Field(False, description="异步分析：立即返回 running，后台完成")
+
+
+class PerfReportAnalyzeRequest(BaseModel):
+    record_id: int = Field(..., description="PerfRecord.id")
+    ai_config_id: Optional[int] = None
+    force_refresh: bool = False
+    async_mode: bool = Field(False, description="异步分析：立即返回 running，后台完成")
+
+
+@router.post(
+    "/perf-report",
+    summary="AI 分析单条压测报告",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def analyze_perf_report(
+    body: PerfReportAnalyzeRequest,
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.models.perf import PerfRecord
+    from app.modules.perf.perf_ai_analyze import (
+        run_perf_record_analysis,
+        schedule_perf_record_analysis,
+        running_placeholder,
+        is_analysis_in_progress,
+    )
+    from app.modules.ai.ai_project_settings import assert_perf_ai_analysis_enabled
+    from app.core.platform.project_access import PROJECT_ROLE_VIEWER, assert_project_access
+
+    project_id = _resolve_project_id(user_info, project_id)
+    username = user_info.get("username", "")
+    record = await PerfRecord.get_or_none(id=body.record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="压测记录不存在")
+    await assert_project_access(user_info, record.project_id, min_role=PROJECT_ROLE_VIEWER)
+    try:
+        await assert_perf_ai_analysis_enabled(record.project_id)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+    if body.async_mode:
+        existing = record.ai_analysis if isinstance(record.ai_analysis, dict) else None
+        if (
+            not body.force_refresh
+            and existing
+            and existing.get("status") == "done"
+            and existing.get("summary")
+        ):
+            return StandardResponse(
+                data={**existing, "cached": True, "record_id": record.id},
+                message="已返回缓存的 AI 分析",
+            )
+        # running 未过期时无论是否 force_refresh 都拒绝重入，避免并发 LLM
+        if is_analysis_in_progress(existing):
+            return StandardResponse(
+                data={**existing, "record_id": record.id},
+                message="分析进行中",
+            )
+        record.ai_analysis = running_placeholder()
+        await record.save(update_fields=["ai_analysis"])
+        schedule_perf_record_analysis(record.id, username=username)
+        return StandardResponse(
+            data={**record.ai_analysis, "record_id": record.id},
+            message="已开始后台分析",
+        )
+
+    try:
+        result = await run_perf_record_analysis(
+            record.id,
+            username=username,
+            ai_config_id=body.ai_config_id,
+            force_refresh=body.force_refresh,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM 调用失败: {str(e)}") from e
+
+    return StandardResponse(data=result, message="压测报告分析完成")
+
+
+@router.post(
+    "/perf-compare",
+    summary="AI 分析压测对比报告",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def analyze_perf_compare(
+    body: PerfCompareAnalyzeRequest,
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.models.perf import PerfComparisonReport
+    from app.modules.perf.perf_ai_analyze import (
+        run_perf_compare_analysis,
+        schedule_perf_compare_analysis,
+        running_placeholder,
+        is_analysis_in_progress,
+    )
+    from app.modules.ai.ai_project_settings import assert_perf_ai_analysis_enabled
+    from app.core.platform.project_access import PROJECT_ROLE_VIEWER, assert_project_access
+
+    project_id = _resolve_project_id(user_info, project_id)
+    username = user_info.get("username", "")
+    report = await PerfComparisonReport.get_or_none(id=body.comparison_report_id, is_del=False)
+    if not report:
+        raise HTTPException(status_code=404, detail="对比报告不存在")
+    await assert_project_access(user_info, report.project_id, min_role=PROJECT_ROLE_VIEWER)
+    try:
+        await assert_perf_ai_analysis_enabled(report.project_id)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+    if body.async_mode:
+        existing = report.ai_analysis if isinstance(report.ai_analysis, dict) else None
+        if (
+            not body.force_refresh
+            and existing
+            and (existing.get("status") == "done" or (existing.get("summary") and not existing.get("status")))
+        ):
+            return StandardResponse(
+                data={**existing, "status": existing.get("status") or "done", "cached": True, "comparison_report_id": report.id},
+                message="已返回缓存的 AI 分析",
+            )
+        # running 未过期时无论是否 force_refresh 都拒绝重入，避免并发 LLM
+        if is_analysis_in_progress(existing):
+            return StandardResponse(
+                data={**existing, "comparison_report_id": report.id},
+                message="分析进行中",
+            )
+        report.ai_analysis = running_placeholder()
+        await report.save(update_fields=["ai_analysis"])
+        schedule_perf_compare_analysis(report.id, username=username)
+        return StandardResponse(
+            data={**report.ai_analysis, "comparison_report_id": report.id},
+            message="已开始后台分析",
+        )
+
+    try:
+        result = await run_perf_compare_analysis(
+            report.id,
+            username=username,
+            ai_config_id=body.ai_config_id,
+            force_refresh=body.force_refresh,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM 调用失败: {str(e)}") from e
+
+    return StandardResponse(data=result, message="压测对比分析完成")

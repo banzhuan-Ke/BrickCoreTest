@@ -22,7 +22,7 @@ from app.core.platform.auth import is_authenticated, require_permissions, get_cu
 from app.core.platform.permissions import API_SUITE_VIEW, API_SUITE_EDIT, API_CASE_EXECUTE
 from app.models.sys import Environment, Project, TestCatalog
 from app.core.platform.config import API_FILE_BUCKET
-from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
+from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog, load_active_catalog_names
 
 router = APIRouter(tags=["接口测试套件"], dependencies=[Depends(is_authenticated), Depends(require_permissions(API_SUITE_VIEW))])
 
@@ -91,14 +91,14 @@ async def get_suites(
     
     total = await query.count()
     suites = await query.order_by("-id").offset((page - 1) * size).limit(size).all()
-    
+    catalog_name_map = await load_active_catalog_names(
+        [s.catalog_id for s in suites if s.catalog_id]
+    )
+
     result = []
     for suite in suites:
         case_count = await ApiSuiteCase.filter(suite_id=suite.id).count()
-        catalog_name = None
-        if suite.catalog_id:
-            catalog = await TestCatalog.get_or_none(id=suite.catalog_id)
-            catalog_name = catalog.name if catalog else None
+        catalog_name = catalog_name_map.get(suite.catalog_id) if suite.catalog_id else None
         result.append({
             "id": suite.id,
             "name": suite.name,
@@ -153,7 +153,7 @@ async def get_suite_detail(suite_id: int):
     
     catalog_name = None
     if suite.catalog_id:
-        catalog = await TestCatalog.get_or_none(id=suite.catalog_id)
+        catalog = await TestCatalog.get_or_none(id=suite.catalog_id, is_del=False)
         catalog_name = catalog.name if catalog else None
     
     return {
@@ -415,7 +415,7 @@ async def run_single_case(
     except ValueError as e:
         return ApiRunResult(record_id=0, status="failed", error=str(e))
     
-    # 请求头已在 merge_request_headers 中按 key 合并
+    # 请求头：用例非空则整表覆盖接口定义（与 params 规则一致）
     # 请求参数：用例级别的 params 完全覆盖接口定义的 params
     if case_params:
         params = {p.get("name", ""): p.get("value", "") for p in case_params if p.get("name")}

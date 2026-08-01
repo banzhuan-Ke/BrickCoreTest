@@ -10,7 +10,7 @@ from .http import (
     EnvDatasource, SqlTemplate,
 )
 from .schedule import Cronjob
-from .perf import PerfScene, PerfRecord
+from .perf import PerfScene, PerfRecord, PerfJourneyTemplate, PerfComparisonReport
 
 __all__ = [
     # Sys
@@ -25,5 +25,5 @@ __all__ = [
     # Schedule
     'Cronjob',
     # Perf
-    'PerfScene', 'PerfRecord',
+    'PerfScene', 'PerfRecord', 'PerfJourneyTemplate', 'PerfComparisonReport',
 ]

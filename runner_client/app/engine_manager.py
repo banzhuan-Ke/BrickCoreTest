@@ -5,6 +5,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -200,6 +201,41 @@ class EngineManager:
         )
         self._reader = _OutputReader(self._proc, self._out_queue)
         self._reader.start()
+        # 等待 main.py 拿到单实例锁；冲突时会很快以码 2 退出
+        buf: list[str] = []
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            chunk = self.read_new_output()
+            if chunk:
+                buf.append(chunk)
+                joined = "\n".join(buf)
+                if any(
+                    marker in joined
+                    for marker in (
+                        "执行器单实例锁已获取",
+                        "开始注册执行设备",
+                        "MQ 消费者连接成功",
+                        "已通过 Runner API 上线",
+                    )
+                ):
+                    # 回灌已读行，避免客户端日志面板丢启动输出
+                    if self._out_queue is not None:
+                        for line in joined.splitlines():
+                            self._out_queue.put(line)
+                    return
+            code = self._proc.poll()
+            if code is not None:
+                output = "\n".join(buf).strip()
+                self._proc = None
+                self._out_queue = None
+                self._reader = None
+                if code == 2:
+                    raise RuntimeError(
+                        output
+                        or "本机已有该设备的 UI 执行器在运行，不能重复上线。请先关闭已开启的实例。"
+                    )
+                raise RuntimeError(output or f"Runner 引擎启动失败（退出码 {code}）")
+            time.sleep(0.1)
 
     def stop(self) -> None:
         if not self._proc:

@@ -164,7 +164,7 @@ docker compose logs -f backend
 
 ### 步骤 7：导入演示数据（首次必做）
 
-**须在后端日志出现「启动后端服务」之后**再导入（表由 `aerich upgrade` 创建；旧版 SQL 里的 `module` 表已废弃）。
+**须在后端日志出现「启动后端服务」之后**再导入（表由容器内 `aerich upgrade` 创建；`database.sql` 只有 INSERT，不含建表。过早导入会报 `Table 'fastapi.user' doesn't exist`）。
 
 ```bash
 cd /opt/BrickCore
@@ -178,6 +178,8 @@ docker exec -i fastapi_mysql mysql --default-character-set=utf8mb4 -uadmin -pBri
 ```bash
 docker exec -i fastapi_mysql mysql --default-character-set=utf8mb4 -uadmin -pBrickCore123456 fastapi < database-demo-fix-labels.sql
 ```
+
+若报错 **`Table 'fastapi.user' doesn't exist`**：后端尚未完成建表，等日志出现「启动后端服务」后再导一次。
 
 若报错 **`Table 'fastapi.module' doesn't exist`**：说明 `database.sql` 过旧。先尝试登录（部分数据可能已写入）；再执行补导入：
 
@@ -307,7 +309,7 @@ Docker 只部署**平台**。Web 自动化、分布式 Worker 需在 **Windows**
 是否执行步骤 4，是否存在 `frontend/dist/index.html`。
 
 **Q：无法登录？**  
-是否在后端启动后执行步骤 7 导入 `database.sql`。
+是否在后端启动后执行步骤 7 导入 `database.sql`。若报 `Table 'fastapi.user' doesn't exist`，说明导入过早，等后端起来后再导一次。
 
 **Q：附件链接是 localhost？**  
 完成步骤 5 修改 `MINIO_PUBLIC_ENDPOINT` 为 `<公网IP>:9200` 并重建 backend。

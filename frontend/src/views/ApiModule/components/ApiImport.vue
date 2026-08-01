@@ -3,12 +3,12 @@
     :model-value="modelValue"
     @update:model-value="$emit('update:modelValue', $event)"
     title="导入接口"
-    width="800px"
+    width="860px"
     destroy-on-close
   >
     <el-steps :active="currentStep" finish-status="success" simple class="import-steps">
-      <el-step title="输入命令"/>
-      <el-step title="编辑确认"/>
+      <el-step :title="importType === 'curl' ? '输入命令' : '选择文件'"/>
+      <el-step :title="importType === 'jmeter' ? '预览确认' : '编辑确认'"/>
       <el-step title="导入完成"/>
     </el-steps>
     
@@ -19,6 +19,7 @@
           <el-radio-group v-model="importType">
             <el-radio-button label="swagger">Swagger/OpenAPI</el-radio-button>
             <el-radio-button label="postman">Postman</el-radio-button>
+            <el-radio-button label="jmeter">JMeter</el-radio-button>
             <el-radio-button label="curl">Curl 命令</el-radio-button>
           </el-radio-group>
         </el-form-item>
@@ -40,7 +41,7 @@
             :auto-upload="false"
             :on-change="handleFileChange"
             :limit="1"
-            accept=".json,.yaml,.yml"
+            :accept="importType === 'jmeter' ? '.jmx' : '.json,.yaml,.yml'"
             class="upload-area"
           >
             <el-icon class="el-icon--upload"><Upload-filled /></el-icon>
@@ -49,7 +50,12 @@
             </div>
             <template #tip>
               <div class="el-upload__tip">
-                支持 .json, .yaml, .yml 格式的 {{ importType === 'swagger' ? 'Swagger/OpenAPI' : 'Postman Collection' }} 文件
+                <template v-if="importType === 'jmeter'">
+                  支持 .jmx（仅转换 HTTP 请求；脚本/复杂控制器会告警）
+                </template>
+                <template v-else>
+                  支持 .json, .yaml, .yml 格式的 {{ importType === 'swagger' ? 'Swagger/OpenAPI' : 'Postman Collection' }} 文件
+                </template>
               </div>
             </template>
           </el-upload>
@@ -233,6 +239,108 @@ curl -X POST 'http://api.example.com/users' \\
         </div>
       </template>
       
+      <!-- JMeter 预览确认 -->
+      <template v-else-if="importType === 'jmeter' && jmeterPreview">
+        <el-alert
+          :title="`已解析：${jmeterPreview.test_plan_name}`"
+          type="info"
+          :description="`将创建接口 ${jmeterPreview.counts?.apis || 0}、用例 ${jmeterPreview.counts?.cases || 0}、套件 ${jmeterPreview.counts?.suites || 0}、压测场景 ${jmeterPreview.counts?.perf_scenes || 0}；未支持节点 ${jmeterPreview.counts?.unsupported || 0}`"
+          show-icon
+          :closable="false"
+          class="parse-alert"
+        />
+        <el-form label-width="110px" class="jmeter-options">
+          <el-form-item label="冲突策略">
+            <el-radio-group v-model="jmeterConflictStrategy">
+              <el-radio label="merge_case">复用同 method+path 接口，新建用例</el-radio>
+              <el-radio label="skip_existing">已存在则跳过</el-radio>
+              <el-radio label="create_always">始终新建接口与用例</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="创建套件">
+            <el-switch v-model="jmeterCreateSuites" />
+            <span class="jmeter-hint">按 Thread Group 生成接口测试套件</span>
+          </el-form-item>
+          <el-form-item label="压测场景">
+            <el-switch
+              v-model="jmeterCreatePerfScenes"
+              :disabled="!(jmeterPreview.counts?.perf_scenes > 0)"
+            />
+            <span class="jmeter-hint">
+              <template v-if="jmeterPreview.counts?.perf_scenes > 0">
+                可为 {{ jmeterPreview.counts.perf_scenes }} 个简单 Thread Group 生成 journey 压测场景（会同时创建套件）
+              </template>
+              <template v-else>
+                无可自动生成的压测场景（含条件控制器/定时器的 Thread Group 已跳过）
+              </template>
+            </span>
+          </el-form-item>
+        </el-form>
+        <el-table
+          v-if="(jmeterPreview.suites || []).length"
+          :data="jmeterPreview.suites"
+          size="small"
+          max-height="160"
+          class="jmeter-suite-table"
+        >
+          <el-table-column label="Thread Group" prop="name" min-width="140" show-overflow-tooltip />
+          <el-table-column label="请求数" width="80" align="center">
+            <template #default="{ row }">{{ (row.sampler_paths || []).length }}</template>
+          </el-table-column>
+          <el-table-column label="压测" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.perf_eligible" size="small" type="success">可生成</el-tag>
+              <el-tag v-else size="small" type="info">跳过</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="说明" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span v-if="row.perf_eligible && row.perf_config">
+                {{ row.perf_config.mode }} / {{ row.perf_config.concurrent_users }} 并发
+              </span>
+              <span v-else>{{ (row.perf_block_reasons || []).join('；') || '-' }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-table :data="jmeterPreview.apis || []" size="small" max-height="220">
+          <el-table-column type="index" width="50"/>
+          <el-table-column label="方法" width="80">
+            <template #default="{ row }">
+              <el-tag :type="getMethodType(row.method)" size="small">{{ row.method }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="路径" prop="path" show-overflow-tooltip/>
+          <el-table-column label="名称" prop="name" show-overflow-tooltip/>
+        </el-table>
+        <el-alert
+          v-if="(jmeterPreview.todos || []).length"
+          title="待办"
+          type="warning"
+          :description="jmeterPreview.todos.join('；')"
+          show-icon
+          :closable="false"
+          class="error-alert"
+        />
+        <el-collapse v-if="(jmeterPreview.unsupported_nodes || []).length" class="jmeter-unsupported">
+          <el-collapse-item :title="`未支持节点（${jmeterPreview.unsupported_nodes.length}）`" name="1">
+            <el-table :data="jmeterPreview.unsupported_nodes" size="small" max-height="180">
+              <el-table-column label="类型" prop="type" width="140"/>
+              <el-table-column label="路径" prop="source_path" show-overflow-tooltip/>
+              <el-table-column label="原因" prop="reason" show-overflow-tooltip/>
+            </el-table>
+          </el-collapse-item>
+        </el-collapse>
+        <el-alert
+          v-if="(jmeterPreview.warnings || []).length"
+          :title="`警告 ${jmeterPreview.warnings.length} 条`"
+          type="warning"
+          :description="jmeterPreview.warnings.slice(0, 8).join('；')"
+          show-icon
+          :closable="false"
+          class="error-alert"
+        />
+      </template>
+
       <!-- 文件导入结果预览 -->
       <template v-else>
         <el-alert
@@ -272,7 +380,18 @@ curl -X POST 'http://api.example.com/users' \\
       <div class="success-result">
         <el-icon class="success-icon"><Circle-check /></el-icon>
         <h3>导入完成</h3>
-        <p>成功导入 {{ parseResult.success }} 个接口</p>
+        <template v-if="importType === 'jmeter' && jmeterCommitResult">
+          <p>
+            新建接口 {{ jmeterCommitResult.created_apis }}，
+            新建用例 {{ jmeterCommitResult.created_cases }}，
+            合并用例 {{ jmeterCommitResult.merged_cases }}，
+            跳过 {{ jmeterCommitResult.skipped }}，
+            失败 {{ jmeterCommitResult.failed }}，
+            套件 {{ jmeterCommitResult.created_suites }}，
+            压测场景 {{ jmeterCommitResult.created_scenes || 0 }}
+          </p>
+        </template>
+        <p v-else>成功导入 {{ parseResult.success }} 个接口</p>
       </div>
     </div>
     
@@ -282,16 +401,30 @@ curl -X POST 'http://api.example.com/users' \\
         <el-button 
           type="primary" 
           @click="handleNext" 
+          :loading="importing"
           :disabled="importType === 'curl' ? !curlCommand.trim() : !selectedFile"
         >
           下一步
         </el-button>
       </template>
       
-      <!-- 第二步：显示上一步、测试和保存 -->
-      <template v-if="currentStep === 1">
+      <!-- 第二步：JMeter 确认导入 -->
+      <template v-if="currentStep === 1 && importType === 'jmeter'">
+        <el-button @click="currentStep = 0">上一步</el-button>
+        <el-button
+          type="primary"
+          @click="handleJmeterCommit"
+          :loading="importing"
+          :disabled="!(jmeterPreview?.counts?.apis > 0)"
+        >
+          确认导入
+        </el-button>
+      </template>
+
+      <!-- 第二步：curl / 其它 -->
+      <template v-else-if="currentStep === 1">
         <el-button @click="currentStep = 0; testResult = null">上一步</el-button>
-        <el-button type="warning" @click="openTestEnvDialog" :loading="testing">
+        <el-button v-if="importType === 'curl'" type="warning" @click="openTestEnvDialog" :loading="testing">
           测试
         </el-button>
         <el-button type="primary" @click="handleSave" :loading="importing">
@@ -388,6 +521,11 @@ const envList = ref([])           // 环境列表
 
 // 预览数据（用于编辑）
 const previewData = ref(null)
+const jmeterPreview = ref(null)
+const jmeterCommitResult = ref(null)
+const jmeterConflictStrategy = ref('merge_case')
+const jmeterCreateSuites = ref(true)
+const jmeterCreatePerfScenes = ref(false)
 
 const parseResult = reactive({
   total: 0,
@@ -453,15 +591,73 @@ const handleNext = async () => {
       ElMessage.warning('请输入 curl 命令')
       return
     }
-    // 解析 curl 命令
     await parseCurlCommand()
+  } else if (importType.value === 'jmeter') {
+    if (!selectedFile.value) {
+      ElMessage.warning('请选择 .jmx 文件')
+      return
+    }
+    await handleJmeterPreview()
   } else {
     if (!selectedFile.value) {
       ElMessage.warning('请选择文件')
       return
     }
-    // 文件导入直接执行
     await handleFileImport()
+  }
+}
+
+const handleJmeterPreview = async () => {
+  importing.value = true
+  jmeterPreview.value = null
+  jmeterCommitResult.value = null
+  try {
+    const res = await http.apiModuleApi.importJmeterPreview(
+      proStore.projectInfo.id,
+      selectedFile.value,
+      targetCatalog.value
+    )
+    if (res.status === 200) {
+      jmeterPreview.value = res.data
+      jmeterCreatePerfScenes.value = (res.data.counts?.perf_scenes || 0) > 0
+      currentStep.value = 1
+      if (!(res.data.counts?.apis > 0)) {
+        ElMessage.warning('未解析到可导入的 HTTP 请求，请查看未支持节点说明')
+      }
+    }
+  } catch (error) {
+    ElMessage.error('解析失败：' + (error.response?.data?.detail || error.message))
+  } finally {
+    importing.value = false
+  }
+}
+
+const handleJmeterCommit = async () => {
+  if (!jmeterPreview.value?.preview_token) {
+    ElMessage.warning('预览已失效，请重新上传')
+    return
+  }
+  importing.value = true
+  try {
+    const res = await http.apiModuleApi.importJmeterCommit({
+      preview_token: jmeterPreview.value.preview_token,
+      project_id: proStore.projectInfo.id,
+      catalog_id: targetCatalog.value,
+      conflict_strategy: jmeterConflictStrategy.value,
+      create_suites: jmeterCreateSuites.value || jmeterCreatePerfScenes.value,
+      create_perf_scenes: jmeterCreatePerfScenes.value
+    })
+    if (res.status === 200) {
+      jmeterCommitResult.value = res.data
+      parseResult.success = (res.data.created_apis || 0) + (res.data.merged_cases || 0)
+      currentStep.value = 2
+      emit('success')
+      ElMessage.success('JMeter 导入完成')
+    }
+  } catch (error) {
+    ElMessage.error('导入失败：' + (error.response?.data?.detail || error.message))
+  } finally {
+    importing.value = false
   }
 }
 
@@ -712,6 +908,12 @@ const handleClose = () => {
   selectedFile.value = null
   curlCommand.value = ''
   previewData.value = null
+  jmeterPreview.value = null
+  jmeterCommitResult.value = null
+  jmeterConflictStrategy.value = 'merge_case'
+  jmeterCreateSuites.value = true
+  jmeterCreatePerfScenes.value = false
+  testResult.value = null
   parseResult.total = 0
   parseResult.success = 0
   parseResult.failed = 0
@@ -726,6 +928,12 @@ const resetAndContinue = () => {
   curlCommand.value = ''
   selectedFile.value = null
   previewData.value = null
+  jmeterPreview.value = null
+  jmeterCommitResult.value = null
+  jmeterConflictStrategy.value = 'merge_case'
+  jmeterCreateSuites.value = true
+  jmeterCreatePerfScenes.value = false
+  testResult.value = null
   parseResult.total = 0
   parseResult.success = 0
   parseResult.failed = 0
@@ -741,8 +949,26 @@ const resetAndContinue = () => {
 
 .step-content {
   min-height: 200px;
-  max-height: 500px;
+  max-height: 520px;
   overflow-y: auto;
+}
+
+.jmeter-options {
+  margin: 12px 0;
+}
+
+.jmeter-hint {
+  margin-left: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.jmeter-unsupported {
+  margin-top: 12px;
+}
+
+.jmeter-suite-table {
+  margin-bottom: 12px;
 }
 
 .upload-area {

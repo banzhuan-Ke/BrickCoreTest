@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Awaitable
 
+from fastapi import HTTPException
+
 from app.core.platform.edition import (
     KNOWLEDGE_TOOL_NAMES,
     QA_EVAL_TOOL_NAMES,
@@ -60,8 +62,6 @@ READONLY_TOOL_NAMES: tuple[str, ...] = (
     "get_execution_record",
     "get_generate_job",
     "get_requirement_latest_job",
-    "list_qa_eval_sets",
-    "get_qa_eval_run",
 )
 
 PREVIEW_TOOL_NAMES: tuple[str, ...] = (
@@ -69,7 +69,6 @@ PREVIEW_TOOL_NAMES: tuple[str, ...] = (
     "preview_run_api_suite",
     "preview_run_api_plan",
     "preview_run_api_case",
-    "preview_run_qa_eval",
     "preview_run_ui_case",
     "preview_run_ui_task",
     "preview_run_ui_suite",
@@ -85,7 +84,6 @@ CONFIRM_ACTION_MAP: dict[str, str] = {
     "run_api_suite": "confirm_run_api_suite",
     "run_api_plan": "confirm_run_api_plan",
     "run_api_case": "confirm_run_api_case",
-    "run_qa_eval": "confirm_run_qa_eval",
     "run_ui_case": "confirm_run_ui_case",
     "run_ui_task": "confirm_run_ui_task",
     "run_ui_suite": "confirm_run_ui_suite",
@@ -855,36 +853,6 @@ READONLY_TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_qa_eval_sets",
-            "description": "列出问答准确性评测集及用例数、可选被测 API",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "project_id": {"type": "integer"},
-                    "keyword": {"type": "string", "description": "按评测集名称模糊搜索"},
-                },
-                "required": ["project_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_qa_eval_run",
-            "description": "查询问答准确性评测跑批进度与结果摘要",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "run_id": {"type": "integer", "description": "跑批记录 ID"},
-                    "project_id": {"type": "integer"},
-                },
-                "required": ["run_id", "project_id"],
-            },
-        },
-    },
 ]
 
 PREVIEW_TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -948,36 +916,6 @@ PREVIEW_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "case_name": {"type": "string", "description": "用例名称（精确或模糊匹配）"},
                 },
                 "required": ["project_id", "env_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "preview_run_qa_eval",
-            "description": "预览问答准确性评测跑批（需 target_id、确认后后台执行）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "project_id": {"type": "integer"},
-                    "set_id": {"type": "integer", "description": "评测集 ID"},
-                    "target_id": {"type": "integer", "description": "被测 API 配置 ID"},
-                    "run_name": {"type": "string", "description": "评测名称"},
-                    "run_mode": {
-                        "type": "string",
-                        "enum": ["auto", "judge_only", "fetch_only"],
-                        "description": "跑批模式，默认 auto",
-                    },
-                    "case_scope": {
-                        "type": "string",
-                        "enum": ["all", "range", "retry_failed"],
-                        "description": "用例范围，默认 all",
-                    },
-                    "range_start": {"type": "integer", "description": "范围起始序号（case_scope=range）"},
-                    "range_end": {"type": "integer", "description": "范围结束序号（case_scope=range）"},
-                    "retry_source_run_id": {"type": "integer", "description": "重跑失败时的来源跑批 ID"},
-                },
-                "required": ["project_id", "set_id"],
             },
         },
     },
@@ -1194,15 +1132,10 @@ def _get_handler_map() -> dict[str, ToolHandler]:
             "list_recent_failures": mcp_tools.tool_list_recent_failures,
             "get_execution_record": mcp_tools.tool_get_execution_record,
             "get_generate_job": mcp_tools.tool_get_generate_job,
-            "get_requirement_latest_job": mcp_tools.tool_get_requirement_latest_job,
-            "list_qa_eval_sets": mcp_tools.tool_list_qa_eval_sets,
-            "get_qa_eval_run": mcp_tools.tool_get_qa_eval_run,
-            "preview_trigger_generate": mcp_tools.tool_preview_trigger_generate,
+            "get_requirement_latest_job": mcp_tools.tool_get_requirement_latest_job,            "preview_trigger_generate": mcp_tools.tool_preview_trigger_generate,
             "preview_run_api_suite": mcp_tools.tool_preview_run_api_suite,
             "preview_run_api_plan": mcp_tools.tool_preview_run_api_plan,
-            "preview_run_api_case": mcp_tools.tool_preview_run_api_case,
-            "preview_run_qa_eval": mcp_tools.tool_preview_run_qa_eval,
-            "preview_run_ui_case": mcp_tools.tool_preview_run_ui_case,
+            "preview_run_api_case": mcp_tools.tool_preview_run_api_case,            "preview_run_ui_case": mcp_tools.tool_preview_run_ui_case,
             "preview_run_app_case": mcp_tools.tool_preview_run_app_case,
             "preview_run_app_suite": mcp_tools.tool_preview_run_app_suite,
             "preview_run_app_plan": mcp_tools.tool_preview_run_app_plan,
@@ -1212,9 +1145,7 @@ def _get_handler_map() -> dict[str, ToolHandler]:
             "confirm_trigger_generate": mcp_tools.tool_confirm_trigger_generate,
             "confirm_run_api_suite": mcp_tools.tool_confirm_run_api_suite,
             "confirm_run_api_plan": mcp_tools.tool_confirm_run_api_plan,
-            "confirm_run_api_case": mcp_tools.tool_confirm_run_api_case,
-            "confirm_run_qa_eval": mcp_tools.tool_confirm_run_qa_eval,
-            "confirm_run_ui_case": mcp_tools.tool_confirm_run_ui_case,
+            "confirm_run_api_case": mcp_tools.tool_confirm_run_api_case,            "confirm_run_ui_case": mcp_tools.tool_confirm_run_ui_case,
             "confirm_run_app_case": mcp_tools.tool_confirm_run_app_case,
             "confirm_run_app_suite": mcp_tools.tool_confirm_run_app_suite,
             "confirm_run_app_plan": mcp_tools.tool_confirm_run_app_plan,
@@ -1268,11 +1199,8 @@ _PROJECT_SCOPED_TOOLS = {
     "list_recent_failures",
     "get_generate_job",
     "get_requirement_latest_job",
-    "list_qa_eval_sets",
-    "get_qa_eval_run",
     "preview_trigger_generate",
     "preview_run_api_case",
-    "preview_run_qa_eval",
     "preview_run_ui_case",
     "preview_run_app_case",
     "preview_run_app_suite",
@@ -1448,6 +1376,9 @@ async def invoke_assistant_tool(
             return {"error": f"参数错误: {exc}"}
         except ValueError as exc:
             return format_tool_error(exc)
+        except HTTPException as exc:
+            detail = exc.detail
+            return {"error": detail if isinstance(detail, str) else str(detail)}
         except Exception as exc:
             return {"error": f"工具执行失败: {exc}"}
 
@@ -1463,6 +1394,9 @@ async def invoke_assistant_tool(
         return {"error": f"参数错误: {exc}"}
     except ValueError as exc:
         return format_tool_error(exc)
+    except HTTPException as exc:
+        detail = exc.detail
+        return {"error": detail if isinstance(detail, str) else str(detail)}
     except Exception as exc:
         return {"error": f"工具执行失败: {exc}"}
 
@@ -1488,7 +1422,11 @@ async def invoke_confirm_tool(
     if not handler:
         raise ValueError(f"未知确认工具: {tool_name}")
     args = {"confirm_token": confirm_token, **(confirm_args or {})}
-    return await handler(ctx, **args)
+    try:
+        return await handler(ctx, **args)
+    except HTTPException as exc:
+        detail = exc.detail
+        raise ValueError(detail if isinstance(detail, str) else str(detail)) from exc
 
 
 def extract_pending_confirm(tool_name: str, result: dict[str, Any]) -> dict[str, Any] | None:
@@ -1504,8 +1442,6 @@ def extract_pending_confirm(tool_name: str, result: dict[str, Any]) -> dict[str,
         action = "run_api_plan"
     elif tool_name == "preview_run_api_case":
         action = "run_api_case"
-    elif tool_name == "preview_run_qa_eval":
-        action = "run_qa_eval"
     elif tool_name == "preview_run_ui_case":
         action = "run_ui_case"
     elif tool_name == "preview_run_app_case":
@@ -1547,17 +1483,7 @@ def extract_pending_confirm(tool_name: str, result: dict[str, Any]) -> dict[str,
             "case_id": impact.get("case_id"),
             "env_id": impact.get("env_id"),
         }
-    elif action == "run_qa_eval":
-        confirm_args = {
-            "project_id": impact.get("project_id"),
-            "set_id": impact.get("set_id"),
-            "target_id": impact.get("target_id"),
-            "run_name": impact.get("run_name"),
-            "run_mode": impact.get("run_mode"),
-            "case_scope": impact.get("case_scope"),
-            "range_start": impact.get("range_start"),
-            "range_end": impact.get("range_end"),
-        }
+
     elif action == "run_ui_case":
         confirm_args = {
             "project_id": impact.get("project_id"),

@@ -1,12 +1,19 @@
 """
 邀请码校验与消费
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 
 from app.core.platform.role_seed import get_default_member_role_ids, ensure_default_roles
 from app.models.sys import InviteCode, Role
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """统一为 timezone-aware UTC，避免 naive/aware 比较报错。"""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 async def validate_and_consume_invite_code(code: str) -> list[int]:
@@ -25,7 +32,7 @@ async def validate_and_consume_invite_code(code: str) -> list[int]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="邀请码已停用")
     if invite.max_uses > 0 and invite.used_count >= invite.max_uses:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="邀请码已达使用上限")
-    if invite.expires_at and invite.expires_at < datetime.now():
+    if invite.expires_at and _as_utc(invite.expires_at) < datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="邀请码已过期")
 
     await ensure_default_roles()

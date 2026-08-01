@@ -35,9 +35,15 @@ def normalize_journey_config(config: dict) -> dict:
             case_id = _safe_case_id(step.get("case_id"))
             if case_id is None:
                 continue
+            delay_mode = str(step.get("delay_mode") or "fixed").strip().lower()
+            if delay_mode not in ("fixed", "random"):
+                delay_mode = "fixed"
             steps.append({
                 "case_id": case_id,
                 "delay_ms": int(step.get("delay_ms") or 0),
+                "delay_mode": delay_mode,
+                "delay_ms_min": int(step.get("delay_ms_min") or 0),
+                "delay_ms_max": int(step.get("delay_ms_max") or 0),
                 "use_stream": bool(step.get("use_stream")),
                 "order": int(step.get("order", j)),
             })
@@ -89,8 +95,86 @@ def journey_to_scene_items(config: dict) -> list[dict]:
                 "case_id": cid,
                 "weight": 1,
                 "delay_ms": step.get("delay_ms", 0),
+                "delay_mode": step.get("delay_mode", "fixed"),
+                "delay_ms_min": step.get("delay_ms_min", 0),
+                "delay_ms_max": step.get("delay_ms_max", 0),
             })
     return items
+
+
+LAYOUT_SINGLE_PHASE = "single_phase"
+LAYOUT_PER_CASE_PHASE = "per_case_phase"
+
+
+def suite_cases_to_journey(
+    cases: list[dict],
+    *,
+    layout: str = LAYOUT_SINGLE_PHASE,
+    suite_name: str = "",
+) -> dict:
+    """将套件用例列表转为 journey 配置。
+
+    cases 项至少含 ``case_id``；可选 ``case_name`` / ``name`` 用于阶段命名。
+    layout:
+      - single_phase: 单阶段，步骤按序
+      - per_case_phase: 每用例一个阶段
+    """
+    layout = (layout or LAYOUT_SINGLE_PHASE).strip()
+    if layout not in (LAYOUT_SINGLE_PHASE, LAYOUT_PER_CASE_PHASE):
+        layout = LAYOUT_SINGLE_PHASE
+
+    ordered: list[dict] = []
+    for raw in cases or []:
+        cid = _safe_case_id(raw.get("case_id") if isinstance(raw, dict) else raw)
+        if cid is None:
+            continue
+        name = ""
+        if isinstance(raw, dict):
+            name = (raw.get("case_name") or raw.get("name") or "").strip()
+        ordered.append({"case_id": cid, "name": name})
+
+    if layout == LAYOUT_PER_CASE_PHASE:
+        phases = []
+        for i, item in enumerate(ordered):
+            phases.append({
+                "name": item["name"] or f"阶段{i + 1}",
+                "execution": "serial",
+                "sync_before": False,
+                "max_parallel": 6,
+                "steps": [{
+                    "case_id": item["case_id"],
+                    "delay_ms": 0,
+                    "use_stream": False,
+                    "order": 0,
+                }],
+            })
+    else:
+        phase_name = (suite_name or "业务链路").strip() or "业务链路"
+        steps = [
+            {
+                "case_id": item["case_id"],
+                "delay_ms": 0,
+                "use_stream": False,
+                "order": i,
+            }
+            for i, item in enumerate(ordered)
+        ]
+        phases = [{
+            "name": phase_name,
+            "execution": "serial",
+            "sync_before": False,
+            "max_parallel": 6,
+            "steps": steps,
+        }] if steps else []
+
+    return normalize_journey_config({
+        "journey": {
+            "stop_on_step_fail": True,
+            "delay_between_journeys_ms": 0,
+            "phases": phases,
+        }
+    })
+
 
 
 async def run_one_journey(*_args, **_kwargs):

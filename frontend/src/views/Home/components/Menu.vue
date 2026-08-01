@@ -163,12 +163,6 @@ watch(
 const filteredMenuGroups = computed(() => {
   return MenuGroups.map((group) => {
     const items = group.items.filter((item) => {
-      if (isCommunityEdition.value && item.path === '/ai-qa-eval') {
-        return false
-      }
-      if (isCommunityEdition.value && item.path?.startsWith('/ai-knowledge')) {
-        return false
-      }
       if (item.anyPermissions?.length) {
         return item.anyPermissions.some((p) => uStore.hasPermission(p))
       }

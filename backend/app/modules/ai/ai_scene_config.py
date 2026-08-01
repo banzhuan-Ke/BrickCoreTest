@@ -1,4 +1,4 @@
-﻿"""AI 场景与 LLM 配置绑定"""
+"""AI 场景与 LLM 配置绑定"""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -19,12 +19,16 @@ AI_SCENE_DEFINITIONS: dict[str, tuple[str, str]] = {
     "locator_heal": ("定位器自愈", "步骤失败时 AI 修复选择器"),
     "ai_act": ("AI Act 兜底", "自愈失败后 AI 按意图重新规划并执行一步"),
     "api_case_generate": ("API 用例生成", "基于接口定义生成用例"),
+    "perf_scene_generate": ("一句话生成压测场景", "自然语言匹配项目内用例/套件生成 PerfScene 草稿"),
+    "stream_parser_rules_generate": ("SSE 解析规则生成", "根据 SSE 样例与阶段说明生成 rule_based 规则草稿"),
     "mock_data_generate": ("Mock 响应生成", "AI 生成 Mock 接口响应 JSON"),
     "platform_assistant": ("平台内 AI 助手", "看板/各页面的只读问答与项目总结"),
     "report_summary": ("测试报告摘要", "执行报告 AI 摘要与建议"),
     "iteration_report": ("迭代自动化测试报告", "资料库 + 多份自动化执行记录 → Word 报告 AI 段落"),
     "functional_report": ("功能测试报告", "功能范围、缺陷与测试结论 AI 段落"),
-    "performance_report": ("性能测试报告", "性能指标、瓶颈与结论 AI 段落"),
+    "performance_report": ("性能测试报告", "资料库迭代报告用：性能指标、瓶颈与结论 AI 段落（非压测执行分析）"),
+    "perf_report_analysis": ("压测单次报告分析", "性能测试执行记录报告页的 AI 分析"),
+    "perf_compare_analysis": ("性能测试报告分析", "压测增强报告（对比 / 汇总 / 合并+对比）的 AI 分析"),
     "test_plan": ("测试计划", "需求与迭代资料 → 测试目标、范围与策略"),
     "test_scheme": ("测试方案", "需求与资料库 → 方案级目标、策略与风险"),
     "knowledge_chunk_digest": ("资料分块提炼", "长文档 Map：单片段核心要点"),
@@ -38,7 +42,6 @@ AI_SCENE_DEFINITIONS: dict[str, tuple[str, str]] = {
     "requirement_test_scheme": ("测试方案生成", "基于测试点生成测试方案文档"),
     "recorder_optimize": ("录制步骤优化", "录制弹窗内 AI 精简步骤并追加断言"),
     "case_steps_optimize": ("用例步骤优化", "用例编辑页 AI 优化步骤并追加断言"),
-    "qa_judge": ("问答准确性评判", "知识库问答评测 LLM 打分"),
     "browser_lab": ("智能浏览器", "browser-use 自然语言驱动浏览器演示/探索"),
     "browser_lab_task_optimize": ("智能浏览器 · 任务描述优化", "将自然语言任务改写为 browser-use 可执行描述"),
     "requirement_doc_understand": ("需求文档读图", "需求用例生成前 Vision 解析文档内图片"),
@@ -70,6 +73,7 @@ AI_SCENE_GROUPS: list[dict[str, str]] = [
     {"id": "assistant", "label": "平台助手"},
     {"id": "generate", "label": "用例生成"},
     {"id": "analysis", "label": "失败分析"},
+    {"id": "perf", "label": "性能测试"},
     {"id": "vision", "label": "多模态 Vision"},
     {"id": "other", "label": "其他增强"},
 ]
@@ -139,6 +143,20 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "temperature_hint": "0.3～0.5",
         "tip": "API 用例 JSON 输出，建议低温度",
     },
+    "perf_scene_generate": {
+        "group": "perf",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-chat",
+        "temperature_hint": "0.2～0.4",
+        "tip": "一句话生成压测场景：只从候选用例/套件里选 ID，勿编造；低温度更稳",
+    },
+    "stream_parser_rules_generate": {
+        "group": "perf",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-chat",
+        "temperature_hint": "0.1～0.3",
+        "tip": "根据 SSE 样例生成 rule_based 阶段匹配规则；低温度、严格 JSON",
+    },
     "mock_data_generate": {
         "group": "generate",
         "recommended_provider": "deepseek",
@@ -151,14 +169,16 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "recommended_provider": "deepseek",
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.3～0.5",
-        "tip": "录制后步骤优化需保持步骤结构稳定",
+        "tip": "录制后步骤优化需保持步骤结构稳定；可开断言时为双次 LLM，建议 timeout≥180",
+        "default_overrides": {"max_tokens": 8192, "temperature": 0.2, "timeout": 180},
     },
     "case_steps_optimize": {
         "group": "other",
         "recommended_provider": "deepseek",
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.3～0.5",
-        "tip": "用例编辑页优化可与录制步骤优化共用同一模型",
+        "tip": "用例编辑页优化可与录制步骤优化共用同一模型；可开断言时为双次 LLM，建议 timeout≥180",
+        "default_overrides": {"max_tokens": 8192, "temperature": 0.2, "timeout": 180},
     },
     "failure_analysis": {
         "group": "analysis",
@@ -193,7 +213,21 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "recommended_provider": "deepseek",
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.3～0.5",
-        "tip": "性能测试报告叙述段；侧重指标与瓶颈分析",
+        "tip": "资料库「性能测试报告」Word 叙述段；与压测执行页「性能测试报告分析」不是同一场景",
+    },
+    "perf_report_analysis": {
+        "group": "perf",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-chat",
+        "temperature_hint": "0.2～0.4",
+        "tip": "单次压测报告 AI 分析；在「场景绑定」选模型。总开关在「项目设置 → 压测 AI」",
+    },
+    "perf_compare_analysis": {
+        "group": "perf",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-chat",
+        "temperature_hint": "0.2～0.4",
+        "tip": "增强报告（对比/汇总/合并+对比）AI 分析；在「场景绑定」为本场景选模型；总开关在项目压测 AI",
     },
     "test_plan": {
         "group": "analysis",
@@ -274,14 +308,6 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "recommended_model": "deepseek-chat",
         "temperature_hint": "0.2～0.4",
         "tip": "自愈失败后的步骤重规划；建议与定位器自愈使用同档文本模型",
-    },
-    "qa_judge": {
-        "group": "analysis",
-        "recommended_provider": "deepseek",
-        "recommended_model": "deepseek-chat",
-        "temperature_hint": "0.1～0.3",
-        "tip": "建议绑定 DeepSeek 文本模型，并在「参数覆盖」中设置 max_tokens≥16384、timeout≥180",
-        "default_overrides": {"max_tokens": 32768, "temperature": 0.1, "timeout": 300},
     },
     "browser_lab": {
         "group": "generate",
@@ -381,15 +407,21 @@ async def resolve_vision_config(
 async def list_scene_bindings() -> dict[str, Any]:
     rows = {r.scene: r for r in await AiSceneBinding.all()}
     enabled = await AiConfig.filter(is_del=False, is_enabled=True).order_by("-is_default", "-id")
+    enabled_ids = {c.id for c in enabled}
     config_options = [
         {"id": c.id, "name": c.name, "model": c.model, "provider": c.provider, "is_default": c.is_default}
         for c in enabled
     ]
     result: list[dict[str, Any]] = []
     unbound = 0
+    stale_cleared = 0
     for scene, (label, desc) in visible_scene_definitions().items():
         row = rows.get(scene)
         config_id = row.config_id if row else None
+        # 绑定指向已禁用/已删配置时，对前端视为未绑定，避免下拉空白仍带着失效 ID
+        if config_id and config_id not in enabled_ids:
+            config_id = None
+            stale_cleared += 1
         if not config_id:
             unbound += 1
         rec = AI_SCENE_RECOMMENDATIONS.get(scene, {})
@@ -416,6 +448,7 @@ async def list_scene_bindings() -> dict[str, Any]:
         "groups": AI_SCENE_GROUPS,
         "has_enabled_config": bool(config_options),
         "unbound_count": unbound,
+        "stale_binding_count": stale_cleared,
     }
 
 
@@ -480,6 +513,17 @@ async def apply_scene_recommendations(username: str) -> dict[str, Any]:
     return result
 
 
+def _normalize_binding_config_id(raw: Any) -> Optional[int]:
+    """空串 / 0 / 非法值一律视为未绑定。"""
+    if raw is None or raw == "":
+        return None
+    try:
+        cid = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return cid if cid > 0 else None
+
+
 async def save_scene_bindings(items: list[dict[str, Any]], username: str) -> None:
     enabled_ids = set(
         await AiConfig.filter(is_del=False, is_enabled=True).values_list("id", flat=True)
@@ -488,16 +532,16 @@ async def save_scene_bindings(items: list[dict[str, Any]], username: str) -> Non
         scene = (item.get("scene") or "").strip()
         if scene not in visible_scene_definitions():
             raise HTTPException(status_code=400, detail=f"未知场景: {scene}")
-        config_id = item.get("config_id")
+        config_id = _normalize_binding_config_id(item.get("config_id"))
         raw_overrides = item.get("overrides") or {}
         overrides = {}
         if isinstance(raw_overrides, dict):
             for k in SCENE_OVERRIDE_KEYS:
                 if k in raw_overrides and raw_overrides[k] is not None:
                     overrides[k] = raw_overrides[k]
-        if config_id is not None:
-            if config_id not in enabled_ids:
-                raise HTTPException(status_code=400, detail=f"场景 {scene} 绑定的配置无效或未启用")
+        # 失效绑定（禁用/删除的模型）自动解绑，避免整页保存被一处 stale ID 卡住
+        if config_id is not None and config_id not in enabled_ids:
+            config_id = None
 
         row = await AiSceneBinding.get_or_none(scene=scene)
         if config_id is None:

@@ -4,7 +4,7 @@
       <span class="selection-summary">已选 <strong>{{ selectedCount }}</strong> 步</span>
       <el-button link type="primary" @click="selectAll">全选</el-button>
       <el-button link @click="clearSelection">清空</el-button>
-      <el-tooltip content="在交互调试浏览器中执行勾选的步骤（需先打开交互调试）" placement="top">
+      <el-tooltip content="仅执行勾选的步骤（不连续也会按序号依次跑；需先打开交互调试）" placement="top">
         <el-button
           type="success"
           size="small"
@@ -12,7 +12,7 @@
           :disabled="selectedCount === 0"
           @click="runDebugSelectedSteps"
         >
-          调试执行
+          执行勾选步骤
         </el-button>
       </el-tooltip>
       <el-button
@@ -35,7 +35,7 @@
       >
         插入智能步骤
       </el-button>
-      <el-text type="info" size="small">勾选多个步骤后可调试执行或生成可复用片段</el-text>
+      <el-text type="info" size="small">勾选后点「执行勾选步骤」；卡片/工具条的「执行本步」只跑当前一步</el-text>
     </div>
 
     <!-- 步骤列表 -->
@@ -65,11 +65,13 @@
             :parent-path="[]"
             :selectable="selectionMode"
             :selected="selectedIndices.has(index)"
+            :selected-count="selectedCount"
             :debug-enabled="debugEnabled"
             :execution-hint="stepExecutionHint(index)"
             :debug-selected="isDebugHighlighted(index)"
             :debug-run-result="stepDebugRunResult(index)"
             @toggle-select="toggleStepSelection(index)"
+            @run-selected="runDebugSelectedSteps"
             @edit="openEditDialog(step, index)"
             @debug="onDebugStep"
             @record-from-step="onRecordFromStep"
@@ -202,9 +204,9 @@ const props = defineProps({
 provide('stepEditorModule', computed(() => props.module))
 
 function stepExecutionHint(index) {
-  const fromDebug = getStepExecutionHint(props.debugExecutionHints, index)
+  const fromDebug = getStepExecutionHint(props.debugExecutionHints, index, localSteps.value[index])
   if (fromDebug) return fromDebug
-  return getStepExecutionHint(props.executionHints, index)
+  return getStepExecutionHint(props.executionHints, index, localSteps.value[index])
 }
 
 function stepDebugRunResult(index) {
@@ -628,7 +630,11 @@ function handleStepCancel() {
   isNewStep.value = false
 }
 
-defineExpose({ insertSmartStep })
+function getSelectedIndices() {
+  return [...selectedIndices.value].sort((a, b) => a - b)
+}
+
+defineExpose({ insertSmartStep, getSelectedIndices })
 </script>
 
 <style scoped lang="scss">
