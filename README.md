@@ -1,4 +1,4 @@
-# BrickCore 自动化测试平台
+﻿# BrickCore 自动化测试平台
 
 > **当前版本 v1.5.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
 
@@ -190,7 +190,7 @@ BrickCoreRunner 安装包为配套客户端（网盘 / 平台内下载），使�
 
 <p align="center">
   <img src="assets/readme/image-wechat-group-brickcore.png" width="260" alt="BrickCoreAI 测试平台交流群" /><br />
-  <sub>微信扫码加入 · 交流部署、用例编写与版本动态 · 二维码约 7 天有效（当前至 8 月 8 日前）</sub>
+  <sub>微信扫码加入 · 交流部署、用例编写与版本动态 · 二维码约 7 天有效（当前至 8 月 15 日前）</sub>
 </p>
 
 ---
