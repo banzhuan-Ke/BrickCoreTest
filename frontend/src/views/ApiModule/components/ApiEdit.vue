@@ -720,6 +720,24 @@ const loadCatalogTree = async () => {
 
 const isEdit = computed(() => !!props.data)
 
+const form = reactive({
+  name: '',
+  catalog_id: null,
+  protocol: 'http',
+  method: 'GET',
+  path: '',
+  base_url: '',
+  description: '',
+  headers: [],
+  params: [],
+  body: {},
+  body_type: 'json',
+  body_fields: [],
+  ws_config: { steps: [] },
+  grpc_config: { full_method: '', service: '', method: '', use_tls: false },
+  response_schema: {}
+})
+
 const pathPlaceholder = computed(() => {
   switch (form.protocol) {
     case 'websocket':
@@ -738,24 +756,6 @@ watch(() => form.protocol, (p) => {
   else if (p === 'graphql') form.method = 'POST'
   else if (p === 'grpc') form.method = 'RPC'
   else if (form.method === 'WS' || form.method === 'RPC') form.method = 'GET'
-})
-
-const form = reactive({
-  name: '',
-  catalog_id: null,
-  protocol: 'http',
-  method: 'GET',
-  path: '',
-  base_url: '',
-  description: '',
-  headers: [],
-  params: [],
-  body: {},
-  body_type: 'json',
-  body_fields: [],
-  ws_config: { steps: [] },
-  grpc_config: { full_method: '', service: '', method: '', use_tls: false },
-  response_schema: {}
 })
 
 const bodyText = ref('')
