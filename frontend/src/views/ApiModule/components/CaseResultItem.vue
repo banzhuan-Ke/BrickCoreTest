@@ -126,6 +126,20 @@
       />
     </div>
 
+    <!-- 响应摘要：状态码 / 耗时 / Headers（套件、计划报告也复用本组件） -->
+    <div class="section" v-if="hasResponseSummary">
+      <h4>响应信息</h4>
+      <el-descriptions border size="small" class="response-info-desc">
+        <el-descriptions-item label="状态码">{{ responseStatusCode ?? '-' }}</el-descriptions-item>
+        <el-descriptions-item label="接口耗时">{{ formatTimingMs(getHttpResponseMs(item)) }}</el-descriptions-item>
+        <el-descriptions-item label="用例总耗时">{{ formatTimingMs(getCaseTotalMs(item)) }}</el-descriptions-item>
+      </el-descriptions>
+      <div class="detail-block" v-if="hasEffectiveResponseHeaders" style="margin-top: 12px;">
+        <div class="detail-title">响应 Headers</div>
+        <CopyablePre :text="effectiveResponseHeaders" max-height="240px" wrap />
+      </div>
+    </div>
+
     <!-- 请求详情和变量替换 -->
     <div class="section" v-if="item.request_detail && Object.keys(item.request_detail).length">
       <el-tabs v-model="detailActiveTab">
@@ -145,41 +159,26 @@
             </div>
           </div>
           <div class="detail-block" v-if="Object.keys(item.request_detail.headers?.final || {}).length">
-            <div class="detail-title-row">
-              <div class="detail-title">请求 Headers</div>
-              <CopyTextButton :text="item.request_detail.headers?.final" />
-            </div>
+            <div class="detail-title">请求 Headers</div>
             <CopyablePre :text="item.request_detail.headers?.final" max-height="320px" wrap />
           </div>
           <div class="detail-block" v-if="hasRequestParams">
-            <div class="detail-title-row">
-              <div class="detail-title">请求参数</div>
-              <CopyTextButton :text="item.request_detail.params?.final" />
-            </div>
+            <div class="detail-title">请求参数</div>
             <CopyablePre :text="item.request_detail.params?.final" max-height="280px" wrap />
           </div>
           <div
             class="detail-block"
             v-if="item.request_detail.body_type === 'form-data' && item.request_detail.body_fields?.final?.length"
           >
-            <div class="detail-title-row">
-              <div class="detail-title">Form Data 字段</div>
-              <CopyTextButton :text="item.request_detail.body_fields.final" />
-            </div>
+            <div class="detail-title">Form Data 字段</div>
             <CopyablePre :text="item.request_detail.body_fields.final" max-height="320px" wrap />
           </div>
           <div class="detail-block" v-else-if="hasRequestBody">
-            <div class="detail-title-row">
-              <div class="detail-title">请求 Body</div>
-              <CopyTextButton :text="item.request_detail.body?.final" />
-            </div>
+            <div class="detail-title">请求 Body</div>
             <CopyablePre :text="item.request_detail.body?.final" max-height="420px" fill min-height="180px" />
           </div>
           <div class="detail-block" v-if="item.request_detail.script_logs?.length">
-            <div class="detail-title-row">
-              <div class="detail-title">脚本日志</div>
-              <CopyTextButton :text="item.request_detail.script_logs.join('\n')" />
-            </div>
+            <div class="detail-title">脚本日志</div>
             <CopyablePre :text="item.request_detail.script_logs.join('\n')" max-height="240px" wrap />
           </div>
         </el-tab-pane>
@@ -245,13 +244,10 @@
           <el-empty v-else description="暂无响应 Body" :image-size="60" />
         </el-tab-pane>
         
-        <!-- 响应Headers -->
+        <!-- 响应Headers：摘要区已展示时仍保留完整 Tab，便于定位 -->
         <el-tab-pane label="响应Headers" name="response-headers">
-          <div class="response-tab-toolbar">
-            <CopyTextButton v-if="effectiveResponseHeaders != null" :text="effectiveResponseHeaders" />
-          </div>
           <CopyablePre
-            v-if="effectiveResponseHeaders != null"
+            v-if="hasEffectiveResponseHeaders"
             :text="effectiveResponseHeaders"
             max-height="320px"
             wrap
@@ -259,6 +255,17 @@
           <el-empty v-else description="暂无响应 Headers" :image-size="60" />
         </el-tab-pane>
       </el-tabs>
+    </div>
+
+    <!-- 无 request_detail 时仍展示响应 Body -->
+    <div class="section" v-else-if="effectiveResponseBody != null">
+      <h4>响应 Body</h4>
+      <ResponseBodyViewer
+        :body="effectiveResponseBody"
+        max-height="480px"
+        fill
+        min-height="200px"
+      />
     </div>
   </div>
 </template>
@@ -269,13 +276,13 @@ import { CircleCheck, CircleClose } from '@element-plus/icons-vue'
 import { formatResponseJson } from '../utils/formatResponse'
 import CaseStageTimings from './CaseStageTimings.vue'
 import RunTimingBadges from './RunTimingBadges.vue'
-import CopyTextButton from '@/components/CopyTextButton.vue'
 import CopyablePre from '@/components/CopyablePre.vue'
 import ResponseBodyViewer from '@/components/ResponseBodyViewer.vue'
 import AssertionActualCell from '@/components/AssertionActualCell.vue'
 import { getAssertionActualPreview } from '@/utils/assertionDisplay.js'
 import { provideAssertionResponseLocate } from '@/composables/assertionResponseLocate.js'
-import { getHttpResponseMs, getCaseTotalMs } from '../utils/runTiming'
+import { getHttpResponseMs, getCaseTotalMs, formatTimingMs } from '../utils/runTiming'
+import { assertionTypeLabel } from '../utils/httpExtractAssertUi.js'
 
 const props = defineProps({
   item: {
@@ -339,21 +346,48 @@ const effectiveResponseBody = computed(() => {
 
 const effectiveResponseHeaders = computed(() => {
   const item = props.item
-  if (item.response_headers) return item.response_headers
-  if (item.response_detail?.headers) return item.response_detail.headers
+  const candidates = [
+    item.response_headers,
+    item.response_detail?.headers,
+  ]
+  const attempts = item.request_detail?.retry_info?.attempts || item.retry_info?.attempts
+  if (attempts?.length) {
+    const last = attempts[attempts.length - 1]
+    candidates.push(last.response_headers, last.headers)
+  }
+  for (const headers of candidates) {
+    if (!headers) continue
+    if (Array.isArray(headers) && headers.length) return headers
+    if (typeof headers === 'object' && Object.keys(headers).length) return headers
+    if (typeof headers === 'string' && headers.trim()) return headers
+  }
   return null
 })
 
-const getAssertionTypeText = (type) => {
-  const texts = {
-    status_code: '状态码',
-    json_path: 'JSON路径',
-    header: '响应头',
-    contains: '包含',
-    not_contains: '不包含'
-  }
-  return texts[type] || type
-}
+const hasEffectiveResponseHeaders = computed(() => {
+  const headers = effectiveResponseHeaders.value
+  if (!headers) return false
+  if (Array.isArray(headers)) return headers.length > 0
+  if (typeof headers === 'object') return Object.keys(headers).length > 0
+  return String(headers).trim().length > 0
+})
+
+const responseStatusCode = computed(() => {
+  const item = props.item
+  return item.response_status
+    ?? item.response_detail?.status_code
+    ?? item.request_detail?.retry_info?.attempts?.slice(-1)?.[0]?.response_status
+    ?? null
+})
+
+const hasResponseSummary = computed(() => {
+  return responseStatusCode.value != null
+    || getHttpResponseMs(props.item) != null
+    || getCaseTotalMs(props.item) != null
+    || hasEffectiveResponseHeaders.value
+})
+
+const getAssertionTypeText = (type) => assertionTypeLabel(type)
 
 const formatJson = (data) => formatResponseJson(data)
 

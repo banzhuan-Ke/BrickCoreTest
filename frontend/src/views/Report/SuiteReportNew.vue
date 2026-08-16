@@ -63,8 +63,18 @@
                 <el-icon :size="32"><Timer /></el-icon>
               </div>
               <div class="stat-info">
-                <div class="stat-label">执行耗时</div>
-                <div class="stat-value">{{ formatDuration(runInfo.duration) }}</div>
+                <div class="stat-label">执行进度</div>
+                <div class="stat-value suite-live-progress">
+                  <el-progress
+                    :percentage="suiteProgress.percent"
+                    :stroke-width="10"
+                    :status="suiteProgressStatus"
+                  />
+                  <span class="suite-live-progress__text">
+                    {{ suiteProgress.done }}/{{ suiteProgress.total || '—' }}
+                    <el-tag v-if="isLiveRunning" size="small" type="primary" effect="plain">自动刷新</el-tag>
+                  </span>
+                </div>
               </div>
             </div>
           </el-col>
@@ -282,7 +292,7 @@
           <el-table-column prop="username" label="执行人" width="100"/>
           <el-table-column label="执行时间" width="170">
             <template #default="scope">
-              {{ formatDateTime(scope.row.start_time) }}
+              {{ formatDateTime(scope.row.result_data?.start_time || scope.row.start_time) }}
             </template>
           </el-table-column>
           <el-table-column label="操作" width="180" fixed="right">
@@ -443,7 +453,13 @@ import { resolveFailedStepIndexFromResult } from '@/utils/caseExecutionHints.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { useFailureAnalysisGate } from '@/composables/useFailureAnalysisGate.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
+import { triggerBackendFileDownload } from '@/utils/backendAssetUrl'
 import { fileApi } from '@/api/modules/sys'
+import {
+  isUiExecutionActive,
+  uiExecutionProgress,
+  useUiExecutionProgressPoll,
+} from '@/composables/useUiExecutionProgressPoll.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -583,8 +599,22 @@ const statusMap = {
   pending: { text: '未运行', type: 'info', icon: InfoFilled },
   '执行完成': { text: '执行完成', type: 'success', icon: CircleCheck },
   '等待执行': { text: '等待执行', type: 'info', icon: InfoFilled },
+  '执行中': { text: '执行中', type: 'primary', icon: Loading },
+  '已停止': { text: '已停止', type: 'warning', icon: Warning },
   '运行中': { text: '运行中', type: 'primary', icon: Loading }
 }
+
+const isLiveRunning = computed(() => isUiExecutionActive(runInfo.value?.status))
+const suiteProgress = computed(() => uiExecutionProgress(runInfo.value || {}))
+const suiteProgressStatus = computed(() => {
+  const status = runInfo.value?.status
+  if (status === '已停止') return 'warning'
+  if (status === '执行完成') {
+    const fail = (runInfo.value?.fail || 0) + (runInfo.value?.error || 0)
+    return fail > 0 ? 'exception' : 'success'
+  }
+  return undefined
+})
 
 // 获取套件详情
 const getRunInfo = async () => {
@@ -593,8 +623,15 @@ const getRunInfo = async () => {
     runInfo.value = response.data
     await loadExecSettings(proStore.projectInfo?.id)
     await getCaseRunList()
+    syncPoll()
   }
 }
+
+const { syncPoll } = useUiExecutionProgressPoll(
+  getRunInfo,
+  () => isUiExecutionActive(runInfo.value?.status),
+  { intervalMs: 3000 }
+)
 
 // 获取用例执行列表
 const getCaseRunList = async () => {
@@ -654,12 +691,10 @@ const exportReport = async () => {
         if (statusData.status === 'completed') {
           clearInterval(timer)
           exportLoading.value = false
-          const link = document.createElement('a')
-          link.href = statusData.download_url
-          link.download = statusData.filename || `测试报告-套件-${runInfo.value.suite_name}-${id}.html`
-          document.body.appendChild(link)
-          link.click()
-          document.body.removeChild(link)
+          triggerBackendFileDownload(
+            statusData.download_url,
+            statusData.filename || `测试报告-套件-${runInfo.value.suite_name}-${id}.html`,
+          )
           ElMessage.success('报告导出成功')
         } else if (statusData.status === 'failed') {
           clearInterval(timer)
@@ -819,6 +854,22 @@ getRunInfo()
             font-weight: 600;
             word-break: break-all;
           }
+
+          &.suite-live-progress {
+            font-size: 12px;
+            font-weight: normal;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            align-items: stretch;
+          }
+        }
+
+        .suite-live-progress__text {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          color: var(--el-text-color-secondary);
         }
       }
     }

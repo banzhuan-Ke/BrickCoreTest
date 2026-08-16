@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import Any, Optional
 
@@ -207,10 +208,17 @@ async def create_debug_session(
         case.project_id,
         body.ai_heal_enabled,
         body.ai_act_enabled,
+        None,
+        getattr(body, "ui_timeout_scale", None),
     )
     env_payload["headless"] = False
     env_payload["device_id"] = body.device_id
     env_payload["debug_idle_timeout_seconds"] = UI_DEBUG_IDLE_SECONDS
+    from app.modules.ai.ai_project_settings import resolve_debug_max_step_timeout_seconds
+
+    env_payload["debug_max_step_timeout_seconds"] = (
+        await resolve_debug_max_step_timeout_seconds(case.project_id)
+    )
 
     username = await resolve_current_username(user_info)
 
@@ -676,7 +684,12 @@ async def runner_debug_callback(
         session.pending_command = None
     elif event == "step_result":
         session.status = "ready"
-        session.last_result = {"type": "run", **payload}
+        # reported_at：同内容重复执行时前端也能识别为新结果
+        session.last_result = {
+            "type": "run",
+            **payload,
+            "reported_at": time.time(),
+        }
         _clear_pending_command(session, body.command_id)
         session.error = None
     elif event == "steps_synced":

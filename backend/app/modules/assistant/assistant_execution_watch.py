@@ -18,7 +18,6 @@ _TERMINAL_API = frozenset({"success", "failed", "partial"})
 _TERMINAL_UI_PLAN = frozenset({"执行完成"})
 _TERMINAL_UI_SUITE = frozenset({"执行完成"})
 _TERMINAL_UI_CASE = frozenset({"success", "fail", "error", "skip", "no_run"})
-
 _TRIGGER_LABELS = {"manual": "手动", "assistant": "小测", "cron": "定时任务"}
 
 
@@ -139,6 +138,7 @@ async def _snapshot(record_type: str, record_id: int) -> tuple[str, dict[str, An
             "trigger_source": ts,
             "trigger_label": _TRIGGER_LABELS.get(ts, ts),
         }
+
     if record_type == "perf":
         from app.models.perf import PerfRecord
 
@@ -191,11 +191,31 @@ def _format_follow_up(record_type: str, record_id: int, data: dict[str, Any]) ->
     elif record_type == "ui_case":
         lines.append(f"- **状态**：{data.get('status')}")
         lines.append(f"- **触发方式**：{data.get('trigger_label', '—')}")
+
     else:
         lines.append(f"- **状态**：{data.get('status', 'unknown')}")
 
     lines.append("")
     lines.append(f"记录 ID：`{record_id}`（类型 `{record_type}`）")
+
+    failed = 0
+    if record_type in ("api_suite", "api_plan"):
+        failed = int(data.get("failed_cases") or 0)
+    elif record_type in ("ui_plan", "ui_suite"):
+        failed = int(data.get("fail") or 0) + int(data.get("error") or 0)
+    elif record_type == "ui_case" and str(data.get("status") or "").lower() in (
+        "fail",
+        "error",
+    ):
+        failed = 1
+
+    if failed > 0:
+        lines.append("")
+        lines.append(
+            f"检测到 **{failed}** 条失败。可点击快捷「失败闭环」或回复「继续失败闭环」，"
+            "先查看失败清单再指定 **失败记录** 的 target_type/target_id 做 AI 根因分析（需确认）。"
+            f"注意：上方运行记录 ID `{record_id}`（`{record_type}`）一般不是分析用的 target_id。"
+        )
     return "\n".join(lines)
 
 

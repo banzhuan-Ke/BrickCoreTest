@@ -335,11 +335,20 @@ ALL_PERMISSIONS = [
 ]
 
 async def get_user_permissions(user) -> list:
-    """获取用户合并后的权限列表。无角色返回空列表。"""
-    roles = await user.roles.all()
-    if not roles:
+    """获取用户合并后的权限列表。无角色返回空列表。
+
+    ``user`` 可为 User 实例或 user_id(int)。一律按 ID 查角色，避免
+    ``user.roles`` / prefetch M2M 在高并发下 KeyError / 实例缺字段。
+    """
+    if user is None:
         return []
+    user_id = user if isinstance(user, int) else getattr(user, "id", None)
+    if user_id is None:
+        return []
+    from app.models.sys import Role
+
+    rows = await Role.filter(users__id=user_id, is_del=False).values("permissions")
     perms: set[str] = set()
-    for role in roles:
-        perms.update(role.permissions or [])
+    for row in rows:
+        perms.update(row.get("permissions") or [])
     return sorted(perms)

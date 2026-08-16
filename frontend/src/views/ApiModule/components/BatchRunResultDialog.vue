@@ -273,21 +273,26 @@
                 <CopyTextButton :text="detailData.request_detail.url.final || ''" />
               </div>
               <div v-if="Object.keys(detailData.request_detail.headers?.final || {}).length > 0" style="margin-top:8px">
-                <div class="mini-title-row">
-                  <div class="mini-title">请求 Headers</div>
-                  <CopyTextButton :text="detailData.request_detail.headers?.final" />
-                </div>
+                <div class="mini-title">请求 Headers</div>
                 <CopyablePre :text="detailData.request_detail.headers?.final" max-height="280px" wrap />
               </div>
               <div v-if="detailData.request_detail.body?.final" style="margin-top:8px">
-                <div class="mini-title-row">
-                  <div class="mini-title">请求 Body</div>
-                  <CopyTextButton :text="detailData.request_detail.body?.final" />
-                </div>
+                <div class="mini-title">请求 Body</div>
                 <CopyablePre :text="detailData.request_detail.body?.final" max-height="320px" wrap />
               </div>
             </el-tab-pane>
             <el-tab-pane label="响应Body" name="response-body" v-if="detailData.response_detail">
+              <div class="detail-block" style="margin-bottom: 12px;">
+                <div class="mini-title">响应信息</div>
+                <el-descriptions border size="small" style="margin-top: 8px;">
+                  <el-descriptions-item label="状态码">
+                    {{ detailData.response_detail.status_code ?? detailData.response_status ?? '-' }}
+                  </el-descriptions-item>
+                  <el-descriptions-item label="接口耗时">
+                    {{ getHttpResponseMs(detailData) != null ? `${Number(getHttpResponseMs(detailData)).toFixed(2)} ms` : '-' }}
+                  </el-descriptions-item>
+                </el-descriptions>
+              </div>
               <ResponseBodyViewer
                 :body="detailData.response_detail.body"
                 :highlight-text="detailResponseHighlight"
@@ -296,12 +301,17 @@
                 min-height="360px"
               />
             </el-tab-pane>
-            <el-tab-pane label="响应Headers" name="response-headers" v-if="detailData.response_detail?.headers">
-              <div class="mini-title-row">
-                <div class="mini-title">响应 Headers</div>
-                <CopyTextButton :text="detailData.response_detail.headers" />
-              </div>
-              <CopyablePre :text="detailData.response_detail.headers" max-height="320px" wrap />
+            <el-tab-pane
+              label="响应Headers"
+              name="response-headers"
+              v-if="detailResponseHeaders"
+            >
+              <div class="mini-title">响应 Headers</div>
+              <CopyablePre
+                :text="detailResponseHeaders"
+                max-height="320px"
+                wrap
+              />
             </el-tab-pane>
           </el-tabs>
         </div>
@@ -343,6 +353,26 @@ const detailVisible = ref(false)
 const detailData = ref(null)
 const detailActiveTab = ref('request')
 const detailResponseHighlight = ref('')
+
+const detailResponseHeaders = computed(() => {
+  const data = detailData.value
+  if (!data) return null
+  const attempts = data.request_detail?.retry_info?.attempts || data.retry_info?.attempts
+  const last = attempts?.length ? attempts[attempts.length - 1] : null
+  const candidates = [
+    data.response_headers,
+    data.response_detail?.headers,
+    last?.response_headers,
+    last?.headers,
+  ]
+  for (const headers of candidates) {
+    if (!headers) continue
+    if (Array.isArray(headers) && headers.length) return headers
+    if (typeof headers === 'object' && Object.keys(headers).length) return headers
+    if (typeof headers === 'string' && headers.trim()) return headers
+  }
+  return null
+})
 
 function locateExpectedInDetailResponse(expected) {
   const term = String(expected ?? '').trim()

@@ -148,7 +148,7 @@ import { appCaseApi, appElementApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
 import { serializeKeywordForDrag, buildStepFromKeyword, ensureStepsHaveIds, updateStepLocatorAtPath } from '@/utils/stepHelper'
-import { parseExecutionIdQuery } from '@/utils/caseExecutionHints'
+import { parseExecutionIdQuery, hasExecutionHintsPayload } from '@/utils/caseExecutionHints'
 import dateTools from '@/tools/dateTools'
 import { validateCaseDriverMode, rememberProjectDefaultAppId, getProjectDefaultAppId } from '@/utils/appStepMeta.js'
 import {
@@ -324,10 +324,15 @@ async function loadExecutionHints() {
     }
     const res = await appCaseApi.getExecutionHints(caseId, params)
     const payload = res.data?.data ?? res.data
-    executionHints.value = payload?.has_failure ? payload : null
+    executionHints.value = hasExecutionHintsPayload(payload) ? payload : null
     hasFailureAnalysis.value = false
     if (executionHints.value) {
-      hintsExpanded.value = ['failure']
+      const expand = []
+      if (executionHints.value.has_failure) expand.push('failure')
+      if ((executionHints.value.step_recoveries || []).some((r) => r && !r.unresolved)) {
+        expand.push('recovery')
+      }
+      hintsExpanded.value = expand.length ? expand : ['failure']
     }
   } catch {
     executionHints.value = null
@@ -365,7 +370,10 @@ function goBack() {
 
 async function save() {
   const valid = await formRef.value.validate().catch(() => false)
-  if (!valid) return
+  if (!valid) {
+    ElMessage.warning('请先完善必填项后再保存')
+    return
+  }
 
   const driverErr = validateCaseDriverMode(
     caseInfo.driver_mode,

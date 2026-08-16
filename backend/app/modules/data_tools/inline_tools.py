@@ -25,6 +25,54 @@ INLINE_EXCLUDED_TOOL_IDS = frozenset({
     "regex_findall",
 })
 
+# 当前时间类：每次解析都取新值，不写入套件级缓存（避免「一直是旧时间」）
+INLINE_NO_CACHE_TOOL_IDS = frozenset({
+    "now_datetime",
+    "now_timestamp",
+    "timestamp_ms",
+})
+
+# 留空基准时间时内部会 datetime.now()，与 now_* 同属实时值
+_INLINE_LIVE_NOW_IF_EMPTY_DATETIME = frozenset({"date_format", "date_add"})
+
+
+def _should_cache_inline_tool(tool_id: str, resolved_inputs: dict[str, str]) -> bool:
+    if tool_id in INLINE_NO_CACHE_TOOL_IDS:
+        return False
+    if tool_id in _INLINE_LIVE_NOW_IF_EMPTY_DATETIME:
+        if not str(resolved_inputs.get("datetime") or "").strip():
+            return False
+    return True
+
+
+def _datetime_param_means_live_now(raw: str | None) -> bool:
+    """未解析参数是否表示「当前时间」（缺省 / 空串 / 空引号 / @变量）。"""
+    if raw is None:
+        return True
+    s = str(raw).strip()
+    if not s:
+        return True
+    if s.startswith("@"):
+        # 变量值可能为空或变化；解析器层不缓存，套件缓存由解析后的值决定
+        return True
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        s = s[1:-1].strip()
+    return not s
+
+
+def should_cache_inline_expression(expr: str) -> bool:
+    """VariableResolver 是否缓存该 dt 表达式（与 execute_inline_tool 套件缓存策略对齐）。"""
+    try:
+        tool_id, params = parse_dt_expression(expr)
+    except ToolExecutionError:
+        return True
+    if tool_id in INLINE_NO_CACHE_TOOL_IDS:
+        return False
+    if tool_id in _INLINE_LIVE_NOW_IF_EMPTY_DATETIME:
+        if _datetime_param_means_live_now(params.get("datetime")):
+            return False
+    return True
+
 
 def ensure_dt_cache(variables: dict | None) -> dict:
     """套件/计划串行执行时共享随机工具结果。"""
@@ -136,6 +184,7 @@ def resolve_dt_param_value(raw: str, lookup_var) -> str:
     参数取值规则：
     - "..." / '...' → 固定字面量（可含 |、=、@）
     - @var → 引用变量池
+    - @csv.列名 → 优先取压测 CSV 注入的 csv.列名；无 CSV 时回退到裸列名（兼容）
     - 其它 → 固定字面量（兼容旧写法；仍支持 URL 编码）
     """
     s = raw.strip()
@@ -147,6 +196,11 @@ def resolve_dt_param_value(raw: str, lookup_var) -> str:
         if not name:
             raise ToolExecutionError("变量引用无效，请使用 @变量名")
         val = lookup_var(name)
+        # 无 CSV 绑定或未注入 csv.* 时，@csv.user 回退查找 user
+        if val is None and name.startswith("csv."):
+            bare = name[4:].strip()
+            if bare:
+                val = lookup_var(bare)
         if val is None:
             raise ToolExecutionError(f"变量 {name} 未定义")
         return str(val)
@@ -182,7 +236,8 @@ def execute_inline_tool(
 
     cache_key = build_dt_cache_key(expr, resolved_inputs)
     cache = dt_cache if dt_cache is not None else {}
-    if cache_key in cache:
+    use_cache = _should_cache_inline_tool(tool_id, resolved_inputs)
+    if use_cache and cache_key in cache:
         return cache[cache_key]
 
     typed_inputs: dict[str, Any] = {}
@@ -209,5 +264,6 @@ def execute_inline_tool(
         raise ToolExecutionError(str(exc)) from exc
 
     text = str(result.get("output_text") or result.get("output") or "")
-    cache[cache_key] = text
+    if use_cache:
+        cache[cache_key] = text
     return text

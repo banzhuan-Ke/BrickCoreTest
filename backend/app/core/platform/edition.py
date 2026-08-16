@@ -16,7 +16,7 @@ def _repo_root() -> Path:
 
 @lru_cache(maxsize=1)
 def is_community_edition() -> bool:
-    """识别开源发行版（Community Edition）。
+    """识别开源发行版。
 
     - Docker：在 compose 中设置 ``BRICKCORE_EDITION=ce``。
     - 本机：未设环境变量时，根据是否存在 ``runner/WebEngine`` 判断。

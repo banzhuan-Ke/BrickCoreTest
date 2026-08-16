@@ -184,11 +184,10 @@ async def get_dashboard(
     e_dt = datetime.combine(e, datetime.max.time())
 
     # ========== 执行趋势（按日聚合） ==========
-    # UI 用例执行记录
+    # UI 用例执行记录（经 case 关联项目；勿用 values_list flat，部分驱动会 KeyError）
     ui_q = UiCaseExecution.filter(start_time__gte=s_dt, start_time__lte=e_dt)
     if project_id:
-        ui_case_ids = await UiCase.filter(project_id=project_id, is_del=False).values_list("id", flat=True)
-        ui_q = ui_q.filter(case_id__in=ui_case_ids)
+        ui_q = ui_q.filter(case__project_id=project_id)
     ui_records = await ui_q.all()
 
     ui_trend_map = {d: {"success": 0, "fail": 0} for d in date_list}
@@ -222,8 +221,7 @@ async def get_dashboard(
     # App 用例执行记录
     app_q = AppCaseExecution.filter(start_time__gte=s_dt, start_time__lte=e_dt, is_del=False)
     if project_id:
-        app_case_ids = await AppCase.filter(project_id=project_id, is_del=False).values_list("id", flat=True)
-        app_q = app_q.filter(case_id__in=app_case_ids)
+        app_q = app_q.filter(case__project_id=project_id)
     app_records = await app_q.all()
 
     app_trend_map = {d: {"success": 0, "fail": 0} for d in date_list}
@@ -311,7 +309,7 @@ async def get_dashboard(
         start_time__gte=s_dt, start_time__lte=e_dt, status__in=["fail", "error", "failed"]
     )
     if project_id:
-        ui_failed_q = ui_failed_q.filter(case_id__in=ui_case_ids)
+        ui_failed_q = ui_failed_q.filter(case__project_id=project_id)
     ui_failed_records = await ui_failed_q.prefetch_related("case").all()
 
     ui_fail_map: Dict[int, Dict] = {}
@@ -341,7 +339,7 @@ async def get_dashboard(
         start_time__gte=s_dt, start_time__lte=e_dt, status__in=["fail", "error", "failed"], is_del=False,
     )
     if project_id:
-        app_failed_q = app_failed_q.filter(case_id__in=app_case_ids)
+        app_failed_q = app_failed_q.filter(case__project_id=project_id)
     app_failed_records = await app_failed_q.prefetch_related("case").all()
 
     app_fail_map: Dict[int, Dict] = {}

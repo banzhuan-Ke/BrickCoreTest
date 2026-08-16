@@ -28,14 +28,22 @@ async def _authenticate_user_from_token(token: str) -> dict:
     data = verify_token(token)
 
     from app.models.sys import User
-    user = await User.get_or_none(id=data.get("id"), is_del=False)
-
-    if not user:
+    user_id = data.get("id")
+    # 用 values 读标量，避开偶发「模型实例缺字段」导致 AttributeError
+    rows = (
+        await User.filter(id=user_id, is_del=False).values("id", "is_active", "is_superuser")
+        if user_id is not None
+        else []
+    )
+    if not rows:
         raise HTTPException(status_code=401, detail="用户不存在或已被删除")
 
-    if not user.is_active:
+    row = rows[0]
+    if not row.get("is_active", True):
         raise HTTPException(status_code=403, detail="用户已被停用，请联系管理员")
 
+    # 回填 JWT 中可能缺失的字段，供后续权限依赖使用
+    data.setdefault("is_superuser", bool(row.get("is_superuser")))
     return data
 
 
@@ -63,9 +71,9 @@ async def resolve_current_username(user_info: dict) -> str:
     user_id = user_info.get("id")
     if user_id:
         from app.models.sys import User
-        user = await User.get_or_none(id=user_id, is_del=False)
-        if user and user.username:
-            return user.username
+        rows = await User.filter(id=user_id, is_del=False).values("username")
+        if rows and rows[0].get("username"):
+            return rows[0]["username"]
     raise HTTPException(status_code=401, detail="无法识别当前登录用户，请重新登录")
 
 
@@ -74,21 +82,35 @@ async def get_current_username(user_info: dict = Depends(is_authenticated)) -> s
     return await resolve_current_username(user_info)
 
 
+async def _load_user_permission_codes(user_id: int) -> set[str]:
+    """按用户 ID 拉角色权限，不依赖可能不完整的 User 实例。"""
+    from app.core.platform.permissions import get_user_permissions
+
+    return set(await get_user_permissions(user_id))
+
+
 def require_permissions(*perms: str):
     """权限校验依赖工厂，超级管理员/admin角色自动跳过"""
     async def checker(token: str = Depends(oauth2_scheme)):
         user_data = await is_authenticated(token)
-        from app.models.sys import User
-        from app.core.platform.permissions import get_user_permissions
-        user = await User.get_or_none(id=user_data.get("id"), is_del=False).prefetch_related("roles")
-        if user and user.is_superuser:
+        if user_data.get("is_superuser"):
             return user_data
-        allowed = set(await get_user_permissions(user))
+        uid = user_data.get("id")
+        if uid is None:
+            raise HTTPException(status_code=401, detail="用户不存在或已被删除")
+        allowed = await _load_user_permission_codes(int(uid))
         if not set(perms).issubset(allowed):
-            role_names = [r.name for r in await user.roles.all()] if user else []
+            from app.models.sys import Role
+            role_names = [
+                r["name"]
+                for r in await Role.filter(users__id=uid, is_del=False).values("name")
+            ]
             raise HTTPException(
                 status_code=403,
-                detail=f"权限不足: 需要{perms}, 拥有{sorted(allowed)}, is_superuser={user.is_superuser if user else None}, roles={role_names}"
+                detail=(
+                    f"权限不足: 需要{perms}, 拥有{sorted(allowed)}, "
+                    f"is_superuser={bool(user_data.get('is_superuser'))}, roles={role_names}"
+                ),
             )
         return user_data
     return checker
@@ -98,17 +120,24 @@ def require_any_permissions(*perms: str):
     """满足任一权限即可（超级管理员自动跳过）"""
     async def checker(token: str = Depends(oauth2_scheme)):
         user_data = await is_authenticated(token)
-        from app.models.sys import User
-        from app.core.platform.permissions import get_user_permissions
-        user = await User.get_or_none(id=user_data.get("id"), is_del=False).prefetch_related("roles")
-        if user and user.is_superuser:
+        if user_data.get("is_superuser"):
             return user_data
-        allowed = set(await get_user_permissions(user))
+        uid = user_data.get("id")
+        if uid is None:
+            raise HTTPException(status_code=401, detail="用户不存在或已被删除")
+        allowed = await _load_user_permission_codes(int(uid))
         if not any(p in allowed for p in perms):
-            role_names = [r.name for r in await user.roles.all()] if user else []
+            from app.models.sys import Role
+            role_names = [
+                r["name"]
+                for r in await Role.filter(users__id=uid, is_del=False).values("name")
+            ]
             raise HTTPException(
                 status_code=403,
-                detail=f"权限不足: 需要以下任一权限 {list(perms)}, 拥有{sorted(allowed)}, roles={role_names}"
+                detail=(
+                    f"权限不足: 需要以下任一权限 {list(perms)}, "
+                    f"拥有{sorted(allowed)}, roles={role_names}"
+                ),
             )
         return user_data
     return checker
@@ -181,10 +210,12 @@ async def verify_runner_token(x_runner_token: str = Header(..., alias="X-Runner-
     if not device_id or not jti:
         raise HTTPException(status_code=401, detail="Runner token 缺少设备信息")
 
-    device = await Device.get_or_none(id=device_id, is_del=False)
-    if not device or device.runner_session_jti != jti:
+    rows = await Device.filter(id=device_id, is_del=False).values(
+        "id", "runner_session_jti", "status"
+    )
+    if not rows or rows[0].get("runner_session_jti") != jti:
         raise HTTPException(status_code=401, detail="Runner 会话已失效，请重新连接")
-    if device.status == "已停止":
+    if rows[0].get("status") == "已停止":
         raise HTTPException(status_code=403, detail="设备已被管理员停止，请重新上线")
 
     return data

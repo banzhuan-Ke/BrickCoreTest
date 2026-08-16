@@ -1127,8 +1127,10 @@ function sheetTableRows(sheet) {
 
 function guessDocType(fileName) {
   const lower = (fileName || '').toLowerCase()
-  if (/bug|缺陷|zentao|禅道/.test(lower)) return 'bug_export'
+  if (/bug|缺陷|zentao|禅道/.test(lower) && !/用例|testcase|test.?case/.test(lower)) return 'bug_export'
+  if (/用例导出|测试用例|testcase|test.?case/.test(lower)) return 'case_export'
   if (/测试计划|test.?plan/.test(lower)) return 'test_plan'
+  if (/测试方案|test.?scheme/.test(lower) && !/模板/.test(fileName || '')) return 'test_scheme'
   if (/迭代|iteration/.test(lower) && /\.xlsx?$/i.test(lower)) return 'iteration_plan'
   if (/需求|requirement/.test(lower)) return 'requirement'
   return 'other'

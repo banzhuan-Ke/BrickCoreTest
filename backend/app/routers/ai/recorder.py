@@ -60,7 +60,7 @@ async def _assert_record_access(record: AiRecordSession, user_info: dict) -> Non
         await assert_user_project_member(user_info, record.project_id)
 
 
-_RECORD_CONTROL_COMMANDS = frozenset({"pause", "resume", "save_variable"})
+_RECORD_CONTROL_COMMANDS = frozenset({"pause", "resume", "save_variable", "retry_inject"})
 
 _CONTROL_RESULT_MESSAGES = {
     "not_recording": "当前未在录制中",
@@ -70,6 +70,9 @@ _CONTROL_RESULT_MESSAGES = {
     "no_active_recorder": "Runner 未在录制，控制指令未生效",
     "unknown_command": "不支持的录制控制指令",
     "control_timeout": "等待 Runner 响应超时，请稍后重试",
+    "frame_not_found": "未找到目标 iframe，请确认页面仍打开该 frame",
+    "main_inject_failed": "主页面监听注入失败",
+    "no_page": "浏览器页面不可用",
 }
 
 
@@ -203,6 +206,17 @@ class HeartbeatRequest(BaseModel):
     raw_actions: list = Field(default_factory=list, description="当前已记录的原始操作列表")
     paused: bool = Field(False, description="是否处于暂停状态")
     last_control_result: Optional[dict] = Field(None, description="最近一次录制控制结果")
+    frames: Optional[dict] = Field(
+        None,
+        description="W-33：frame 监听状态 {total, listening, items[]}",
+    )
+
+
+class RetryInjectRequest(BaseModel):
+    debug_session_id: Optional[int] = Field(None, description="交互调试接录时的调试会话 ID")
+    frame_url: Optional[str] = Field(None, description="仅重试该 frame URL；空则全部")
+    frame_name: Optional[str] = Field(None, description="可选 frame name")
+    slot_id: Optional[str] = Field(None, description="W-33 P2：优先按槽位重试")
 
 
 class SaveVariableRequest(BaseModel):
@@ -444,6 +458,8 @@ async def get_record_status(
             "create_time": record.create_time.isoformat() if record.create_time else None,
             "paused": bool(_get_record_runtime(record_id).get("paused")),
             "last_control_result": _get_record_runtime(record_id).get("last_control_result"),
+            "frames": _get_record_runtime(record_id).get("frames")
+            or {"total": 0, "listening": 0, "items": []},
         }
     )
 
@@ -529,6 +545,9 @@ async def _dispatch_record_control(
     debug_session_id: Optional[int] = None,
     var_name: Optional[str] = None,
     source: str = "text",
+    frame_url: Optional[str] = None,
+    frame_name: Optional[str] = None,
+    slot_id: Optional[str] = None,
     user_info: Optional[dict] = None,
 ) -> None:
     if record.status != "recording":
@@ -552,11 +571,16 @@ async def _dispatch_record_control(
             "pause": "pause_record",
             "resume": "resume_record",
             "save_variable": "save_variable",
+            "retry_inject": "retry_inject",
         }
         payload = {"record_session_id": record.id}
         if command == "save_variable":
             payload["var_name"] = var_name
             payload["source"] = source
+        if command == "retry_inject":
+            payload["frame_url"] = frame_url or ""
+            payload["frame_name"] = frame_name or ""
+            payload["slot_id"] = slot_id or ""
         await dispatch_debug_command(
             debug_session,
             action_map[command],
@@ -572,6 +596,9 @@ async def _dispatch_record_control(
                 command=command,
                 var_name=var_name,
                 source=source,
+                frame_url=frame_url,
+                frame_name=frame_name,
+                slot_id=slot_id,
             )
         except Exception as e:
             logger.error(f"发送录制控制消息失败: {e}")
@@ -616,6 +643,37 @@ async def resume_record(
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=_format_control_error(result))
     return StandardResponse(data={"message": "录制已恢复", "record_id": record.id, **result})
+
+
+@router.post("/{record_id}/retry-inject", summary="重新注入录制监听（iframe）")
+async def retry_inject_record(
+    record_id: int,
+    body: Optional[RetryInjectRequest] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    """W-33 P1：对失败 / 全部子 frame 重新 evaluate 录制监听。"""
+    record = await AiRecordSession.get_or_none(id=record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="录制会话不存在")
+    await _assert_record_access(record, user_info)
+    ctrl = body or RetryInjectRequest()
+    await _dispatch_record_control(
+        record,
+        "retry_inject",
+        debug_session_id=ctrl.debug_session_id,
+        frame_url=ctrl.frame_url,
+        frame_name=ctrl.frame_name,
+        slot_id=ctrl.slot_id,
+        user_info=user_info,
+    )
+    result = await _wait_control_result(record.id, "retry_inject")
+    if result.get("frames"):
+        _set_record_runtime(record.id, frames=result.get("frames"))
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=_format_control_error(result))
+    return StandardResponse(
+        data={"message": "已重新尝试注入", "record_id": record.id, **result}
+    )
 
 
 @router.post("/{record_id}/save-variable", summary="存变量（当前悬停元素）")
@@ -665,6 +723,8 @@ async def record_heartbeat(
         runtime_patch = {"paused": bool(body.paused)}
         if body.last_control_result:
             runtime_patch["last_control_result"] = body.last_control_result
+        if body.frames is not None:
+            runtime_patch["frames"] = body.frames
         _set_record_runtime(record_id, **runtime_patch)
         await record.save()
     

@@ -97,6 +97,32 @@ def _health_state(ok: bool | None) -> str:
     return "idle"
 
 
+def _resolve_app_icon_path() -> Path | None:
+    """解析小搬砖图标：开发态 / 打包态 / 引擎目录多路径回退。"""
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here / "icon.ico",
+        here.parent / "runner" / "icon.ico",
+        Path(sys.executable).resolve().parent / "icon.ico",
+        Path(sys.executable).resolve().parent / "runner" / "icon.ico",
+    ]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.insert(0, Path(meipass) / "icon.ico")
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def _load_app_icon() -> QIcon | None:
+    path = _resolve_app_icon_path()
+    if not path:
+        return None
+    icon = QIcon(str(path))
+    return icon if not icon.isNull() else None
+
+
 class _ApiHealthWorker(QThread):
     result_ready = Signal(bool)
 
@@ -117,6 +143,41 @@ class _VersionInfoWorker(QThread):
 
     def run(self) -> None:
         self.result_ready.emit(BrickCoreApi(self._base_url).fetch_version_info())
+
+
+class _LayeredUpdateWorker(QThread):
+    """后台下载/解密增量，避免主线程卡死显示「未响应」。"""
+
+    progress = Signal(str)
+    finished_ok = Signal(object)
+    finished_err = Signal(str)
+
+    def __init__(self, api: BrickCoreApi, version_info: dict, baked_gui_version: str, parent=None) -> None:
+        super().__init__(parent)
+        self._api = api
+        self._version_info = version_info
+        self._baked_gui_version = baked_gui_version
+
+    def run(self) -> None:
+        try:
+            from runner_client.app.layered_updater import prepare_layered_update
+
+            def _progress(label: str, received: int, total: int) -> None:
+                if total > 0:
+                    pct = int(received * 100 / total)
+                    self.progress.emit(f"正在准备增量更新… {label} {pct}%")
+                else:
+                    self.progress.emit(f"正在准备增量更新… {label}")
+
+            result = prepare_layered_update(
+                self._api,
+                self._version_info,
+                baked_gui_version=self._baked_gui_version,
+                progress=_progress,
+            )
+            self.finished_ok.emit(result)
+        except Exception as exc:
+            self.finished_err.emit(str(exc))
 
 
 class _AppStatusWorker(QThread):
@@ -311,6 +372,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("BrickCore Runner · 执行器客户端")
         self.resize(820, 780)
         self.setMinimumSize(720, 560)
+        app_icon = _load_app_icon()
+        if app_icon is not None:
+            self.setWindowIcon(app_icon)
 
         self.engine = EngineManager()
         self.perf_engine = PerfWorkerManager()
@@ -324,10 +388,19 @@ class MainWindow(QMainWindow):
         self._version_info: dict | None = None
         self._quitting = False
         self._health_poll_ms = 10_000
+        # 独立 API 探活间隔：上线且绿灯主要靠心跳，避免额外刷 /runner/health
+        self._api_health_ttl_ok_sec = 120.0
+        self._api_health_ttl_bad_sec = 30.0
+        self._api_health_ttl_unknown_sec = 15.0
         self._last_api_health_ts = 0.0
         self._last_api_health_ok: bool | None = None
+        self._api_health_gen = 0
         self._api_health_worker: _ApiHealthWorker | None = None
+        self._recording_poll_idle_ms = 3_000
+        self._recording_poll_active_ms = 1_500
+        self._recording_active = False
         self._version_worker: _VersionInfoWorker | None = None
+        self._layered_update_worker: _LayeredUpdateWorker | None = None
         self._connect_worker: _ConnectWorker | None = None
         self._app_status_worker: _AppStatusWorker | None = None
         self._recording_poll_worker: _RecordingPollWorker | None = None
@@ -360,7 +433,7 @@ class MainWindow(QMainWindow):
         self.health_timer.timeout.connect(self._refresh_health)
 
         self.recording_poll_timer = QTimer(self)
-        self.recording_poll_timer.setInterval(1000)
+        self.recording_poll_timer.setInterval(self._recording_poll_idle_ms)
         self.recording_poll_timer.timeout.connect(self._poll_active_recording)
 
         QTimer.singleShot(100, self._refresh_version_badge)
@@ -652,6 +725,10 @@ class MainWindow(QMainWindow):
         log_title.setFont(QFont("", 10, QFont.Weight.Bold))
         log_header.addWidget(log_title)
         log_header.addStretch()
+        self.clear_log_btn = QPushButton("清空显示")
+        self.clear_log_btn.setToolTip("仅清空下方面板中的日志显示，不删除磁盘上的日志文件")
+        self.clear_log_btn.clicked.connect(self._clear_log_display)
+        log_header.addWidget(self.clear_log_btn)
         self.history_log_btn = QPushButton("历史日志…")
         self.history_log_btn.clicked.connect(self._open_log_history)
         log_header.addWidget(self.history_log_btn)
@@ -777,7 +854,7 @@ class MainWindow(QMainWindow):
         label.style().polish(label)
 
     def _setup_tray(self) -> None:
-        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        icon = _load_app_icon() or self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
         self.tray = QSystemTrayIcon(icon, self)
         self.tray.setToolTip("BrickCore Runner")
 
@@ -1020,7 +1097,11 @@ class MainWindow(QMainWindow):
             token = session.get("password_token", "")
             if token:
                 self.password_edit.setText(decrypt_text(token))
-        self._refresh_health()
+        # 换服务器后清空旧灯态，避免上一台的红/绿粘住
+        self._last_api_health_ok = None
+        self._last_api_health_ts = 0.0
+        self._api_health_gen += 1
+        self._refresh_health(force_api_probe=True)
 
     def _append_log(self, text: str) -> None:
         if not text:
@@ -1034,42 +1115,87 @@ class MainWindow(QMainWindow):
         dialog = _LogHistoryDialog(self.engine, parent=self)
         dialog.exec()
 
+    def _clear_log_display(self) -> None:
+        """仅清空会话日志面板；磁盘日志保留，读指针移到文件末尾以免旧内容回灌。"""
+        self.log_view.clear()
+        try:
+            self.engine.discard_displayed_logs()
+        except Exception:
+            pass
+        try:
+            self.perf_engine.discard_displayed_logs()
+        except Exception:
+            pass
+        self._append_log("[客户端] 已清空会话日志显示（磁盘日志未删除）")
+
     def _set_status(self, text: str) -> None:
         self.status_label.setText(text)
+
+    def _api_health_ttl_sec(self) -> float:
+        if self._last_api_health_ok is True:
+            return self._api_health_ttl_ok_sec
+        if self._last_api_health_ok is False:
+            return self._api_health_ttl_bad_sec
+        return self._api_health_ttl_unknown_sec
+
+    def _mark_api_health(self, ok: bool, *, invalidate_inflight: bool = True) -> None:
+        """同步更新平台 API 灯；可作废进行中的探活，避免旧结果回刷。"""
+        if invalidate_inflight:
+            self._api_health_gen += 1
+        self._last_api_health_ok = bool(ok)
+        self._last_api_health_ts = time.monotonic()
+        self._set_health_label(self.health_api, "平台 API", self._last_api_health_ok)
 
     def _schedule_api_health_probe(self, *, force: bool = False) -> None:
         base_url = self._current_server_url()
         if not base_url:
             return
         now = time.monotonic()
+        ttl = self._api_health_ttl_sec()
         if (
             not force
             and self._last_api_health_ok is not None
-            and (now - self._last_api_health_ts) < self._health_poll_ms / 1000.0
+            and (now - self._last_api_health_ts) < ttl
         ):
             self._set_health_label(self.health_api, "平台 API", self._last_api_health_ok)
             return
-        if self._api_health_worker and self._api_health_worker.isRunning():
+        # 非强制：已有探活在跑则复用，避免叠请求
+        if not force and self._api_health_worker and self._api_health_worker.isRunning():
             return
-        self._set_health_label(self.health_api, "平台 API", None)
-        self.health_api.setText("平台 API ○ 检测中…")
+        # 强制探活：抬升代数，丢弃进行中/迟到的旧结果
+        self._api_health_gen += 1
+        gen = self._api_health_gen
+        if self._last_api_health_ok is None:
+            self._set_health_label(self.health_api, "平台 API", None)
+            self.health_api.setText("平台 API ○ 检测中…")
         worker = _ApiHealthWorker(base_url, parent=self)
         self._api_health_worker = worker
-        worker.result_ready.connect(self._on_api_health_probe_result)
+        worker.result_ready.connect(
+            lambda ok, g=gen: self._on_api_health_probe_result(ok, g)
+        )
         worker.start()
 
-    def _on_api_health_probe_result(self, api_ok: bool) -> None:
-        self._last_api_health_ok = api_ok
+    def _on_api_health_probe_result(self, api_ok: bool, gen: int | None = None) -> None:
+        # 迟到的旧探活（换服务器 / 登录已标绿 / 强制重探）一律丢弃
+        if gen is not None and gen != self._api_health_gen:
+            return
+        self._last_api_health_ok = bool(api_ok)
         self._last_api_health_ts = time.monotonic()
-        self._set_health_label(self.health_api, "平台 API", api_ok)
+        self._set_health_label(self.health_api, "平台 API", self._last_api_health_ok)
 
     def _refresh_health(self, *, force_api_probe: bool = False) -> None:
+        # UI 上线且已绿：靠 30s 心跳维持，不另打 /runner/health
+        # 仅压测角色无 UI 心跳，仍按 TTL 低频探活，避免绿灯永久粘住
         if force_api_probe:
             self._schedule_api_health_probe(force=True)
-        elif self._last_api_health_ok is not None:
-            self._set_health_label(self.health_api, "平台 API", self._last_api_health_ok)
+        elif (
+            self._online
+            and self._last_api_health_ok is True
+            and self._needs_ui_role(self._active_role)
+        ):
+            self._set_health_label(self.health_api, "平台 API", True)
         else:
-            self._schedule_api_health_probe()
+            self._schedule_api_health_probe(force=False)
 
         mq_ok = redis_ok = None
         if self.connect_data and self._needs_ui_role(self._active_role):
@@ -1153,28 +1279,38 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, "检查更新", f"当前已是最新版本（{current}）")
 
+    def _is_logged_in(self) -> bool:
+        return bool(self.api and self.api.user_token)
+
     def _show_version_dialog(self, message: str, force: bool = False) -> None:
         download = BrickCoreApi.resolve_download_url(self._current_server_url(), self._version_info)
         package_available = bool(self._version_info and self._version_info.get("package_available"))
         patches_available = bool(self._version_info and self._version_info.get("update_patches_available"))
+        logged_in = self._is_logged_in()
         box = QMessageBox(self)
         box.setWindowTitle("客户端更新")
         box.setText(message)
         extra = []
-        if patches_available:
-            extra.append("平台已提供加密分层增量包，可点击「一键增量更新」（需已登录；将自动覆盖并重启）。")
-        if package_available:
+        # 版本查询接口公开，无需登录；下载/增量包需登录，避免未登录仍露出会失败的按钮
+        if not logged_in:
+            extra.append("检查版本无需登录；下载完整包或一键增量更新请先登录平台账号。")
+        elif patches_available:
+            extra.append("平台已提供加密分层增量包，可点击「一键增量更新」（将自动覆盖并重启）。")
+        if package_available and logged_in:
             extra.append("也可下载完整安装包后手动解压覆盖。")
         if download:
             extra.append(f"外链/静态地址：\n{download}")
         if extra:
             box.setInformativeText("\n".join(extra))
         patch_btn = None
-        if patches_available:
-            patch_btn = box.addButton("一键增量更新", QMessageBox.ButtonRole.AcceptRole)
         dl_btn = None
-        if package_available:
+        login_btn = None
+        if logged_in and patches_available:
+            patch_btn = box.addButton("一键增量更新", QMessageBox.ButtonRole.AcceptRole)
+        if logged_in and package_available:
             dl_btn = box.addButton("下载完整包", QMessageBox.ButtonRole.ActionRole)
+        if not logged_in:
+            login_btn = box.addButton("去登录", QMessageBox.ButtonRole.AcceptRole)
         open_btn = None
         if download:
             open_btn = box.addButton("在浏览器打开", QMessageBox.ButtonRole.ActionRole)
@@ -1183,7 +1319,10 @@ class MainWindow(QMainWindow):
             box.setIcon(QMessageBox.Icon.Warning)
         box.exec()
         clicked = box.clickedButton()
-        if clicked == patch_btn:
+        if clicked == login_btn:
+            self.username_edit.setFocus()
+            self._set_status("请先登录后再下载或增量更新")
+        elif clicked == patch_btn:
             self._apply_layered_update()
         elif clicked == dl_btn:
             self._download_client_package()
@@ -1227,24 +1366,55 @@ class MainWindow(QMainWindow):
         # 重新拉版本信息，避免本地缓存清单过期
         info = api.fetch_version_info() or self._version_info or {}
         self._version_info = info
-        self._set_status("正在准备增量更新…")
-        QApplication.processEvents()
-        try:
-            from runner_client.app.layered_updater import launch_apply_helper, prepare_layered_update
-
-            result = prepare_layered_update(
-                api,
-                info,
-                baked_gui_version=__version__,
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "增量更新失败", str(exc))
-            self._set_status("增量更新失败")
+        if self._layered_update_worker and self._layered_update_worker.isRunning():
+            QMessageBox.information(self, "更新", "增量更新正在准备中，请稍候")
             return
+        try:
+            self.update_btn.setEnabled(False)
+            self._layered_progress_logged_pct = -1
+            self._set_status("正在准备增量更新…（进度见下方状态栏与会话日志）")
+            self._append_log("[客户端] 开始准备增量更新…")
+            worker = _LayeredUpdateWorker(api, info, __version__, parent=self)
+            self._layered_update_worker = worker
+            worker.progress.connect(self._on_layered_update_progress)
+            worker.finished_ok.connect(self._on_layered_update_ready)
+            worker.finished_err.connect(self._on_layered_update_failed)
+            worker.finished.connect(lambda: self.update_btn.setEnabled(True))
+            worker.start()
+        except Exception as exc:
+            self.update_btn.setEnabled(True)
+            self._append_log(f"[客户端] 启动增量更新失败: {exc}")
+            QMessageBox.critical(self, "增量更新失败", str(exc))
+            self._set_status(f"增量更新失败：{exc}")
 
+    def _on_layered_update_progress(self, text: str) -> None:
+        """增量下载进度：状态条 + 会话日志都可见（避免只改中部标签被忽略）。"""
+        self._set_status(text)
+        # 日志区刷太密会卡，约每 10% 或文案变化时写一行
+        pct_mark = None
+        if "%" in text:
+            try:
+                pct_mark = int(text.rsplit(" ", 1)[-1].rstrip("%"))
+            except ValueError:
+                pct_mark = None
+        last = getattr(self, "_layered_progress_logged_pct", -1)
+        if pct_mark is None or pct_mark >= last + 10 or pct_mark >= 100:
+            self._append_log(f"[客户端] {text}")
+            if pct_mark is not None:
+                self._layered_progress_logged_pct = pct_mark
+
+    def _on_layered_update_failed(self, message: str) -> None:
+        QMessageBox.critical(self, "增量更新失败", message)
+        self._set_status("增量更新失败")
+
+    def _on_layered_update_ready(self, result: object) -> None:
+        if not isinstance(result, dict):
+            self._on_layered_update_failed("增量准备结果无效")
+            return
         action = result.get("action")
         if action == "none":
             QMessageBox.information(self, "检查更新", "当前已是最新版本")
+            self._set_status("当前已是最新版本")
             return
         if action != "patch" or not result.get("helper_script"):
             QMessageBox.information(
@@ -1254,6 +1424,8 @@ class MainWindow(QMainWindow):
             )
             self._download_client_package()
             return
+
+        from runner_client.app.layered_updater import launch_apply_helper
 
         helper = Path(result["helper_script"])
         launch_apply_helper(helper)
@@ -1332,8 +1504,10 @@ class MainWindow(QMainWindow):
         self.connect_btn.setEnabled(True)
         self._set_status(f"已登录 {base_url}（{username}），可点击「上线」启动执行器。")
         self._append_log(f"[客户端] 登录成功：{username} @ {base_url}")
+        # 登录前已 health_check、登录接口也成功 → 直接绿灯；作废进行中的探活，避免迟到失败刷红
+        self._mark_api_health(True, invalidate_inflight=True)
         self._load_projects_for_user()
-        self._refresh_health(force_api_probe=True)
+        self._refresh_health(force_api_probe=False)
         self._sync_tray_actions()
 
     def _on_connect(self) -> None:
@@ -1476,6 +1650,7 @@ class MainWindow(QMainWindow):
         self.poll_timer.start()
         if self._needs_ui_role(execution_role):
             self.heartbeat_timer.start()
+            self._sync_recording_poll_interval(active=False)
             self.recording_poll_timer.start()
             QTimer.singleShot(200, self._poll_active_recording)
         else:
@@ -1541,6 +1716,7 @@ class MainWindow(QMainWindow):
         self.heartbeat_timer.stop()
         self.health_timer.stop()
         self.recording_poll_timer.stop()
+        self._sync_recording_poll_interval(active=False)
         self._set_recording_panel_visible(False)
         self.recording_panel.clear_recording()
         device_id = (self.connect_data or {}).get("device_id", "")
@@ -1596,11 +1772,19 @@ class MainWindow(QMainWindow):
         worker.failed.connect(self._on_recording_poll_failed)
         worker.start()
 
+    def _sync_recording_poll_interval(self, *, active: bool) -> None:
+        self._recording_active = bool(active)
+        want = self._recording_poll_active_ms if active else self._recording_poll_idle_ms
+        if self.recording_poll_timer.interval() != want:
+            self.recording_poll_timer.setInterval(want)
+
     def _on_recording_snapshot(self, data: object) -> None:
         if not isinstance(data, dict) or data.get("status") != "recording":
+            self._sync_recording_poll_interval(active=False)
             self._set_recording_panel_visible(False)
             self.recording_panel.clear_recording()
             return
+        self._sync_recording_poll_interval(active=True)
         self._set_recording_panel_visible(True)
         self.recording_panel.apply_snapshot(data)
 
@@ -1702,10 +1886,14 @@ class MainWindow(QMainWindow):
         device_id = self.connect_data.get("device_id", "")
         try:
             self.api.heartbeat(device_id)
+            # 心跳成功即视为平台 HTTP 可达，无需另打 /runner/health
+            self._mark_api_health(True, invalidate_inflight=False)
         except ApiError as exc:
             if exc.status_code in (401, 403):
                 self._append_log("[客户端] 会话已失效或被管理员停止，自动下线")
                 self._on_disconnect()
+            elif self._last_api_health_ok is not False:
+                self._mark_api_health(False, invalidate_inflight=False)
         except Exception:
             pass
 
@@ -1998,6 +2186,9 @@ def run_app() -> int:
     os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
     app = QApplication(sys.argv)
     app.setApplicationName("BrickCore Runner")
+    app_icon = _load_app_icon()
+    if app_icon is not None:
+        app.setWindowIcon(app_icon)
     app.setQuitOnLastWindowClosed(False)
     app.setFont(QFont("Microsoft YaHei UI", 10))
     app.setStyleSheet(APP_STYLESHEET)

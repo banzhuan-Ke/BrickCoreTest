@@ -239,9 +239,9 @@ export const httpRecordApi = {
             responseType: 'blob'
         })
     },
-    // 发送 API 测试报告邮件
-    async sendSuiteReport(record_id) {
-        return await http.post(`/api-module/records/suites/${record_id}/send-report`)
+    // 发送 API 测试报告
+    async sendSuiteReport(record_id, data = {}) {
+        return await http.post(`/api-module/records/suites/${record_id}/send-report`, data, { timeout: 120000 })
     },
     // 批量删除套件执行记录
     async batchDeleteSuiteRecords(record_ids) {
@@ -357,9 +357,9 @@ export const httpPlanApi = {
             responseType: 'blob'
         })
     },
-    // 发送计划测试报告邮件
-    async sendPlanReport(record_id) {
-        return await http.post(`/api-module/plan-records/${record_id}/send-report`)
+    // 发送计划测试报告
+    async sendPlanReport(record_id, data = {}) {
+        return await http.post(`/api-module/plan-records/${record_id}/send-report`, data, { timeout: 120000 })
     },
     async saveAsTemplate(plan_id, data) {
         return await http.post(`/api-module/plan/${plan_id}/save-as-template`, data)

@@ -83,6 +83,9 @@
 }
 
 .ui-run-concurrency-row__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
   font-size: 13px;
   color: var(--el-text-color-regular);
@@ -100,6 +103,60 @@
 
 .ui-run-parallel-hint {
   margin-bottom: 10px;
+
+  :deep(.el-alert__content) {
+    width: 100%;
+  }
+}
+
+.ui-run-parallel-hint__body {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--el-text-color-regular);
+
+  p {
+    margin: 0 0 4px;
+  }
+
+  p:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.ui-run-parallel-hint__example {
+  margin-top: 6px !important;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+}
+
+.ui-run-col-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ui-run-tip-icon {
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+  cursor: help;
+  vertical-align: middle;
+}
+
+.ui-run-tip-block {
+  max-width: 280px;
+  line-height: 1.5;
+  font-size: 12px;
+
+  p {
+    margin: 0 0 6px;
+  }
+
+  p:last-child {
+    margin-bottom: 0;
+  }
 }
 
 .ui-run-device-table {

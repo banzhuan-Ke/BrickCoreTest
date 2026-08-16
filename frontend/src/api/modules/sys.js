@@ -512,6 +512,9 @@ export const notificationApi = {
     async getConfigList(project_id) {
         return await http.get('/sys/notifications/config', { params: { project_id } })
     },
+    async getSendTargets(project_id) {
+        return await http.get('/sys/notifications/config/send-targets', { params: { project_id } })
+    },
     async createConfig(project_id, data) {
         return await http.post('/sys/notifications/config', data, { params: { project_id } })
     },
@@ -529,6 +532,9 @@ export const notificationApi = {
     },
     async updateSmtpConfig(data) {
         return await http.put('/sys/notifications/smtp', data)
+    },
+    async testSmtpConfig(data) {
+        return await http.post('/sys/notifications/smtp/test', data, { timeout: 30000 })
     },
     async getLogList(params) {
         return await http.get('/sys/notifications/logs', { params })

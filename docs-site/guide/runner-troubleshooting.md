@@ -62,7 +62,7 @@ cd <平台仓库>\runner
 
 ## 六、客户端版本过低
 
-平台 `.env` 可设 `RUNNER_CLIENT_VERSION_MIN`。设备管理列表会标「需升级」。请下载与 `RUNNER_CLIENT_VERSION_LATEST` 一致的 zip（当前 **1.5.5**）。
+平台 `.env` 可设 `RUNNER_CLIENT_VERSION_MIN`。设备管理列表会标「需升级」。请下载与 `RUNNER_CLIENT_VERSION_LATEST` 一致的 zip（当前推荐见页脚 / 版本更新记录，平台 **v1.6.0** 对应执行器 **1.6.1**）。
 
 ## 七、App adb（WiFi / 模拟器）
 

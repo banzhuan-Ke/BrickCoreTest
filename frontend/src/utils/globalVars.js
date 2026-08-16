@@ -12,7 +12,21 @@ export function isVarEntryObject(value) {
 }
 
 /** 系统保留键（项目 global_vars 内嵌套配置，非表格变量） */
-const RESERVED_KEYS = new Set(['ai_settings', 'zentao_export', '__default_start_url'])
+const RESERVED_KEYS = new Set([
+  'ai_settings',
+  'zentao_export',
+  '__default_start_url',
+  '__ui_timeout_scale',
+  '__ui_nav_wait_until',
+  '__ui_busy_selectors',
+  '__ui_ready_selector',
+  '__ui_readiness_retry',
+  '__ui_busy_appear_probe_ms',
+  '__ui_action_settle_ms',
+  '__ui_action_settle_quiet_ms',
+  '__ui_auth_inject',
+  '__ui_storage_state',
+])
 
 export function parseVarEntry(key, value) {
   if (RESERVED_KEYS.has(key) && typeof value === 'object' && value !== null && !isVarEntryObject(value)) {

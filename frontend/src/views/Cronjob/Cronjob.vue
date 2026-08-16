@@ -201,7 +201,7 @@
 
   
   <!--新建定时任务-->
-  <el-dialog v-model="createDialog" title="添加定时任务" width="750" center destroy-on-close>
+  <el-dialog v-model="createDialog" title="添加定时任务" width="920" center destroy-on-close>
     <el-form :model="cronjob" :rules="formDataRules" ref="formDataRef" label-width="auto" style="max-width: 750px">
       <el-form-item label="任务名称：" prop="name">
         <el-input v-model="cronjob.name" placeholder="请输入任务名称"/>
@@ -301,6 +301,7 @@
       <el-form-item label="状态：" prop="state">
         <el-switch v-model="cronjob.state"/>
       </el-form-item>
+      <CronRunConfigFields ref="createRunConfigRef" :task-parallel="createTaskParallel" />
       <div style="text-align: center">
         <el-button type="primary" @click="createCronjob(formDataRef)" plain>保存</el-button>
         <el-button @click="createDialog=false" plain>取消</el-button>
@@ -308,7 +309,7 @@
     </el-form>
   </el-dialog>
   <!--修改定时任务-->
-  <el-dialog v-model="updateDialog" title="编辑定时任务" width="750" center destroy-on-close>
+  <el-dialog v-model="updateDialog" title="编辑定时任务" width="920" center destroy-on-close>
     <el-form :model="update" :rules="formUpdateRules" ref="formUpdateRef" label-width="auto" style="max-width: 750px">
       <el-form-item label="任务名称：" prop="name">
         <el-input v-model="update.name" placeholder="请输入任务名称"/>
@@ -405,6 +406,7 @@
       <el-form-item label="状态：" prop="state">
         <el-switch v-model="update.state"/>
       </el-form-item>
+      <CronRunConfigFields ref="updateRunConfigRef" :task-parallel="updateTaskParallel" />
       <div style="text-align: center">
         <el-button type="primary" @click="updateCronjob(formUpdateRef)" plain>保存</el-button>
         <el-button @click="updateDialog=false" plain>取消</el-button>
@@ -414,7 +416,7 @@
 </template>
 
 <script setup>
-import {reactive, onMounted, ref} from 'vue'
+import {reactive, onMounted, ref, watch, nextTick} from 'vue'
 import {Clock, Search, RefreshRight} from "@element-plus/icons-vue"
 import http from '@/api/index'
 import {ElNotification, ElMessageBox, ElMessage} from "element-plus"
@@ -422,6 +424,7 @@ import dateTools from "@/tools/dateTools.js"
 import { makeTableRowIndex } from '@/utils/tableIndex'
 import {ProjectStore} from "@/stores/module/ProjectStore.js"
 import PageCard from "@/components/PageCard.vue"
+import CronRunConfigFields from "@/components/CronRunConfigFields.vue"
 import {UserStore} from "@/stores/module/UserStore.js"
 import {useRouter} from 'vue-router'
 
@@ -596,7 +599,33 @@ const formDataRules = reactive({
 })
 
 let createDialog = ref(false)
+let updateDialog = ref(false)
 const formDataRef = ref()
+const createRunConfigRef = ref()
+const updateRunConfigRef = ref()
+const createTaskParallel = ref(false)
+const updateTaskParallel = ref(false)
+
+async function refreshTaskParallel(taskId, targetRef) {
+  if (!taskId) {
+    targetRef.value = false
+    return
+  }
+  try {
+    const detail = await http.taskApi.getDetail(taskId)
+    targetRef.value = !!detail.data?.parallel
+  } catch {
+    const row = (proStore.taskList || []).find((t) => t.id === taskId)
+    targetRef.value = !!row?.parallel
+  }
+}
+
+watch(() => cronjob.task, (id) => {
+  if (createDialog.value) refreshTaskParallel(id, createTaskParallel)
+})
+watch(() => update.task, (id) => {
+  if (updateDialog.value) refreshTaskParallel(id, updateTaskParallel)
+})
 
 // 点击添加按钮
 async function ClickAdd() {
@@ -623,6 +652,9 @@ async function ClickAdd() {
     date: "2030-01-01 00:00:00"
   })
   createDialog.value = true
+  await nextTick()
+  await refreshTaskParallel(cronjob.task, createTaskParallel)
+  await createRunConfigRef.value?.reset(null)
 }
 
 async function createCronjob() {
@@ -630,7 +662,8 @@ async function createCronjob() {
   if (!valid) return
   const params = {
     ...cronjob,
-    date: dateTools.rTime(cronjob.date)
+    date: dateTools.rTime(cronjob.date),
+    run_config: createRunConfigRef.value?.buildPayload() || null,
   }
   const response = await http.scheduleApi.create(params)
   if (response.status === 201) {
@@ -651,8 +684,6 @@ async function createCronjob() {
   }
 }
 
-let updateDialog = ref(false)
-
 async function EditDialog(row) {
   // 重新加载下拉框数据（避免 localStorage 中存的是旧项目数据）
   await proStore.getEnvironmentList()
@@ -668,6 +699,9 @@ async function EditDialog(row) {
   update.date = dateTools.rTime(row.date)
   update.interval = row.interval
   update.crontab = row.crontab
+  await nextTick()
+  await refreshTaskParallel(update.task, updateTaskParallel)
+  await updateRunConfigRef.value?.reset(row.run_config || null)
 }
 
 const formUpdateRules = reactive({
@@ -711,7 +745,8 @@ async function updateCronjob() {
       day: update.crontab.day,
       month: update.crontab.month,
       day_of_week: update.crontab.day_of_week
-    }
+    },
+    run_config: updateRunConfigRef.value?.buildPayload() || null,
   }
   const response = await http.scheduleApi.update(update.id, params)
   if (response.status === 200) {

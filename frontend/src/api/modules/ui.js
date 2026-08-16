@@ -347,11 +347,17 @@ export const uiRecordApi = {
     getTaskRecord(params) { return this.getTaskRecords(params) },
     getSuiteRecord(params) { return this.getSuiteRecords(params) },
     getCaseRecord(params) { return this.getCaseRecords(params) },
-    deleteTaskRecord(record_id) { 
-        return http.delete(`/ui/records/tasks/${record_id}`) 
+    deleteTaskRecord(record_id, params = {}) { 
+        return http.delete(`/ui/records/tasks/${record_id}`, { params }) 
     },
-    deleteSuiteRecord(record_id) { 
-        return http.delete(`/ui/records/suites/${record_id}`) 
+    deleteSuiteRecord(record_id, params = {}) { 
+        return http.delete(`/ui/records/suites/${record_id}`, { params }) 
+    },
+    batchDeleteTaskRecords(record_ids, permanent = false) {
+        return http.post('/ui/records/tasks/batch-delete', { record_ids, permanent })
+    },
+    batchDeleteSuiteRecords(record_ids, permanent = false) {
+        return http.post('/ui/records/suites/batch-delete', { record_ids, permanent })
     },
     deleteCaseRecord(record_id, params = {}) {
         return http.delete(`/ui/records/cases/${record_id}`, { params })
@@ -366,5 +372,8 @@ export const uiRecordApi = {
         return http.post(`/ui/records/cases/${record_id}/restore`)
     },
     exportTaskReport(record_id) { return this.exportReport(record_id, 'task') },
-    exportSuiteReport(record_id) { return this.exportReport(record_id, 'suite') }
+    exportSuiteReport(record_id) { return this.exportReport(record_id, 'suite') },
+    async sendTaskReport(record_id, data = {}) {
+        return await http.post(`/ui/records/tasks/${record_id}/send-report`, data, { timeout: 120000 })
+    },
 }

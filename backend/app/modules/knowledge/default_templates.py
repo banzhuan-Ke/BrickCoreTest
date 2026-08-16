@@ -610,10 +610,10 @@ def list_builtin_templates() -> list[dict[str, str]]:
     items = [{"kind": kind, "format": "docx", **meta} for kind, meta in BUILTIN_TEMPLATE_CATALOG.items()]
     # 质量回顾 pptx 依赖行业扩展包；未开通时不出现在列表，避免下载 500
     try:
-        from app.core.platform.edition import knowledge_digitech_pack_enabled
+        from app.core.platform.edition import knowledge_pack_addon_enabled
     except Exception:  # pragma: no cover
-        knowledge_digitech_pack_enabled = lambda: True  # type: ignore[assignment]
-    if knowledge_digitech_pack_enabled():
+        knowledge_pack_addon_enabled = lambda: True  # type: ignore[assignment]
+    if knowledge_pack_addon_enabled():
         items.extend(
             {"kind": kind, "format": "pptx", **meta}
             for kind, meta in PPTX_BUILTIN_TEMPLATE_CATALOG.items()

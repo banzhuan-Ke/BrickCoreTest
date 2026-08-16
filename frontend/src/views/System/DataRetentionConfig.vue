@@ -9,16 +9,16 @@
         :closable="false"
         show-icon
         title="删除策略说明"
-        description="配置 UI 用例运行记录与资料库（生成记录、迭代文件夹上传文档）的删除方式。逻辑删除仅从列表隐藏；物理删除立即从数据库清除，并删除关联存储文件。"
+        description="配置 Web 自动化运行记录（用例/套件/计划）与资料库（生成记录、迭代文件夹上传文档）的删除方式。逻辑删除仅从列表隐藏；物理删除立即从数据库清除，并删除关联存储文件。回收站界面目前仅用例运行记录可用；套件/计划在选择回收站时按逻辑删除处理。"
         style="margin-bottom: 20px; max-width: 960px;"
       />
 
-      <el-form :model="form" label-width="160px" style="max-width: 960px;">
-        <el-form-item label="用例运行记录删除">
+      <el-form :model="form" label-width="200px" style="max-width: 960px;">
+        <el-form-item label="Web自动化运行记录删除">
           <el-radio-group v-model="form.ui_case_record_delete_mode">
             <el-radio value="logical">逻辑删除（从列表隐藏，不可恢复）</el-radio>
             <el-radio value="physical">物理删除（立即永久删除）</el-radio>
-            <el-radio value="recycle_bin">回收站（可恢复或永久删除）</el-radio>
+            <el-radio value="recycle_bin">回收站（可恢复或永久删除；界面目前仅用例记录）</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="资料库删除">

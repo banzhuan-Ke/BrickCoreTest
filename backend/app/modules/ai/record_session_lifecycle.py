@@ -66,6 +66,25 @@ async def get_active_recording_on_device(device_id: str) -> Optional[AiRecordSes
     return None
 
 
+async def fail_active_recordings_for_device(
+    device_id: str,
+    *,
+    error: str = "执行器异常下线，录制已自动结束",
+) -> int:
+    """执行器下线时结束该设备进行中的录制。"""
+    device_id = (device_id or "").strip()
+    if not device_id:
+        return 0
+    records = await AiRecordSession.filter(device_id=device_id, status="recording").all()
+    closed = 0
+    for record in records:
+        record.status = "failed"
+        record.error = record.error or error
+        await record.save(update_fields=["status", "error"])
+        closed += 1
+    return closed
+
+
 def serialize_active_recording(record: AiRecordSession, runtime: dict | None = None) -> dict:
     """供 Runner 客户端 / 内部 API 使用的进行中录制快照。"""
     runtime = runtime or {}

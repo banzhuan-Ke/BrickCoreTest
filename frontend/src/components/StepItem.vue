@@ -148,25 +148,39 @@ function handleDeleteBranch(bIndex) {
   emit('delete-branch', bIndex)
 }
 
-// 获取条件显示文本
+// 获取条件显示文本（含定位摘要，便于发现未配置）
 function getConditionDisplay(condition) {
   if (!condition) return ''
-  
+
   const typeMap = {
-    'element_visible': '元素可见',
-    'element_exist': '元素存在',
-    'element_text_equals': '文本等于',
-    'element_text_contains': '文本包含',
-    'page_title_equals': '标题等于',
-    'page_url_contains': 'URL包含',
-    'custom_js': 'JS表达式'
+    element_visible: '元素可见',
+    element_exist: '元素存在',
+    element_text_equals: '文本等于',
+    element_text_contains: '文本包含',
+    page_title_equals: '标题等于',
+    page_url_contains: 'URL包含',
+    custom_js: 'JS表达式',
   }
-  
+
   if (condition.type === 'else') return '默认分支'
-  
+
   const typeName = typeMap[condition.type] || condition.type
   const operator = condition.operator === 'is_true' ? '为真' : '为假'
-  
+  const needsLocator = ['element_visible', 'element_exist', 'element_text_equals', 'element_text_contains'].includes(
+    condition.type,
+  )
+  let locatorText = ''
+  const loc = condition.locator
+  if (typeof loc === 'string') locatorText = loc.trim()
+  else if (loc && typeof loc === 'object') {
+    const value = String(loc.value || '').trim()
+    locatorText = value ? (loc.by ? `${loc.by}=${value}` : value) : ''
+  }
+  if (needsLocator) {
+    if (!locatorText) return `${typeName} ${operator} · 未配置定位`
+    const short = locatorText.length > 40 ? `${locatorText.slice(0, 40)}…` : locatorText
+    return `${typeName} ${operator} · ${short}`
+  }
   return `${typeName} ${operator}`
 }
 

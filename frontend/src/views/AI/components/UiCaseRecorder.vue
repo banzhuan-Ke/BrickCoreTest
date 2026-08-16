@@ -201,8 +201,81 @@
           <p class="recording-stats">
             已记录 <strong>{{ actionsCount }}</strong> 个操作
             <span v-if="elapsedTime > 0">，已录制 {{ formatTime(elapsedTime) }}</span>
+            <span v-if="frameStatus.main_ok === false" style="color: var(--el-color-danger)">
+              ，主页面监听失败
+            </span>
+            <span v-else-if="frameStatus.total > 0">
+              ，已监听 <strong>{{ frameStatus.listening }}</strong> / {{ frameStatus.total }} 个 frame
+            </span>
           </p>
         </div>
+      </div>
+
+      <div v-if="frameStatus.total > 0 || frameStatus.main_ok === false" class="frame-listen-panel">
+        <div class="frame-listen-header">
+          <span>iframe 监听</span>
+          <el-button
+            size="small"
+            plain
+            :loading="retryingInject"
+            :disabled="paused"
+            @click="handleRetryInject()"
+          >
+            全部重试注入
+          </el-button>
+        </div>
+        <el-alert
+          v-if="frameStatus.main_ok === false"
+          type="error"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 8px"
+          title="主页面录制监听注入失败"
+          :description="frameStatus.main?.message || '请点「全部重试注入」；若仍失败请刷新页面后重新开始录制'"
+        />
+        <el-collapse v-if="failedFrames.length" class="frame-fail-collapse">
+          <el-collapse-item
+            v-for="(item, idx) in failedFrames"
+            :key="idx"
+            :name="String(idx)"
+          >
+            <template #title>
+              <el-tag type="danger" size="small" style="margin-right: 8px">未监听</el-tag>
+              <span class="frame-fail-title">{{ shortFrameUrl(item.url) || item.name || 'frame' }}</span>
+              <el-tag size="small" type="info" style="margin-left: 8px">{{ item.reason || 'unknown' }}</el-tag>
+            </template>
+            <p class="frame-fail-msg">{{ frameReasonHint(item.reason) }}</p>
+            <p v-if="item.message" class="frame-fail-detail">{{ item.message }}</p>
+            <el-button
+              size="small"
+              type="primary"
+              plain
+              :loading="retryingInject"
+              @click="handleRetryInject(item)"
+            >
+              重新尝试注入
+            </el-button>
+            <p class="frame-fail-hint">
+              菜单切换导致 iframe 热替换后，可先点「重新尝试注入 / 全部重试注入」。
+              若仍失败（如 sandbox 禁脚本）：停止录制，用<strong>交互调试拾取</strong>生成带
+              <code>iframe||</code> 前缀的步骤，或手写 <code>iframe||定位器</code>。
+            </p>
+          </el-collapse-item>
+        </el-collapse>
+        <el-alert
+          v-else-if="pendingFrames.length"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="部分 iframe 正在导航/热替换，监听注入等待中"
+        />
+        <el-alert
+          v-else-if="allFramesListening"
+          type="success"
+          :closable="false"
+          show-icon
+          title="当前子 frame 均已注入监听"
+        />
       </div>
 
       <div class="save-variable-row">
@@ -558,6 +631,112 @@ const paused = ref(false)
 const saveVarName = ref('')
 const saveVarSource = ref('text')
 const savingVariable = ref(false)
+const retryingInject = ref(false)
+const frameStatus = ref({ total: 0, listening: 0, items: [], main_ok: true, main: null })
+const failedFrames = computed(() =>
+  (frameStatus.value.items || []).filter((it) => it && it.status === 'failed')
+)
+const pendingFrames = computed(() =>
+  (frameStatus.value.items || []).filter((it) => it && it.status === 'pending')
+)
+const allFramesListening = computed(() => {
+  const total = Number(frameStatus.value.total) || 0
+  const listening = Number(frameStatus.value.listening) || 0
+  return (
+    frameStatus.value.main_ok !== false &&
+    total > 0 &&
+    listening === total &&
+    pendingFrames.value.length === 0 &&
+    failedFrames.value.length === 0
+  )
+})
+
+const FRAME_REASON_HINTS = {
+  sandbox_no_scripts: '该 iframe sandbox 禁止脚本，无法自动注入录制监听；请改用交互调试拾取',
+  navigating: 'iframe 正在导航或热替换中，稍后会自动重试，也可手动「重新尝试注入」',
+  detached: 'iframe 已卸载（常见于菜单热替换），新页面加载后应自动重注；也可全部重试',
+  no_execution_context: '执行上下文未就绪，请稍后重试注入',
+  evaluate_rejected: 'evaluate 被拒绝（安全策略等），可改用调试拾取',
+  main_inject_failed: '主页面注入失败，子 frame 状态可能仍显示已监听，请先全部重试',
+  unknown: '注入失败，详见下方日志摘要',
+}
+
+function shortFrameUrl(url) {
+  if (!url) return ''
+  try {
+    const u = new URL(url)
+    return (u.pathname + u.search).slice(0, 64) || u.host
+  } catch {
+    return String(url).slice(0, 64)
+  }
+}
+
+function frameReasonHint(reason) {
+  return FRAME_REASON_HINTS[reason] || FRAME_REASON_HINTS.unknown
+}
+
+function applyFrameStatus(data) {
+  const frames = data?.frames
+  if (frames && typeof frames === 'object') {
+    const mainOk =
+      frames.main_ok !== undefined
+        ? Boolean(frames.main_ok)
+        : data?.main_ok !== undefined
+          ? Boolean(data.main_ok)
+          : true
+    frameStatus.value = {
+      total: Number(frames.total) || 0,
+      listening: Number(frames.listening) || 0,
+      items: Array.isArray(frames.items) ? frames.items : [],
+      main_ok: mainOk,
+      main: frames.main && typeof frames.main === 'object' ? frames.main : null,
+    }
+  } else if (data && data.main_ok === false) {
+    frameStatus.value = {
+      ...frameStatus.value,
+      main_ok: false,
+      main: { reason: 'main_inject_failed', message: data.message || '' },
+    }
+  }
+}
+
+async function handleRetryInject(item) {
+  if (!recordId.value || retryingInject.value) return
+  retryingInject.value = true
+  try {
+    const payload = {
+      ...recordControlPayload(),
+      frame_url: item?.url || '',
+      frame_name: item?.name || '',
+      slot_id: item?.slot_id || '',
+    }
+    const res = await aiRecordApi.retryInject(recordId.value, payload)
+    if (res.status === 200 && res.data?.code === 200) {
+      const body = res.data.data || {}
+      applyFrameStatus(body)
+      if (body.ok === false || body.main_ok === false) {
+        ElMessage.warning(
+          body.message ||
+            (body.reason === 'main_inject_failed'
+              ? '主页面注入失败'
+              : '部分 frame 仍未注入成功')
+        )
+      } else {
+        ElMessage.success(body.message || '已重新尝试注入')
+      }
+    }
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '重试注入失败')
+  } finally {
+    retryingInject.value = false
+    try {
+      const statusRes = await aiRecordApi.getStatus(recordId.value)
+      if (statusRes.status === 200 && statusRes.data?.code === 200) {
+        applyFrameStatus(statusRes.data.data)
+      }
+    } catch (_) { /* ignore */ }
+  }
+}
 const skipConfigStartFailed = ref(false)
 const preparingReplay = ref(false)
 /** 取消接录流程时递增，避免回放完成后仍自动启动 */
@@ -874,6 +1053,7 @@ const handleStart = async () => {
       startTime = Date.now()
       actions.value = []
       actionsCount.value = 0
+      frameStatus.value = { total: 0, listening: 0, items: [], main_ok: true, main: null }
       elapsedTime.value = 0
       startPolling()
       startElapsedTimer()
@@ -1046,6 +1226,7 @@ const startPolling = () => {
         actions.value = data.raw_actions || []
         actionsCount.value = data.actions_count
         paused.value = !!data.paused
+        applyFrameStatus(data)
         // 如果 Runner 已经自动完成
         if (data.status === 'completed' && state.value === 'recording') {
           steps.value = data.steps || []
@@ -1465,6 +1646,64 @@ onUnmounted(() => {
           font-size: 16px;
         }
       }
+    }
+  }
+
+  .frame-listen-panel {
+    margin: 12px 0;
+    padding: 10px 12px;
+    background: #f5f7fa;
+    border-radius: 8px;
+    border: 1px solid #e4e7ed;
+
+    .frame-listen-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #303133;
+    }
+
+    .frame-fail-collapse {
+      border: none;
+      :deep(.el-collapse-item__header) {
+        height: auto;
+        min-height: 40px;
+        line-height: 1.4;
+        padding: 6px 0;
+      }
+    }
+
+    .frame-fail-title {
+      font-size: 13px;
+      color: #606266;
+      max-width: 360px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .frame-fail-msg,
+    .frame-fail-detail,
+    .frame-fail-hint {
+      margin: 6px 0;
+      font-size: 12px;
+      color: #606266;
+      line-height: 1.5;
+    }
+
+    .frame-fail-detail {
+      color: #909399;
+      word-break: break-all;
+    }
+
+    .frame-fail-hint code {
+      font-size: 12px;
+      background: #eef1f6;
+      padding: 0 4px;
+      border-radius: 3px;
     }
   }
 

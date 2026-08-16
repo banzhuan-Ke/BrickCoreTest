@@ -5,10 +5,10 @@ export const runnerReleaseApi = {
     return http.get('/runner/client-release')
   },
   getConfig() {
-    return http.get('/sys/runner-release/config')
+    return http.get('/sys/runner-release/config', { timeout: 60000 })
   },
   updateConfig(data) {
-    return http.put('/sys/runner-release/config', data)
+    return http.put('/sys/runner-release/config', data, { timeout: 60000 })
   },
   downloadUrl(token) {
     const base = (import.meta.env.VITE_BASE_API || '').replace(/\/$/, '')

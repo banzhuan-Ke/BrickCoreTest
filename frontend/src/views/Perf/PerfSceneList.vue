@@ -277,9 +277,19 @@
                 type="info"
                 :closable="false"
                 show-icon
-                title="压测施压由在线 Worker 执行（后端不再本机直跑）。可勾选执行器，并用权重控制分压比例（数值越大分得越多）。"
                 style="margin-bottom: 10px;"
-              />
+              >
+                <template #title>如何理解下面三列</template>
+                <template #default>
+                  <div style="font-size: 12px; line-height: 1.7;">
+                    压测由在线执行机施压（平台不本机直跑）。
+                    <strong>本机上限</strong>：这台机器最多能扛多少并发；
+                    <strong>分压比例</strong>：多机时按比例拆分场景并发（只比大小，不是人数）；
+                    <strong>本机分到</strong>：最终落在这台机器上的虚拟用户数（VU）。
+                    仅勾选一台时，分压比例无效，场景并发会全部落在该机。
+                  </div>
+                </template>
+              </el-alert>
               <el-alert
                 v-if="workerList.length === 0"
                 type="warning"
@@ -299,7 +309,7 @@
                 type="warning"
                 :closable="false"
                 show-icon
-                :title="`选中执行器容量不足：需要并发 ${runNeededConcurrent}，当前勾选总容量 ${selectedWorkerCapacity}`"
+                :title="`容量不足：场景需要 ${runNeededConcurrent} 并发，已勾选机器合计上限仅 ${selectedWorkerCapacity}`"
               />
               <el-alert
                 v-else
@@ -309,11 +319,8 @@
               >
                 <template #title>
                   <span>
-                    已勾选 {{ selectedWorkerRows.length }} / {{ workerList.length }} 台，容量 {{ selectedWorkerCapacity }}，预计分配 {{ previewAssignedTotal }} 虚拟用户
-                    <el-tooltip
-                      placement="top"
-                      content="VU = Virtual User（虚拟用户），表示本机将启动的并发施压人数；各执行器按权重分摊。"
-                    >
+                    {{ workerDispatchSummary }}
+                    <el-tooltip placement="top" :content="workerDispatchTip">
                       <el-icon class="tip-icon" style="margin-left: 4px; vertical-align: middle"><QuestionFilled /></el-icon>
                     </el-tooltip>
                   </span>
@@ -348,27 +355,43 @@
                     </div>
                   </template>
                 </el-table-column>
-                <el-table-column label="容量" width="72" align="center">
+                <el-table-column width="88" align="center">
+                  <template #header>
+                    <span>
+                      本机上限
+                      <el-tooltip placement="top" content="执行机申报的最大并发能力（max_concurrent），不是本次会启动的人数。">
+                        <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+                      </el-tooltip>
+                    </span>
+                  </template>
                   <template #default="{ row }">{{ row.max_concurrent }}</template>
                 </el-table-column>
-                <el-table-column label="权重" width="108" align="center">
+                <el-table-column width="118" align="center">
+                  <template #header>
+                    <span>
+                      分压比例
+                      <el-tooltip placement="top" content="多机时按比例拆分场景并发，例如 2:1 约分到 2/3 与 1/3。单机时无需调整。">
+                        <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+                      </el-tooltip>
+                    </span>
+                  </template>
                   <template #default="{ row }">
                     <el-input-number
                       v-model="row.weight"
                       :min="1"
                       :max="100000"
                       size="small"
-                      :disabled="!row.selected"
+                      :disabled="!row.selected || selectedWorkerRows.length <= 1"
                       controls-position="right"
                       style="width: 96px;"
                     />
                   </template>
                 </el-table-column>
-                <el-table-column label="预计虚拟用户" width="110" align="center">
+                <el-table-column width="110" align="center">
                   <template #header>
                     <span>
-                      预计虚拟用户
-                      <el-tooltip placement="top" content="VU：本执行器预计分到的虚拟用户数（按权重分配）。">
+                      本机分到
+                      <el-tooltip placement="top" content="本次场景并发按分压比例落到本机的虚拟用户数（VU）。">
                         <el-icon class="tip-icon"><QuestionFilled /></el-icon>
                       </el-tooltip>
                     </span>
@@ -738,6 +761,23 @@ const workerPreviewMap = computed(() => {
 const previewAssignedTotal = computed(() =>
   workerPreviewAssignments.value.reduce((a, b) => a + b, 0)
 )
+const workerDispatchSummary = computed(() => {
+  const need = runNeededConcurrent.value
+  const n = selectedWorkerRows.value.length
+  const total = workerList.value.length
+  const cap = selectedWorkerCapacity.value
+  if (n <= 1) {
+    const name = selectedWorkerRows.value[0]?.name || '该执行机'
+    return `场景需要 ${need} 并发 · 已选 ${n}/${total} 台（上限合计 ${cap}）· 将全部落在 ${name}（${previewAssignedTotal.value} VU）`
+  }
+  return `场景需要 ${need} 并发 · 已选 ${n}/${total} 台（上限合计 ${cap}）· 按分压比例拆到各机，合计 ${previewAssignedTotal.value} VU`
+})
+const workerDispatchTip = computed(() => {
+  if (selectedWorkerRows.value.length <= 1) {
+    return '只选一台时不看分压比例：场景并发会全部落到该机，且不得超过本机上限。'
+  }
+  return '多机时按「分压比例」拆分场景并发；本机分到的人数不会超过该机上限。VU = 虚拟用户（并发施压人数）。'
+})
 const canConfirmRun = computed(() => {
   if (!workerList.value.length || !selectedWorkerRows.value.length) return false
   return selectedWorkerCapacity.value >= runNeededConcurrent.value
@@ -1274,7 +1314,8 @@ const handleRun = async (row) => {
     workerList.value = filterOnlineWorkers(parseWorkerList(res)).map((w) => ({
       ...w,
       selected: true,
-      weight: Math.max(1, Number(w.max_concurrent) || 1),
+      // 默认等权；勿用 max_concurrent 当权重，否则会和「本机上限」数字撞车、难理解
+      weight: 1,
     }))
   } catch (e) {
     console.error(e)

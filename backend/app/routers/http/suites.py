@@ -337,7 +337,12 @@ async def run_single_case(
     env = await Environment.get_or_none(id=env_id, is_del=False)
     if not env:
         return ApiRunResult(record_id=0, status="failed", error="环境不存在")
-    
+    if env.project_id != case.project_id:
+        return ApiRunResult(
+            record_id=0,
+            status="failed",
+            error=f"执行环境「{env.name}」不属于当前用例所在项目，请重新选择环境",
+        )    
     api = await case.api
     if not api:
         return ApiRunResult(record_id=0, status="failed", error="关联接口不存在")
@@ -371,6 +376,7 @@ async def run_single_case(
     auth_vars, auth_err = await inject_auth_variables(case.project_id, env_id, all_variables)
     if auth_err:
         return ApiRunResult(record_id=0, status="failed", error=f"授权刷新失败: {auth_err}")
+    auth_injected_keys = list(auth_vars.keys()) if auth_vars else []
     if auth_vars:
         all_variables.update(auth_vars)
     stage_timings["auth_inject_ms"] = round((time.time() - _stage_start) * 1000, 2)
@@ -443,6 +449,45 @@ async def run_single_case(
         body_fields, body_fields_details = replace_body_fields_with_detail(body_fields, all_variables, resolver=var_resolver)
     except ToolExecutionError as exc:
         return ApiRunResult(record_id=0, status="failed", error=str(exc))
+
+    from app.modules.http.http_utils import (
+        collect_unresolved_placeholders,
+        format_unresolved_variables_error,
+    )
+    unresolved = []
+    unresolved.extend(collect_unresolved_placeholders(url, "url"))
+    unresolved.extend(collect_unresolved_placeholders(headers, "headers"))
+    unresolved.extend(collect_unresolved_placeholders(params, "params"))
+    unresolved.extend(collect_unresolved_placeholders(body, "body"))
+    unresolved.extend(collect_unresolved_placeholders(body_fields, "body_fields"))
+    if unresolved:
+        err = format_unresolved_variables_error(
+            unresolved,
+            env_name=env.name,
+            auth_injected_keys=auth_injected_keys,
+        )
+        return ApiRunResult(
+            record_id=0,
+            status="failed",
+            error=err,
+            request_detail={
+                "env_id": env_id,
+                "env_name": env.name,
+                "url": {"original": original_url, "final": url},
+                "headers": {"original": original_headers, "final": headers if isinstance(headers, dict) else {}},
+                "params": {"original": original_params, "final": params if isinstance(params, dict) else {}},
+                "body": {"original": original_body, "final": body},
+                "body_fields": {"original": original_body_fields, "final": body_fields},
+                "variables_used": var_resolver.get_resolved_snapshot(),
+                "replacements": url_details + headers_details + params_details + body_details + body_fields_details,
+                "auth_injected_keys": auth_injected_keys,
+                "unresolved_variables": unresolved,
+                "script_logs": script_logs,
+                "stage_timings": stage_timings,
+            },
+            case_id=case.id,
+            case_name=case.name,
+        )
     
     # 合并替换详情
     all_replacements = url_details + headers_details + params_details + body_details + body_fields_details
@@ -459,6 +504,7 @@ async def run_single_case(
         "body_fields": {"original": original_body_fields, "final": body_fields},
         "variables_used": var_resolver.get_resolved_snapshot(),
         "replacements": all_replacements,
+        "auth_injected_keys": auth_injected_keys,
         "script_logs": script_logs,   # 前置脚本日志（后置脚本日志将在执行后追加）
     }
     

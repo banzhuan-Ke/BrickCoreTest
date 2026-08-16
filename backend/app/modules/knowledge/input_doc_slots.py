@@ -19,6 +19,7 @@ MULTI_SELECT_ROLES = frozenset({"requirement"})
 ROLE_LABELS: dict[str, str] = {
     "iteration_plan": "迭代计划",
     "test_plan": "测试计划",
+    "test_scheme": "测试方案",
     "bug_export": "Bug 导出",
     "task_export": "任务导出",
     "dev_hours_export": "开发工时单",
@@ -37,7 +38,9 @@ DIGITECH_SLOT_PROFILES: dict[str, list[tuple[str, bool]]] = {
         ("case_export", False),
     ],
     "report": [
-        ("iteration_plan", True),
+        # 闭环：平台生成方案后回传 + Bug 导出即可出报告；迭代计划仍可用
+        ("test_scheme", False),
+        ("iteration_plan", False),
         ("bug_export", True),
         ("test_plan", False),
         ("case_export", False),

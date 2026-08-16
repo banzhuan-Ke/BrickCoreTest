@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.infra.redis_client import redis_cli
 from app.models.sys import SystemPlatformSettings
-from app.models.ui import UiCaseExecution
+from app.models.ui import UiCaseExecution, UiPlanExecution, UiSuiteExecution
 
 logger = logging.getLogger(__name__)
 
@@ -128,14 +128,16 @@ async def save_platform_settings(
     return _row_to_dict(row)
 
 
+async def _ui_record_should_hard_delete(*, permanent: bool = False) -> bool:
+    if permanent:
+        return True
+    mode = await get_ui_case_record_delete_mode()
+    return mode == DELETE_MODE_PHYSICAL
+
+
 async def delete_ui_case_execution(record: UiCaseExecution, *, permanent: bool = False) -> str:
     """删除用例运行记录，返回 soft_deleted 或 hard_deleted。"""
-    if permanent:
-        await record.delete()
-        return "hard_deleted"
-
-    mode = await get_ui_case_record_delete_mode()
-    if mode == DELETE_MODE_PHYSICAL:
+    if await _ui_record_should_hard_delete(permanent=permanent):
         await record.delete()
         return "hard_deleted"
 
@@ -147,6 +149,43 @@ async def delete_ui_case_execution(record: UiCaseExecution, *, permanent: bool =
 async def restore_ui_case_execution(record: UiCaseExecution) -> None:
     record.is_del = False
     await record.save()
+
+
+async def delete_ui_suite_execution(record: UiSuiteExecution, *, permanent: bool = False) -> str:
+    """删除套件运行记录并级联处理下属用例记录。套件/计划无回收站时 recycle_bin 等同逻辑删除。"""
+    suite_id = record.id
+    hard = await _ui_record_should_hard_delete(permanent=permanent)
+    if hard:
+        await UiCaseExecution.filter(suite_execution_id=suite_id).delete()
+        await record.delete()
+        return "hard_deleted"
+
+    await UiCaseExecution.filter(suite_execution_id=suite_id, is_del=False).update(is_del=True)
+    record.is_del = True
+    await record.save()
+    return "soft_deleted"
+
+
+async def delete_ui_plan_execution(record: UiPlanExecution, *, permanent: bool = False) -> str:
+    """删除计划运行记录并级联处理下属套件与用例记录。"""
+    plan_id = record.id
+    suite_ids = list(
+        await UiSuiteExecution.filter(plan_execution_id=plan_id).values_list("id", flat=True)
+    )
+    hard = await _ui_record_should_hard_delete(permanent=permanent)
+    if hard:
+        if suite_ids:
+            await UiCaseExecution.filter(suite_execution_id__in=suite_ids).delete()
+            await UiSuiteExecution.filter(id__in=suite_ids).delete()
+        await record.delete()
+        return "hard_deleted"
+
+    if suite_ids:
+        await UiCaseExecution.filter(suite_execution_id__in=suite_ids, is_del=False).update(is_del=True)
+        await UiSuiteExecution.filter(id__in=suite_ids, is_del=False).update(is_del=True)
+    record.is_del = True
+    await record.save()
+    return "soft_deleted"
 
 
 async def delete_app_case_execution(record, *, permanent: bool = False) -> str:

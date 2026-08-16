@@ -43,12 +43,64 @@ export function pickResultKey(result) {
   return `legacy:${result.locator || ''}`
 }
 
-/** 根据拾取元素类型推荐步骤关键字模板 */
-export function suggestPickStepTemplate(meta = {}) {
+/** 拾取结果是否更像可填控件（input / textarea / contenteditable） */
+export function isFillablePickMeta(meta = {}) {
   const tag = String(meta.tag || '').toLowerCase()
   const inputType = String(meta.inputType || '').toLowerCase()
+  const cls = String(meta.class || '').toLowerCase()
+  const role = String(meta.role || '').toLowerCase()
+  if (tag === 'textarea') return true
+  if (role === 'textbox') return true
+  if (cls.includes('el-input__inner') || cls.includes('el-textarea__inner')) return true
+  if (tag === 'input') {
+    return !['checkbox', 'radio', 'file', 'hidden', 'button', 'submit', 'reset', 'image'].includes(inputType)
+  }
+  if (inputType === 'text' || inputType === 'password' || inputType === 'number') return true
+  return false
+}
+
+/** 定位器是否停在常见输入组件外壳（fill 易失败） */
+export function isInputShellLocator(locator = '') {
+  const raw = String(locator || '').trim()
+  const core = raw.includes('||') ? raw.slice(raw.indexOf('||') + 2).trim() : raw
+  if (!core) return false
+  if (/input\.el-input__inner|textarea\.el-textarea__inner|(^|[\s>])input(\.|$|\s|\[)|(^|[\s>])textarea(\.|$|\s|\[)/i.test(core)) {
+    return false
+  }
+  return /(^|[\s>])div\.(el-input|el-textarea|ant-input-affix-wrapper)(\.[a-zA-Z0-9_-]+)*$/i.test(core)
+}
+
+/** 候选列表展示短标签（语义 / 结构） */
+export function formatPickCandidateLabel(candidate = '') {
+  const c = String(candidate || '')
+  if (c.startsWith('get_by_role=textbox') || c.startsWith('get_by_placeholder=')) {
+    return `语义 · ${c}`
+  }
+  if (c.includes('input.el-input__inner') || c.includes('textarea.el-textarea__inner')) {
+    return `可填 · ${c}`
+  }
+  if (isInputShellLocator(c)) {
+    return `外壳 · ${c}`
+  }
+  return c
+}
+
+/** 根据拾取元素类型推荐步骤关键字模板 */
+export function suggestPickStepTemplate(meta = {}, options = {}) {
+  // 仅以实际回填的 frame 选择器为准；勿用 frameUrl 误判（iframe 内 pageUrl/frameUrl 常同值且未必已生成 iframe|| 前缀）
+  const frame = String(options.frame || meta.frame || meta.pickedFrame || '').trim()
+  const hasFrame = !!frame
+  const tag = String(meta.tag || '').toLowerCase()
   const cls = String(meta.class || meta.role || '').toLowerCase()
-  if (tag === 'input' || tag === 'textarea' || inputType === 'text' || inputType === 'password') {
+
+  if (isFillablePickMeta(meta)) {
+    if (hasFrame) {
+      return {
+        keyword: 'iframe内元素输入',
+        method: 'frame_fill_value',
+        params: { frame: '', locator: '', value: '', index: 1 },
+      }
+    }
     return {
       keyword: '元素输入',
       method: 'fill_value',
@@ -105,10 +157,26 @@ export function applyWebLocatorToStep(steps, stepIndex, payload) {
   const frame = (payload.frame || split.frame || '').trim()
   const elementLocator = (payload.element_locator || split.locator || payload.locator || '').trim()
   const useFrame = isFrameStep(step) || !!frame
+  const combinedForDisambig = useFrame
+    ? `${frame ? frame + '||' : ''}${elementLocator}`
+    : (payload.locator || elementLocator || '')
+  // 定位已消歧时勿叠大 index（与后端 apply_index_from_meta 对齐）
+  const locatorDisambiguated = (() => {
+    const core = String(combinedForDisambig).split('||').pop() || ''
+    const low = core.toLowerCase()
+    if (/^#[A-Za-z_][\w:-]*$/.test(core.trim().split(/\s/)[0] || '')) return true
+    if (core.startsWith('[data-testid=')) return true
+    if (core.startsWith('get_by_placeholder=') || core.startsWith('get_by_label=')) return true
+    if (core.startsWith('get_by_role=') && core.includes(',')) return true
+    if (low.includes('nth-of-type(') || low.includes('nth-child(') || low.includes('>> nth=')) return true
+    if (/\[(?:name|placeholder|aria-label|title)\s*=/i.test(core)) return true
+    return false
+  })()
+  const resolvedIndex = locatorDisambiguated ? 1 : matchIndex
 
   const nextParams = {
     ...step.params,
-    index: matchIndex,
+    index: resolvedIndex,
   }
 
   if (useFrame) {
@@ -144,7 +212,9 @@ export function applyPickLocatorToSteps(steps, payload, options = {}) {
   const targetIndex = Number(options.stepIndex ?? payload.stepIndex ?? 0)
 
   if (mode === 'insert') {
-    const template = options.template || suggestPickStepTemplate(payload.meta || payload.element || {})
+    const template = options.template || suggestPickStepTemplate(payload.meta || payload.element || {}, {
+      frame: payload.frame || '',
+    })
     const blank = buildStepFromKeyword(template)
     const nameHint = (payload.meta?.accessibleName || payload.meta?.text || payload.element?.text || '').trim()
     if (nameHint) {

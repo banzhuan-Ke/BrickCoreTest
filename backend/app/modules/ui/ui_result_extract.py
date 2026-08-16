@@ -117,9 +117,101 @@ def extract_ui_case_failure_summary(result_data: Any) -> dict[str, Any]:
     }
 
 
+def _heal_retry_status(step: dict[str, Any]) -> str:
+    healed = step.get("locator_healed")
+    if isinstance(healed, dict):
+        raw = healed.get("retry_status") or step.get("heal_retry_status") or ""
+    else:
+        raw = step.get("heal_retry_status") or ""
+    return str(raw or "").strip().lower()
+
+
+def _act_retry_status(step: dict[str, Any]) -> str:
+    act = step.get("ai_act")
+    if isinstance(act, dict):
+        raw = act.get("retry_status") or ""
+    else:
+        raw = ""
+    return str(raw or "").strip().lower()
+
+
+def _is_successful_heal_recovery(step: dict[str, Any]) -> bool:
+    """步骤最终成功，且自愈真正救回（非校验跳过/重试失败）。"""
+    if not step.get("locator_healed") and not step.get("healed"):
+        return False
+    status = str(step.get("status") or "").lower()
+    if status in FAIL_STEP_STATUSES:
+        return False
+    retry = _heal_retry_status(step)
+    if retry in ("fail", "skipped"):
+        return False
+    return True
+
+
+def _is_successful_act_recovery(step: dict[str, Any]) -> bool:
+    if not (step.get("ai_act_used") or step.get("ai_act")):
+        return False
+    status = str(step.get("status") or "").lower()
+    if status in FAIL_STEP_STATUSES:
+        return False
+    if _act_retry_status(step) == "fail":
+        return False
+    return True
+
+
+def _recovery_entry_from_result_step(step: dict[str, Any], step_index: int) -> dict[str, Any]:
+    healed = step.get("locator_healed") if isinstance(step.get("locator_healed"), dict) else {}
+    act = step.get("ai_act") if isinstance(step.get("ai_act"), dict) else {}
+    kinds: list[str] = []
+    if _is_successful_heal_recovery(step):
+        kinds.append("heal")
+    if _is_successful_act_recovery(step):
+        kinds.append("act")
+    summary_parts: list[str] = []
+    if "heal" in kinds:
+        new_loc = healed.get("new") if isinstance(healed, dict) else ""
+        summary_parts.append(f"自愈救过 → {new_loc}" if new_loc else "自愈救过")
+    if "act" in kinds:
+        reason = (act.get("reason") or act.get("act_desc") or "") if isinstance(act, dict) else ""
+        summary_parts.append(f"AI Act 救过：{reason}" if reason else "AI Act 救过")
+    return {
+        "step_index": step_index,
+        "status": str(step.get("status") or "success"),
+        "keyword": _norm_text(step.get("keyword") or step.get("desc")),
+        "desc": _norm_text(step.get("desc")),
+        "method": _extract_step_method(step),
+        "step_id": _extract_step_id(step),
+        "kinds": kinds,
+        "heal": healed or None,
+        "ai_act": act or None,
+        "message": "；".join(summary_parts),
+    }
+
+
+def extract_step_recoveries(result_data: Any) -> list[dict[str, Any]]:
+    """从 result_data 提取「自愈 / AI Act 成功救回」的步骤提示。"""
+    rd = normalize_result_data(result_data)
+    steps = rd.get("steps") or []
+    recoveries: list[dict[str, Any]] = []
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        if not (_is_successful_heal_recovery(step) or _is_successful_act_recovery(step)):
+            continue
+        step_index = step.get("step_index")
+        if step_index is None:
+            step_index = idx
+        try:
+            step_index = int(step_index)
+        except (TypeError, ValueError):
+            step_index = idx
+        recoveries.append(_recovery_entry_from_result_step(step, step_index))
+    return recoveries
+
+
 def build_case_execution_hints(result_data: Any) -> dict[str, Any]:
     """
-    从用例 result_data 提取编辑页用的失败高亮信息（Web / App 共用结构）。
+    从用例 result_data 提取编辑页用的失败高亮与自愈/Act 救回信息（Web / App 共用结构）。
     """
     rd = normalize_result_data(result_data)
     summary = extract_ui_case_failure_summary(rd)
@@ -195,13 +287,16 @@ def build_case_execution_hints(result_data: Any) -> dict[str, Any]:
                     }
                 )
 
+    step_recoveries = extract_step_recoveries(rd)
     return {
         "has_failure": has_failure,
+        "has_recovery": bool(step_recoveries),
         "status": status,
         "error_msg": summary.get("error_hint") or "",
         "log_excerpt": summary.get("log_error_excerpt") or "",
         "log_tail": summary.get("log_tail") or "",
         "step_failures": step_failures,
+        "step_recoveries": step_recoveries,
     }
 
 
@@ -238,7 +333,7 @@ def _failure_entry_from_result_step(
     status: str,
     message: str,
 ) -> dict[str, Any]:
-    return {
+    entry = {
         "step_index": step_index,
         "status": status,
         "keyword": _norm_text(step.get("keyword") or step.get("desc")),
@@ -247,6 +342,10 @@ def _failure_entry_from_result_step(
         "step_id": _extract_step_id(step),
         "message": message,
     }
+    failure_code = _norm_text(step.get("failure_code"))
+    if failure_code:
+        entry["failure_code"] = failure_code
+    return entry
 
 
 def _fingerprint_match(fail: dict[str, Any], case_step: dict[str, Any]) -> bool:

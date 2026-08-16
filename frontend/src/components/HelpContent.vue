@@ -917,7 +917,7 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
         <ul>
           <li><strong>复制用例</strong>：编辑用例时点击「复制」快速创建相似用例</li>
           <li><strong>变量使用</strong>：用 <code v-pre>${{变量名}}</code> 实现数据驱动测试</li>
-          <li><strong>iframe 处理</strong>：先切换 frame 再操作内部元素</li>
+          <li><strong>Web 用例编写</strong>：用例编辑页折叠「Web 用例编写指南」含定位器、等待、iframe、上传、断言等章节；iframe 用 <code>iframe||元素</code>；上传用「input文件上传」绑测试文件</li>
           <li><strong>接口调试</strong>：在接口管理或用例中「调试/send」通过后再加入套件/计划（单次调试默认超时 30 秒）</li>
           <li><strong>失败定位</strong>：执行结果中查看请求详情、响应 Body、断言与重试历史</li>
           <li><strong>性能关注</strong>：看「接口总耗时」判断接口快慢，勿与「执行总耗时」混淆</li>
@@ -931,7 +931,10 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
         <h3>❓ 常见问题</h3>
         
         <h4>Q1: 元素定位失败怎么办？</h4>
-        <p>A: 检查元素是否在 iframe 中，或使用了动态 id。建议使用 CSS 类名或 data-testid 属性。</p>
+        <p>A: 若在 iframe 内，定位器写成 <code>iframe[name=…]||选择器</code>（或多层 <code>||</code>）。避免动态 id，优先 data-testid / 稳定属性；可用交互调试拾取。iframe 内上传仍用「input文件上传」，定位器带上 iframe 前缀即可。</p>
+
+        <h4>Q1b: ElementUI 弹窗在 iframe 里——能点不能输 / 上传失败？</h4>
+        <p>A: 常见是定位点到了 <code>div.el-input</code> 外壳：点击可以，<code>fill</code> 必须落到 <code>input.el-input__inner</code>。新版 Runner 拾取会对普通输入下钻，并优先给出 <code>get_by_role=textbox</code> / placeholder 候选；存量外壳也可由执行侧 fill 自动下钻。多 iframe 时用 <code>iframe[src*="/业务路径"]</code> 区分；上传用 <code>iframe…||input[type=file]</code>，注意 <code>src</code> 引号成对（多一个引号会 CSS 解析失败）。弹窗按钮被遮罩挡住时可开「强制点击」。用例编辑页「编写指南 → 十四、ElementUI 多 iframe 弹窗」有完整示例。</p>
 
         <h4>Q2: 用例执行超时？</h4>
         <p>A: 网络较慢时，在步骤前添加「等待」操作，或增加隐式等待时间。</p>
@@ -977,7 +980,7 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
 
       <div class="help-footer">
         <p>📧 遇到问题？请联系系统管理员或查看接口文档获取更多技术支持。</p>
-        <p style="color: #999; font-size: 12px;">版本：v1.5.0 | 更新日期：2026-07-31</p>
+        <p style="color: #999; font-size: 12px;">版本：v1.6.0 | 更新日期：2026-08-16</p>
       </div>
     </el-scrollbar>
   </div>

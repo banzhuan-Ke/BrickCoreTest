@@ -43,19 +43,22 @@ async def resolve_mcp_auth(headers: dict[str, str]) -> McpAuthContext:
         return McpAuthContext(username="mcp-api", is_api_key=True, is_superuser=True)
 
     data = verify_token(token)
-    user = await User.get_or_none(id=data.get("id"), is_del=False).prefetch_related("roles")
-    if not user:
+    rows = await User.filter(id=data.get("id"), is_del=False).values(
+        "id", "username", "is_active", "is_superuser"
+    )
+    if not rows:
         raise ValueError("用户不存在或已被删除")
-    if not user.is_active:
+    row = rows[0]
+    if not row.get("is_active", True):
         raise ValueError("用户已被停用")
 
     from app.core.platform.permissions import get_user_permissions
 
-    perms = set(await get_user_permissions(user))
+    perms = set(await get_user_permissions(row["id"]))
     return McpAuthContext(
-        username=user.username,
-        user_id=user.id,
-        is_superuser=bool(user.is_superuser),
+        username=row.get("username") or "",
+        user_id=row["id"],
+        is_superuser=bool(row.get("is_superuser")),
         permissions=perms,
     )
 

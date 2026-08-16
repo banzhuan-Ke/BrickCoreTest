@@ -11,10 +11,29 @@ except ImportError:  # pragma: no cover - 运行环境应安装 Faker
     Faker = None  # type: ignore
 
 from app.modules.data_tools.errors import ToolExecutionError
-from app.modules.data_tools.inline_tools import DT_CACHE_KEY, DT_EXPR_PREFIX, execute_inline_tool
+from app.modules.data_tools.inline_tools import (
+    DT_CACHE_KEY,
+    DT_EXPR_PREFIX,
+    execute_inline_tool,
+    should_cache_inline_expression,
+)
 
 _VAR_PATTERN = re.compile(r"\$\{\{([^}]+)\}\}|\$\{([^}]+)\}|\{\{([^}]+)\}\}")
 _FAKER_EXPR_PATTERN = re.compile(r"^faker\.(\w+)\((.*)\)$", re.IGNORECASE)
+
+
+def _placeholder_forms(key: str) -> set[str]:
+    k = (key or "").strip()
+    if not k:
+        return set()
+    return {f"${{{{{k}}}}}", f"${{{k}}}", f"{{{{{k}}}}}"}
+
+
+def is_self_referential_value(key: str, value: Any) -> bool:
+    """环境变量写成 cookie=${{cookie}} 这类自引用。"""
+    if not isinstance(value, str):
+        return False
+    return value.strip() in _placeholder_forms(key)
 
 
 class VariableResolver:
@@ -33,32 +52,68 @@ class VariableResolver:
         "today",
     )
 
+    _FRESH_BUILTIN_KEYS = frozenset({"timestamp", "now_time", "today"})
+
     def __init__(self, global_vars: Optional[Dict[str, Any]] = None):
         from app.core.shared.global_vars_validate import flatten_global_vars
 
-        self._global_vars = flatten_global_vars(global_vars)
+        raw = dict(global_vars or {})
+        # 套件级 dt 缓存必须保留同一 dict 引用，不能被 flatten 成字符串或丢弃
+        shared_dt_cache = raw.get(DT_CACHE_KEY)
+        self._global_vars = flatten_global_vars(raw)
         self._cache: Dict[str, Any] = {}
+        self._resolving: set[str] = set()
         self._faker = Faker("zh_CN") if Faker else None
-        if DT_CACHE_KEY not in self._global_vars or not isinstance(self._global_vars.get(DT_CACHE_KEY), dict):
+        if isinstance(shared_dt_cache, dict):
+            self._global_vars[DT_CACHE_KEY] = shared_dt_cache
+        elif DT_CACHE_KEY not in self._global_vars or not isinstance(self._global_vars.get(DT_CACHE_KEY), dict):
             self._global_vars[DT_CACHE_KEY] = {}
+
+    @staticmethod
+    def _dt_tool_id(expr: str) -> str:
+        raw = (expr or "").strip()
+        if raw.startswith(DT_EXPR_PREFIX):
+            raw = raw[len(DT_EXPR_PREFIX):]
+        return raw.split("|", 1)[0].strip()
 
     def get(self, key: str) -> Any:
         if key in self._cache:
             return self._cache[key]
 
+        # 循环引用（如 cookie=${{cookie}}）时直接断开，避免 RecursionError
+        if key in self._resolving:
+            return None
+
         if key.startswith(DT_EXPR_PREFIX):
-            value = self._resolve_inline_tool(key)
-            self._cache[key] = value
+            self._resolving.add(key)
+            try:
+                value = self._resolve_inline_tool(key)
+            finally:
+                self._resolving.discard(key)
+            # 当前时间类 / 留空基准的 date_format·date_add：每次解析取新值
+            if should_cache_inline_expression(key):
+                self._cache[key] = value
             return value
 
         if key in self._global_vars:
-            value = self._resolve_raw_value(self._global_vars[key])
+            self._resolving.add(key)
+            try:
+                raw = self._global_vars[key]
+                if is_self_referential_value(key, raw):
+                    value = None
+                else:
+                    value = self._resolve_raw_value(raw)
+                    if is_self_referential_value(key, value):
+                        value = None
+            finally:
+                self._resolving.discard(key)
             self._cache[key] = value
             return value
 
         value = self._generate_dynamic(key)
         if value is not None:
-            self._cache[key] = value
+            if key not in self._FRESH_BUILTIN_KEYS:
+                self._cache[key] = value
             return value
 
         return None
@@ -101,8 +156,22 @@ class VariableResolver:
             return None
         if key in self._cache:
             return self._cache[key]
+        if key in self._resolving:
+            return None
         if key in self._global_vars:
-            return self._resolve_raw_value(self._global_vars[key])
+            self._resolving.add(key)
+            try:
+                raw = self._global_vars[key]
+                if is_self_referential_value(key, raw):
+                    value = None
+                else:
+                    value = self._resolve_raw_value(raw)
+                    if is_self_referential_value(key, value):
+                        value = None
+            finally:
+                self._resolving.discard(key)
+            self._cache[key] = value
+            return value
         return self._generate_dynamic(key)
 
     def _resolve_inline_tool(self, expr: str) -> str:

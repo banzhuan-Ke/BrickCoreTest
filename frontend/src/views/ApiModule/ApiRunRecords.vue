@@ -188,6 +188,12 @@
         />
       </div>
     </el-dialog>
+
+    <SendReportDialog
+      v-model="sendDialogVisible"
+      :project-id="projectId"
+      :send-fn="doSendReport"
+    />
   </div>
 </template>
 
@@ -198,6 +204,7 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '@/api/index'
 import TableColumnPicker from '@/components/TableColumnPicker.vue'
+import SendReportDialog from '@/components/SendReportDialog.vue'
 import { useTableColumns } from '@/composables/useTableColumns.js'
 import { makeTableRowIndexRefs } from '@/utils/tableIndex'
 import ApiRunDetail from './components/ApiRunDetail.vue'
@@ -236,6 +243,23 @@ const rerunLoadingId = ref(null)
 const detailDialogVisible = ref(false)
 const currentRecordId = ref(null)
 const currentRecordType = ref('suite')
+
+const sendDialogVisible = ref(false)
+const sendTargetRow = ref(null)
+
+const doSendReport = async (configIds) => {
+  const row = sendTargetRow.value
+  if (!row) throw new Error('未选择记录')
+  if (row.record_type === 'plan') {
+    return await http.apiModuleApi.sendPlanReport(row.id, { config_ids: configIds })
+  }
+  return await http.apiModuleApi.sendSuiteReport(row.id, { config_ids: configIds })
+}
+
+const sendReport = (row) => {
+  sendTargetRow.value = row
+  sendDialogVisible.value = true
+}
 
 const formatDate = (date) => {
   if (!date) return '-'
@@ -371,25 +395,6 @@ const exportReport = async (row) => {
   } catch (error) {
     console.error('导出报告失败:', error)
     ElMessage.error(error?.response?.data?.detail || '导出报告失败')
-  }
-}
-
-const sendReport = async (row) => {
-  try {
-    if (row.record_type === 'plan') {
-      const res = await http.apiModuleApi.sendPlanReport(row.id)
-      if (res.status === 200) {
-        ElMessage.success(res.data.detail || '报告邮件已发送')
-      }
-    } else {
-      const res = await http.apiModuleApi.sendSuiteReport(row.id)
-      if (res.status === 200) {
-        ElMessage.success(res.data.detail || '报告邮件已发送')
-      }
-    }
-  } catch (error) {
-    console.error('发送报告失败:', error)
-    ElMessage.error(error?.response?.data?.detail || '发送报告失败')
   }
 }
 

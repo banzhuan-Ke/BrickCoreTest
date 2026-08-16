@@ -86,7 +86,7 @@ class RunnerVersionResponse(BaseModel):
     middleware_isolation: bool = True
     runner_notices: Optional[dict[str, Any]] = None
     community_edition: bool = False
-    platform_version: str = "1.5.0"
+    platform_version: str = "1.6.0"
     perf_package_filename: str = "BrickCorePerf.zip"
     perf_package_available: bool = False
     perf_package_size_bytes: int = 0

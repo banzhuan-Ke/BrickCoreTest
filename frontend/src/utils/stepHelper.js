@@ -223,14 +223,26 @@ export function formatStepParamValue(value) {
  * 从关键字面板数据构建规范步骤对象
  */
 export function buildStepFromKeyword(rawData) {
+  // 容错探测类步骤默认短超时，避免「不存在还干等 30 秒」
+  const shortProbeMethods = new Set([
+    'click_if_exists',
+    'click_if_visible',
+    'fill_if_exists',
+    'fill_if_visible',
+  ])
+  const defaultTimeout = shortProbeMethods.has(rawData.method) ? 5000 : 30000
+  const params = rawData.params ? JSON.parse(JSON.stringify(rawData.params)) : {}
+  if (shortProbeMethods.has(rawData.method) && (params.timeout == null || params.timeout === '')) {
+    params.timeout = 5000
+  }
   const newStep = {
     id: generateStepId(),
     keyword: rawData.keyword || rawData.name || '未知操作',
     desc: rawData.name || rawData.keyword || '未知操作',
     method: rawData.method || '',
-    params: rawData.params ? JSON.parse(JSON.stringify(rawData.params)) : {},
+    params,
     children: [],
-    config: { timeout: 30000, retry: false, pre_wait_ms: 0 },
+    config: { timeout: defaultTimeout, retry: false, pre_wait_ms: 0, timeout_explicit: false },
   }
   if (rawData.method === 'condition_branch' || rawData.is_container) {
     newStep.is_container = true
@@ -523,7 +535,7 @@ export function validateStep(step) {
     errors.push('步骤名称不能为空')
   }
   
-  // 根据方法类型验证必填参数
+  // 根据方法类型验证必填参数（smart_* / KW-1b 须与 backend UI_REQUIRED_PARAMS 同步）
   const requiredParams = {
     open_url: ['url'],
     click_ele: ['locator'],
@@ -532,14 +544,149 @@ export function validateStep(step) {
     kw_assert_text_contains: ['text'],
     kw_assert_element_text: ['locator', 'text'],
     kw_assert_element_text_contains: ['locator', 'text'],
+    smart_click: ['target', 'intent'],
+    smart_fill: ['target', 'intent', 'value'],
+    wait_for_clickable: ['locator'],
+    click_if_exists: ['locator'],
+    click_if_visible: ['locator'],
+    fill_if_exists: ['locator', 'value'],
+    fill_if_visible: ['locator', 'value'],
   }
   
   const required = requiredParams[step.method] || []
   for (const param of required) {
-    if (!step.params?.[param]) {
+    if (!step.params?.[param] && step.params?.[param] !== 0) {
       errors.push(`参数 "${param}" 不能为空`)
     }
   }
+
+  if (step.method === 'smart_click' || step.method === 'smart_fill') {
+    errors.push(...validateSmartStepParams(step.method, step.params || {}))
+  }
   
   return errors
+}
+
+const SMART_EXPECTED_AFTER_TYPES = new Set([
+  'text_visible',
+  'locator_visible',
+  'locator_hidden',
+  'url_contains',
+  'value_equals',
+])
+
+const SMART_DESTRUCTIVE_WORDS = [
+  // 须与 backend ui_keywords.validate_smart_step_params、runner infer_risk_level 同步
+  // 不含「确定/确认」——普通确认弹层不强制 region+后置
+  '删除', '移除', '提交', '发布', '支付',
+  'delete', 'remove', 'submit', 'publish', 'pay',
+]
+
+/** 与 Backend validate_smart_step_params 对齐的前端校验 */
+export function validateSmartStepParams(method, params = {}) {
+  const errors = []
+  if (method !== 'smart_click' && method !== 'smart_fill') return errors
+  const ea = params.expected_after
+  if (ea != null && typeof ea !== 'object') {
+    errors.push('expected_after 必须是对象')
+  } else if (ea && typeof ea === 'object') {
+    const eaType = String(ea.type || '').trim()
+    if (eaType && !SMART_EXPECTED_AFTER_TYPES.has(eaType)) {
+      errors.push(`expected_after.type 不支持: ${eaType}`)
+    }
+    if (eaType === 'locator_visible' || eaType === 'locator_hidden') {
+      if (!String(ea.locator || '').trim()) {
+        errors.push(`expected_after.${eaType} 必须填写 locator`)
+      }
+    }
+    if (eaType === 'text_visible' && !String(ea.text || '').trim()) {
+      errors.push('expected_after.text_visible 必须填写 text')
+    }
+    if (eaType === 'url_contains' && !String(ea.text || ea.url || '').trim()) {
+      errors.push('expected_after.url_contains 必须填写 URL 片段')
+    }
+  }
+  const target = String(params.target || '')
+  const risk = String(params.risk_level || '').trim().toLowerCase()
+  const dangerous =
+    risk === 'submit'
+    || risk === 'destructive'
+    || SMART_DESTRUCTIVE_WORDS.some((w) => target.includes(w))
+  if (dangerous) {
+    if (!String(params.region || '').trim()) {
+      errors.push('危险动作（删除/提交等）必须填写 region')
+    }
+    if (!ea || typeof ea !== 'object' || !String(ea.type || '').trim()) {
+      errors.push('危险动作必须填写 expected_after')
+    }
+  }
+  return errors
+}
+
+/** 普通点击/输入是否可转为智能步骤 */
+export function canConvertToSmart(step) {
+  const m = step?.method
+  return m === 'click_ele' || m === 'click_by_text' || m === 'fill_value'
+}
+
+/**
+ * 普通点击/输入 → smart_click / smart_fill
+ * 保留 locator、value、force、meta.candidates、desc
+ */
+export function convertStepToSmart(step) {
+  if (!canConvertToSmart(step)) return null
+  const method = step.method
+  const params = { ...(step.params || {}) }
+  const meta = step.meta && typeof step.meta === 'object' ? { ...step.meta } : undefined
+  const desc = step.desc || ''
+
+  if (method === 'fill_value') {
+    return {
+      ...step,
+      method: 'smart_fill',
+      keyword: '智能输入',
+      params: {
+        target: String(params.target || '').trim() || '',
+        intent: String(params.intent || desc || '填充字段').trim(),
+        value: params.value ?? '',
+        region: params.region || '',
+        locator: params.locator || '',
+        target_role: params.target_role || 'textbox',
+        expected_after: (params.expected_after && typeof params.expected_after === 'object')
+          ? { ...params.expected_after }
+          : {},
+        min_score: Number(params.min_score) || 70,
+        min_margin: Number(params.min_margin) || 15,
+        allow_ai: false,
+      },
+      ...(meta ? { meta } : {}),
+    }
+  }
+
+  const text = String(params.text || '').trim()
+  const target = String(params.target || text).trim()
+  let locator = String(params.locator || '').trim()
+  if (!locator && text) {
+    locator = params.exact ? `get_by_text=${text}` : `get_by_text=${text}`
+  }
+  return {
+    ...step,
+    method: 'smart_click',
+    keyword: '智能点击',
+    params: {
+      target,
+      intent: String(params.intent || desc || '点击目标').trim(),
+      region: params.region || '',
+      locator,
+      target_role: params.target_role || 'button',
+      expected_after: (params.expected_after && typeof params.expected_after === 'object')
+        ? { ...params.expected_after }
+        : {},
+      min_score: Number(params.min_score) || 70,
+      min_margin: Number(params.min_margin) || 15,
+      allow_ai: false,
+      force: !!params.force,
+    },
+    ...(meta ? { meta } : {}),
+  }
 }

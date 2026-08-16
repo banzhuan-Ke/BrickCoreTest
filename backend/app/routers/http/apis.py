@@ -966,10 +966,10 @@ async def debug_api(item: ApiDebugRequest):
     )
     from app.core.case.variable_resolver import VariableResolver
     from app.core.shared.header_merge import merge_request_headers
-    from app.models.sys import Environment, Project
+    from app.models.sys import Environment
     
     try:
-        # 获取变量：project_global_vars < env_vars < passed variables
+        # 获取变量：project < env < df < extra < Token 授权
         variables = dict(item.variables or {})
         env = None
         project_id = item.project_id
@@ -992,17 +992,17 @@ async def debug_api(item: ApiDebugRequest):
             env = await Environment.get_or_none(id=item.env_id, is_del=False)
             if env:
                 project_id = project_id or env.project_id
-                env_vars = env.global_vars or {}
-                variables = {**env_vars, **variables}
 
-        if project_id:
-            project = await Project.get_or_none(id=project_id, is_del=False)
-            if project and project.global_vars:
-                variables = {**project.global_vars, **variables}
-
-        if project_id and item.env_id:
-            from app.modules.data_tools.tag_service import merge_execution_variables
-            variables = await merge_execution_variables(project_id, item.env_id, variables)
+        from app.modules.http.api_auth_service import prepare_api_runtime_variables
+        from app.modules.http.http_utils import (
+            collect_unresolved_placeholders,
+            format_unresolved_variables_error,
+        )
+        variables, auth_err, auth_injected_keys = await prepare_api_runtime_variables(
+            project_id, item.env_id, variables, inject_auth=True
+        )
+        if auth_err:
+            raise HTTPException(status_code=400, detail=f"授权刷新失败: {auth_err}")
 
         var_resolver = VariableResolver(variables)
 
@@ -1057,7 +1057,7 @@ async def debug_api(item: ApiDebugRequest):
             )
             headers[key] = header_value
             headers_details.extend(details)
-        
+
         # 变量替换请求体
         original_body = item.body
         body, body_details = replace_variables_with_detail(original_body, variables, "body", resolver=var_resolver)
@@ -1068,6 +1068,22 @@ async def debug_api(item: ApiDebugRequest):
         body_fields, body_fields_details = replace_body_fields_with_detail(
             original_body_fields, variables, resolver=var_resolver
         )
+
+        unresolved = []
+        unresolved.extend(collect_unresolved_placeholders(url, "url"))
+        unresolved.extend(collect_unresolved_placeholders(headers, "headers"))
+        unresolved.extend(collect_unresolved_placeholders(params, "params"))
+        unresolved.extend(collect_unresolved_placeholders(body, "body"))
+        unresolved.extend(collect_unresolved_placeholders(body_fields, "body_fields"))
+        if unresolved:
+            raise HTTPException(
+                status_code=400,
+                detail=format_unresolved_variables_error(
+                    unresolved,
+                    env_name=(env.name if env else ""),
+                    auth_injected_keys=auth_injected_keys,
+                ),
+            )
         
         # 合并所有替换详情
         all_replacements = url_details + headers_details + params_details + body_details + body_fields_details
@@ -1092,7 +1108,8 @@ async def debug_api(item: ApiDebugRequest):
             },
             "body_fields": {"original": original_body_fields, "final": body_fields},
             "variables_used": var_resolver.get_resolved_snapshot(),
-            "replacements": all_replacements
+            "replacements": all_replacements,
+            "auth_injected_keys": auth_injected_keys,
         }
 
         resolved_request = {

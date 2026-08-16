@@ -77,6 +77,8 @@ import { httpAuthConfigApi } from '@/api/modules/httpAuth'
 import { BUILTIN_VAR_HINTS, isSecretKey, varsObjectToList } from '@/utils/globalVars.js'
 import { insertVarRef, snapshotInsertTarget } from '@/utils/varInsert.js'
 import EnvVarQuickEdit from '@/components/EnvVarQuickEdit.vue'
+// 变量源约定与 ToolInsertButton 一致：项目/环境/授权/内置/extra；
+// 扁平分组构建见 @/utils/insertableVars.js（插入工具引用变量已复用）。
 
 const props = defineProps({
   envId: { type: Number, default: null },

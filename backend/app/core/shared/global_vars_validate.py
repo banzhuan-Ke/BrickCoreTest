@@ -5,13 +5,23 @@ import re
 from typing import Any, Dict
 
 from app.core.shared.start_url import validate_default_start_url
+from app.core.shared.ui_auth_inject import (
+    UI_AUTH_INJECT_KEYS,
+    normalize_ui_auth_inject_value,
+)
+from app.core.shared.ui_env_exec_strategy import (
+    UI_EXEC_STRATEGY_KEYS,
+    normalize_ui_exec_strategy_value,
+)
 
 # 项目 global_vars 中的系统配置键（非用例变量，执行时跳过）
 RESERVED_PROJECT_GLOBAL_VAR_KEYS = frozenset({"ai_settings", "zentao_export"})
 
 # 环境 global_vars 中的 UI 元数据键（非用例变量，执行时跳过）
-RESERVED_ENV_GLOBAL_VAR_KEYS = frozenset({"__default_start_url"})
-
+ENV_DEFAULT_START_URL_KEY = "__default_start_url"
+RESERVED_ENV_GLOBAL_VAR_KEYS = (
+    frozenset({ENV_DEFAULT_START_URL_KEY}) | UI_EXEC_STRATEGY_KEYS | UI_AUTH_INJECT_KEYS
+)
 _SECRET_KEY_PATTERN = re.compile(
     r"password|passwd|secret|token|api[_-]?key|authorization|credential|private",
     re.IGNORECASE,
@@ -80,12 +90,22 @@ def normalize_global_vars(raw: Any) -> Dict[str, Any]:
             raise ValueError("变量名不能为空")
         if k in out:
             raise ValueError(f"变量名重复：{k}")
-        if k in RESERVED_ENV_GLOBAL_VAR_KEYS:
+        if k == ENV_DEFAULT_START_URL_KEY:
             url = validate_default_start_url(
                 extract_var_value(value) if isinstance(value, dict) and "value" in value else (value or "")
             )
             if url:
                 out[k] = url
+            continue
+        if k in UI_EXEC_STRATEGY_KEYS:
+            normalized = normalize_ui_exec_strategy_value(k, value)
+            if normalized is not None:
+                out[k] = normalized
+            continue
+        if k in UI_AUTH_INJECT_KEYS:
+            normalized = normalize_ui_auth_inject_value(k, value)
+            if normalized is not None:
+                out[k] = normalized
             continue
         if isinstance(value, dict) and "value" not in value:
             raise ValueError(f"变量「{k}」的值格式无效，需包含 value 字段或使用字符串")

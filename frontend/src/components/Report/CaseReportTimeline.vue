@@ -155,6 +155,15 @@
                   <el-tag size="small" :type="getStepStatusType(step.status)">
                     {{ getStepStatusText(step.status) }}
                   </el-tag>
+                  <el-tag
+                    v-if="step.failure_code"
+                    size="small"
+                    :type="failureCodeTagType(step.failure_code)"
+                    effect="plain"
+                    class="failure-code-tag"
+                  >
+                    {{ formatFailureCode(step.failure_code) }}
+                  </el-tag>
                   <el-tag v-if="isAppProfile && step.locator_type" size="small" :type="locatorTypeTag(step.locator_type)" effect="plain">
                     {{ locatorTypeLabel(step.locator_type) }}
                   </el-tag>
@@ -214,14 +223,64 @@
                     type="danger"
                     effect="plain"
                   >重试仍失败</el-tag>
+                  <el-tag
+                    v-else-if="step.heal_retry_status === 'skipped'"
+                    size="small"
+                    type="info"
+                    effect="plain"
+                  >校验未通过</el-tag>
+                  <span
+                    v-if="step.locator_healed.validate_reason"
+                    class="heal-act-desc"
+                  >{{ step.locator_healed.validate_reason }}</span>
                   <el-button
-                    v-if="caseIdForWriteback"
+                    v-if="caseIdForWriteback && step.heal_retry_status !== 'skipped'"
                     size="small"
                     type="primary"
                     link
                     :loading="applyingStepIndex === index"
                     @click="applyHealedToCase(step, index)"
                   >写回用例</el-button>
+                </div>
+                <div v-if="step.smart_action || step.smart_action_used" class="step-smart-info">
+                  <div class="step-smart-head">
+                    <el-tag size="small" type="primary">智能消歧</el-tag>
+                    <span v-if="step.smart_action?.selected_locator" class="smart-selected">
+                      选中
+                      <code class="heal-locator">{{ step.smart_action.selected_locator }}</code>
+                      <template v-if="step.smart_action.selected_score != null">
+                        （{{ step.smart_action.selected_score }} 分
+                        <template v-if="step.smart_action.score_margin != null">
+                          · 分差 {{ step.smart_action.score_margin }}
+                        </template>）
+                      </template>
+                    </span>
+                    <el-tag
+                      v-if="step.smart_action?.error_code"
+                      size="small"
+                      type="danger"
+                      effect="plain"
+                    >{{ step.smart_action.error_code }}</el-tag>
+                    <el-tag
+                      v-if="step.smart_action?.postcondition?.status"
+                      size="small"
+                      :type="step.smart_action.postcondition.status === 'passed' ? 'success' : (step.smart_action.postcondition.status === 'skipped' ? 'info' : 'danger')"
+                      effect="plain"
+                    >后置 {{ step.smart_action.postcondition.status }}</el-tag>
+                  </div>
+                  <ul
+                    v-if="Array.isArray(step.smart_action?.candidates) && step.smart_action.candidates.length"
+                    class="smart-cand-list"
+                  >
+                    <li
+                      v-for="(c, ci) in step.smart_action.candidates.slice(0, 5)"
+                      :key="`${index}-cand-${ci}`"
+                    >
+                      <span class="smart-cand-score">{{ c.score ?? '—' }}</span>
+                      <code class="heal-locator">{{ c.locator }}</code>
+                      <span v-if="c.source" class="smart-cand-src">{{ c.source }}</span>
+                    </li>
+                  </ul>
                 </div>
                 <div
                   v-if="isFailedStep(step) && getFailureContextScreenshots(index).length"
@@ -249,10 +308,23 @@
                   </div>
                 </div>
                 <div v-if="step.ai_act_used && step.ai_act" class="step-heal-info">
-                  <el-tag size="small" type="success">AI Act 兜底</el-tag>
-                  <span class="heal-act-desc">{{ step.ai_act.act_desc || step.ai_act.reason || '已重新规划并执行' }}</span>
+                  <el-tag
+                    size="small"
+                    :type="step.ai_act.retry_status === 'fail' ? 'danger' : 'success'"
+                  >AI Act 兜底</el-tag>
+                  <span class="heal-act-desc">{{
+                    step.ai_act.retry_status === 'fail'
+                      ? (step.ai_act.error || step.ai_act.reason || '兜底执行失败')
+                      : (step.ai_act.act_desc || step.ai_act.reason || '已重新规划并执行')
+                  }}</span>
+                  <el-tag
+                    v-if="step.ai_act.retry_status === 'fail'"
+                    size="small"
+                    type="danger"
+                    effect="plain"
+                  >失败</el-tag>
                   <el-button
-                    v-if="caseIdForWriteback && step.ai_act.act_params && Object.keys(step.ai_act.act_params).length"
+                    v-if="caseIdForWriteback && step.ai_act.retry_status !== 'fail' && step.ai_act.act_params && Object.keys(step.ai_act.act_params).length"
                     size="small"
                     type="primary"
                     link
@@ -421,6 +493,7 @@ import ExecutionLogScroller from '@/components/Report/ExecutionLogScroller.vue'
 import { fileApi } from '@/api/modules/sys'
 import { aiGenerateApi } from '@/api/modules/ai.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { formatFailureCode, failureCodeTagType } from '@/utils/uiFailureCode'
 
 const props = defineProps({
   runInfo: {
@@ -836,12 +909,13 @@ function getFailureContextScreenshots(failIndex) {
   return shots
 }
 
-// 判断是否有数据
+// 判断是否有数据（含仅有错误说明的超时收尾结果）
 const hasData = computed(() => {
   const info = processedRunInfo.value
-  return info && (info.id || info.case_id || info.case_name || info.name || 
-         (info.steps && info.steps.length > 0) || 
-         (info.log_data && info.log_data.length > 0))
+  return info && (info.id || info.case_id || info.case_name || info.name ||
+         (info.steps && info.steps.length > 0) ||
+         (info.log_data && info.log_data.length > 0) ||
+         info.error_msg || info.error || info.message)
 })
 
 // 步骤数据（使用处理后的数据）
@@ -1106,6 +1180,48 @@ const handleScreenshotChange = (index) => {
             &.new { color: var(--el-color-success); }
           }
           .heal-arrow { color: var(--el-text-color-secondary); }
+        }
+
+        .step-smart-info {
+          margin-bottom: 8px;
+          padding: 8px 10px;
+          background: var(--el-color-primary-light-9);
+          border-radius: 6px;
+          font-size: 12px;
+
+          .step-smart-head {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+          }
+          .smart-selected {
+            color: var(--el-text-color-regular);
+          }
+          .smart-cand-list {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--el-text-color-secondary);
+            li {
+              margin: 2px 0;
+              line-height: 1.45;
+            }
+          }
+          .smart-cand-score {
+            display: inline-block;
+            min-width: 28px;
+            font-weight: 600;
+            color: var(--el-color-primary);
+          }
+          .smart-cand-src {
+            margin-left: 6px;
+            opacity: 0.75;
+          }
+          .heal-locator {
+            font-family: monospace;
+            word-break: break-all;
+          }
         }
         
         .step-webview-meta {

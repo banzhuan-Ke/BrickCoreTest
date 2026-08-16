@@ -9,6 +9,75 @@ import httpx
 from app.core.case.variable_resolver import VariableResolver
 
 
+_UNRESOLVED_VAR_RE = re.compile(r"\$\{\{([^}]+)\}\}|\$\{([^}]+)\}|\{\{([^}]+)\}\}")
+
+
+def collect_unresolved_placeholders(data: Any, parent_key: str = "") -> List[Dict[str, str]]:
+    """收集替换后仍残留的 ${{var}} / ${var} / {{var}} 占位符。"""
+    found: List[Dict[str, str]] = []
+
+    def _walk(node: Any, path: str) -> None:
+        if isinstance(node, str):
+            for match in _UNRESOLVED_VAR_RE.finditer(node):
+                name = (match.group(1) or match.group(2) or match.group(3) or "").strip()
+                found.append({
+                    "path": path or "(root)",
+                    "placeholder": match.group(0),
+                    "name": name,
+                })
+            return
+        if isinstance(node, dict):
+            for k, v in node.items():
+                child = f"{path}.{k}" if path else str(k)
+                _walk(v, child)
+            return
+        if isinstance(node, list):
+            for i, item in enumerate(node):
+                child = f"{path}[{i}]" if path else f"[{i}]"
+                _walk(item, child)
+
+    _walk(data, parent_key)
+    return found
+
+
+def format_unresolved_variables_error(
+    unresolved: List[Dict[str, str]],
+    *,
+    env_name: str = "",
+    auth_injected_keys: Optional[List[str]] = None,
+) -> str:
+    """生成未解析变量的友好错误文案。"""
+    if not unresolved:
+        return ""
+    names = []
+    for item in unresolved:
+        n = item.get("name") or ""
+        if n and n not in names:
+            names.append(n)
+    samples = []
+    for item in unresolved[:5]:
+        samples.append(f"{item.get('path')}: {item.get('placeholder')}")
+    name_text = "、".join(names[:8]) if names else "未知变量"
+    lines = [
+        f"存在未解析变量（{name_text}），已中止发送请求，避免带占位符请求下游。",
+        "位置：" + "；".join(samples),
+    ]
+    tips = [
+        "请确认执行环境与 Token 授权绑定的环境一致，且授权已启用、缓存有效",
+        "Header/Body 中的 ${{变量名}} 须与授权「提取器变量名」一致（不是授权名称）",
+        "不要把环境变量写成自引用，例如 cookie=${{cookie}}",
+    ]
+    if env_name:
+        tips.insert(0, f"当前执行环境：{env_name}")
+    if auth_injected_keys is not None:
+        if auth_injected_keys:
+            tips.append("本次已注入授权变量：" + "、".join(auth_injected_keys[:12]))
+        else:
+            tips.append("本次未注入任何 Token 授权变量（该环境可能未配置/未启用授权）")
+    lines.append("建议：" + "；".join(tips) + "。")
+    return "\n".join(lines)
+
+
 def build_api_url(base_url: str, path: str, protocol: str = "http") -> str:
     """
     拼接基础URL和接口路径，处理斜杠边界和绝对路径
@@ -111,7 +180,13 @@ def prepare_httpx_headers(headers: Optional[Union[Dict[str, Any], httpx.Headers]
         return httpx.Headers(encoding="utf-8")
     if isinstance(headers, httpx.Headers):
         return headers
-    return httpx.Headers(headers, encoding="utf-8")
+    cleaned: Dict[str, Any] = {}
+    for key, value in headers.items():
+        if not key or value is None:
+            continue
+        # h11 拒绝首尾空白；变量未替掉时也会更早被业务校验拦住
+        cleaned[str(key)] = value.strip() if isinstance(value, str) else value
+    return httpx.Headers(cleaned, encoding="utf-8")
 
 
 def resolve_body_fields(case_fields: Optional[List], api_fields: Optional[List]) -> List[Dict[str, Any]]:
@@ -256,11 +331,16 @@ def evaluate_assertion(response, response_body, assertion):
     elif assertion_type == "json_path":
         actual = get_json_path_value(response_body, target)
     elif assertion_type == "header":
-        # 处理 headers 可能是列表的情况
-        headers = response.headers if isinstance(response.headers, dict) else {}
+        # 与变量提取一致：Header 名大小写不敏感
+        headers = response.headers
         if isinstance(headers, list):
             headers = {h.get("key", ""): h.get("value", "") for h in headers if h.get("key")}
-        actual = headers.get(target) if isinstance(headers, dict) else None
+        elif headers is not None and not isinstance(headers, dict):
+            try:
+                headers = dict(headers)
+            except Exception:
+                headers = {}
+        actual = _header_lookup(_headers_to_dict(headers), target) if headers else None
     elif assertion_type == "contains":
         actual = json.dumps(response_body, ensure_ascii=False) if isinstance(response_body, dict) else str(response_body)
         expected = str(expected)

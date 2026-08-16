@@ -16,6 +16,11 @@ class Cronjob(models.Model):
     date = fields.DatetimeField(default='2030-01-01 00:00:00', description="指定执行的事件")
     crontab = fields.JSONField(default={'minute': '30', 'hour': '*', 'day': '*', 'month': '*', 'day_of_week': '*'},
                                description="周期性任务规则")
+    run_config = fields.JSONField(
+        null=True,
+        default=None,
+        description="执行器配置：devices/weight/concurrency/browser/headless",
+    )
     username = fields.CharField(max_length=50, description="创建人")
     is_del = fields.BooleanField(description="是否删除", default=False)
 

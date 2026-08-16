@@ -753,9 +753,10 @@ async def export_report_status(task_id: str):
 
 class SendAppReportPayload(BaseModel):
     recipients: list[str] | None = None
+    config_ids: list[int] | None = None
 
 
-@router.post("/plans/{record_id}/send-report", summary="发送 App 计划报告邮件")
+@router.post("/plans/{record_id}/send-report", summary="发送 App 计划报告")
 async def send_plan_report(
     record_id: int,
     payload: SendAppReportPayload | None = None,
@@ -765,11 +766,19 @@ async def send_plan_report(
     if not record:
         raise HTTPException(status_code=404, detail="计划执行记录不存在")
     await assert_user_project_member(user_info, record.project_id)
-    await NotificationService.send_app_plan_report(record_id, (payload.recipients if payload else None))
-    return {"msg": "报告已发送"}
+    body = payload or SendAppReportPayload()
+    try:
+        result = await NotificationService.send_app_plan_report(
+            record_id,
+            body.recipients,
+            config_ids=body.config_ids,
+        )
+        return {"msg": NotificationService.format_dispatch_detail(result)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/suites/{record_id}/send-report", summary="发送 App 套件报告邮件")
+@router.post("/suites/{record_id}/send-report", summary="发送 App 套件报告")
 async def send_suite_report(
     record_id: int,
     payload: SendAppReportPayload | None = None,
@@ -782,5 +791,13 @@ async def send_suite_report(
     if not suite:
         raise HTTPException(status_code=404, detail="套件执行记录不存在")
     await assert_user_project_member(user_info, suite.project_id)
-    await NotificationService.send_app_suite_report(record_id, (payload.recipients if payload else None))
-    return {"msg": "报告已发送"}
+    body = payload or SendAppReportPayload()
+    try:
+        result = await NotificationService.send_app_suite_report(
+            record_id,
+            body.recipients,
+            config_ids=body.config_ids,
+        )
+        return {"msg": NotificationService.format_dispatch_detail(result)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

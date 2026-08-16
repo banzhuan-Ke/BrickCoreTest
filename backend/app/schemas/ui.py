@@ -243,6 +243,12 @@ class RunForm(BaseModel):
         default=None,
         description="本次执行报告是否展示失败 AI 分析；不传则使用项目默认",
     )
+    ui_timeout_scale: Optional[float] = Field(
+        default=None,
+        ge=0.5,
+        le=5.0,
+        description="本次执行 UI 超时倍率覆盖；不传则使用环境配置",
+    )
     trigger_source: Optional[str] = Field(
         default=None,
         description="触发来源：manual / assistant / cron 等，写入执行 env",
@@ -267,6 +273,12 @@ class DebugSessionCreateForm(BaseModel):
     auto_navigate: bool = Field(default=True, description="打开浏览器后自动导航到环境地址或首步 open_url")
     ai_heal_enabled: Optional[bool] = Field(default=None, description="是否启用 AI 定位器自愈")
     ai_act_enabled: Optional[bool] = Field(default=None, description="是否启用 AI Act")
+    ui_timeout_scale: Optional[float] = Field(
+        default=None,
+        ge=0.5,
+        le=5.0,
+        description="本趟调试 UI 超时倍率覆盖；不传则使用环境配置",
+    )
     hotkeys: Optional[dict] = Field(default=None, description="交互调试工具条快捷键覆盖（可选）")
 
 
@@ -361,8 +373,14 @@ class TaskResultSchemas(BaseModel):
 # ============ 用例导入/导出 ============
 
 class UiCaseBatchExportRequest(BaseModel):
-    """批量导出UI用例请求"""
-    case_ids: List[int] = Field(..., description="要导出的用例ID列表")
+    """批量导出UI用例请求。
+
+    二选一：传 case_ids；或传 project_id + catalog_id（导出该目录下用例，可含子孙目录）。
+    """
+    case_ids: Optional[List[int]] = Field(None, description="要导出的用例ID列表")
+    project_id: Optional[int] = Field(None, description="按目录导出时的项目ID")
+    catalog_id: Optional[int] = Field(None, description="按目录导出时的目录ID")
+    include_children: bool = Field(True, description="按目录导出时是否包含子目录")
 
 
 class UiCaseBatchUpdateCatalogRequest(BaseModel):

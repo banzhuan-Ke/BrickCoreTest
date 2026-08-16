@@ -33,7 +33,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "pro_bg_url": "",
     "classic_bg_url": "",
     "welcome_title": "欢迎登录 BrickCore",
-    "footer_text": "© 2025-2026 BrickCore v1.5.0. All Rights Reserved.",
+    "footer_text": "© 2025-2026 BrickCore v1.6.0. All Rights Reserved.",
     "show_register": True,
     "bg_brick_count": 30,
     "bg_star_count": 15,

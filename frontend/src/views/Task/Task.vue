@@ -129,7 +129,7 @@
     <template #header>
       <div style="font-size: 18px">计划执行记录</div>
     </template>
-    <TaskRunRecord :task_id="showTask.id"></TaskRunRecord>
+    <TaskRunRecord :task_id="showTask.id" @rerun="rerunFromRecord"></TaskRunRecord>
   </el-dialog>
 
   <!-- 运行计划的弹框-->
@@ -230,15 +230,34 @@
         v-model="runParams.failure_analysis_on_report"
         :options="healRunOptions"
       />
+      <UiRunTimeoutScaleField v-model="runParams.ui_timeout_scale" mode="batch" />
       <el-form-item label="执行设备" required>
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          class="ui-run-parallel-hint"
+          style="margin-bottom: 8px"
+          title="此处配置仅本次手动运行有效，不会保存，也不作用于定时任务。定时请在「定时任务」编辑页配置执行器。"
+        />
         <template v-if="runTaskParallel">
           <el-alert
             type="info"
             :closable="false"
             show-icon
             class="ui-run-parallel-hint"
-            title="并行模式：按权重分配套件；同一执行器可同时跑多个 Browser（受并发数限制）。"
-          />
+          >
+            <template #title>并行模式：按「套件」调度（套件内用例始终串行）</template>
+            <div class="ui-run-parallel-hint__body">
+              <p><b>权重</b>：决定套件分给哪台执行器（整套件不分拆）。</p>
+              <p><b>并发</b>：本机同时开几个 Browser 跑套件；不改变「分到多少套件」。</p>
+              <p class="ui-run-parallel-hint__example">
+                例：计划 4 个套件；强机权重 3 / 并发 2，弱机权重 1 / 并发 1 →
+                约 3:1 分套件；强机最多同时跑 2 个套件，弱机同时只跑 1 个。
+                套件内用例仍一个接一个，不会拆到两台机。
+              </p>
+            </div>
+          </el-alert>
           <el-table :data="runDeviceRows" size="small" class="ui-run-device-table" border table-layout="fixed">
             <el-table-column label="选用" width="52" align="center" fixed="left">
               <template #default="{ row }">
@@ -257,7 +276,22 @@
                 <el-tag v-else type="info" size="small">离线</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="权重" width="108" align="center">
+            <el-table-column width="108" align="center">
+              <template #header>
+                <span class="ui-run-col-head">
+                  权重
+                  <el-tooltip placement="top" :show-after="200">
+                    <template #content>
+                      <div class="ui-run-tip-block">
+                        <p>按权重把<strong>整套件</strong>分到执行器（参考套件用例数负载）。</p>
+                        <p>数值越大分到的套件越多；单机或权重都为 1 时几乎无差别。</p>
+                        <p>例：A=3、B=1 → 约 3:1 分套件。不会拆开套件内用例。</p>
+                      </div>
+                    </template>
+                    <el-icon class="ui-run-tip-icon"><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </span>
+              </template>
               <template #default="{ row }">
                 <el-input-number
                   v-model="row.weight"
@@ -270,7 +304,22 @@
                 />
               </template>
             </el-table-column>
-            <el-table-column label="并发" width="108" align="center">
+            <el-table-column width="108" align="center">
+              <template #header>
+                <span class="ui-run-col-head">
+                  并发
+                  <el-tooltip placement="top" :show-after="200">
+                    <template #content>
+                      <div class="ui-run-tip-block">
+                        <p>本机最多同时跑几个套件（开几个 Browser）。</p>
+                        <p>按电脑性能配置；慢站建议 1～2。调高并发不会从别的机抢套件。</p>
+                        <p>例：分到 4 个套件、并发=2 → 先并行 2 个，跑完再补。</p>
+                      </div>
+                    </template>
+                    <el-icon class="ui-run-tip-icon"><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </span>
+              </template>
               <template #default="{ row }">
                 <el-input-number
                   v-model="row.concurrency"
@@ -302,9 +351,20 @@
             </el-option>
           </el-select>
           <div class="ui-run-concurrency-row">
-            <span class="ui-run-concurrency-row__label">并发数</span>
+            <span class="ui-run-concurrency-row__label">
+              并发数
+              <el-tooltip placement="top" :show-after="200">
+                <template #content>
+                  <div class="ui-run-tip-block">
+                    <p>同一执行器同时运行的<strong>套件</strong>数上限（开几个 Browser）。</p>
+                    <p>套件内用例仍串行。慢站建议 1～2；机器空闲可适当调高。</p>
+                  </div>
+                </template>
+                <el-icon class="ui-run-tip-icon"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
             <el-input-number v-model="runParams.concurrency" :min="1" :max="20" size="small" controls-position="right" />
-            <span class="ui-run-concurrency-row__tip">同一执行器同时运行的套件数上限</span>
+            <span class="ui-run-concurrency-row__tip">同时跑几个套件；套件内用例仍串行</span>
           </div>
         </template>
       </el-form-item>
@@ -320,7 +380,7 @@
 
 <script setup>
 import {ref, reactive, computed, onMounted, watch} from 'vue'
-import {Calendar, ChromeFilled, Compass, Apple, Promotion, Search, RefreshRight, View, Hide} from "@element-plus/icons-vue"
+import {Calendar, ChromeFilled, Compass, Apple, Promotion, Search, RefreshRight, View, Hide, QuestionFilled} from "@element-plus/icons-vue"
 import { aiConfigApi } from '@/api/modules/ai.js'
 import {ProjectStore} from '@/stores/module/ProjectStore'
 import http from '@/api/index'
@@ -333,6 +393,7 @@ import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
 import UiRunAiActDisabledTip from '@/components/UiRunAiActDisabledTip.vue'
 import UiRunFailureAnalysisField from '@/components/UiRunFailureAnalysisField.vue'
+import UiRunTimeoutScaleField from '@/components/UiRunTimeoutScaleField.vue'
 import {useRouter, useRoute} from "vue-router"
 import {UserStore} from "@/stores/module/UserStore.js"
 import { makeTableRowIndex } from '@/utils/tableIndex'
@@ -550,8 +611,17 @@ const runParams = reactive({
   ai_heal_enabled: true,
   ai_act_enabled: false,
   failure_analysis_on_report: true,
+  ui_timeout_scale: null,
   concurrency: 3,
 })
+
+watch(
+  () => runParams.env_id,
+  () => {
+    // 计划：默认跟随环境慢站策略，切换环境时回到「环境默认」
+    runParams.ui_timeout_scale = null
+  }
+)
 
 const loadHealRunOptions = async () => {
   const pid = proStore.projectInfo?.id
@@ -573,7 +643,7 @@ const loadHealRunOptions = async () => {
 }
 
 // 点击运行计划
-const clickRun = async (task_id) => {
+const clickRun = async (task_id, prefills = null) => {
   runParams.env_id = ''
   runParams.browser_type = 'chromium'
   runParams.device_id = ''
@@ -583,6 +653,7 @@ const clickRun = async (task_id) => {
   runParams.ai_heal_enabled = true
   runParams.ai_act_enabled = false
   runParams.failure_analysis_on_report = true
+  runParams.ui_timeout_scale = null
   runParams.concurrency = 3
   runTaskParallel.value = false
   await loadHealRunOptions()
@@ -594,7 +665,66 @@ const clickRun = async (task_id) => {
     runTaskParallel.value = !!row?.parallel
   }
   await getDeviceList()
+  if (prefills) {
+    if (prefills.env_id) runParams.env_id = prefills.env_id
+    if (prefills.browser_type) runParams.browser_type = prefills.browser_type
+    if (typeof prefills.headless === 'boolean') runParams.headless = prefills.headless
+    if (typeof prefills.concurrency === 'number' && prefills.concurrency >= 1) {
+      runParams.concurrency = prefills.concurrency
+    }
+    if (typeof prefills.ai_heal_enabled === 'boolean') {
+      runParams.ai_heal_enabled = prefills.ai_heal_enabled
+    }
+    if (typeof prefills.ai_act_enabled === 'boolean') {
+      runParams.ai_act_enabled = prefills.ai_act_enabled
+    }
+    if (typeof prefills.failure_analysis_on_report === 'boolean') {
+      runParams.failure_analysis_on_report = prefills.failure_analysis_on_report
+    }
+    applyDevicePrefill(prefills)
+  }
   showRunDlg.value = true
+}
+
+/** 从历史记录预填执行器（仅勾选仍在线的设备） */
+const applyDevicePrefill = (prefills) => {
+  const onlineIds = new Set((deviceList.value || []).map((d) => d.id))
+  const assignments = Array.isArray(prefills.device_assignments) ? prefills.device_assignments : []
+  if (runTaskParallel.value && assignments.length) {
+    const selectedIds = new Set(
+      assignments.map((a) => a.device_id).filter((id) => id && onlineIds.has(id))
+    )
+    if (selectedIds.size) {
+      runDeviceRows.value = runDeviceRows.value.map((r) => {
+        const match = assignments.find((a) => a.device_id === r.id)
+        return {
+          ...r,
+          selected: selectedIds.has(r.id),
+          weight: match?.weight || r.weight || 1,
+          concurrency: match?.concurrency || r.concurrency || 3,
+        }
+      })
+    }
+    return
+  }
+  let deviceId = prefills.device_id
+  if (deviceId && String(deviceId).includes(',')) {
+    deviceId = String(deviceId).split(',')[0].trim()
+  }
+  if (deviceId && onlineIds.has(deviceId)) {
+    runParams.device_id = deviceId
+  }
+}
+
+/** 执行记录「再次运行」→ 关闭记录窗，打开运行配置并预填环境 */
+const rerunFromRecord = async (prefills) => {
+  const taskId = prefills?.task_id || showTask.value?.id
+  if (!taskId) {
+    ElMessage.warning('无法识别计划，请从计划列表点击「运行」')
+    return
+  }
+  runDlg.value = false
+  await clickRun(taskId, prefills)
 }
 
 // 运行测试计划
@@ -640,6 +770,9 @@ async function runTask() {
   }
   if (healRunOptions.value?.failure_analysis_allow_run_override) {
     payload.failure_analysis_on_report = runParams.failure_analysis_on_report
+  }
+  if (runParams.ui_timeout_scale == null) {
+    delete payload.ui_timeout_scale
   }
 
   running.value = true

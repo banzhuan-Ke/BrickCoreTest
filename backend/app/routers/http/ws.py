@@ -27,7 +27,7 @@ router = APIRouter(tags=["接口自动化"], dependencies=[Depends(is_authentica
 async def debug_ws(item: WsDebugRequest, username: str = Depends(get_current_username)):
     """在线调试 WebSocket：连接 → 发送/接收 → 断言"""
     from app.core.shared.header_merge import merge_request_headers
-    from app.modules.data_tools.tag_service import merge_execution_variables
+    from app.modules.http.api_auth_service import prepare_api_runtime_variables
 
     variables = dict(item.variables or {})
     project_id = item.project_id
@@ -42,7 +42,11 @@ async def debug_ws(item: WsDebugRequest, username: str = Depends(get_current_use
         if env:
             project_id = project_id or env.project_id
 
-    variables = await merge_execution_variables(project_id, item.env_id, variables)
+    variables, auth_err, auth_injected_keys = await prepare_api_runtime_variables(
+        project_id, item.env_id, variables, inject_auth=True
+    )
+    if auth_err:
+        raise HTTPException(status_code=400, detail=f"授权刷新失败: {auth_err}")
 
     var_resolver = VariableResolver(variables)
     url, _ = replace_variables_with_detail(original_url, variables, "url", resolver=var_resolver)
@@ -64,6 +68,23 @@ async def debug_ws(item: WsDebugRequest, username: str = Depends(get_current_use
     for key, value in headers.items():
         val, _ = replace_variables_with_detail(value, variables, f"headers.{key}", resolver=var_resolver)
         resolved_headers[key] = val
+
+    from app.modules.http.http_utils import (
+        collect_unresolved_placeholders,
+        format_unresolved_variables_error,
+    )
+    unresolved = []
+    unresolved.extend(collect_unresolved_placeholders(url, "url"))
+    unresolved.extend(collect_unresolved_placeholders(resolved_headers, "headers"))
+    if unresolved:
+        raise HTTPException(
+            status_code=400,
+            detail=format_unresolved_variables_error(
+                unresolved,
+                env_name=(env.name if env else ""),
+                auth_injected_keys=auth_injected_keys,
+            ),
+        )
 
     message_log, error, elapsed_ms = await execute_ws_steps(
         url=url,

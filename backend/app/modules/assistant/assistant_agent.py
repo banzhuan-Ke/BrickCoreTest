@@ -120,14 +120,18 @@ async def build_assistant_ctx(user_info: dict) -> McpAuthContext:
     from app.core.platform.permissions import get_user_permissions
     from app.models.sys import User
 
-    user = await User.get_or_none(id=user_info.get("id"), is_del=False)
-    if not user:
+    uid = user_info.get("id")
+    rows = await User.filter(id=uid, is_del=False).values(
+        "id", "username", "is_superuser"
+    )
+    if not rows:
         raise ValueError("用户不存在")
-    perms = set(await get_user_permissions(user))
+    row = rows[0]
+    perms = set(await get_user_permissions(row["id"]))
     return McpAuthContext(
-        username=user.username,
-        user_id=user.id,
-        is_superuser=bool(user.is_superuser),
+        username=row.get("username") or "",
+        user_id=row["id"],
+        is_superuser=bool(row.get("is_superuser") or user_info.get("is_superuser")),
         permissions=perms,
     )
 
@@ -739,7 +743,6 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
         is_ui_exec = any(h in text for h in _UI_HINTS) and not is_api_ctx and not is_app_ctx
         is_app_exec = is_app_ctx and not is_api_ctx
         is_perf_exec = any(h in text for h in _PERF_HINTS)
-
         if case_id and is_app_exec and "套件" not in text:
             add(
                 "preview_run_app_case",
@@ -815,6 +818,7 @@ def _plan_tools(message: str, project_id: int | None) -> list[tuple[str, dict[st
             add("list_api_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
         else:
             add("list_api_cron_jobs", {"project_id": pid, "page": 1, "size": 15})
+
 
     if any(k in text for k in ("runner", "device_id", "执行设备", "执行器", "在线设备")) and (
         any(h in text for h in _UI_HINTS) or is_app_ctx

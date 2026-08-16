@@ -44,6 +44,7 @@ async def _maybe_notify_app_suite_complete(suite_record: AppSuiteExecution) -> N
             },
             related_id=suite_record.id,
             related_type="app_suite_execution",
+            alert_scope="app",
         )
 
     push_cfg = await NotificationConfig.filter(
@@ -54,7 +55,10 @@ async def _maybe_notify_app_suite_complete(suite_record: AppSuiteExecution) -> N
     ).first()
     if push_cfg:
         try:
-            await NotificationService.send_app_suite_report(suite_record.id)
+            await NotificationService.send_app_suite_report(
+                suite_record.id,
+                auto_push_only=True,
+            )
         except Exception as exc:
             logger.error("自动推送 App 套件报告失败 suite=%s: %s", suite_record.id, exc)
 
@@ -83,6 +87,7 @@ async def _maybe_notify_app_plan_complete(plan_record: AppPlanExecution) -> None
             },
             related_id=plan_record.id,
             related_type="app_plan_execution",
+            alert_scope="app",
         )
 
     push_cfg = await NotificationConfig.filter(
@@ -93,7 +98,10 @@ async def _maybe_notify_app_plan_complete(plan_record: AppPlanExecution) -> None
     ).first()
     if push_cfg:
         try:
-            await NotificationService.send_app_plan_report(plan_record.id)
+            await NotificationService.send_app_plan_report(
+                plan_record.id,
+                auto_push_only=True,
+            )
         except Exception as exc:
             logger.error("自动推送 App 计划报告失败 plan=%s: %s", plan_record.id, exc)
 

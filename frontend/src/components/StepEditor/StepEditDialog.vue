@@ -17,7 +17,7 @@
         <div class="param-input-row">
           <el-input v-model="form.desc" placeholder="简短名称，如：点击登录" style="flex: 1" />
           <VarInsertButton :env-id="varInsertEnvId" label="变量" />
-          <ToolInsertButton label="工具" />
+          <ToolInsertButton :env-id="varInsertEnvId" label="工具" />
         </div>
       </el-form-item>
 
@@ -48,7 +48,7 @@
             />
           </el-select>
           <VarInsertButton :env-id="varInsertEnvId" label="插入变量" hint-text="跨环境请优先用环境变量同名 key。" />
-          <ToolInsertButton label="插入工具" />
+          <ToolInsertButton :env-id="varInsertEnvId" label="插入工具" />
           <el-button link type="info" size="small" @click="tagPickerVisible = true">数据工厂标签</el-button>
         </div>
         <p class="step-insert-hint">请先点击要填入的参数输入框，再选择插入项；执行时以运行环境为准。</p>
@@ -136,7 +136,7 @@
             <UiStepUsageGuide v-if="showUiStepUsageGuide" :method="form.method" />
           </span>
         </template>
-        <div class="params-container">
+        <div class="params-container" :class="{ 'is-smart-action': isSmartActionStep }">
           <el-alert
             v-if="isDragDropStep"
             type="info"
@@ -165,6 +165,16 @@
               <code>1. 在搜索框输入订单号</code>、<code>2、点击查询按钮</code>
             </p>
           </el-alert>
+          <SmartActionGuide
+            v-if="isSmartActionStep"
+            :method="form.method"
+          />
+          <div v-if="canConvertCurrentToSmart" class="smart-convert-bar">
+            <el-button type="primary" plain size="small" @click="convertCurrentToSmart">
+              {{ convertSmartButtonLabel }}
+            </el-button>
+            <span class="smart-convert-hint">保留 locator / value / 录制候选，改为消歧执行</span>
+          </div>
           <el-alert
             v-if="isElementOrderStep"
             type="info"
@@ -205,8 +215,12 @@
               </el-tooltip>
             </div>
             
+            <!-- SMART-1：后置条件结构化表单 -->
+            <template v-if="key === 'expected_after'">
+              <ExpectedAfterFields v-model="form.params.expected_after" />
+            </template>
             <!-- 根据参数类型渲染不同输入框 -->
-            <template v-if="isAppObjectLocator(key)">
+            <template v-else-if="isAppObjectLocator(key)">
               <div v-if="form.params[key].by === 'image'" class="app-image-locator">
                 <div class="app-locator-row">
                   <el-select v-model="form.params[key].by" placeholder="定位方式" style="width: 140px" @change="onAppLocatorByChange(key)">
@@ -328,11 +342,11 @@
                   v-model="form.params[key]"
                   type="textarea"
                   :rows="2"
-                  :placeholder="isRequiredParam(key) ? '必填' : '请输入'"
+                  :placeholder="smartParamPlaceholder(key) || (isRequiredParam(key) ? '必填' : '请输入')"
                   style="flex: 1"
                 />
                 <VarInsertButton v-if="canInsertVar(key)" :env-id="varInsertEnvId" label="变量" />
-                <ToolInsertButton v-if="canInsertVar(key)" label="工具" />
+                <ToolInsertButton v-if="canInsertVar(key)" :env-id="varInsertEnvId" label="工具" />
               </div>
             </template>
             <template v-else-if="isNumber(value)">
@@ -359,19 +373,68 @@
               <div class="param-input-row">
                 <el-input
                   v-model="form.params[key]"
-                  :placeholder="isRequiredParam(key) ? '必填' : '请输入'"
+                  :placeholder="smartParamPlaceholder(key) || (isRequiredParam(key) ? '必填' : '请输入')"
                   style="flex: 1"
                 />
                 <VarInsertButton v-if="canInsertVar(key)" :env-id="varInsertEnvId" label="变量" />
-                <ToolInsertButton v-if="canInsertVar(key)" label="工具" />
+                <ToolInsertButton v-if="canInsertVar(key)" :env-id="varInsertEnvId" label="工具" />
               </div>
             </template>
           </div>
+
+          <el-collapse
+            v-if="isSmartActionStep && smartTuningParamEntries.length"
+            v-model="smartTuningOpen"
+            class="smart-tuning-params"
+          >
+            <el-collapse-item name="smart-tuning">
+              <template #title>
+                <span class="smart-tuning-title">消歧与兜底（可选）</span>
+                <span class="smart-tuning-hint">多数场景保持默认即可</span>
+              </template>
+              <div
+                v-for="[key, value] in smartTuningParamEntries"
+                :key="'smart-tuning-' + key"
+                class="param-item"
+              >
+                <div class="param-label">
+                  <span>{{ resolveParamLabel(key) }}</span>
+                  <el-tooltip
+                    v-if="resolveParamTooltip(key)"
+                    placement="top"
+                    :show-after="200"
+                    popper-class="param-tip-popper"
+                  >
+                    <template #content>
+                      <div class="param-tip-content">{{ resolveParamTooltip(key) }}</div>
+                    </template>
+                    <el-icon class="param-tip-icon"><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </div>
+                <template v-if="isBoolean(key)">
+                  <el-switch v-model="form.params[key]" />
+                </template>
+                <template v-else-if="isNumber(value)">
+                  <el-input-number
+                    v-model="form.params[key]"
+                    :style="{ width: compactNumberWidth(key) }"
+                    :min="key === 'min_score' || key === 'min_margin' ? 0 : undefined"
+                    :max="key === 'min_score' || key === 'min_margin' ? 100 : undefined"
+                    :step="key === 'min_score' || key === 'min_margin' ? 5 : 1"
+                    controls-position="right"
+                  />
+                </template>
+                <template v-else>
+                  <el-input v-model="form.params[key]" placeholder="可选" style="width: 100%" />
+                </template>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
         </div>
       </el-form-item>
       
       <!-- 条件分支配置 -->
-      <el-form-item label="分支配置" v-if="isConditionBranch">
+      <el-form-item label="分支配置" v-if="isConditionBranch" class="condition-branch-form-item">
         <ConditionEdit v-model:branches="form.branches" :module="module" />
       </el-form-item>
       
@@ -432,11 +495,11 @@
 
             <section v-if="hasClickAdvanced" class="advanced-section">
               <div class="advanced-section-head">
-                <h4>动作后等待 · 原生弹窗 / 文件下载</h4>
+                <h4>动作前就绪 · 动作后等待 · 原生弹窗 / 文件下载</h4>
                 <UiStepUsageGuide :method="form.method" />
               </div>
               <p class="advanced-section-desc">
-                慢站保存/查询/菜单：填写「动作后等待选择器」。
+                慢站：动作前可用「就绪选择器 / 使用环境就绪」；保存/查询后列表刷新填「动作后等待选择器」。
                 页面二次确认 Dialog：请拆成两步点击。
                 以下原生弹窗/下载仅用于系统弹窗或导出文件。
               </p>
@@ -481,6 +544,7 @@
                         style="flex: 1"
                       />
                       <VarInsertButton v-if="canInsertVar(key)" :env-id="varInsertEnvId" label="变量" />
+                      <ToolInsertButton v-if="canInsertVar(key)" :env-id="varInsertEnvId" label="工具" />
                     </div>
                   </template>
                 </div>
@@ -535,12 +599,16 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown, QuestionFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import FillValueInput from '@/components/StepEditor/FillValueInput.vue'
+import ConditionEdit from '@/components/StepEditor/ConditionEdit.vue'
 import { FILL_VALUE_INPUT_METHODS, isFillValueFixedMode } from '@/utils/fillValueMode.js'
 import LocatorSelector from '@/components/LocatorSelector.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
 import DataFactoryTagPicker from '@/views/ApiModule/components/DataFactoryTagPicker.vue'
 import UiDbAssertStepFields from './UiDbAssertStepFields.vue'
+import ExpectedAfterFields from './ExpectedAfterFields.vue'
+import SmartActionGuide from './SmartActionGuide.vue'
+import { canConvertToSmart, convertStepToSmart } from '@/utils/stepHelper'
 import UiTestFilePicker from './UiTestFilePicker.vue'
 import UiTestMultiFilePicker from './UiTestMultiFilePicker.vue'
 import UiTestFolderPicker from './UiTestFolderPicker.vue'
@@ -697,7 +765,37 @@ const isDragDropStep = computed(() => isDragDropMethod(form.value.method))
 
 const isSmartStep = computed(() => form.value.method === 'smart_step')
 
+const isSmartActionStep = computed(() =>
+  form.value.method === 'smart_click' || form.value.method === 'smart_fill',
+)
+
+/** 智能点击/输入：消歧阈值等次要项，主表单收起展示 */
+const SMART_TUNING_PARAM_KEYS = ['min_score', 'min_margin', 'allow_ai', 'force']
+
+const smartTuningOpen = ref([])
+
+const canConvertCurrentToSmart = computed(() =>
+  !isAppStep.value && canConvertToSmart(form.value),
+)
+
+const convertSmartButtonLabel = computed(() => {
+  if (form.value.method === 'fill_value') return '转为智能输入'
+  return '转为智能点击'
+})
+
 const isElementOrderStep = computed(() => isElementOrderMethod(form.value.method))
+
+function convertCurrentToSmart() {
+  const next = convertStepToSmart(form.value)
+  if (!next) return
+  form.value.method = next.method
+  form.value.keyword = next.keyword
+  form.value.params = { ...(next.params || {}) }
+  if (next.meta) form.value.meta = next.meta
+  ElMessage.success(
+    `已转为「${next.keyword}」，请补全「要点谁 / 本步要做什么」${next.method === 'smart_click' ? '，危险操作再配「点完后应看到」' : ''}`,
+  )
+}
 
 const showUiStepUsageGuide = computed(() => {
   if (isAppStep.value || isDbAssertStep.value) return false
@@ -721,13 +819,15 @@ const advancedActiveCount = computed(() => {
   if (p.wait_download) n += 1
   if (p.accept_dialog) n += 1
   if (p.dismiss_dialog) n += 1
+  if (String(p.ready_selector || '').trim()) n += 1
+  if (p.use_env_ready) n += 1
   if (String(p.expected_selector || '').trim()) n += 1
   if (p.wait_busy_after) n += 1
   return n
 })
 
 const advancedToggleHint = computed(() => {
-  if (hasClickAdvanced.value) return '超时 · 动作后等待 · 原生弹窗 / 下载'
+  if (hasClickAdvanced.value) return '超时 · 动作前就绪 · 动作后等待 · 弹窗 / 下载'
   return '超时 · 重试'
 })
 
@@ -749,9 +849,11 @@ function onClickAdvancedSwitch(key, val) {
   }
 }
 
-const paramsSectionLabel = computed(() =>
-  isAssertionMethod(form.value.method) ? '断言参数' : '配置参数'
-)
+const paramsSectionLabel = computed(() => {
+  if (form.value.method === 'smart_click') return '智能点击参数'
+  if (form.value.method === 'smart_fill') return '智能输入参数'
+  return isAssertionMethod(form.value.method) ? '断言参数' : '配置参数'
+})
 
 const uploadFileHiddenKeys = new Set([
   'file_path', 'file_key', 'file_bucket', 'file_name', 'upload_as_name', 'file_items',
@@ -781,12 +883,25 @@ const filteredParams = computed(() => {
   if (isAppStep.value) {
     return getAppOrderedVisibleParams(form.value.method, raw)
   }
-  return getOrderedVisibleParams(form.value.method, raw, { scope: 'basic' })
+  const ordered = getOrderedVisibleParams(form.value.method, raw, { scope: 'basic' })
+  if (!isSmartActionStep.value) return ordered
+  const basic = { ...ordered }
+  SMART_TUNING_PARAM_KEYS.forEach((key) => delete basic[key])
+  return basic
+})
+
+const smartTuningParamEntries = computed(() => {
+  if (!isSmartActionStep.value) return []
+  const params = form.value.params || {}
+  return SMART_TUNING_PARAM_KEYS
+    .filter((key) => Object.prototype.hasOwnProperty.call(params, key))
+    .map((key) => [key, params[key]])
 })
 
 // 是否有参数
 const hasParams = computed(() => {
   return Object.keys(filteredParams.value).length > 0
+    || smartTuningParamEntries.value.length > 0
 })
 
 function resolveParamLabel(key) {
@@ -806,6 +921,20 @@ function resolveParamTooltip(key) {
     return getAppParamTooltip(form.value.method, key)
   }
   return getParamTooltip(form.value.method, key)
+}
+
+/** 智能点击/输入字段占位提示 */
+function smartParamPlaceholder(key) {
+  if (!isSmartActionStep.value) return ''
+  const fill = form.value.method === 'smart_fill'
+  const map = {
+    target: fill ? '如：用户名、手机号' : '如：新增、确定、提交',
+    intent: fill ? '如：在创建用户弹窗中填写登录名' : '如：点击顶部工具栏新增，打开创建弹窗',
+    region: fill ? '如：创建用户弹窗、筛选区' : '如：顶部工具栏、确认删除弹窗',
+    value: '要写入输入框的内容',
+    locator: '可选，粘贴录制或自愈得到的定位',
+  }
+  return map[key] || ''
 }
 
 // 判断参数是否必填
@@ -845,6 +974,12 @@ function isRequiredParam(key) {
   }
   if (method === 'smart_step') {
     return key === 'intent'
+  }
+  if (method === 'smart_click') {
+    return key === 'target' || key === 'intent'
+  }
+  if (method === 'smart_fill') {
+    return key === 'target' || key === 'intent' || key === 'value'
   }
   if (method === 'scroll_to_height') {
     if (key === 'position') return true
@@ -895,6 +1030,11 @@ const paramLabelMap = {
   value: '输入值',
   button: '按键(left/right)',
   count: '点击次数',
+  ready_selector: '动作前就绪选择器',
+  use_env_ready: '使用环境就绪选择器',
+  expected_selector: '动作后等待选择器',
+  post_wait_state: '动作后等待状态',
+  wait_busy_after: '动作后再等忙碌遮罩',
   start_selector: '起始元素定位',
   end_selector: '结束元素定位',
   first_locator: '靠前元素定位',
@@ -1072,15 +1212,18 @@ watch(() => props.step, (newStep) => {
         ...newStep.config,
         pre_wait_ms: newStep.config?.pre_wait_ms ?? newStep.pre_wait_ms ?? 0,
       },
-      branches: newStep.branches ? JSON.parse(JSON.stringify(newStep.branches)) : undefined
+      // 必须用 stepData.branches（可能刚补了默认值），不能回读 newStep.branches
+      branches: stepData.branches ? JSON.parse(JSON.stringify(stepData.branches)) : undefined,
     }
-    // 历史 params.timeout：非模板默认值视为用户手工超时
+    // 历史 params.timeout：同步到 config.timeout；非模板默认值视为用户手工超时
     if (!isAppStep.value) {
       const pt = form.value.params?.timeout
       const n = parseInt(pt, 10)
-      if (Number.isFinite(n) && n > 0 && n !== 20000 && n !== 30000) {
+      if (Number.isFinite(n) && n > 0) {
         form.value.config.timeout = n
-        form.value.config.timeout_explicit = true
+        if (n !== 20000 && n !== 30000) {
+          form.value.config.timeout_explicit = true
+        }
       }
     }
     if (isAppStep.value && isAppMethod(form.value.method)) {
@@ -1111,10 +1254,11 @@ watch(() => props.visible, (open) => {
   }
   if (open) {
     const p = form.value.params || {}
-        showAdvanced.value = !!(
-          p.wait_download || p.accept_dialog || p.dismiss_dialog
-          || String(p.expected_selector || '').trim() || p.wait_busy_after
-        )
+    showAdvanced.value = !!(
+      p.wait_download || p.accept_dialog || p.dismiss_dialog
+      || String(p.ready_selector || '').trim() || p.use_env_ready
+      || String(p.expected_selector || '').trim() || p.wait_busy_after
+    )
   }
   if (open && isAppStep.value) {
     loadAppElementOptions().then(() => {
@@ -1171,6 +1315,7 @@ function compactNumberWidth(key) {
     'amount', 'cursor_x', 'cursor_y',
   ])
   if (tiny.has(key)) return '120px'
+  if (key === 'min_score' || key === 'min_margin') return '140px'
   return '168px'
 }
 
@@ -1181,7 +1326,12 @@ function isSelect(key) {
   }
   if (key === 'position' && form.value.method === 'scroll_to_height') return true
   if (key === 'direction' && form.value.method === 'mouse_wheel') return true
-  const selectKeys = ['wait_until', 'browser_type', 'operator', 'key', 'button', 'match_mode', 'order', 'post_wait_state']
+  if (key === 'target_role' && isSmartActionStep.value) return true
+  // 「key」仅键盘按键步骤是下拉；LocalStorage 的键名必须是文本输入
+  if (key === 'key') {
+    return form.value.method === 'press_key'
+  }
+  const selectKeys = ['wait_until', 'browser_type', 'operator', 'button', 'match_mode', 'order', 'post_wait_state']
   return selectKeys.includes(key)
 }
 
@@ -1501,7 +1651,10 @@ async function confirmHeal() {
 // 判断是否为布尔值
 function isBoolean(key) {
   if (form.value.method === 'fill_by_image' && key === 'clear_first') return true
-  const booleanKeys = ['force', 'wait_download', 'exact', 'accept_dialog', 'dismiss_dialog', 'use_regex', 'wait_busy_after']
+  const booleanKeys = [
+    'force', 'wait_download', 'exact', 'accept_dialog', 'dismiss_dialog',
+    'use_regex', 'wait_busy_after', 'use_env_ready', 'allow_ai',
+  ]
   return booleanKeys.includes(key)
 }
 
@@ -1517,6 +1670,18 @@ function getOptions(key) {
       { label: '向左滚', value: 'left' },
       { label: '向右滚', value: 'right' },
       { label: '自定义 ΔX / ΔY', value: 'custom' },
+    ]
+  }
+  if (key === 'target_role') {
+    return [
+      { label: 'button', value: 'button' },
+      { label: 'link', value: 'link' },
+      { label: 'textbox', value: 'textbox' },
+      { label: 'checkbox', value: 'checkbox' },
+      { label: 'radio', value: 'radio' },
+      { label: 'menuitem', value: 'menuitem' },
+      { label: 'tab', value: 'tab' },
+      { label: 'option', value: 'option' },
     ]
   }
   const options = {
@@ -1669,13 +1834,20 @@ async function handleSave() {
     const pt = saveParams.timeout
     if (pt != null && String(pt).trim() !== '') {
       const n = parseInt(pt, 10)
-      // 历史步骤里非模板默认的 timeout，迁移为显式 config.timeout
-      if (Number.isFinite(n) && n > 0 && n !== 20000 && n !== 30000) {
+      // 迁移 params.timeout → config.timeout；模板默认 20s/30s 不标 explicit，仍吃环境倍率
+      if (Number.isFinite(n) && n > 0) {
         if (!form.value.config || typeof form.value.config !== 'object') {
-          form.value.config = { timeout: n, retry: false, pre_wait_ms: 0, timeout_explicit: true }
+          form.value.config = {
+            timeout: n,
+            retry: false,
+            pre_wait_ms: 0,
+            timeout_explicit: n !== 20000 && n !== 30000,
+          }
         } else {
           form.value.config.timeout = n
-          form.value.config.timeout_explicit = true
+          if (n !== 20000 && n !== 30000) {
+            form.value.config.timeout_explicit = true
+          }
         }
       }
     }
@@ -1788,6 +1960,7 @@ function handleClose() {
     config: { timeout: 30000, retry: false, pre_wait_ms: 0, timeout_explicit: false }
   }
   showAdvanced.value = false
+  smartTuningOpen.value = []
 }
 </script>
 
@@ -1808,6 +1981,78 @@ function handleClose() {
 .ui-step-usage-guide-standalone {
   display: inline-flex;
   margin: 0 0 8px 100px;
+}
+
+.smart-convert-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 4px;
+  padding: 8px 12px;
+  background: var(--el-fill-color-blank);
+  border: 1px dashed var(--el-border-color);
+  border-radius: 8px;
+}
+.smart-convert-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
+}
+
+.params-container.is-smart-action {
+  gap: 12px;
+
+  > .param-item {
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--el-fill-color-blank);
+    border: 1px solid var(--el-border-color-extra-light);
+  }
+
+  > .param-item .param-label {
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: var(--el-text-color-regular);
+  }
+}
+
+.smart-tuning-params {
+  margin-top: 2px;
+  border: none;
+
+  :deep(.el-collapse-item__header) {
+    height: auto;
+    min-height: 36px;
+    line-height: 1.4;
+    padding: 6px 2px;
+    background: transparent;
+    border-bottom: 1px dashed var(--el-border-color-lighter);
+    font-size: 13px;
+  }
+
+  :deep(.el-collapse-item__wrap) {
+    border-bottom: none;
+    background: transparent;
+  }
+
+  :deep(.el-collapse-item__content) {
+    padding: 10px 0 2px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+}
+
+.smart-tuning-title {
+  font-weight: 600;
+  color: var(--el-text-color-regular);
+  margin-right: 8px;
+}
+
+.smart-tuning-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
 }
 
 .drag-position-hint {
@@ -1869,6 +2114,17 @@ function handleClose() {
 
   :deep(.el-form-item__content) {
     margin-left: 0 !important;
+    width: 100%;
+  }
+}
+
+.condition-branch-form-item {
+  :deep(.el-form-item__content) {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  :deep(.condition-edit) {
     width: 100%;
   }
 }

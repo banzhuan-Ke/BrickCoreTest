@@ -21,11 +21,15 @@ def enrich_execution_hints_from_record(hints: dict[str, Any], record: Any) -> di
     out["execution_id"] = getattr(record, "id", None)
     start_time = getattr(record, "start_time", None)
     out["start_time"] = start_time.isoformat() if start_time else None
+    if "has_recovery" not in out:
+        out["has_recovery"] = bool(out.get("step_recoveries"))
+    if "step_recoveries" not in out:
+        out["step_recoveries"] = []
     return out
 
 
 async def resolve_latest_failure_record(model: Any, case_id: int, execution_id: int | None = None) -> Any | None:
-    """取指定或最近一次执行；仅当最近一次为失败/错误时返回记录。"""
+    """取指定或最近一次失败执行（兼容旧调用）。"""
     if execution_id:
         record = await model.get_or_none(id=execution_id, is_del=False)
         if not record or record.case_id != case_id:
@@ -41,6 +45,16 @@ async def resolve_latest_failure_record(model: Any, case_id: int, execution_id: 
     return None
 
 
+async def resolve_latest_execution_record(model: Any, case_id: int, execution_id: int | None = None) -> Any | None:
+    """取指定或最近一次执行（成功/失败均可，用于自愈/Act 救回提示）。"""
+    if execution_id:
+        record = await model.get_or_none(id=execution_id, is_del=False)
+        if not record or record.case_id != case_id:
+            return None
+        return record
+    return await model.filter(case_id=case_id, is_del=False).order_by("-id").first()
+
+
 def build_execution_hints_response(
     record: Any | None,
     case_steps: list[Any] | None = None,
@@ -48,6 +62,7 @@ def build_execution_hints_response(
     if not record:
         return {
             "has_failure": False,
+            "has_recovery": False,
             "execution_id": None,
             "start_time": None,
             "status": "",
@@ -55,11 +70,19 @@ def build_execution_hints_response(
             "log_excerpt": "",
             "log_tail": "",
             "step_failures": [],
+            "step_recoveries": [],
         }
     hints = build_case_execution_hints(getattr(record, "result_data", None))
     hints = enrich_execution_hints_from_record(hints, record)
     hints["step_failures"] = remap_step_failures_to_case_steps(
         hints.get("step_failures"),
         case_steps,
+    )
+    hints["step_recoveries"] = remap_step_failures_to_case_steps(
+        hints.get("step_recoveries"),
+        case_steps,
+    )
+    hints["has_recovery"] = bool(
+        [r for r in (hints.get("step_recoveries") or []) if r and not r.get("unresolved")]
     )
     return hints

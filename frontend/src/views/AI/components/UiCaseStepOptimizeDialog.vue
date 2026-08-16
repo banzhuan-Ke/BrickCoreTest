@@ -2,7 +2,7 @@
   <el-dialog
     v-model="visible"
     title="AI 优化步骤"
-    width="720px"
+    width="860px"
     destroy-on-close
     append-to-body
     @open="handleOpen"
@@ -59,6 +59,50 @@
         <div v-if="lastStats.risk_steps_count" class="risk-hint">
           有 {{ lastStats.risk_steps_count }} 步存在定位风险，应用前请核对
         </div>
+        <el-table
+          :data="previewSteps"
+          size="small"
+          border
+          class="preview-table"
+          max-height="320"
+        >
+          <el-table-column type="index" label="#" width="44" />
+          <el-table-column label="关键字" width="120">
+            <template #default="{ row }">
+              <el-tag size="small">{{ row.keyword || row.method || '-' }}</el-tag>
+              <el-tag
+                v-if="row.meta?.ai_inferred_assertion"
+                size="small"
+                type="warning"
+                style="margin-left: 4px"
+              >AI断言</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="描述" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.desc || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="定位" min-width="140" show-overflow-tooltip>
+            <template #default="{ row }">
+              {{ row.params?.locator || row.params?.frame || '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="质量" width="72" align="center">
+            <template #default="{ row }">
+              <el-tag
+                v-if="row.meta?.quality?.level === 'risk'"
+                size="small"
+                type="danger"
+              >风险</el-tag>
+              <el-tag
+                v-else-if="row.meta?.quality?.level === 'warn'"
+                size="small"
+                type="warning"
+              >注意</el-tag>
+              <span v-else style="color: #909399; font-size: 12px">正常</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <p class="preview-tip">切换上方「优化前 / 优化后」可对照；确认后点「应用到用例」，再在编辑器里保存。</p>
       </div>
     </div>
 
@@ -124,6 +168,10 @@ const lastStats = reactive({
   fallback_reason: '',
   assertions_skipped_reason: '',
 })
+
+const previewSteps = computed(() =>
+  stepVersion.value === 'optimized' ? optimizedSteps.value : sourceSteps.value
+)
 
 function resetState() {
   description.value = props.initialDescription || ''
@@ -252,7 +300,17 @@ const handleApply = async () => {
 }
 .risk-hint {
   margin-top: 8px;
+  margin-bottom: 8px;
   font-size: 13px;
   color: #e6a23c;
+}
+.preview-table {
+  margin-top: 10px;
+  width: 100%;
+}
+.preview-tip {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #909399;
 }
 </style>

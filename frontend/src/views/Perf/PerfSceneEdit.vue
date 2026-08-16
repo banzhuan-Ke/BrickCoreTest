@@ -788,8 +788,9 @@
                 <div>　• 编辑已保存的场景，选择文件后可预览；<b>须再点下方「保存」才会写入场景</b>（取消离开则丢弃）</div>
                 <div style="margin-top: 4px;"><b>Step 3 — 在用例 Body 中引用</b></div>
                 <div>　• 写法：<code v-pre style="background:#f5f7fa;padding:2px 6px;border-radius:4px;">${{csv.列名}}</code>（兼容旧写法 <code v-pre>{{csv.列名}}</code>）</div>
+                <div>　• 对 CSV 列做 MD5 等工具：<code v-pre style="background:#f5f7fa;padding:2px 6px;border-radius:4px;">${{dt:md5|text=@csv.列名}}</code>（与环境变量同名时仍取 CSV）</div>
                 <div>　• 问答 Body 示例：<code v-pre style="background:#f5f7fa;padding:2px 6px;border-radius:4px;">{"question":"${{csv.question}}"}</code></div>
-                <div>　• 可用于 Body、Query、Header、URL 路径</div>
+                <div>　• 可用于 Body、Query、Header、URL 路径；须本场景已绑定 CSV</div>
                 <div style="margin-top: 4px;"><b>Step 4 — 选择分配策略</b></div>
                 <div>　• <b>顺序轮询</b>：所有请求按 CSV 行号依次取下一题，<b>最后一题用完后从第一题重新开始</b>（持续压测推荐）</div>
                 <div>　• <b>随机</b>：每次请求随机抽一行问题，适合题库很大、不要求按序覆盖的场景</div>

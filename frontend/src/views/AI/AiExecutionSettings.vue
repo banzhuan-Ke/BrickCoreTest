@@ -113,6 +113,30 @@
           </el-select>
           <div class="form-tip">影响 AI 录制落库时默认选中的定位器；LocatorSelector 中仍可手改</div>
         </el-form-item>
+        <el-form-item>
+          <template #label>
+            <span class="label-with-tip">
+              调试单步最大超时
+              <el-tooltip
+                placement="top"
+                :show-after="200"
+                content="仅交互调试「执行本步 / 执行勾选 / 工具条执行」生效：步骤等待与就绪探测等封顶到此秒数，失败更快反馈。正式跑用例仍用步骤自身超时与环境倍率。需关闭并重新打开调试会话后生效。"
+              >
+                <el-icon class="label-tip-icon"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <el-input-number
+            v-model="execSettings.debug_max_step_timeout_seconds"
+            :min="1"
+            :max="120"
+            :step="1"
+          />
+          <span class="form-unit">秒</span>
+          <div class="form-tip">
+            默认 5 秒；过短可能导致慢站调试误失败，过长则失败反馈变慢
+          </div>
+        </el-form-item>
       </template>
 
       <template v-else-if="activeSection === 'failure'">
@@ -225,6 +249,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { QuestionFilled } from '@element-plus/icons-vue'
 import { projectSettingsApi } from '@/api/modules/sys.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
@@ -264,6 +289,7 @@ const execSettings = reactive({
   ai_act_max_per_case: 3,
   recording_locator_strategy: 'semantic_first',
   default_start_url: '',
+  debug_max_step_timeout_seconds: 5,
   failure_analysis_enabled: true,
   failure_analysis_default_on_report: true,
   failure_analysis_allow_run_override: true,
@@ -313,7 +339,7 @@ const SECTION_PAYLOAD_KEYS = {
     'ai_act_allow_run_override',
     'ai_act_max_per_case',
   ],
-  recording: ['default_start_url', 'recording_locator_strategy'],
+  recording: ['default_start_url', 'recording_locator_strategy', 'debug_max_step_timeout_seconds'],
   failure: [
     'failure_analysis_enabled',
     'failure_analysis_default_on_report',
@@ -340,6 +366,7 @@ const buildSavePayload = () => {
       ai_act_max_per_case: execSettings.ai_act_max_per_case,
       recording_locator_strategy: execSettings.recording_locator_strategy,
       default_start_url: execSettings.default_start_url,
+      debug_max_step_timeout_seconds: execSettings.debug_max_step_timeout_seconds,
       failure_analysis_enabled: execSettings.failure_analysis_enabled,
       failure_analysis_default_on_report: execSettings.failure_analysis_default_on_report,
       failure_analysis_allow_run_override: execSettings.failure_analysis_allow_run_override,
@@ -406,12 +433,31 @@ watch(projectId, (pid) => {
 </script>
 
 <style scoped>
+.label-with-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.label-tip-icon {
+  font-size: 14px;
+  color: #909399;
+  cursor: help;
+  vertical-align: middle;
+}
+.label-tip-icon:hover {
+  color: var(--el-color-primary);
+}
 .form-tip {
   margin-top: 4px;
   font-size: 12px;
   color: #909399;
   line-height: 1.4;
   width: 100%;
+}
+.form-unit {
+  margin-left: 8px;
+  color: #606266;
+  font-size: 13px;
 }
 .section-lead {
   margin: 0 0 12px;

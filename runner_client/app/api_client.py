@@ -75,15 +75,18 @@ class BrickCoreApi:
         return f"{self.base_url}{path}"
 
     def health_check(self) -> bool:
+        """探活平台 HTTP API。优先单路径，失败再试 version（最多 2 次请求）。"""
         try:
             resp = requests.get(self._url("/runner/health"), timeout=5)
+            if resp.status_code == 200:
+                return True
+        except requests.RequestException:
+            pass
+        try:
+            resp = requests.get(self._url("/runner/version"), timeout=5)
             return resp.status_code == 200
         except requests.RequestException:
-            try:
-                resp = requests.get(self._url("/docs"), timeout=5)
-                return resp.status_code in (200, 401)
-            except requests.RequestException:
-                return False
+            return False
 
     def login(self, username: str, password: str) -> dict[str, Any]:
         resp = requests.post(

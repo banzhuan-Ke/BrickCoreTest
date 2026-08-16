@@ -36,6 +36,10 @@
           <el-tag v-if="step.params?.fragment_version" size="small" type="info">v{{ step.params.fragment_version }}</el-tag>
           <el-tag v-if="fragmentOutdated" size="small" type="warning">有新版本</el-tag>
         </div>
+        <div v-if="recoveryHint && !executionHint" class="tags recovery-tags">
+          <el-tag v-if="recoveryKinds.includes('heal')" size="small" type="warning">自愈救过</el-tag>
+          <el-tag v-if="recoveryKinds.includes('act')" size="small" type="success">AI Act 救过</el-tag>
+        </div>
         <!--按钮-->
         <div class="btn">
           <el-tooltip
@@ -52,8 +56,8 @@
             >执行勾选({{ selectedCount }})</el-button>
           </el-tooltip>
           <el-tooltip
-            v-else-if="depth === 0 && interactiveReady && !selectable"
-            content="在已打开的交互调试浏览器中只执行本步（勾选多步请用顶部「执行勾选步骤」）"
+            v-if="depth === 0 && interactiveReady"
+            content="在已打开的交互调试浏览器中只执行本步；勾选多步请用顶部「执行勾选步骤」"
             placement="top"
           >
             <el-button
@@ -61,25 +65,29 @@
               size="small"
               type="warning"
               :icon="VideoPlay"
+              :loading="debugRunResult?.status === 'running'"
               @click.stop="handleInteractiveRun"
             >执行本步</el-button>
           </el-tooltip>
           <el-tooltip
             v-if="depth === 0"
-            content="调试已开时可二选一：直接在当前浏览器接录，或先回放前置步再接录"
+            :content="recordFromStepTooltip"
             placement="top"
           >
-            <el-button
-              plain
-              size="small"
-              type="warning"
-              :icon="VideoCamera"
-              @click.stop="handleRecordFromStep"
-            >从这里开始录制</el-button>
+            <span>
+              <el-button
+                plain
+                size="small"
+                type="warning"
+                :icon="VideoCamera"
+                :disabled="!allowInteractiveActions"
+                @click.stop="handleRecordFromStep"
+              >从这里开始录制</el-button>
+            </span>
           </el-tooltip>
           <el-tooltip
             v-if="depth === 0"
-            :content="interactiveReady ? '交互调试已就绪：将执行第 1 步到本步' : '推荐先打开「交互调试」；也可使用旧版一次性调试'"
+            :content="debugThroughTooltip"
             placement="top"
           >
             <span>
@@ -89,7 +97,7 @@
                 size="small"
                 type="success"
                 :icon="VideoPlay"
-                :disabled="!debugEnabled"
+                :disabled="!debugEnabled || !allowInteractiveActions"
                 @click.stop="handleDebug"
               >调试到此步</el-button>
             </span>
@@ -97,6 +105,13 @@
           <el-button plain size="small" type="primary" :icon="Edit" @click.stop="handleEdit">
             {{ step.method === 'fragment_ref' ? '配置' : '编辑' }}
           </el-button>
+          <el-button
+            v-if="canConvertSmart"
+            plain
+            size="small"
+            type="warning"
+            @click.stop="handleConvertToSmart"
+          >转为智能</el-button>
           <el-button plain size="small" type="info" :icon="CopyDocument" @click.stop="handleCopy">复制</el-button>
           <el-button plain size="small" type="danger" :icon="Delete" @click.stop="handleDelete">删除</el-button>
         </div>
@@ -182,6 +197,14 @@
           <el-tag :type="executionHint.status === 'error' ? 'danger' : 'warning'" size="small">
             {{ executionHintLabel }}
           </el-tag>
+          <el-tag
+            v-if="executionHint.failure_code"
+            size="small"
+            :type="failureCodeTagType(executionHint.failure_code)"
+            effect="plain"
+          >
+            {{ formatFailureCode(executionHint.failure_code) }}
+          </el-tag>
           <span class="execution-error-toggle">{{ errorExpanded ? '收起' : '展开' }}详情</span>
           <el-icon class="execution-error-arrow">
             <ArrowDown v-if="!errorExpanded" />
@@ -201,6 +224,30 @@
         </div>
       </div>
 
+      <!-- 最近一次执行：自愈 / AI Act 救回（默认收起） -->
+      <div v-else-if="recoveryHint" class="execution-recovery-box">
+        <div class="execution-recovery-header" @click="recoveryExpanded = !recoveryExpanded">
+          <el-tag v-if="recoveryKinds.includes('heal')" size="small" type="warning">自愈救过</el-tag>
+          <el-tag v-if="recoveryKinds.includes('act')" size="small" type="success">AI Act 救过</el-tag>
+          <span class="execution-error-toggle">{{ recoveryExpanded ? '收起' : '展开' }}详情</span>
+          <el-icon class="execution-error-arrow">
+            <ArrowDown v-if="!recoveryExpanded" />
+            <ArrowUp v-else />
+          </el-icon>
+        </div>
+        <div v-show="recoveryExpanded" class="execution-error-body">
+          <p v-if="recoveryHint.message" class="execution-recovery-message">{{ recoveryHint.message }}</p>
+          <p v-if="recoveryHint.heal?.new" class="execution-recovery-meta">
+            自愈定位：<code>{{ recoveryHint.heal.original || '—' }}</code>
+            →
+            <code>{{ recoveryHint.heal.new }}</code>
+          </p>
+          <p v-if="recoveryHint.ai_act?.reason || recoveryHint.ai_act?.act_desc" class="execution-recovery-meta">
+            Act 规划：{{ recoveryHint.ai_act.act_desc || recoveryHint.ai_act.reason }}
+          </p>
+        </div>
+      </div>
+
       <div v-else-if="debugRunResult?.status === 'running'" class="execution-running-box">
         <el-tag type="primary" size="small">调试执行中</el-tag>
         <span v-if="debugRunResult.message" class="execution-running-msg">{{ debugRunResult.message }}</span>
@@ -208,6 +255,21 @@
 
       <div v-else-if="debugRunResult && debugRunResult.status === 'success'" class="execution-success-box">
         <el-tag type="success" size="small">调试成功</el-tag>
+        <div v-if="debugOutcomeVars.length" class="execution-success-vars">
+          <div
+            v-for="(item, vi) in debugOutcomeVars"
+            :key="`${item.name}-${vi}`"
+            class="execution-success-var-row"
+          >
+            <code class="var-name">{{ item.name }}</code>
+            <span class="var-eq">=</span>
+            <code class="var-value" :title="formatOutcomeValue(item.value)">{{ formatOutcomeValue(item.value) }}</code>
+          </div>
+        </div>
+        <p
+          v-else-if="debugOutcomeText"
+          class="execution-success-msg"
+        >{{ debugOutcomeText }}</p>
       </div>
     </div>
   </div>
@@ -220,8 +282,11 @@ import { uiFragmentApi } from '@/api/modules/ui'
 import { appFragmentApi } from '@/api/modules/app'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import BranchStepList from './BranchStepList.vue'
-import { formatStepParamValue } from '@/utils/stepHelper'
+import { formatStepParamValue, canConvertToSmart, convertStepToSmart } from '@/utils/stepHelper'
 import { formatExecutionHintStatus } from '@/utils/caseExecutionHints'
+import { formatFailureCode, failureCodeTagType } from '@/utils/uiFailureCode'
+import { formatOutcomeValue, formatStepOutcomeText } from '@/utils/debugSession.js'
+import { ElMessage } from 'element-plus'
 
 const props = defineProps({
   step: {
@@ -256,6 +321,10 @@ const props = defineProps({
     type: Object,
     default: null
   },
+  recoveryHint: {
+    type: Object,
+    default: null,
+  },
   debugSelected: {
     type: Boolean,
     default: false,
@@ -265,6 +334,10 @@ const props = defineProps({
     default: null,
   },
   debugEnabled: {
+    type: Boolean,
+    default: true,
+  },
+  allowInteractiveActions: {
     type: Boolean,
     default: true,
   },
@@ -278,14 +351,31 @@ const editStepMethod = inject('editStepMethod', null)
 const interactiveDebugSession = inject('interactiveDebugSession', ref(null))
 const runInteractiveDebugStep = inject('runInteractiveDebugStep', null)
 const interactiveReady = computed(() => interactiveDebugSession.value?.status === 'ready')
+const recordFromStepTooltip = computed(() => (
+  props.allowInteractiveActions
+    ? '调试已开时可二选一：直接在当前浏览器接录，或先回放前置步再接录'
+    : '请先保存用例后再使用交互调试 / 从这里录制'
+))
+const debugThroughTooltip = computed(() => {
+  if (!props.allowInteractiveActions) {
+    return '请先保存用例后再使用交互调试 / 从这里录制'
+  }
+  return interactiveReady.value
+    ? '交互调试已就绪：将执行第 1 步到本步'
+    : '推荐先打开「交互调试」；也可使用旧版一次性调试'
+})
 const showRunSelectedBtn = computed(
   () => props.selectable && props.selected && props.selectedCount > 0,
 )
 const proStore = ProjectStore()
 const stepModule = inject('stepEditorModule', computed(() => 'web'))
+const canConvertSmart = computed(
+  () => stepModule.value === 'web' && canConvertToSmart(props.step),
+)
 const latestFragmentVersion = ref(null)
 const fragmentOutdated = ref(false)
 const errorExpanded = ref(false)
+const recoveryExpanded = ref(false)
 
 const fragmentVarEntries = computed(() => {
   const vars = props.step.params?.variables
@@ -305,6 +395,7 @@ const stepClasses = computed(() => ({
   'is-fragment': props.step.method === 'fragment_ref',
   'is-selected': props.selectable && props.selected,
   'is-failed': !!props.executionHint,
+  'is-recovered': !!props.recoveryHint && !props.executionHint,
   'is-debug-selected': props.debugSelected,
   'is-debug-running': props.debugRunResult?.status === 'running',
   'is-debug-success': props.debugRunResult?.status === 'success' && !props.executionHint,
@@ -312,6 +403,17 @@ const stepClasses = computed(() => ({
 }))
 
 const executionHintLabel = computed(() => formatExecutionHintStatus(props.executionHint?.status))
+
+const debugOutcomeVars = computed(() => {
+  const list = props.debugRunResult?.variables
+  return Array.isArray(list) ? list.filter((v) => v && v.name) : []
+})
+
+const debugOutcomeText = computed(() => formatStepOutcomeText(props.debugRunResult))
+const recoveryKinds = computed(() => {
+  const kinds = props.recoveryHint?.kinds
+  return Array.isArray(kinds) ? kinds : []
+})
 
 async function checkFragmentVersion() {
   if (props.step.method !== 'fragment_ref') return
@@ -401,11 +503,21 @@ function handleEdit() {
   emit('edit')
 }
 
+/** SMART-1：普通点击/输入 → 智能步骤 */
+function handleConvertToSmart() {
+  const next = convertStepToSmart(props.step)
+  if (!next) return
+  emit('update:step', next)
+  ElMessage.success(`已转为「${next.keyword}」，请编辑补全 target / intent`)
+}
+
 function handleDebug() {
+  if (!props.allowInteractiveActions || !props.debugEnabled) return
   emit('debug', props.index)
 }
 
 function handleRecordFromStep() {
+  if (!props.allowInteractiveActions) return
   emit('record-from-step', props.index)
 }
 
@@ -469,25 +581,50 @@ function handleDeleteBranch(bIndex) {
   emit('delete-branch', bIndex)
 }
 
-// 获取条件显示文本
+function formatConditionLocator(locator) {
+  if (locator == null || locator === '') return ''
+  if (typeof locator === 'string') return locator.trim()
+  if (typeof locator === 'object') {
+    const by = locator.by || ''
+    const value = String(locator.value || '').trim()
+    if (!value) return ''
+    return by ? `${by}=${value}` : value
+  }
+  return String(locator)
+}
+
+// 获取条件显示文本（含定位摘要，便于发现未配置）
 function getConditionDisplay(condition) {
   if (!condition) return ''
-  
+
   const typeMap = {
-    'element_visible': '元素可见',
-    'element_exist': '元素存在',
-    'element_text_equals': '文本等于',
-    'element_text_contains': '文本包含',
-    'page_title_equals': '标题等于',
-    'page_url_contains': 'URL包含',
-    'custom_js': 'JS表达式'
+    element_visible: '元素可见',
+    element_exist: '元素存在',
+    element_text_equals: '文本等于',
+    element_text_contains: '文本包含',
+    page_title_equals: '标题等于',
+    page_url_contains: 'URL包含',
+    custom_js: 'JS表达式',
   }
-  
+
   if (condition.type === 'else') return '默认分支'
-  
+
   const typeName = typeMap[condition.type] || condition.type
   const operator = condition.operator === 'is_true' ? '为真' : '为假'
-  
+  const needsLocator = ['element_visible', 'element_exist', 'element_text_equals', 'element_text_contains'].includes(
+    condition.type,
+  )
+  const locatorText = formatConditionLocator(condition.locator)
+  if (needsLocator) {
+    if (!locatorText) return `${typeName} ${operator} · 未配置定位`
+    const short = locatorText.length > 40 ? `${locatorText.slice(0, 40)}…` : locatorText
+    return `${typeName} ${operator} · ${short}`
+  }
+  const expected = String(condition.expected_value || condition.script || '').trim()
+  if (expected) {
+    const short = expected.length > 24 ? `${expected.slice(0, 24)}…` : expected
+    return `${typeName} ${operator} · ${short}`
+  }
   return `${typeName} ${operator}`
 }
 
@@ -671,6 +808,55 @@ function getParamsDisplay(params) {
   overflow: hidden;
 }
 
+.execution-recovery-box {
+  margin-top: 10px;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px solid var(--el-color-warning-light-5);
+  overflow: hidden;
+}
+
+.execution-recovery-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.execution-recovery-box .execution-error-body {
+  border-top: 1px dashed var(--el-color-warning-light-5);
+}
+
+.execution-recovery-message,
+.execution-recovery-meta {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-regular);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.execution-recovery-meta code {
+  font-size: 11px;
+  padding: 0 4px;
+  background: var(--el-fill-color);
+  border-radius: 3px;
+}
+
+.recovery-tags {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+.step.is-recovered {
+  border-color: var(--el-color-warning-light-5);
+}
+
 .execution-error-header {
   display: flex;
   align-items: center;
@@ -700,7 +886,7 @@ function getParamsDisplay(params) {
   font-size: 12px;
   line-height: 1.5;
   color: var(--el-color-danger);
-  max-height: 120px;
+  max-height: 220px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
@@ -721,6 +907,57 @@ function getParamsDisplay(params) {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.execution-success-msg {
+  margin: 0;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.execution-success-vars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.execution-success-var-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.execution-success-var-row .var-name {
+  flex: 0 0 auto;
+  max-width: 140px;
+  color: var(--el-color-success);
+  background: var(--el-color-success-light-9);
+  padding: 1px 6px;
+  border-radius: 3px;
+  word-break: break-all;
+}
+
+.execution-success-var-row .var-eq {
+  color: var(--el-text-color-secondary);
+  flex: 0 0 auto;
+}
+
+.execution-success-var-row .var-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--el-text-color-primary);
+  background: var(--el-fill-color-light);
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow: auto;
 }
 
 .execution-running-box {

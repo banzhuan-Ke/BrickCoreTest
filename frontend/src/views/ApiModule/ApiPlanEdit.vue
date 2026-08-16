@@ -117,7 +117,11 @@
                     />
                   </el-select>
                   <VarInsertButton :env-id="planRefEnvId" :show-env-edit="false" label="插入变量" />
-                  <ToolInsertButton :extra-vars="planVarNames" label="插入工具" />
+                  <ToolInsertButton
+                    :env-id="planRefEnvId || form.env_id"
+                    :extra-vars="planVarNames"
+                    label="插入工具"
+                  />
                 </div>
                 <div
                   v-for="(v, idx) in varList"

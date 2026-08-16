@@ -534,13 +534,18 @@ Snapshot 类型：{{snapshot_type}}
 - 正确：get_by_placeholder=密码、get_by_role=row, 0302、#loginBtn
 - 错误：get_by_placeholder("密码")、page.get_by_role(...)、get_by_role='row'（role/name 禁止加引号）、get_by_role=button, name="登入"（禁止写 name= 前缀，应写 get_by_role=button, 登入）、row=0302（必须用 get_by_role=row, 0302）
 - 优先 data-testid、#id、name、get_by_role=、get_by_placeholder=、get_by_label=
-- get_by_text= 对 input placeholder 无效；失败定位器为「请输入…」或短 placeholder 文案时改用 get_by_placeholder=
+- get_by_text= 对 **真实 input/textarea 的 placeholder 属性**无效；此时改用 get_by_placeholder=
+- **严禁**把组件展示层文案（如「请选择 / Please select」）当成 placeholder 改写成 get_by_placeholder=
 - 严禁返回与失败定位器完全相同的字符串
+- **错误含 intercepts pointer events 时（R1）**：禁止继续推荐与失败定位器等价的「纯文案 / 展示占位节点」；应推荐能完成点击的控件（报错中的拦截者，或其 combobox / button / listbox 祖先）
+- **placeholder vs 展示文案（R2）**：
+  - 对：`<input placeholder="请输入">` → get_by_placeholder=请输入；错：get_by_text=请输入
+  - 对：TreeSelect/Select 展示 `<span>请选择</span>` 且错误含 intercepts pointer events → get_by_role=combobox（可加 label/nth）或可点祖先；错：get_by_placeholder=请选择、get_by_text=请选择 置顶（拼接邻近文案）
 - **错误含 element is not visible 时**：禁止继续用 (//xpath)[1] 等纯序号定位；改用可见结构特征（如含操作按钮的行、唯一 id、title 等）
-- **业务意图 step_intent 是操作目标**：新定位器必须能完成 intent 描述的操作（如「点击侧栏基础设置」必须点到「基础设置」，不能改成「设置」）
+- **业务意图 step_intent 是操作目标（R4）**：新定位器必须能完成 intent 描述的操作；优先对齐表单项 label 再用 combobox，禁止改成邻近开关文案（如「置顶」）
 - 页面上有多个相似文案时，选与 step_intent **完全匹配** 或 **更长更具体** 的那个，禁止用更短子串替代（例：失败 get_by_text=基础设置 时禁止改成 get_by_text=设置）
 - 常见短词（设置、登录、确定等）易重复，优先用带区域/结构信息的定位（侧栏菜单、顶栏导航、父级 class 等），必要时配合 index
-- **弹窗/浮层内元素**：优先 `弹窗容器 >> get_by_text=` 或 `get_by_role=dialog >> ...`；禁止裸 `get_by_text` 全页搜索
+- **弹窗/浮层内元素（R3）**：优先 `弹窗容器 >> get_by_text=` 或 `get_by_role=dialog >> ...`；禁止裸 `get_by_text=请选择` 全页搜索
 - **文本含 $ 或反斜杠时禁止** `tag:has-text("...")`（Playwright CSS 会报 BADSTRING），必须用 `get_by_text=` 或 `父级 >> get_by_text=`
 - 只输出 JSON 对象""",
             "examples": [],
@@ -579,10 +584,16 @@ Snapshot 类型：{{snapshot_type}}
 
 规则：
 1. 只输出**一步**，method 仅限：click_ele, fill_value, double_click_ele, clear_value, hover, select_option, type_value, drag_and_drop, wait_for_element, press_key
-2. params.locator 必须是字符串；优先 data-testid、#id、get_by_role=、get_by_placeholder=
-3. 必须完成业务意图 intent 描述的操作，禁止点到相似但错误的元素
+2. params.locator 必须是字符串；优先 data-testid、#id、get_by_role=、get_by_placeholder=（仅真实 input/textarea 的 placeholder 属性）
+3. 必须完成业务意图 intent 描述的操作，禁止点到相似但错误的元素；优先对齐表单项 label，勿点邻近「置顶」等无关控件
 4. 拖拽类保留 start_selector/end_selector；输入类保留 value（可沿用原 params）
-5. 只输出 JSON 对象""",
+5. **错误含 intercepts pointer events**：禁止对展示文案「请选择」使用 get_by_placeholder=；应规划点击 combobox/button 或拦截者祖先
+6. **placeholder vs 展示文案**：
+   - 对：真实 `<input placeholder="请输入">` → get_by_placeholder=请输入
+   - 错：`<span>请选择</span>` / 选择器展示占位 → get_by_placeholder=请选择
+7. 弹窗内操作优先 `get_by_role=dialog >> ...`；禁止裸全页 get_by_text=请选择
+8. locator 须为平台字符串规范（禁止 get_by_placeholder("x") 函数写法）
+9. 只输出 JSON 对象""",
             "examples": [],
         },
         "requirement_parse": {
@@ -1486,10 +1497,12 @@ Bug 总数：{{ bug_total }}，未关闭：{{ bug_open_count }}，已关闭：{{
                 "你是企业级测试方案撰写专家。"
                 "必须严格依据提供的需求列表与进度计划生成 JSON，不得编造需求编号。"
                 "测试策略中的时间节点必须与进度计划一致；测试数据须按当前需求逐条给出可执行准备项。"
+                "除 risks、schedule 数组外，叙述类字段一律输出中文纯文本字符串，禁止嵌套对象。"
             ),
             "user_prompt_template": """项目：{{ project_name }}
 迭代编号：{{ iteration_no }}
 方案名称：{{ scheme_name }}
+是否需要 AI 补齐进度计划：{{ need_ai_schedule }}
 
 ## 需求列表（节选）
 {{ requirements_preview }}
@@ -1517,14 +1530,19 @@ Bug 总数：{{ bug_total }}，未关闭：{{ bug_open_count }}，已关闭：{{
   "regression_test_priority": "3.1.6 回归测试表-测试重点（按本迭代修改模块，勿沿用其他迭代的需求编号）",
   "regression_test_special_notes": "3.1.6 回归测试表-特殊事项",
   "test_strategy": "整体测试策略摘要（必须引用进度计划中的日期与里程碑，写明提测/评审/发布窗口，禁止写 6/30、7/1 等未在进度计划出现的日期）",
+  "schedule": [
+    {"content": "事项", "start_date": "开始日期", "end_date": "结束日期", "env": "测试环境", "members": "参与人", "note": "备注"}
+  ],
   "risks": [
     {"req_no": "编号", "risk_assessment": "风险描述", "risk_scope": "影响范围"}
   ]
 }
 要求：
 1. risks 至少覆盖全部 P0 需求；备注含「风险/不明确」的条目须单独说明；
-2. 进度计划为空时，test_strategy 中不要写具体日期；
-3. 只输出 JSON。""",
+2. 当 need_ai_schedule 为 true 或上方进度计划为空时：必须输出 schedule 数组（至少含需求说明会、用例编写/评审、QC提测、回归与发布等关键节点）；日期未知时用「待定」，禁止编造具体日历日期；need_ai_schedule 为 false 时 schedule 可为空数组；
+3. 进度计划为空且 schedule 亦无可用日期时，test_strategy 中不要写具体日期；
+4. test_data、ai_func_priority、*_test_priority、*_test_special_notes、overview、test_objectives、test_strategy 等叙述字段必须是**中文纯文本字符串**（可用换行），禁止返回嵌套 JSON/对象/数组；
+5. 只输出 JSON。""",
             "examples": [],
         },
         "knowledge_pack_report_narrative": {
@@ -1534,33 +1552,46 @@ Bug 总数：{{ bug_total }}，未关闭：{{ bug_open_count }}，已关闭：{{
             "system_prompt": (
                 "你是企业级测试报告撰写专家。"
                 "统计数字由系统提供，不得篡改通过率或 Bug 数量。"
+                "定制报告以禅道 Bug、测试方案与需求为主；平台自动化执行记录多为可选，经常为空。"
+                "测试结论必须明确写出发版建议，并与系统发版判定一致。"
             ),
             "user_prompt_template": """项目：{{ project_name }}
 迭代：{{ iteration_no }} · {{ scheme_name }}
 需求数：{{ requirements_count }}
+是否有平台自动化执行记录：{{ has_automation_exec }}
 
-## 执行数据
+## 执行数据（平台自动化，可选）
 {{ execution_data }}
 
-## Bug 摘要
+## Bug 摘要（手工/禅道，主依据）
 {{ bug_summary }}
+
+## 系统发版判定（结论必须对齐）
+{{ release_assessment }}
 
 请输出 JSON：
 {
   "test_phase_desc": "测试阶段说明（含测试类型、环境、周期）",
   "test_scope": "测试范围概述",
-  "test_conclusion": "测试结论（2.1）",
+  "test_conclusion": "测试结论（2.1）：首句明确是否建议发版，并简述依据",
   "test_summary": "测试总结（2.2，分点叙述）",
   "progress_summary": "测试进度总结（3.1）",
   "coverage_summary": "测试需求覆盖情况（3.2）",
   "module_analysis": "5.1 按模块分布分析及建议",
   "severity_analysis": "5.2 按严重程度分析及建议",
-  "round_analysis": "5.3 按轮次收敛趋势分析及建议",
+  "resolution_analysis": "5.3 按解决结论分析及建议",
+  "round_analysis": "同 resolution_analysis（兼容旧字段，内容须写解决结论而非测试轮次）",
   "status_analysis": "5.4 按状态分析及建议",
   "bug_analysis_text": "缺陷分析综合叙述",
   "ai_recommendations": "测试风险分析及建议（分点）"
 }
-只输出 JSON。""",
+要求：
+1. 以 Bug 摘要与系统发版判定为主撰写；有 Bug 即说明已开展测试活动；
+2. test_conclusion 必须明确「建议可发版 / 建议可发版（带风险） / 不建议发版」，并与系统发版判定一致：全部已关闭/已解决→可发版；仅有 3/4 级未关闭→带风险可发；存在激活等未关闭的 1/2 级→不建议发版；
+3. has_automation_exec 为 false 时：结论、总结、进度、风险中**禁止提及**自动化、通过率、执行记录、未接入自动化等任何表述；
+4. 5.3 按「解决结论」（修改代码/转优化/非BUG 等）分析，禁止再写「第一/二/三轮」「轮次收敛」；
+5. ai_recommendations 结合未关闭 Bug、严重程度与发版风险，勿空泛重复「无执行数据」；
+6. 只输出 JSON。""",
             "examples": [],
         },
         "ui_record_optimize": {

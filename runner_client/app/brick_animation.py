@@ -1,11 +1,31 @@
-"""搬砖加载动画（纯 QPainter，无外部资源）"""
+"""搬砖加载动画（QPainter）与启动闪屏。"""
 from __future__ import annotations
 
 import math
+import sys
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QRectF, QPointF
-from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QLinearGradient
+from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QLinearGradient, QIcon
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QVBoxLayout, QWidget
+
+
+def _splash_app_icon() -> QIcon | None:
+    here = Path(__file__).resolve().parent.parent
+    candidates = [
+        here / "icon.ico",
+        here.parent / "runner" / "icon.ico",
+        Path(sys.executable).resolve().parent / "icon.ico",
+    ]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.insert(0, Path(meipass) / "icon.ico")
+    for path in candidates:
+        if path.is_file():
+            icon = QIcon(str(path))
+            if not icon.isNull():
+                return icon
+    return None
 
 
 def _make_pen(
@@ -157,6 +177,9 @@ class StartupSplash(QWidget):
         super().__init__(None, Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint)
         self.setFixedSize(380, 280)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        splash_icon = _splash_app_icon()
+        if splash_icon is not None:
+            self.setWindowIcon(splash_icon)
         self.setStyleSheet(
             """
             StartupSplash, QWidget#splashRoot {

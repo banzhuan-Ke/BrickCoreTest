@@ -97,8 +97,12 @@ def convert_actions_to_steps(
 
     # 第四步：转换为平台步骤
     steps = []
-    for action in with_popup_waits:
-        step = _action_to_step(action, locator_strategy=locator_strategy)
+    for idx, action in enumerate(with_popup_waits):
+        step = _action_to_step(
+            action,
+            locator_strategy=locator_strategy,
+            seq=idx,
+        )
         if step:
             steps.append(step)
 
@@ -124,8 +128,30 @@ def _dedup_actions(actions: List[dict]) -> List[dict]:
     return result
 
 
+def _fill_action_target_key(action: dict) -> str:
+    """与 Runner 一致：按控件身份合并，避免裸 textbox selector 把不同输入框并成一步。"""
+    meta = action.get("meta") if isinstance(action.get("meta"), dict) else {}
+    elem_id = str(meta.get("id") or "").strip()
+    if elem_id:
+        return f"id:{elem_id}"
+    css_path = str(meta.get("cssPath") or "").strip()
+    if css_path:
+        return f"css:{css_path}"
+    name = str(meta.get("name") or "").strip()
+    if name:
+        return f"name:{name}"
+    placeholder = str(meta.get("placeholder") or "").strip()
+    if placeholder:
+        return f"ph:{placeholder}"
+    accessible = str(meta.get("accessibleName") or meta.get("text") or "").strip()
+    input_type = str(meta.get("inputType") or "").strip().lower()
+    if accessible or input_type:
+        return f"a11y:{accessible}|type:{input_type}"
+    return f"sel:{(action.get('selector') or '').strip()}"
+
+
 def _merge_input_actions(actions: List[dict]) -> List[dict]:
-    """合并输入事件：连续的 input 合并为单个 fill"""
+    """合并输入事件：同一控件连续 input 合并为单个 fill"""
     result = []
     pending_fill = None
 
@@ -133,13 +159,19 @@ def _merge_input_actions(actions: List[dict]) -> List[dict]:
         action_type = action.get("action_type", "")
 
         if action_type == "fill":
-            selector = action.get("selector", "")
             value = action.get("value", "")
+            curr_key = _fill_action_target_key(action)
 
-            if pending_fill and pending_fill.get("selector") == selector:
+            if pending_fill and _fill_action_target_key(pending_fill) == curr_key:
                 # 同一输入框，更新值
                 pending_fill["value"] = value
                 pending_fill["timestamp"] = action.get("timestamp", 0)
+                if action.get("meta"):
+                    pending_fill["meta"] = action.get("meta")
+                if action.get("selector"):
+                    pending_fill["selector"] = action.get("selector")
+                if action.get("candidates"):
+                    pending_fill["candidates"] = action.get("candidates")
             else:
                 # 新的输入框，保存上一个，开始新的
                 if pending_fill:
@@ -241,7 +273,12 @@ def _insert_popup_wait_actions(actions: List[dict]) -> List[dict]:
     return result
 
 
-def _action_to_step(action: dict, *, locator_strategy: str = "semantic_first") -> dict:
+def _action_to_step(
+    action: dict,
+    *,
+    locator_strategy: str = "semantic_first",
+    seq: int = 0,
+) -> dict:
     """将单个原始操作转换为平台步骤"""
     action_type = action.get("action_type", "")
 
@@ -273,7 +310,7 @@ def _action_to_step(action: dict, *, locator_strategy: str = "semantic_first") -
             }
             desc = f"存变量 ${{{var_name}}}" if var_name else "存变量"
         return assess_step_quality({
-            "id": f"step_{int(time.time() * 1000)}_{hash(action.get('selector', '')) % 1000}",
+            "id": f"step_{int(time.time() * 1000)}_{seq}_{abs(hash(action.get('selector', '') or '')) % 10000}",
             "keyword": keyword,
             "desc": desc,
             "method": method,
@@ -308,7 +345,13 @@ def _action_to_step(action: dict, *, locator_strategy: str = "semantic_first") -
         desc = f"选择下拉框选项: {params['value']}"
     elif action_type == "wait":
         params["timeout"] = int(action.get("value", 2000))
-        desc = f"等待 {params['timeout'] // 1000} 秒"
+        timeout_ms = int(params["timeout"] or 0)
+        if timeout_ms < 1000:
+            desc = f"等待 {timeout_ms} 毫秒"
+        elif timeout_ms % 1000 == 0:
+            desc = f"等待 {timeout_ms // 1000} 秒"
+        else:
+            desc = f"等待 {timeout_ms / 1000:g} 秒"
     elif action_type == "wait_popup":
         params["locator"] = action.get("selector", "")
         params["timeout"] = 20000
@@ -369,6 +412,7 @@ def _action_to_step(action: dict, *, locator_strategy: str = "semantic_first") -
         desc = f"执行操作: {action_type}"
 
     meta = dict(action.get("meta", {}))
+    # W-33：needs_confirm / frame_chain* 已在 meta 中透传；勿改为结构化 params.frame_chain
     if action_type == "fill":
         for key in ("inputType", "name", "id"):
             if action.get(key):
@@ -396,7 +440,8 @@ def _action_to_step(action: dict, *, locator_strategy: str = "semantic_first") -
         meta.pop("locatorRankedByRunner", None)
 
     step = {
-        "id": f"step_{int(time.time() * 1000)}_{hash(action.get('selector', '')) % 1000}",
+        # 同毫秒 + 同 selector（如 click/hover 同一菜单）会撞 id；带上序号保证唯一
+        "id": f"step_{int(time.time() * 1000)}_{seq}_{abs(hash(action.get('selector', '') or '')) % 10000}",
         "keyword": _method_to_keyword(method),
         "desc": desc,
         "method": method,

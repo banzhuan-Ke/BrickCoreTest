@@ -15,6 +15,7 @@
       >
         <template #title>
           配置登录 Token 后，用例执行前自动注入 <code v-pre>${{token}}</code> 等变量；过期时自动刷新。
+          请在执行用例时选择<strong>与授权绑定相同的环境</strong>；编辑态「调试授权」成功会写入缓存。
         </template>
         <p class="page-tip">一般请用<strong>接口登录</strong>；Token 已在环境 global_vars 时，可直接在用例里写 <code v-pre>${{变量名}}</code>，不必建授权。</p>
       </el-alert>
@@ -123,14 +124,17 @@
         </el-form-item>
         <el-form-item label="变量提取">
           <div class="extractor-list">
+            <p class="extractor-hint">
+              从登录接口的<strong>响应</strong>取值（不是请求）：可选响应体 JSON/正则，或响应头（如 Set-Cookie）。
+            </p>
             <div v-for="(ex, idx) in form.extractors" :key="idx" class="extractor-row">
               <el-input v-model="ex.name" placeholder="变量名 token" style="width: 120px;" />
-              <el-select v-model="ex.source" style="width: 100px;">
-                <el-option label="JSON" value="json" />
-                <el-option label="Header" value="header" />
-                <el-option label="正则" value="regex" />
-              </el-select>
-              <el-input v-model="ex.path" placeholder="$.data.token 或 Header 名" style="flex: 1;" />
+              <HttpExtractorSourceSelect v-model="ex.source" select-style="width: 140px;" />
+              <el-input
+                v-model="ex.path"
+                :placeholder="extractorPathPlaceholder(ex.source)"
+                style="flex: 1;"
+              />
               <el-button icon="Delete" type="danger" link @click="form.extractors.splice(idx, 1)" />
             </div>
             <el-button size="small" @click="addExtractor">+ 添加提取规则</el-button>
@@ -209,6 +213,8 @@ import PageCard from '@/components/PageCard.vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { httpAuthConfigApi } from '@/api/modules/httpAuth'
 import { httpApi } from '@/api/modules/http'
+import HttpExtractorSourceSelect from './components/HttpExtractorSourceSelect.vue'
+import { extractorPathPlaceholder } from './utils/httpExtractAssertUi.js'
 
 const proStore = ProjectStore()
 
@@ -380,13 +386,16 @@ const handleTestPreview = async () => {
       auth_type: form.auth_type,
       login_api_id: form.auth_type === 'api_login' ? form.login_api_id : null,
       extractors: form.auth_type === 'api_login' ? form.extractors.filter(e => e.name) : [],
-      custom_code: form.auth_type === 'custom_code' ? form.custom_code : null
+      custom_code: form.auth_type === 'custom_code' ? form.custom_code : null,
+      config_id: editingId.value || undefined
     })
     if (res.data?.code === 200) {
       testResult.variables = res.data.data?.variables || {}
       testResult.hint = res.data.data?.usage_hint || ''
       testResultVisible.value = true
-      ElMessage.success('调试成功，请核对下方变量')
+      const written = res.data.data?.cache_written
+      ElMessage.success(written ? '调试成功，已写入授权缓存' : '调试成功，请核对下方变量')
+      if (written) loadList()
     } else {
       ElMessage.error(res.data?.message || '调试失败')
     }
@@ -490,6 +499,12 @@ onMounted(() => {
 .search-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .pagination { margin-top: 16px; justify-content: flex-end; }
 .extractor-list { width: 100%; }
+.extractor-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}
 .extractor-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 .code-area :deep(textarea) { font-family: Consolas, monospace; font-size: 13px; }
 .page-tip { margin: 6px 0 0; font-size: 13px; line-height: 1.5; }

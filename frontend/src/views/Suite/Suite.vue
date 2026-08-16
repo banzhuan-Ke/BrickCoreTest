@@ -278,6 +278,7 @@
           v-model="runParams.failure_analysis_on_report"
           :options="healRunOptions"
         />
+        <UiRunTimeoutScaleField v-model="runParams.ui_timeout_scale" mode="batch" />
         <el-form-item label="执行设备" required>
           <el-select v-model="runParams.device_id" placeholder="请选择执行设备" style="width: 100%">
             <el-option
@@ -332,6 +333,7 @@ import { makeTableRowIndex } from '@/utils/tableIndex'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
 import UiRunAiActDisabledTip from '@/components/UiRunAiActDisabledTip.vue'
 import UiRunFailureAnalysisField from '@/components/UiRunFailureAnalysisField.vue'
+import UiRunTimeoutScaleField from '@/components/UiRunTimeoutScaleField.vue'
 import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 
 const {
@@ -473,8 +475,17 @@ const runParams = reactive({
   ai_heal_enabled: true,
   ai_act_enabled: false,
   failure_analysis_on_report: true,
+  ui_timeout_scale: null,
 })
 const healRunOptions = ref(null)
+
+watch(
+  () => runParams.env_id,
+  () => {
+    // 套件：默认跟随环境慢站策略，切换环境时回到「环境默认」
+    runParams.ui_timeout_scale = null
+  }
+)
 
 const loadHealRunOptions = async () => {
   const pid = proStore.projectInfo?.id
@@ -504,6 +515,7 @@ const clickRun = async (id) => {
   runParams.ai_heal_enabled = true
   runParams.ai_act_enabled = false
   runParams.failure_analysis_on_report = true
+  runParams.ui_timeout_scale = null
   await loadHealRunOptions()
   // 获取设备列表
   await getDeviceList()
@@ -542,6 +554,9 @@ const confirmRun = async () => {
     }
     if (healRunOptions.value?.failure_analysis_allow_run_override) {
       payload.failure_analysis_on_report = runParams.failure_analysis_on_report
+    }
+    if (runParams.ui_timeout_scale != null) {
+      payload.ui_timeout_scale = runParams.ui_timeout_scale
     }
     const res = await http.suiteApi.runSuite(showSuite.value.id, payload)
     if (res.status === 200 || res.status === 201) {

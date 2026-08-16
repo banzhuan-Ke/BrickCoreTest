@@ -431,11 +431,12 @@ async def _resolve_log_user(request: Request, path: str, params: dict) -> tuple[
             user_id = int(data.get("user_id") or 0)
             device_id = str(data.get("device_id") or "").strip()
             if user_id:
-                user = await User.get_or_none(id=user_id, is_del=False)
-                if user:
+                rows = await User.filter(id=user_id, is_del=False).values("id", "username")
+                if rows:
+                    uname = rows[0].get("username") or str(user_id)
                     if device_id:
-                        return user_id, f"{user.username}({device_id})"
-                    return user_id, user.username
+                        return user_id, f"{uname}({device_id})"
+                    return user_id, uname
             if device_id:
                 return user_id, f"Runner设备({device_id})"
         except Exception:
@@ -460,12 +461,18 @@ SKIP_PATHS = {
     "/sys/users/verify",
     "/sys/users/refresh",
     "/runner/heartbeat",
+    "/runner/health",
+    "/runner/version",
+    "/runner/active-recording",
     "/login",  # 外部扫描/误配路径，非平台真实登录接口
     "/perf/workers/heartbeat",  # 压测 Worker 每 30s 心跳，无审计价值
     # Runner 高频上报：无审计价值且 params 体积巨大（尤其 image_base64）
     "/runner/device-screen",
     "/runner/device-log",
     "/runner/device-log/batch",
+    # Runner 对象存储预签名：执行/上传极高频，无审计价值
+    "/runner/upload/presign",
+    "/runner/download/presign",
 }
 SKIP_PREFIXES = (
     "/static",
@@ -477,6 +484,8 @@ SKIP_PREFIXES = (
 SKIP_PATH_REGEXES = (
     re.compile(r"^/ai/record/\d+/heartbeat$"),
     re.compile(r"^/perf/workers/\d+/report$"),  # 压测秒级上报
+    re.compile(r"^/ui/debug/sessions/\d+/compare-steps$"),  # 交互调试轮询对比
+    re.compile(r"^/ai/generate/locator-heal/internal$"),
 )
 
 

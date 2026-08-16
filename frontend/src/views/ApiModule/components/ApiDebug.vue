@@ -34,7 +34,7 @@
           :env-id="selectedEnvId"
           hint-text="不含工厂标签；请用「数据工厂标签」或「插入工具」。"
         />
-        <ToolInsertButton v-if="selectedEnvId" />
+        <ToolInsertButton v-if="selectedEnvId" :env-id="selectedEnvId" />
         <el-button
           v-if="selectedEnvId"
           type="info"
@@ -272,24 +272,15 @@
               </p>
               <p><strong>Method:</strong> {{ resolvedRequestDisplay.method }}</p>
               <div v-if="resolvedRequestDisplay.params && Object.keys(resolvedRequestDisplay.params).length" class="request-info-block">
-                <div class="response-tab-toolbar">
-                  <strong>Params（替换后）:</strong>
-                  <CopyTextButton :text="resolvedRequestDisplay.params" />
-                </div>
+                <strong>Params（替换后）:</strong>
                 <CopyablePre :text="resolvedRequestDisplay.params" max-height="200px" wrap />
               </div>
               <div class="request-info-block">
-                <div class="response-tab-toolbar">
-                  <strong>Headers（替换后）:</strong>
-                  <CopyTextButton :text="resolvedRequestDisplay.headers" />
-                </div>
+                <strong>Headers（替换后）:</strong>
                 <CopyablePre :text="resolvedRequestDisplay.headers" max-height="280px" wrap />
               </div>
               <div v-if="hasResolvedRequestBody" class="request-info-block">
-                <div class="response-tab-toolbar">
-                  <strong>Body（替换后）:</strong>
-                  <CopyTextButton :text="resolvedRequestDisplay.body" />
-                </div>
+                <strong>Body（替换后）:</strong>
                 <CopyablePre :text="resolvedRequestDisplay.body" max-height="320px" wrap />
               </div>
             </div>

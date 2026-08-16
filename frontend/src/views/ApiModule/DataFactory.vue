@@ -249,7 +249,16 @@
       </el-form-item>
       <el-form-item label="SQL" prop="sql_text">
         <MonacoEditor v-if="tplDialogVisible" v-model="tplForm.sql_text" language="sql" height="220px" />
-        <p class="field-hint">支持 <code v-pre>${{变量名}}</code> 替换；Redis 数据源请写命令如 SET key value</p>
+        <div class="sql-insert-toolbar">
+          <VarInsertButton
+            :env-id="tplInsertEnvId"
+            :show-env-edit="false"
+            label="插入变量"
+          />
+          <ToolInsertButton :env-id="tplInsertEnvId" label="插入工具" />
+          <span class="sql-insert-hint">先点 SQL 编辑区再插入；引用与数据源所属环境对齐</span>
+        </div>
+        <p class="field-hint">支持 <code v-pre>${{变量名}}</code> / <code v-pre>${{dt:md5|text=@password}}</code>；Redis 请写命令如 SET key value</p>
       </el-form-item>
       <el-form-item label="描述"><el-input v-model="tplForm.description" type="textarea" :rows="2" /></el-form-item>
     </el-form>
@@ -301,6 +310,8 @@ import { dataFactoryApi } from '@/api/modules/dataFactory'
 import PageCard from '@/components/PageCard.vue'
 import DataToolBoxPanel from './components/DataToolBoxPanel.vue'
 import DfEnvScopeSelect from '@/components/DfEnvScopeSelect.vue'
+import VarInsertButton from '@/components/VarInsertButton.vue'
+import ToolInsertButton from '@/components/ToolInsertButton.vue'
 
 const route = useRoute()
 const proStore = ProjectStore()
@@ -442,6 +453,11 @@ const tplSaving = ref(false)
 const tplFormRef = ref()
 const tplForm = reactive({
   name: '', template_type: 'setup', datasource_id: null, sql_text: '', description: '',
+})
+/** SQL 模板插入变量/工具时，按所选数据源所属环境拉取环境变量 */
+const tplInsertEnvId = computed(() => {
+  const ds = datasourceList.value.find((d) => d.id === tplForm.datasource_id)
+  return ds?.environment_id || tplFilterEnvId.value || null
 })
 const tplRules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
@@ -792,5 +808,16 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.5;
+}
+.sql-insert-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.sql-insert-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>
