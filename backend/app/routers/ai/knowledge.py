@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from app.core.platform.auth import is_authenticated, require_any_permissions, require_permissions
 from app.core.platform.config import KNOWLEDGE_MAX_FILE_MB
 from app.modules.knowledge.knowledge_embed_config import platform_vector_embed_allowed
-from app.core.platform.edition import is_community_edition, knowledge_digitech_pack_enabled
+from app.core.platform.edition import is_community_edition, knowledge_pack_addon_enabled
 from app.core.platform.permissions import KNOWLEDGE_EDIT, KNOWLEDGE_EXECUTE, KNOWLEDGE_VIEW
 from app.modules.knowledge.constants import DOC_TYPES
 from app.modules.knowledge import knowledge_service as svc
@@ -181,7 +181,7 @@ async def knowledge_meta(user_info: dict = Depends(is_authenticated)):
     return StandardResponse(
         data={
             "community_edition": is_community_edition(),
-            "knowledge_pack_enabled": knowledge_digitech_pack_enabled(),
+            "knowledge_pack_enabled": knowledge_pack_addon_enabled(),
             "max_file_mb": KNOWLEDGE_MAX_FILE_MB,
             "platform_vector_embed_enabled": platform_vector_embed_allowed(),
             "knowledge_delete_mode": await get_knowledge_report_delete_mode(),
@@ -605,17 +605,16 @@ async def knowledge_qa(
     user_info: dict = Depends(is_authenticated),
 ):
     from app.core.platform.permissions import get_user_permissions
-    from app.models.sys import User
     from app.modules.knowledge.knowledge_qa import ask_knowledge, normalize_qa_mode
     from app.modules.knowledge.knowledge_qa_history import save_qa_record
 
     pid = _resolve_project_id(user_info, project_id)
     mode = normalize_qa_mode(body.mode)
-    user = await User.get_or_none(id=user_info.get("id"), is_del=False).prefetch_related("roles")
-    if not (user and user.is_superuser):
-        if not user:
+    if not user_info.get("is_superuser"):
+        uid = user_info.get("id")
+        if not uid:
             raise HTTPException(status_code=403, detail="用户不存在或已禁用")
-        allowed = set(await get_user_permissions(user))
+        allowed = set(await get_user_permissions(int(uid)))
         need = KNOWLEDGE_EXECUTE if mode == "smart" else KNOWLEDGE_VIEW
         if need not in allowed:
             raise HTTPException(
@@ -1286,7 +1285,7 @@ async def list_default_templates():
 )
 async def download_default_template(kind: str = Query("iteration_report", description="模板类型")):
     ensure_builtin_templates_on_disk()
-    if is_pptx_builtin_kind(kind) and not knowledge_digitech_pack_enabled():
+    if is_pptx_builtin_kind(kind) and not knowledge_pack_addon_enabled():
         raise HTTPException(status_code=400, detail="行业定制模板未开通，请联系管理员")
     try:
         content, filename = load_builtin_template_bytes(kind)

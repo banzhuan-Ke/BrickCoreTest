@@ -217,15 +217,28 @@ async def batch_delete_records(
         await PerfRecord.filter(id__in=unique_ids).delete()
 
 
-@router.post("/{record_id}/send-report", summary="发送性能测试报告邮件", status_code=status.HTTP_200_OK)
-async def send_perf_report(record: PerfRecord = Depends(get_record_for_viewer)):
-    """手动发送性能测试报告邮件"""
+class SendPerfReportPayload(BaseModel):
+    config_ids: Optional[List[int]] = None
+    recipients: Optional[List[str]] = None
+
+
+@router.post("/{record_id}/send-report", summary="发送性能测试报告", status_code=status.HTTP_200_OK)
+async def send_perf_report(
+    record: PerfRecord = Depends(get_record_for_viewer),
+    payload: Optional[SendPerfReportPayload] = None,
+):
+    """手动发送性能测试报告（可指定通知配置 id）"""
+    body = payload or SendPerfReportPayload()
     try:
-        await NotificationService.send_perf_report(
+        result = await NotificationService.send_perf_report(
             project_id=record.project_id,
             record_id=record.id,
+            recipients=body.recipients,
+            config_ids=body.config_ids,
         )
-        return {"detail": "报告邮件已发送"}
+        return {"detail": NotificationService.format_dispatch_detail(result)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"发送失败: {e}")
 
@@ -334,8 +347,17 @@ async def get_record_report(record: PerfRecord = Depends(get_record_for_viewer))
     return await build_report_payload(record, scene, previous, baseline_record=baseline_record)
 
 
-def _generate_perf_html_report(record: PerfRecord, scene, *, editable: bool = True) -> str:
-    """生成性能测试 HTML 报告（汇报型模块结构）。"""
+def _generate_perf_html_report(
+    record: PerfRecord,
+    scene,
+    *,
+    editable: bool = True,
+    embed_echarts: bool = True,
+) -> str:
+    """生成性能测试 HTML 报告（汇报型模块结构）。
+
+    embed_echarts=False：图表库走 CDN，适合邮件附件（避免内嵌约 1MB JS）。
+    """
     from app.modules.perf.perf_html_theme import (
         case_note_map,
         err_tag,
@@ -491,6 +513,7 @@ def _generate_perf_html_report(record: PerfRecord, scene, *, editable: bool = Tr
         record,
         ai_trend_note=str((ai or {}).get("trend_note") or "").strip(),
         ai_dist_note=str((ai or {}).get("distribution_note") or "").strip(),
+        embed_echarts=embed_echarts,
     )
     stream_html = render_perf_html_stream_sections(record)
     status_code_html = render_perf_html_status_codes(record)

@@ -77,6 +77,7 @@
 - 添加多个 **API 用例**，设置 **权重** 或 **固定比例**（如 1:2 严格轮询）
 - 可配置单接口请求间隔：固定毫秒，或随机区间（如 1000~3000ms，类似 Locust `between`）
 - 支持 **CSV 参数化**（轮询、独占、随机）：可 **下载模板**；选择/删除/改策略在编辑页为本地待定，**点场景「保存」才写入**；新建场景请先保存后再选 CSV
+- CSV 引用：`${{csv.列名}}`；对列值做工具计算（如 MD5）写 `${{dt:md5|text=@csv.列名}}`（仅本场景绑定了 CSV 时有值；与同名环境变量隔离）
 - 用例内可使用 **插入工具** 写入 `${{dt:...}}`；压测执行时与 `${{df:标签}}`、环境变量一并合并
 
 ### 执行场景
@@ -84,7 +85,16 @@
 1. 先在 **执行机** 列表确认有在线 Worker（或按下方方式上线）
 2. 在场景列表点击 **执行**
 3. 选择 **执行环境**
-4. 执行完成后到 **执行记录** 查看报告
+4. 勾选执行机并确认分压（见下表）→ **确认执行**
+5. 执行完成后到 **执行记录** 查看报告
+
+**启动弹窗 · 执行器三列含义**
+
+| 列 | 含义 |
+|----|------|
+| **本机上限** | 该执行机申报的最大并发能力，不是本次会启动的人数 |
+| **分压比例** | 多机时按比例拆分场景并发（只比大小，如 2:1）；**仅勾选一台时禁用**，全部 VU 落在该机 |
+| **本机分到** | 按比例落到本机的虚拟用户数（VU），合计等于场景需要的并发 |
 
 > **施压方式**：压测一律由**在线 Worker**执行（BrickCoreRunner / BrickCorePerf），后端不再本机直跑。无在线执行机时**无法启动**（不会静默降级）。任务字段与上报契约见 [压测 Worker 协议](./perf-worker-protocol.md)。
 
@@ -184,9 +194,9 @@
 
 | 配置 | 当前推荐值 | 说明 |
 |------|------------|------|
-| BrickCoreRunner 客户端 | **≥ 1.5.5**（推荐） | 与 `runner_client/__init__.py`、`VERSION.txt` 一致；最低上线 `RUNNER_CLIENT_VERSION_MIN=1.3.8` |
-| `RUNNER_CLIENT_VERSION_LATEST` | `1.5.5` | 服务器 `.env` / `docker-compose.yml` |
-| `RUNNER_ENGINE_VERSION` | `1.1.1` | 与 `runner/settings.py` 中 `RUNNER_VERSION` 一致；引擎最低 `RUNNER_ENGINE_VERSION_MIN` 默认 ≥1.0.0 |
+| BrickCoreRunner 客户端 | **≥ 1.6.1**（推荐） | 与 `runner_client/__init__.py`、`VERSION.txt` 一致；最低上线 `RUNNER_CLIENT_VERSION_MIN=1.3.8` |
+| `RUNNER_CLIENT_VERSION_LATEST` | `1.6.1` | 服务器 `.env` / `docker-compose.yml` |
+| `RUNNER_ENGINE_VERSION` | `1.6.1` | 与 `runner/settings.py` 中 `RUNNER_VERSION` 一致；引擎最低 `RUNNER_ENGINE_VERSION_MIN` 默认 ≥1.0.0 |
 
 生产环境浏览器访问平台一般为 **80 端口**（Nginx），`--master` / 客户端服务器地址 **不要写 :8000**（8000 为容器内 Backend）。
 

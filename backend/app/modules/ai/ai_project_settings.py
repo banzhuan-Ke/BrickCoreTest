@@ -36,6 +36,8 @@ DEFAULT_AI_PROJECT_SETTINGS: dict[str, Any] = {
     "ai_act_max_per_case": 3,
     "recording_locator_strategy": "semantic_first",
     "default_start_url": "",
+    # 交互调试按步试跑：单步等待封顶（秒），仅 debug 会话生效，正式执行不受影响
+    "debug_max_step_timeout_seconds": 5,
     "failure_analysis_enabled": True,
     "failure_analysis_default_on_report": True,
     "failure_analysis_allow_run_override": True,
@@ -47,6 +49,27 @@ DEFAULT_AI_PROJECT_SETTINGS: dict[str, Any] = {
 
 _STRING_SETTINGS_KEYS = frozenset({"recording_locator_strategy", "default_start_url"})
 _NESTED_SETTINGS_KEYS = frozenset({"requirement_case"})
+_INT_SETTINGS_KEYS = frozenset({"ai_act_max_per_case", "debug_max_step_timeout_seconds"})
+
+# 交互调试单步超时：1～120 秒
+DEBUG_MAX_STEP_TIMEOUT_SECONDS_DEFAULT = 5
+DEBUG_MAX_STEP_TIMEOUT_SECONDS_MIN = 1
+DEBUG_MAX_STEP_TIMEOUT_SECONDS_MAX = 120
+
+
+def normalize_debug_max_step_timeout_seconds(value: Any) -> int:
+    if value is None or (isinstance(value, str) and not str(value).strip()):
+        return DEBUG_MAX_STEP_TIMEOUT_SECONDS_DEFAULT
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        return DEBUG_MAX_STEP_TIMEOUT_SECONDS_DEFAULT
+    if num <= 0:
+        return DEBUG_MAX_STEP_TIMEOUT_SECONDS_DEFAULT
+    return max(
+        DEBUG_MAX_STEP_TIMEOUT_SECONDS_MIN,
+        min(DEBUG_MAX_STEP_TIMEOUT_SECONDS_MAX, num),
+    )
 
 
 def normalize_recording_locator_strategy(value: Any) -> str:
@@ -143,10 +166,14 @@ def normalize_ai_project_settings(raw: Any) -> dict[str, Any]:
                     base[key] = max(1, min(10, int(raw[key])))
                 except (TypeError, ValueError):
                     base[key] = DEFAULT_AI_PROJECT_SETTINGS["ai_act_max_per_case"]
+            elif key == "debug_max_step_timeout_seconds":
+                base[key] = normalize_debug_max_step_timeout_seconds(raw[key])
             elif key == "recording_locator_strategy":
                 base[key] = normalize_recording_locator_strategy(raw[key])
             elif key in _STRING_SETTINGS_KEYS:
                 base[key] = str(raw[key] or "").strip()
+            elif key in _INT_SETTINGS_KEYS:
+                continue
             else:
                 base[key] = bool(raw[key])
     return base
@@ -192,6 +219,8 @@ async def save_ai_project_settings(project_id: int, updates: dict[str, Any]) -> 
                 current[key] = max(1, min(10, int(updates[key])))
             except (TypeError, ValueError):
                 pass
+        elif key == "debug_max_step_timeout_seconds":
+            current[key] = normalize_debug_max_step_timeout_seconds(updates[key])
         elif key == "recording_locator_strategy":
             current[key] = normalize_recording_locator_strategy(updates[key])
         elif key in _STRING_SETTINGS_KEYS:
@@ -199,6 +228,8 @@ async def save_ai_project_settings(project_id: int, updates: dict[str, Any]) -> 
                 current[key] = validate_default_start_url(updates[key])
             else:
                 current[key] = str(updates[key] or "").strip()
+        elif key in _INT_SETTINGS_KEYS:
+            continue
         else:
             current[key] = bool(updates[key])
     gv = dict(project.global_vars or {})
@@ -240,6 +271,13 @@ async def resolve_locator_heal_for_execute(
 async def resolve_recording_locator_strategy(project_id: int) -> str:
     settings = await load_ai_project_settings(project_id)
     return normalize_recording_locator_strategy(settings.get("recording_locator_strategy"))
+
+
+async def resolve_debug_max_step_timeout_seconds(project_id: int) -> int:
+    settings = await load_ai_project_settings(project_id)
+    return normalize_debug_max_step_timeout_seconds(
+        settings.get("debug_max_step_timeout_seconds")
+    )
 
 
 async def resolve_failure_analysis_for_report(

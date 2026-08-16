@@ -3,9 +3,11 @@
 DOC_TYPES: dict[str, str] = {
     "requirement": "需求文档",
     "test_plan": "测试计划",
+    "test_scheme": "测试方案",
     "iteration_plan": "迭代计划",
     "bug_export": "Bug 导出",
     "task_export": "任务导出",
+    "case_export": "用例导出",
     "summary": "测试总结",
     "report_template": "报告模板",
     "plan_template": "方案模板",

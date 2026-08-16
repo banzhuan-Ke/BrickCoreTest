@@ -114,6 +114,50 @@ const pageSteps = [
             script: '',
             args: []
         }
+    },
+    {
+        keyword: '设置LocalStorage',
+        method: 'set_local_storage',
+        params: {
+            key: '',
+            value: '',
+        }
+    },
+    {
+        keyword: '设置SessionStorage',
+        method: 'set_session_storage',
+        params: {
+            key: '',
+            value: '',
+        }
+    },
+    {
+        keyword: '设置Cookie',
+        method: 'add_cookies',
+        params: {
+            name: '',
+            value: '',
+            domain: '',
+            path: '/',
+            url: '',
+        }
+    },
+    {
+        keyword: '设置鉴权Token',
+        method: 'set_auth_token',
+        params: {
+            token: '',
+            header_name: 'Authorization',
+            header_prefix: 'Bearer',
+            storage_key: '',
+        }
+    },
+    {
+        keyword: '导出登录态',
+        method: 'save_storage_state',
+        params: {
+            path: '',
+        }
     }
 ]
 // 2、元素操作
@@ -134,6 +178,8 @@ const elementSteps = [
             locator: "",
             index: 1,
             force: false,
+            ready_selector: '',
+            use_env_ready: false,
             expected_selector: '',
             post_wait_state: 'reappear',
             wait_busy_after: false,
@@ -154,6 +200,8 @@ const elementSteps = [
             locator: "",
             index: 1,
             force: false,
+            ready_selector: '',
+            use_env_ready: false,
             expected_selector: '',
             post_wait_state: 'reappear',
             wait_busy_after: false,
@@ -173,6 +221,8 @@ const elementSteps = [
         params: {
             locator: "",
             index: 1,
+            ready_selector: '',
+            use_env_ready: false,
             expected_selector: '',
             post_wait_state: 'reappear',
             wait_busy_after: false,
@@ -201,6 +251,8 @@ const elementSteps = [
             locator: "",
             value: "",
             index: 1,
+            ready_selector: '',
+            use_env_ready: false,
             expected_selector: '',
             post_wait_state: 'reappear',
             wait_busy_after: false,
@@ -227,6 +279,11 @@ const elementSteps = [
             source_position_y: "",
             target_position_x: "",
             target_position_y: "",
+            ready_selector: '',
+            use_env_ready: false,
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
         }
     },
     {
@@ -236,6 +293,11 @@ const elementSteps = [
             locator: "",
             delay: 0.1,
             index: 1,
+            ready_selector: '',
+            use_env_ready: false,
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
         }
     },
     {
@@ -246,6 +308,11 @@ const elementSteps = [
             index: 1,
             exact: false,
             force: false,
+            ready_selector: '',
+            use_env_ready: false,
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
             wait_download: false,
             save_path: '',
             var_name: '',
@@ -254,6 +321,78 @@ const elementSteps = [
             dismiss_dialog: false,
             dialog_timeout: 10000,
             prompt_text: ''
+        }
+    },
+    {
+        keyword: '智能点击',
+        method: 'smart_click',
+        params: {
+            target: '',
+            intent: '',
+            region: '',
+            locator: '',
+            target_role: '',
+            expected_after: {},
+            min_score: 70,
+            min_margin: 15,
+            allow_ai: false,
+            force: false,
+        }
+    },
+    {
+        keyword: '智能输入',
+        method: 'smart_fill',
+        params: {
+            target: '',
+            intent: '',
+            value: '',
+            region: '',
+            locator: '',
+            target_role: '',
+            expected_after: {},
+            min_score: 70,
+            min_margin: 15,
+            allow_ai: false,
+        }
+    },
+    {
+        keyword: '若存在则点击',
+        method: 'click_if_exists',
+        params: {
+            locator: '',
+            index: 1,
+            force: false,
+            timeout: 5000,
+        }
+    },
+    {
+        keyword: '若存在则输入',
+        method: 'fill_if_exists',
+        params: {
+            locator: '',
+            value: '',
+            index: 1,
+            timeout: 5000,
+        }
+    },
+    {
+        keyword: '若可见则点击',
+        method: 'click_if_visible',
+        params: {
+            locator: '',
+            index: 1,
+            force: false,
+            timeout: 5000,
+        }
+    },
+    {
+        keyword: '若可见则输入',
+        method: 'fill_if_visible',
+        params: {
+            locator: '',
+            value: '',
+            index: 1,
+            timeout: 5000,
         }
     }
 ]
@@ -384,6 +523,11 @@ const IframeSteps = [
             index: 1,
             button: "left",
             force: false,
+            ready_selector: '',
+            use_env_ready: false,
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
         }
     },
     {
@@ -412,6 +556,11 @@ const IframeSteps = [
             locator: "",
             value: "",
             index: 1,
+            ready_selector: '',
+            use_env_ready: false,
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
         }
     },
     {
@@ -432,6 +581,11 @@ const IframeSteps = [
             locator: "",
             delay: 0.1,
             index: 1,
+            ready_selector: '',
+            use_env_ready: false,
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
         }
     },
     {
@@ -447,6 +601,11 @@ const IframeSteps = [
             source_position_y: "",
             target_position_x: "",
             target_position_y: "",
+            ready_selector: '',
+            use_env_ready: false,
+            expected_selector: '',
+            post_wait_state: 'reappear',
+            wait_busy_after: false,
         }
     }
 ]
@@ -481,6 +640,14 @@ const waitSteps = [
         method: "wait_for_element",
         params: {
             locator: "",
+            index: 1,
+        }
+    },
+    {
+        keyword: '等待元素可点击',
+        method: 'wait_for_clickable',
+        params: {
+            locator: '',
             index: 1,
         }
     },

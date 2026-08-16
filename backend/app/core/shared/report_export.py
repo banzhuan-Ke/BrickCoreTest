@@ -4,9 +4,11 @@
 """
 
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
+import copy
 import json
+import os
 import re
 import base64
 import io
@@ -22,6 +24,61 @@ class ImageExportOptions:
     include_images: bool = True      # 是否包含图片
     image_mode: str = "all"          # all-全部, failed-仅失败, none-不包含
     include_video: bool = True       # 是否包含视频
+
+
+# 邮件 HTML 附件软上限（原文字节；SMTP 再 base64 后约 ×1.37）。可用环境变量覆盖。
+EMAIL_HTML_SOFT_LIMIT_BYTES = max(
+    1 * 1024 * 1024,
+    int(os.getenv("EMAIL_REPORT_HTML_MAX_BYTES", str(8 * 1024 * 1024))),
+)
+
+
+def build_email_html_report(
+    record_data: Dict[str, Any],
+    record_type: str = "task",
+    suite_records: Optional[List[Dict]] = None,
+    case_records: Optional[List[Dict]] = None,
+) -> Tuple[str, str]:
+    """生成邮件附件 HTML：优先内嵌失败用例截图；超限则降级为无图。
+
+    自动邮件不宜用 image_mode=all（大计划可达数十～上百 MB，易被 SMTP 拒收）。
+    手动导出报告仍可按需选 all。
+
+    Returns:
+        (html, image_mode_used) 其中 image_mode_used 为 failed | none
+    """
+    last_html = ""
+    last_mode = "none"
+    for mode in ("failed", "none"):
+        opts = ImageExportOptions(
+            include_images=(mode != "none"),
+            image_mode=mode,
+            include_video=False,
+        )
+        # generate_html_report 会改写 case 内截图字段，每次用深拷贝
+        html = generate_html_report(
+            record_data,
+            record_type,
+            copy.deepcopy(suite_records or []),
+            copy.deepcopy(case_records or []),
+            opts,
+        )
+        last_html, last_mode = html, mode
+        size = len(html.encode("utf-8"))
+        if size <= EMAIL_HTML_SOFT_LIMIT_BYTES:
+            return html, mode
+        print(
+            f"[EmailReport] HTML {size} bytes with image_mode={mode} exceeds "
+            f"{EMAIL_HTML_SOFT_LIMIT_BYTES}, degrading…"
+        )
+    return last_html, last_mode
+
+
+def email_report_attachment_note(image_mode_used: str) -> str:
+    """邮件正文里对附件截图策略的说明。"""
+    if image_mode_used == "failed":
+        return "详细报告（失败步骤含内嵌截图）请查看附件。"
+    return "详细报告请查看附件（截图因体积过大未内嵌，请到平台查看）。"
 
 
 def _should_include_image(img_options: ImageExportOptions, case_status: str) -> bool:
@@ -96,12 +153,12 @@ def generate_html_report(
     if img_options is None:
         img_options = ImageExportOptions()
     
-    # 根据选项处理图片和视频
+    # 根据选项处理图片和视频：能内嵌则转 base64；否则清空外链，避免邮件/离线 HTML 裂图
     image_cache = {}
-    if case_records and (img_options.include_images or img_options.include_video):
-        _collect_and_download_images(case_records, image_cache, img_options)
-        if image_cache:
-            case_records = _replace_images_with_base64(case_records, image_cache, img_options)
+    if case_records:
+        if img_options.include_images or img_options.include_video:
+            _collect_and_download_images(case_records, image_cache, img_options)
+        case_records = _replace_images_with_base64(case_records, image_cache, img_options)
     
     # 计算百分比（使用 case_count 而不是 all）
     all_count = record_data.get('case_count', 0) or record_data.get('all', 0)
@@ -196,14 +253,19 @@ def generate_html_report(
         .status-success {{ background: #52c41a; color: white; }}
         .status-fail {{ background: #ff4d4f; color: white; }}
         .status-running {{ background: #1890ff; color: white; }}
-        .summary-cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px; }}
+        .summary-cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 8px; }}
         .card {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); text-align: center; }}
+        .card.filterable {{ cursor: pointer; transition: box-shadow 0.2s, outline 0.2s, transform 0.15s; user-select: none; }}
+        .card.filterable:hover {{ box-shadow: 0 4px 12px rgba(0,0,0,0.1); transform: translateY(-1px); }}
+        .card.filterable.active {{ outline: 2px solid #1890ff; box-shadow: 0 0 0 3px rgba(24,144,255,0.15); }}
         .card .number {{ font-size: 32px; font-weight: bold; margin-bottom: 5px; }}
         .card .label {{ color: #666; font-size: 14px; }}
         .card.success .number {{ color: #52c41a; }}
         .card.fail .number {{ color: #ff4d4f; }}
         .card.warning .number {{ color: #faad14; }}
         .card.info .number {{ color: #8c8c8c; }}
+        .filter-hint {{ min-height: 20px; margin-bottom: 12px; font-size: 13px; color: #1890ff; }}
+        .case-block.filter-hidden, .suite-block.filter-hidden {{ display: none !important; }}
         .progress-section {{ background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
         .progress-bar {{ height: 30px; background: #e4e7ed; border-radius: 15px; overflow: hidden; display: flex; }}
         .progress-segment {{ height: 100%; transition: width 0.3s; }}
@@ -299,13 +361,14 @@ def generate_html_report(
         </div>
 
         <div class="summary-cards">
-            <div class="card info"><div class="number">{all_count}</div><div class="label">用例总数</div></div>
-            <div class="card success"><div class="number">{success}</div><div class="label">成功</div></div>
-            <div class="card fail"><div class="number">{fail}</div><div class="label">失败</div></div>
-            <div class="card warning"><div class="number">{error}</div><div class="label">错误</div></div>
-            <div class="card info"><div class="number">{skip}</div><div class="label">跳过</div></div>
-            <div class="card info"><div class="number">{no_run}</div><div class="label">未运行</div></div>
+            <div class="card info filterable active" data-filter="all" onclick="filterByStatus('all')" title="显示全部用例"><div class="number">{all_count}</div><div class="label">用例总数</div></div>
+            <div class="card success filterable" data-filter="success" onclick="filterByStatus('success')" title="仅看成功"><div class="number">{success}</div><div class="label">成功</div></div>
+            <div class="card fail filterable" data-filter="fail" onclick="filterByStatus('fail')" title="仅看失败"><div class="number">{fail}</div><div class="label">失败</div></div>
+            <div class="card warning filterable" data-filter="error" onclick="filterByStatus('error')" title="仅看错误"><div class="number">{error}</div><div class="label">错误</div></div>
+            <div class="card info filterable" data-filter="skip" onclick="filterByStatus('skip')" title="仅看跳过"><div class="number">{skip}</div><div class="label">跳过</div></div>
+            <div class="card info filterable" data-filter="no_run" onclick="filterByStatus('no_run')" title="仅看未运行"><div class="number">{no_run}</div><div class="label">未运行</div></div>
         </div>
+        <div id="status-filter-hint" class="filter-hint"></div>
 
         <div class="progress-section">
             <h3 style="margin-bottom: 15px; color: #333;">执行进度</h3>
@@ -359,6 +422,41 @@ def generate_html_report(
             }} else {{
                 content.classList.add('expanded');
                 icon.classList.remove('collapsed');
+            }}
+        }}
+
+        // 按状态筛选用例（点击顶部统计卡片）
+        function filterByStatus(status) {{
+            document.querySelectorAll('.summary-cards .card.filterable').forEach(function(card) {{
+                card.classList.toggle('active', card.getAttribute('data-filter') === status);
+            }});
+            document.querySelectorAll('.case-block').forEach(function(block) {{
+                var s = block.getAttribute('data-status') || '';
+                var show = status === 'all' || s === status;
+                block.classList.toggle('filter-hidden', !show);
+            }});
+            document.querySelectorAll('.suite-block').forEach(function(suite) {{
+                var cases = suite.querySelectorAll('.case-block');
+                if (!cases.length) {{
+                    suite.classList.toggle('filter-hidden', status !== 'all');
+                    return;
+                }}
+                var anyVisible = false;
+                cases.forEach(function(c) {{
+                    if (!c.classList.contains('filter-hidden')) anyVisible = true;
+                }});
+                suite.classList.toggle('filter-hidden', !anyVisible);
+                if (anyVisible && status !== 'all') {{
+                    var content = suite.querySelector('.suite-content');
+                    var icon = suite.querySelector('.suite-header .toggle-icon');
+                    if (content) content.classList.add('expanded');
+                    if (icon) icon.classList.remove('collapsed');
+                }}
+            }});
+            var hint = document.getElementById('status-filter-hint');
+            if (hint) {{
+                var labels = {{ all: '全部', success: '成功', fail: '失败', error: '错误', skip: '跳过', no_run: '未运行' }};
+                hint.textContent = status === 'all' ? '' : ('当前筛选：' + (labels[status] || status) + '（点击「用例总数」可清除）');
             }}
         }}
 
@@ -530,9 +628,10 @@ def generate_case_log_html(case: Dict, img_options: Optional[ImageExportOptions]
         'running': ('skip', '执行中'),
     }
     status_class, status_text = status_map.get(case_status, ('skip', '未知'))
+    filter_status = case_status if case_status in ('success', 'fail', 'error', 'skip', 'no_run', 'running') else 'no_run'
     
     html_parts = []
-    html_parts.append(f'<div class="case-block">')
+    html_parts.append(f'<div class="case-block" data-status="{filter_status}">')
     html_parts.append(f'<div class="case-header {status_class}" onclick="toggleCase(this)">')
     html_parts.append(f'<div class="case-name-text"><span class="toggle-icon collapsed">▼</span><span>{case_name}</span></div>')
     html_parts.append(f'<span class="case-status-badge case-status-{status_class}">{status_text}</span>')
@@ -902,11 +1001,13 @@ def _replace_images_with_base64(case_records: List[Dict], image_cache: Dict[str,
             was_string = False
         
         if isinstance(run_info, dict):
-            # 替换用例级别截图 (img字段)
+            # 替换用例级别截图 (img字段)；未能内嵌的外链清空，避免离线/邮件裂图
             if _should_include_image(img_options, case_status):
                 img = run_info.get('img', '')
                 if img and img in image_cache:
                     run_info['img'] = image_cache[img]
+                elif not (isinstance(img, str) and img.startswith('data:')):
+                    run_info['img'] = ''
             else:
                 run_info['img'] = ''
             
@@ -915,6 +1016,8 @@ def _replace_images_with_base64(case_records: List[Dict], image_cache: Dict[str,
                 video_url = run_info.get('video_url', '')
                 if video_url and video_url in image_cache:
                     run_info['video_url'] = image_cache[video_url]
+                elif not (isinstance(video_url, str) and video_url.startswith('data:')):
+                    run_info['video_url'] = ''
             else:
                 run_info['video_url'] = ''
             
@@ -929,6 +1032,11 @@ def _replace_images_with_base64(case_records: List[Dict], image_cache: Dict[str,
                                 step['screenshot'] = image_cache[img]
                             if 'image' in step:
                                 step['image'] = image_cache[img]
+                        elif not (isinstance(img, str) and img.startswith('data:')):
+                            if 'screenshot' in step:
+                                step['screenshot'] = ''
+                            if 'image' in step:
+                                step['image'] = ''
                     else:
                         # 不导出图片时，清空截图字段
                         if 'screenshot' in step:

@@ -55,6 +55,20 @@
                 {{ taskRunDetail.status }}
               </el-tag>
             </el-descriptions-item>
+            <el-descriptions-item label="执行进度">
+              <div class="live-progress">
+                <el-progress
+                  :percentage="taskProgress.percent"
+                  :stroke-width="12"
+                  :status="taskProgressStatus"
+                  style="width: 160px"
+                />
+                <span class="live-progress__text">
+                  {{ taskProgress.done }}/{{ taskProgress.total || '—' }}
+                  <el-tag v-if="isLiveRunning" size="small" type="primary" effect="plain" style="margin-left: 6px">自动刷新</el-tag>
+                </span>
+              </div>
+            </el-descriptions-item>
             <el-descriptions-item label="执行人">{{ taskRunDetail.username }}</el-descriptions-item>
             <el-descriptions-item label="执行时间">
               {{ dateTools.rTime(taskRunDetail.start_time) }}
@@ -128,7 +142,7 @@
           </el-table-column>
           <el-table-column label="执行时间" width="170">
             <template #default="scope">
-              {{ dateTools.rTime(scope.row.start_time) }}
+              {{ dateTools.rTime(scope.row.result_data?.start_time || scope.row.start_time) }}
             </template>
           </el-table-column>
           <el-table-column label="操作" width="220" fixed="right">
@@ -456,6 +470,12 @@ import { resolveFailedStepIndexFromResult } from '@/utils/caseExecutionHints.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { useFailureAnalysisGate } from '@/composables/useFailureAnalysisGate.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
+import { triggerBackendFileDownload } from '@/utils/backendAssetUrl'
+import {
+  isUiExecutionActive,
+  uiExecutionProgress,
+  useUiExecutionProgressPoll,
+} from '@/composables/useUiExecutionProgressPoll.js'
 import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
 import ReportFailureBatchBar from '@/components/ReportFailureBatchBar.vue'
 import ReportKnowledgeBridge from '@/components/ReportKnowledgeBridge.vue'
@@ -512,8 +532,22 @@ const tableRowIndex = makeTableRowIndex(pageConfig)
 const statusMap = {
   '执行完成': { type: 'success', icon: CircleCheck },
   '等待执行': { type: 'info', icon: InfoFilled },
+  '执行中': { type: 'primary', icon: Loading },
+  '已停止': { type: 'warning', icon: Warning },
   '运行中': { type: 'primary', icon: Loading }
 }
+
+const isLiveRunning = computed(() => isUiExecutionActive(taskRunDetail.value?.status))
+const taskProgress = computed(() => uiExecutionProgress(taskRunDetail.value || {}))
+const taskProgressStatus = computed(() => {
+  const status = taskRunDetail.value?.status
+  if (status === '已停止') return 'warning'
+  if (status === '执行完成') {
+    const fail = (taskRunDetail.value?.fail || 0) + (taskRunDetail.value?.error || 0)
+    return fail > 0 ? 'exception' : 'success'
+  }
+  return undefined
+})
 
 // 计算统计数据
 const CASE_STATUS_LABELS = {
@@ -640,6 +674,27 @@ const getSuiteList = async () => {
   }
 }
 
+const refreshLiveReport = async () => {
+  await getTaskReport()
+  await getSuiteList()
+  if (caseStatusFilter.value) {
+    await getCaseRunList()
+  }
+  syncPoll()
+}
+
+const { syncPoll } = useUiExecutionProgressPoll(
+  refreshLiveReport,
+  () => isUiExecutionActive(taskRunDetail.value?.status),
+  { intervalMs: 3000 }
+)
+
+// 初始化
+refreshLiveReport()
+if (caseStatusFilter.value) {
+  getCaseRunList()
+}
+
 // 初始化图表
 const initCharts = () => {
   if (!chart1Ref.value || !chart2Ref.value || !taskRunDetail.value) return
@@ -757,12 +812,10 @@ const exportReport = async () => {
         if (statusData.status === 'completed') {
           clearInterval(timer)
           exportLoading.value = false
-          const link = document.createElement('a')
-          link.href = statusData.download_url
-          link.download = statusData.filename || `测试报告-任务-${taskRunDetail.value.task_name}-${task_id}.html`
-          document.body.appendChild(link)
-          link.click()
-          document.body.removeChild(link)
+          triggerBackendFileDownload(
+            statusData.download_url,
+            statusData.filename || `测试报告-任务-${taskRunDetail.value.task_name}-${task_id}.html`,
+          )
           ElMessage.success('报告导出成功')
         } else if (statusData.status === 'failed') {
           clearInterval(timer)
@@ -822,13 +875,6 @@ const back = () => {
 watch(isDark, () => {
   nextTick(() => initCharts())
 })
-
-// 初始化
-getTaskReport()
-getSuiteList()
-if (caseStatusFilter.value) {
-  getCaseRunList()
-}
 </script>
 
 <style scoped lang="scss">
@@ -905,6 +951,20 @@ if (caseStatusFilter.value) {
     
     .task-info {
       margin-top: 16px;
+    }
+
+    .live-progress {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .live-progress__text {
+      font-size: 13px;
+      color: var(--el-text-color-secondary);
+      display: inline-flex;
+      align-items: center;
     }
   }
   

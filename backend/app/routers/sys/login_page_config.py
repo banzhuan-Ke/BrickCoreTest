@@ -25,7 +25,7 @@ class LoginPageConfigForm(BaseModel):
     pro_bg_url: str | None = Field(default=None, description="Pro 自定义背景 URL（key=custom 时）")
     classic_bg_url: str | None = Field(default=None, description="经典自定义背景 URL（key=custom 时）")
     welcome_title: str = Field(default="欢迎登录 BrickCore", max_length=200)
-    footer_text: str = Field(default="© 2025-2026 BrickCore v1.5.0. All Rights Reserved.", max_length=500)
+    footer_text: str = Field(default="© 2025-2026 BrickCore v1.6.0. All Rights Reserved.", max_length=500)
     show_register: bool = True
     bg_brick_count: int = Field(default=30, ge=0, le=60, description="漂浮积木数量")
     bg_star_count: int = Field(default=15, ge=0, le=40, description="四角星数量")

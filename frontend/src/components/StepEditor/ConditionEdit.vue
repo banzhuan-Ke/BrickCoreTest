@@ -111,6 +111,7 @@
                   v-else
                   v-model="branch.condition.locator"
                   placeholder="如: #username 或 xpath=//input"
+                  @input="updateBranches"
                   @change="updateBranches"
                 />
               </el-form-item>

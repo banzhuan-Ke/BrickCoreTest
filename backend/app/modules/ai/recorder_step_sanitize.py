@@ -184,12 +184,25 @@ def _trim_redundant_hovers(steps: list[dict]) -> tuple[list[dict], int]:
             removed += 1
             i += 1
             continue
+        # hover 紧接同定位点击：点之前的悬停可省略
         if i + 1 < len(steps):
             nxt = steps[i + 1]
             if _method(nxt) in CLICK_METHODS and _same_locator(step, nxt):
                 removed += 1
                 i += 1
                 continue
+        # 侧栏连点：click A → hover A → [短 wait] → click B，hover A 无意义
+        if out and _method(out[-1]) in CLICK_METHODS and _same_locator(out[-1], step):
+            removed += 1
+            i += 1
+            if (
+                i < len(steps)
+                and _method(steps[i]) == "wait_for_time"
+                and _wait_timeout(steps[i]) <= 1200
+            ):
+                removed += 1
+                i += 1
+            continue
         out.append(step)
         i += 1
     return out, removed

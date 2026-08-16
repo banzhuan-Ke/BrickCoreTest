@@ -794,6 +794,12 @@
       </div>
     </template>
   </PageCard>
+
+  <SendReportDialog
+    v-model="sendDialogVisible"
+    :project-id="sendProjectId"
+    :send-fn="doSendReport"
+  />
 </template>
 
 <script setup>
@@ -802,11 +808,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Download, Message } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
+import SendReportDialog from '@/components/SendReportDialog.vue'
 import PerfAiAnalysisPanel from '@/views/Perf/components/PerfAiAnalysisPanel.vue'
 import PerfMetricGlossary from '@/views/Perf/components/PerfMetricGlossary.vue'
 import PerfAiInlineNote from '@/views/Perf/components/PerfAiInlineNote.vue'
 import { perfRecordApi, perfExecApi, perfSceneApi } from '@/api'
 import { resolveDownloadFilename } from '@/utils/downloadFilename'
+import { ProjectStore } from '@/stores/module/ProjectStore.js'
 
 // echarts 按需导入
 import * as echarts from 'echarts/core'
@@ -827,8 +835,12 @@ echarts.use([
 const route = useRoute()
 const router = useRouter()
 const recordId = route.params.recordId
+const proStore = ProjectStore()
 
 const reportData = ref({})
+const sendProjectId = computed(
+  () => Number(reportData.value?.project_id) || Number(proStore.projectInfo?.id) || Number(route.params.projectId) || 0,
+)
 const liveAi = ref(null)
 const chartRef = ref(null)
 const histogramRef = ref(null)
@@ -1602,18 +1614,19 @@ const handleExportExcel = async () => {
   }
 }
 
-const handleSendReport = async () => {
+const handleSendReport = () => {
   if (reportData.value.status === 'running') {
     ElMessage.warning('压测进行中，请稍后再发送报告')
     return
   }
+  sendDialogVisible.value = true
+}
+
+const sendDialogVisible = ref(false)
+const doSendReport = async (configIds) => {
   sending.value = true
   try {
-    await perfRecordApi.sendReport(recordId)
-    ElMessage.success('报告邮件已发送')
-  } catch (err) {
-    console.error(err)
-    ElMessage.error(err?.response?.data?.detail || '报告发送失败，请检查 SMTP 与通知配置')
+    return await perfRecordApi.sendReport(recordId, { config_ids: configIds })
   } finally {
     sending.value = false
   }

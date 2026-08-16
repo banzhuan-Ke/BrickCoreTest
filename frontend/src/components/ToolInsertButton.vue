@@ -87,13 +87,24 @@
               <el-select
                 v-if="paramModes[field.key] === 'var'"
                 v-model="paramValues[field.key]"
-                placeholder="选择变量"
+                :placeholder="resolvedEnvId ? '选择项目/环境/授权/内置变量' : '请先选择参考环境，或手动输入变量名'"
                 filterable
                 allow-create
                 default-first-option
                 style="width: 100%;"
               >
-                <el-option v-for="v in variableOptions" :key="v" :label="v" :value="`@${v}`" />
+                <el-option-group
+                  v-for="group in variableGroups"
+                  :key="group.label"
+                  :label="group.label"
+                >
+                  <el-option
+                    v-for="item in group.items"
+                    :key="`${group.label}-${item.key}`"
+                    :label="item.label"
+                    :value="`@${item.key}`"
+                  />
+                </el-option-group>
               </el-select>
               <el-input-number
                 v-else-if="field.type === 'number'"
@@ -129,21 +140,27 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, inject, ref, unref, watch } from 'vue'
 import { Tools } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { dataFactoryApi } from '@/api/modules/dataFactory'
-import { BUILTIN_VAR_HINTS } from '@/utils/globalVars.js'
+import { httpAuthConfigApi } from '@/api/modules/httpAuth'
+import { ProjectStore } from '@/stores/module/ProjectStore'
+import { collectInsertableVarGroups } from '@/utils/insertableVars.js'
 import { formatDtToolRef, insertDtToolRef } from '@/utils/dtToolInsert.js'
 import { snapshotInsertTarget } from '@/utils/varInsert.js'
 
 const props = defineProps({
+  envId: { type: Number, default: null },
   extraVars: { type: Array, default: () => [] },
   label: { type: String, default: '插入工具' },
   size: { type: String, default: 'small' },
   type: { type: String, default: 'success' },
   link: { type: Boolean, default: false },
 })
+
+const proStore = ProjectStore()
+const injectedEnvId = inject('varInsertEnvId', null)
 
 const loading = ref(false)
 const categories = ref([])
@@ -153,6 +170,14 @@ const paramDialogVisible = ref(false)
 const pickedTool = ref(null)
 const paramValues = ref({})
 const paramModes = ref({})
+const authPreview = ref({ items: [] })
+
+const resolvedEnvId = computed(() => {
+  if (props.envId != null && props.envId !== '') return Number(props.envId)
+  const injected = unref(injectedEnvId)
+  if (injected != null && injected !== '') return Number(injected)
+  return null
+})
 
 const categoryLabelMap = computed(() => {
   const map = new Map()
@@ -160,14 +185,41 @@ const categoryLabelMap = computed(() => {
   return map
 })
 
-const variableOptions = computed(() => {
-  const set = new Set()
-  for (const key of props.extraVars) {
-    if (key) set.add(String(key))
-  }
-  for (const item of BUILTIN_VAR_HINTS) set.add(item.key)
-  return [...set]
+const variableGroups = computed(() => {
+  const envId = resolvedEnvId.value
+  const env = envId ? proStore.envList.find((e) => e.id === envId) : null
+  return collectInsertableVarGroups({
+    projectGlobalVars: proStore.projectInfo?.global_vars || {},
+    envGlobalVars: envId ? (env?.global_vars || {}) : undefined,
+    authItems: envId ? (authPreview.value.items || []) : [],
+    extraVars: props.extraVars,
+  })
 })
+
+async function loadAuthVariables() {
+  const projectId = proStore.projectInfo?.id
+  const envId = resolvedEnvId.value
+  if (!projectId || !envId) {
+    authPreview.value = { items: [] }
+    return
+  }
+  try {
+    const res = await httpAuthConfigApi.getVariablesPreview(projectId, envId)
+    const data = res.data?.data ?? res.data ?? {}
+    authPreview.value = {
+      items: Array.isArray(data.items) ? data.items : [],
+    }
+  } catch {
+    authPreview.value = { items: [] }
+  }
+}
+
+watch(
+  () => [paramDialogVisible.value, resolvedEnvId.value],
+  ([visible]) => {
+    if (visible) loadAuthVariables()
+  }
+)
 
 const filteredTools = computed(() => {
   const q = searchKeyword.value.trim().toLowerCase()

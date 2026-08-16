@@ -21,12 +21,10 @@
               <p class="help-item">• 请求体覆盖：支持 JSON / form-data / x-www-form-urlencoded / XML / Raw</p>
               <p class="help-item">• form-data 文件字段：本地选文件后会自动上传到 MinIO，仅保存引用信息</p>
               <p class="help-section"><b>2. 断言规则</b> - 验证接口返回结果</p>
-              <p class="help-item">• 状态码断言：检查 HTTP 状态码（如 200、404）</p>
-              <p class="help-item">• JSON路径断言：检查响应体中的具体字段（如 $.data.token）</p>
-              <p class="help-item">• Header断言：检查响应头中的值</p>
-              <p class="help-item">• 包含断言：检查响应内容是否包含指定字符串</p>
-              <p class="help-item">• 不包含断言：检查响应内容不包含指定字符串</p>
-              <p class="help-section"><b>3. 变量提取</b> - 从响应中提取数据供后续使用</p>
+              <p class="help-item">• 状态：检查 HTTP 状态码</p>
+              <p class="help-item">• 响应体：JSON 路径 / 全文包含 / 全文不包含</p>
+              <p class="help-item">• 响应头：按 Header 名称取值后再比较</p>
+              <p class="help-section"><b>3. 变量提取</b> - 从响应体或响应头提取数据</p>
               <p class="help-item">• 将登录接口返回的 token 提取出来</p>
               <p class="help-item">• 在后续接口的 Headers 中使用 <code v-pre>${{变量名}}</code> 引用</p>
               <p class="help-example">💡 示例：登录接口提取 token → 其他接口使用 <code v-pre>Authorization: Bearer ${{token}}</code></p>
@@ -158,7 +156,7 @@
             :extra-vars="extractorVarNames"
             hint-text="不含工厂标签；标签与内联工具请用右侧按钮。"
           />
-          <ToolInsertButton :extra-vars="extractorVarNames" />
+          <ToolInsertButton :env-id="refEnvId" :extra-vars="extractorVarNames" />
           <el-button type="info" link size="small" @click="tagPickerVisible = true">数据工厂标签</el-button>
         </div>
         <span class="var-toolbar-hint">先点击下方输入框再插入；变量 <code v-pre>${{名}}</code> / 标签 <code v-pre>${{df:标签}}</code> / 工具 <code v-pre>${{dt:md5|text=@a}}</code></span>
@@ -372,6 +370,10 @@
               <div class="help-popover">
                 <p><b>简单模式</b>：所有断言均会执行</p>
                 <p><b>条件分支</b>：按响应条件选择断言组（如 code=0 校验成功字段，否则校验错误信息）</p>
+                <p class="mt-5"><b>先选对象，再填目标：</b></p>
+                <p>• <b>状态</b>：校验 HTTP 状态码</p>
+                <p>• <b>响应体</b>：JSON 路径 / 全文包含 / 全文不包含</p>
+                <p>• <b>响应头</b>：按 Header 名称取值后再比较</p>
               </div>
             </template>
             <el-icon class="section-help-icon"><QuestionFilled /></el-icon>
@@ -386,33 +388,36 @@
           <el-button type="warning" link size="small" @click="openGenDialog" icon="MagicStick">一键生成</el-button>
         </template>
       </div>
+      <p v-if="assertionMode === 'flat'" class="section-hint">
+        断言针对<strong>响应</strong>：可选状态码、响应体或响应头；选响应头时「目标」填 Header 名（如 Content-Type）。
+      </p>
       <AssertionGroupsEditor v-if="assertionMode === 'conditional'" v-model="form.assertion_groups" />
       <el-table v-else :data="form.assertions" size="small" border class="config-table">
-        <el-table-column label="类型" width="120">
+        <el-table-column label="断言方式" min-width="168">
           <template #default="{ $index }">
-            <el-select v-model="form.assertions[$index].type" size="small">
-              <el-option label="状态码" value="status_code"/>
-              <el-option label="JSON路径" value="json_path"/>
-              <el-option label="Header" value="header"/>
-              <el-option label="包含" value="contains"/>
-              <el-option label="不包含" value="not_contains"/>
-              <template v-if="isWsApi">
-                <el-option label="WS-消息包含" value="ws_contains"/>
-                <el-option label="WS-JSON路径" value="ws_json_path"/>
-                <el-option label="WS-消息条数" value="ws_message_count"/>
-              </template>
-            </el-select>
+            <HttpAssertionTypeSelect
+              v-model="form.assertions[$index].type"
+              size="small"
+              :include-ws="isWsApi"
+              @update:model-value="onAssertionTypeChange(form.assertions[$index])"
+            />
           </template>
         </el-table-column>
-        <el-table-column label="目标字段/路径" width="150">
+        <el-table-column label="目标" min-width="150">
           <template #default="{ $index }">
-            <el-input v-model="form.assertions[$index].target" size="small" placeholder="$.data.id"/>
+            <el-input
+              v-if="assertionNeedsTarget(form.assertions[$index].type, { includeWs: isWsApi })"
+              v-model="form.assertions[$index].target"
+              size="small"
+              :placeholder="assertionTargetPlaceholder(form.assertions[$index].type, { includeWs: isWsApi })"
+            />
+            <span v-else class="target-na">—</span>
           </template>
         </el-table-column>
         <el-table-column label="操作符" width="120">
           <template #default="{ $index }">
             <el-select
-              v-if="!['contains', 'not_contains'].includes(form.assertions[$index].type)"
+              v-if="!['contains', 'not_contains', 'ws_contains'].includes(form.assertions[$index].type)"
               v-model="form.assertions[$index].operator"
               size="small"
             >
@@ -455,21 +460,13 @@
           <el-tooltip placement="top" :show-after="300">
             <template #content>
               <div class="help-popover">
-                <p><b>变量提取</b>用于从响应中提取数据，供后续接口使用</p>
-                <p class="mt-5"><b>典型场景：</b></p>
-                <p>1. 登录接口返回 token，提取后供其他接口使用</p>
-                <p>2. 创建接口返回 id，提取后用于删除/修改接口</p>
-                <p class="mt-5"><b>字段说明：</b></p>
-                <p>• <b>变量名</b>：自定义名称，如 token、userId</p>
-                <p>• <b>来源</b>：JSON 响应体 / Header 响应头</p>
-                <p>• <b>提取路径</b>：JSONPath 表达式</p>
+                <p><b>变量提取</b>从<strong>响应</strong>中取值，供后续接口使用（不是请求头/请求体）</p>
+                <p class="mt-5"><b>来源说明：</b></p>
+                <p>• <b>响应体 · JSON 路径</b>：如 <code>$.data.token</code></p>
+                <p>• <b>响应体 · 正则</b>：匹配响应文本，建议用捕获组</p>
+                <p>• <b>响应头 · Header 名</b>：如 <code>Set-Cookie</code>、<code>Authorization</code></p>
                 <p class="mt-5"><b>使用方式：</b></p>
-                <p>• 在后续接口的请求头或请求体中使用 <code v-pre>${{变量名}}</code> 引用</p>
-                <p>• 示例：<code v-pre>Authorization: Bearer ${{token}}</code></p>
-                <p class="mt-5"><b>路径示例：</b></p>
-                <p>• $.data.token → 提取 data 中的 token</p>
-                <p>• $.data.user.id → 提取嵌套对象中的 id</p>
-                <p>• X-Request-Id → Header 名称</p>
+                <p>• 后续请求中写 <code v-pre>${{变量名}}</code>，名称须与此处变量名一致</p>
               </div>
             </template>
             <el-icon class="section-help-icon"><QuestionFilled /></el-icon>
@@ -477,23 +474,27 @@
         </span>
         <el-button type="primary" link size="small" @click="addExtractor" icon="Plus">添加</el-button>
       </div>
+      <p class="section-hint">
+        从<strong>响应体</strong>或<strong>响应头</strong>提取；Cookie 一般在登录响应的 <code>Set-Cookie</code> 响应头。
+      </p>
       <el-table :data="form.extractors" size="small" border class="config-table">
-        <el-table-column label="变量名" width="150">
+        <el-table-column label="变量名" width="140">
           <template #default="{ $index }">
             <el-input v-model="form.extractors[$index].name" size="small" placeholder="token"/>
           </template>
         </el-table-column>
-        <el-table-column label="来源" width="100">
+        <el-table-column label="提取来源" width="150">
           <template #default="{ $index }">
-            <el-select v-model="form.extractors[$index].source" size="small">
-              <el-option label="JSON" value="json"/>
-              <el-option label="Header" value="header"/>
-            </el-select>
+            <HttpExtractorSourceSelect v-model="form.extractors[$index].source" size="small" />
           </template>
         </el-table-column>
-        <el-table-column label="提取路径" min-width="200">
+        <el-table-column label="提取表达式" min-width="200">
           <template #default="{ $index }">
-            <el-input v-model="form.extractors[$index].path" size="small" placeholder="$.data.token"/>
+            <el-input
+              v-model="form.extractors[$index].path"
+              size="small"
+              :placeholder="extractorPathPlaceholder(form.extractors[$index].source)"
+            />
           </template>
         </el-table-column>
         <el-table-column label="描述" width="120">
@@ -584,6 +585,16 @@
       <div class="section-header">
         <span class="section-title-text">
           数据库断言
+          <el-tooltip placement="top" :show-after="200">
+            <template #content>
+              <div class="help-popover">
+                <p>执行后按 SQL 查库做断言，适合校验落库结果。</p>
+                <p class="mt-5">字段等于/包含等<strong>只看首行</strong>（字段缺失回退首列）；数据源须与顶部调试环境一致。</p>
+                <p class="mt-5">完整案例与操作符说明：点下方工具栏「使用帮助」展开。</p>
+              </div>
+            </template>
+            <el-icon class="section-help-icon"><QuestionFilled /></el-icon>
+          </el-tooltip>
           <el-tag v-if="form.db_assertions.length" type="success" size="small" style="margin-left: 6px;">{{ form.db_assertions.length }} 条</el-tag>
         </span>
         <el-button
@@ -597,15 +608,12 @@
           调试断言
         </el-button>
       </div>
-      <DbAssertionsEditor v-model="form.db_assertions" :datasources="datasources" />
-      <div v-if="dbAssertionTestResult" class="db-assert-test-result">
-        <el-alert
-          :title="dbAssertionTestResult.all_passed ? '全部通过' : '存在失败'"
-          :type="dbAssertionTestResult.all_passed ? 'success' : 'error'"
-          show-icon
-          :closable="false"
-        />
-      </div>
+      <DbAssertionsEditor
+        v-model="form.db_assertions"
+        :datasources="datasources"
+        :environment-id="refEnvId"
+      />
+      <DbAssertionTestResult :result="dbAssertionTestResult" />
     </div>
 
     <!-- 数据集（数据驱动） -->
@@ -721,10 +729,10 @@
               <el-checkbox v-model="genDialog.checkedItems[$index]">&nbsp;</el-checkbox>
             </template>
           </el-table-column>
-          <el-table-column label="类型" width="100">
+          <el-table-column label="类型" min-width="140">
             <template #default="{ row }">
               <el-tag size="small" :type="row.type === 'status_code' ? 'warning' : 'primary'">
-                {{ row.type === 'status_code' ? '状态码' : 'JSON路径' }}
+                {{ assertionTypeLabel(row.type) }}
               </el-tag>
             </template>
           </el-table-column>
@@ -764,11 +772,15 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import http from '@/api/index'
 
 import { catalogApi, buildCatalogTree } from '@/api/modules/catalog'
+import { dataFactoryApi } from '@/api/modules/dataFactory'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ApiCaseUsedVarsPanel from '@/components/ApiCaseUsedVarsPanel.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
 import DbAssertionsEditor from './DbAssertionsEditor.vue'
+import DbAssertionTestResult from './DbAssertionTestResult.vue'
 import AssertionGroupsEditor from './AssertionGroupsEditor.vue'
+import HttpExtractorSourceSelect from './HttpExtractorSourceSelect.vue'
+import HttpAssertionTypeSelect from './HttpAssertionTypeSelect.vue'
 import JsonTextarea from '@/components/JsonTextarea.vue'
 import HeaderEditorPanel from '@/components/HeaderEditorPanel.vue'
 import DataFactoryTagPicker from './DataFactoryTagPicker.vue'
@@ -776,6 +788,12 @@ import WsStepsEditor from './WsStepsEditor.vue'
 import ApiTestFilePicker from '@/components/ApiTestFilePicker.vue'
 import { insertVarRef } from '@/utils/varInsert.js'
 import { buildAssertionsFromJson } from '@/utils/assertionSuggest'
+import {
+  assertionNeedsTarget,
+  assertionTargetPlaceholder,
+  assertionTypeLabel,
+  extractorPathPlaceholder,
+} from '../utils/httpExtractAssertUi.js'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -824,6 +842,29 @@ const refEnvId = ref(null)
 provide('varInsertEnvId', refEnvId)
 
 const isEdit = computed(() => !!props.data)
+
+const form = reactive({
+  name: '',
+  api_id: null,
+  catalog_id: null,
+  priority: 'P2',
+  timeout: 30,
+  retry_count: 0,
+  tags: [],
+  request_headers: [],
+  request_params: [],
+  request_body: '',
+  request_body_type: 'json',
+  request_body_fields: [],
+  ws_steps: [],
+  assertions: [],
+  assertion_groups: [],
+  extractors: [],
+  pre_script: null,
+  post_script: null,
+  data_set: [],
+  db_assertions: [],
+})
 
 const extractorVarNames = computed(() =>
   (form.extractors || []).map((e) => e.name).filter(Boolean)
@@ -982,29 +1023,6 @@ const bodyPlaceholder = computed(() => {
   }
 })
 
-const form = reactive({
-  name: '',
-  api_id: null,
-  catalog_id: null,
-  priority: 'P2',
-  timeout: 30,
-  retry_count: 0,
-  tags: [],
-  request_headers: [],
-  request_params: [],
-  request_body: '',
-  request_body_type: 'json',
-  request_body_fields: [],
-  ws_steps: [],
-  assertions: [],
-  assertion_groups: [],
-  extractors: [],
-  pre_script: null,
-  post_script: null,
-  data_set: [],
-  db_assertions: [],
-})
-
 const tagSuggestions = [
   { label: '压测', value: 'perf' },
   { label: '业务链路', value: 'journey' },
@@ -1041,19 +1059,36 @@ const resetForm = () => {
   form.post_script = null
   form.data_set = []
   form.db_assertions = []
+  dbAssertionTestResult.value = null
   activeCollapse.value = ['headers', 'params', 'body']
 }
 
 const datasources = ref([])
 const testingDbAssertions = ref(false)
 const dbAssertionTestResult = ref(null)
+let datasourcesSeq = 0
 
 const loadDatasources = async () => {
+  const projectId = proStore.projectInfo?.id
+  const envId = refEnvId.value
+  const seq = ++datasourcesSeq
+  if (!projectId || !envId) {
+    // 未选调试环境时不拉全量数据源，避免误选其他环境
+    if (seq === datasourcesSeq) datasources.value = []
+    return
+  }
   try {
-    const res = await dataFactoryApi.listDatasources({ project_id: proStore.projectInfo.id, size: 100 })
+    const res = await dataFactoryApi.listDatasources({
+      project_id: projectId,
+      environment_id: envId,
+      size: 100,
+    })
+    if (seq !== datasourcesSeq) return
     datasources.value = res.data?.list || []
-  } catch {
+  } catch (e) {
+    if (seq !== datasourcesSeq) return
     datasources.value = []
+    ElMessage.error(e?.response?.data?.detail || e?.message || '加载数据源失败')
   }
 }
 
@@ -1084,7 +1119,13 @@ const handleTestDbAssertions = async () => {
     if (dbAssertionTestResult.value?.all_passed) {
       ElMessage.success('数据库断言全部通过')
     } else {
-      ElMessage.error('数据库断言存在失败项')
+      const failed = (dbAssertionTestResult.value?.results || []).find((r) => !r.passed)
+      const detail = failed?.error || failed?.message || ''
+      if (/环境不一致|绑定在/.test(detail)) {
+        ElMessage.error('数据源与调试环境不一致，请查看下方说明')
+      } else {
+        ElMessage.error('数据库断言存在失败项，请查看下方详情')
+      }
     }
   } catch (error) {
     ElMessage.error(error?.response?.data?.detail || '调试断言失败')
@@ -1092,6 +1133,11 @@ const handleTestDbAssertions = async () => {
     testingDbAssertions.value = false
   }
 }
+
+watch(refEnvId, () => {
+  loadDatasources()
+  dbAssertionTestResult.value = null
+})
 
 watch(() => props.data, (val) => {
   if (val) {
@@ -1140,13 +1186,27 @@ watch(() => props.data, (val) => {
 watch(() => form.assertions, (assertions) => {
   if (!assertions) return
   assertions.forEach(a => {
-    if (a.type === 'contains') {
+    if (a.type === 'contains' || a.type === 'ws_contains') {
       a.operator = 'contains'
     } else if (a.type === 'not_contains') {
       a.operator = 'not_contains'
     }
   })
 }, { deep: true })
+
+const onAssertionTypeChange = (row) => {
+  if (!row) return
+  if (row.type === 'contains' || row.type === 'ws_contains') {
+    row.operator = 'contains'
+  } else if (row.type === 'not_contains') {
+    row.operator = 'not_contains'
+  } else if (!row.operator) {
+    row.operator = 'equals'
+  }
+  if (!assertionNeedsTarget(row.type, { includeWs: isWsApi.value })) {
+    row.target = ''
+  }
+}
 
 // 弹窗关闭后重置
 const handleClosed = () => {
@@ -1205,9 +1265,12 @@ const fetchCaseDetail = async (caseId) => {
 watch(() => props.modelValue, (visible) => {
   if (visible) {
     proStore.refreshProjectGlobals()
-    loadDatasources()
+    dbAssertionTestResult.value = null
     if (!refEnvId.value && proStore.envList.length) {
       refEnvId.value = proStore.envList[0].id
+    } else {
+      // 环境未变时不会触发 refEnvId watch，需主动刷新数据源
+      loadDatasources()
     }
     loadCatalogTree()
     if (props.data?.id) {
@@ -1710,6 +1773,19 @@ const handleSave = async () => {
 }
 .operator-fixed {
   color: #606266;
+  font-size: 13px;
+  padding-left: 4px;
+}
+
+.section-hint {
+  margin: -4px 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}
+
+.target-na {
+  color: #909399;
   font-size: 13px;
   padding-left: 4px;
 }

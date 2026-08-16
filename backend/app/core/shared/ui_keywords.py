@@ -17,9 +17,11 @@ UI_VALID_METHODS = {
     "set_default_timeout", "wait_for_time", "wait_for_load", "wait_for_network",
     "wait_for_element",
     "wait_for_element_hidden", "wait_for_element_text_change", "wait_for_element_text_stable",
+    "wait_for_clickable",
     "wait_for_url_contains", "wait_for_response", "wait_for_download",
     "accept_dialog", "dismiss_dialog",
-    "scroll_to_element", "click_by_text", "switch_to_latest_page",
+    "scroll_to_element", "click_by_text", "click_if_exists", "fill_if_exists",
+    "click_if_visible", "fill_if_visible", "switch_to_latest_page",
     "kw_assert_page_title", "kw_assert_page_url", "kw_assert_value",
     "kw_assert_element_text", "kw_assert_element_text_contains", "kw_assert_text_contains",
     "kw_assert_text_not_contains", "kw_assert_element_count", "kw_assert_text_length",
@@ -32,9 +34,19 @@ UI_VALID_METHODS = {
     "extract_text", "extract_attribute", "extract_input_value", "extract_page_url",
     "extract_response_field",
     "smart_step",
+    "smart_click", "smart_fill",
     "condition_branch",
     "click_by_image", "fill_by_image", "wait_for_image", "kw_assert_image", "kw_assert_image_not_exists",
 }
+
+# SMART-1：expected_after.type 白名单
+SMART_EXPECTED_AFTER_TYPES = frozenset({
+    "text_visible",
+    "locator_visible",
+    "locator_hidden",
+    "url_contains",
+    "value_equals",
+})
 
 UI_REQUIRED_PARAMS = {
     "open_url": {"url"},
@@ -67,6 +79,11 @@ UI_REQUIRED_PARAMS = {
     "wait_for_element_hidden": {"locator"},
     "wait_for_element_text_change": {"locator"},
     "wait_for_element_text_stable": {"locator"},
+    "wait_for_clickable": {"locator"},
+    "click_if_exists": {"locator"},
+    "fill_if_exists": {"locator", "value"},
+    "click_if_visible": {"locator"},
+    "fill_if_visible": {"locator", "value"},
     "wait_for_url_contains": {"url"},
     "wait_for_response": {"url"},
     "wait_for_download": {},
@@ -103,6 +120,9 @@ UI_REQUIRED_PARAMS = {
     "extract_page_url": {"var_name"},
     "extract_response_field": {"field", "var_name"},
     "smart_step": {"intent"},
+    # smart_* / KW-1b 必填须与 frontend stepHelper.validateStep 同步
+    "smart_click": {"target", "intent"},
+    "smart_fill": {"target", "intent", "value"},
     "frame_fill_value": {"frame", "locator"},
     "frame_click_element": {"frame", "locator"},
     "frame_hover": {"frame", "locator"},
@@ -140,6 +160,11 @@ UI_DEFAULT_PARAMS = {
     "wait_for_element_hidden": {"timeout": 20000, "index": 1},
     "wait_for_element_text_change": {"timeout": 20000, "index": 1},
     "wait_for_element_text_stable": {"timeout": 20000, "stable_ms": 500, "index": 1},
+    "wait_for_clickable": {"timeout": 20000, "index": 1},
+    "click_if_exists": {"index": 1, "force": False, "timeout": 5000},
+    "fill_if_exists": {"index": 1, "timeout": 5000},
+    "click_if_visible": {"index": 1, "force": False, "timeout": 5000},
+    "fill_if_visible": {"index": 1, "timeout": 5000},
     "wait_for_url_contains": {"timeout": 20000, "use_regex": False},
     "wait_for_response": {"timeout": 30000},
     "wait_for_download": {},
@@ -178,6 +203,20 @@ UI_DEFAULT_PARAMS = {
     "extract_input_value": {"index": 1, "timeout": 20000},
     "extract_page_url": {"var_name": ""},
     "smart_step": {"intent": ""},
+    "smart_click": {
+        "allow_ai": False,
+        "min_score": 70,
+        "min_margin": 15,
+        "timeout": 20000,
+        "risk_level": "normal",
+    },
+    "smart_fill": {
+        "allow_ai": False,
+        "min_score": 70,
+        "min_margin": 15,
+        "timeout": 20000,
+        "risk_level": "normal",
+    },
     "frame_fill_value": {"timeout": 20000},
     "frame_click_element": {"index": 1, "button": "left", "force": False, "timeout": 20000},
     "frame_hover": {"timeout": 20000},
@@ -236,6 +275,11 @@ METHOD_TO_KEYWORD = {
     "wait_for_element_hidden": "等待元素消失",
     "wait_for_element_text_change": "等待元素文本变化",
     "wait_for_element_text_stable": "等待元素文本稳定",
+    "wait_for_clickable": "等待元素可点击",
+    "click_if_exists": "若存在则点击",
+    "fill_if_exists": "若存在则输入",
+    "click_if_visible": "若可见则点击",
+    "fill_if_visible": "若可见则输入",
     "wait_for_url_contains": "等待URL包含",
     "wait_for_response": "等待接口响应",
     "wait_for_download": "等待下载完成",
@@ -273,6 +317,8 @@ METHOD_TO_KEYWORD = {
     "extract_page_url": "提取当前页面url",
     "extract_response_field": "提取接口响应字段",
     "smart_step": "智能步骤",
+    "smart_click": "智能点击",
+    "smart_fill": "智能输入",
     "condition_branch": "条件分支",
     "click_by_image": "图像模板点击",
     "fill_by_image": "图像模板输入",
@@ -280,3 +326,54 @@ METHOD_TO_KEYWORD = {
     "kw_assert_image": "断言图像存在",
     "kw_assert_image_not_exists": "断言图像不存在",
 }
+
+
+def validate_smart_step_params(method: str, params=None):
+    """SMART-1：校验 expected_after 类型与危险动作安全字段。返回错误文案列表。"""
+    if method not in ("smart_click", "smart_fill"):
+        return []
+    params = params if isinstance(params, dict) else {}
+    errors = []
+    ea = params.get("expected_after")
+    if ea is not None:
+        if not isinstance(ea, dict):
+            errors.append("expected_after 必须是对象")
+        else:
+            ea_type = str(ea.get("type") or "").strip()
+            # 空对象 / 无 type = 未配置后置（允许）；仅当显式填了 type 才校验白名单
+            if ea_type and ea_type not in SMART_EXPECTED_AFTER_TYPES:
+                errors.append(
+                    f"expected_after.type 不支持: {ea_type}，"
+                    f"允许: {', '.join(sorted(SMART_EXPECTED_AFTER_TYPES))}"
+                )
+            if ea_type in ("locator_visible", "locator_hidden"):
+                if not str(ea.get("locator") or "").strip():
+                    errors.append(f"expected_after.{ea_type} 必须填写 locator")
+            if ea_type == "text_visible" and not str(ea.get("text") or "").strip():
+                errors.append("expected_after.text_visible 必须填写 text")
+            if ea_type == "url_contains" and not str(
+                ea.get("text") or ea.get("url") or ""
+            ).strip():
+                errors.append("expected_after.url_contains 必须填写 URL 片段")
+            try:
+                to = ea.get("timeout")
+                if to is not None and float(to) < 0:
+                    errors.append("expected_after.timeout 不能为负数")
+            except (TypeError, ValueError):
+                errors.append("expected_after.timeout 必须是数字")
+
+    # 危险词：保存侧与 Runner 一致，缺 region/后置则报错
+    # 不含「确定/确认」——普通确认弹层不强制；删除确认靠 target 含「删除」命中
+    # 须与 runner/tools/smart_action.py、frontend stepHelper.validateSmartStepParams 同步
+    target = str(params.get("target") or "")
+    risk = str(params.get("risk_level") or "").strip().lower()
+    destructive_words = (
+        "删除", "移除", "提交", "发布", "支付",
+        "delete", "remove", "submit", "publish", "pay",
+    )
+    if risk in ("submit", "destructive") or any(w in target for w in destructive_words):
+        if not str(params.get("region") or "").strip():
+            errors.append("危险动作（删除/提交等）必须填写 region")
+        if not isinstance(ea, dict) or not str((ea or {}).get("type") or "").strip():
+            errors.append("危险动作必须填写 expected_after")
+    return errors

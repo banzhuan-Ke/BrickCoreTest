@@ -142,9 +142,15 @@ python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
+# 必装：Backend 本机 Chromium（AI「Agent(MCP) / 多轮探索 / 抓取页面」在 Backend 起浏览器，不走 Runner）
+python -m playwright install chromium
+
 copy .env.example .env
 notepad .env
 ```
+
+> **易漏点**：只给 Runner 装 Playwright **不够**。Agent（MCP）报错  
+> `Executable doesn't exist ... ms-playwright\chromium_...` 时，请在 **Backend 的 venv** 内执行上面这条，然后重启 Backend。
 
 将 `backend\.env` 调成与上面中间件一致（**必须保存**；无 Docker 方式一端口见下）。至少确认这几行：
 
@@ -185,10 +191,10 @@ AI_REQUIREMENT_BUCKET=ai-requirements
 DOC_USERNAME=admin
 DOC_PASSWORD=BrickCore123456
 INTERNAL_API_KEY=brickcore-internal-demo
-PLATFORM_VERSION=1.5.0
-RUNNER_CLIENT_VERSION_LATEST=1.5.5
+PLATFORM_VERSION=1.6.0
+RUNNER_CLIENT_VERSION_LATEST=1.6.1
 RUNNER_CLIENT_VERSION_MIN=1.3.8
-RUNNER_ENGINE_VERSION=1.1.1
+RUNNER_ENGINE_VERSION=1.6.1
 RUNNER_ENGINE_VERSION_MIN=1.0.0
 ```
 
@@ -391,6 +397,7 @@ docker compose logs -f backend
 | 附件/截图打不开 | MinIO 已启动，且 `MINIO_PUBLIC_ENDPOINT` 为本机可访问地址 |
 | Docker 装不上 / 无 Hyper-V | 不要用方式二/三，改方式一 |
 | 页面空白（全栈） | 先 `npm run build`，确认有 `frontend/dist/index.html` |
+| AI 生成 Agent（MCP）/ 探索失败：`Executable doesn't exist` / `ms-playwright` | 在 **Backend** 目录激活 `venv` 后执行 `python -m playwright install chromium`，重启 Backend（与 Runner 浏览器无关） |
 
 ---
 

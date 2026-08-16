@@ -27,6 +27,7 @@ from app.schemas.http import (
 from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
 from app.core.platform.permissions import API_PLAN_VIEW, API_PLAN_EDIT
 from app.core.ops.notification import NotificationService
+from app.routers.http.records import SendReportPayload
 from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 from .utils import api_run_result_to_case_display, normalize_plan_item_results
 from app.modules.http.api_report_export import sum_plan_item_results_http_ms
@@ -1388,18 +1389,23 @@ async def export_plan_report(record_id: int):
     )
 
 
-@router.post("/plan-records/{record_id}/send-report", summary="发送计划测试报告邮件")
-async def send_plan_report(record_id: int):
-    """手动发送计划测试报告邮件"""
+@router.post("/plan-records/{record_id}/send-report", summary="发送计划测试报告")
+async def send_plan_report(record_id: int, payload: Optional[SendReportPayload] = None):
+    """手动发送计划测试报告（可指定通知配置 id）"""
+    body = payload or SendReportPayload()
     record = await ApiPlanRunRecord.get_or_none(id=record_id)
     if not record:
         raise HTTPException(status_code=404, detail="记录不存在")
     try:
-        await NotificationService.send_api_report(
+        result = await NotificationService.send_api_report(
             project_id=record.project_id,
             record_id=record_id,
             record_type="plan",
+            recipients=body.recipients,
+            config_ids=body.config_ids,
         )
-        return {"detail": "报告邮件已发送"}
+        return {"detail": NotificationService.format_dispatch_detail(result)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"发送失败: {e}")

@@ -74,14 +74,47 @@ def sum_plan_item_results_http_ms(item_results: List[Dict[str, Any]]) -> float:
 
 
 def resolve_case_response_headers(item: Dict[str, Any]) -> Any:
-    """从用例结果中解析响应 Headers"""
-    headers = item.get("response_headers")
-    if headers:
+    """从用例结果中解析响应 Headers（跳过空 dict/list/字符串）"""
+    def _nonempty(headers: Any) -> Any:
+        if not headers:
+            return None
+        if isinstance(headers, dict) and not headers:
+            return None
+        if isinstance(headers, (list, tuple)) and not headers:
+            return None
+        if isinstance(headers, str) and not headers.strip():
+            return None
+        return headers
+
+    headers = _nonempty(item.get("response_headers"))
+    if headers is not None:
         return headers
     response_detail = item.get("response_detail") or {}
-    if isinstance(response_detail, dict) and response_detail.get("headers"):
-        return response_detail.get("headers")
+    if isinstance(response_detail, dict):
+        headers = _nonempty(response_detail.get("headers"))
+        if headers is not None:
+            return headers
+    request_detail = item.get("request_detail") or {}
+    retry_info = request_detail.get("retry_info") if isinstance(request_detail, dict) else None
+    if not retry_info:
+        retry_info = item.get("retry_info") or {}
+    attempts = (retry_info or {}).get("attempts") or []
+    if attempts:
+        last = attempts[-1] if isinstance(attempts[-1], dict) else {}
+        headers = _nonempty(last.get("response_headers")) or _nonempty(last.get("headers"))
+        if headers is not None:
+            return headers
     return {}
+
+
+def resolve_case_response_status(item: Dict[str, Any]) -> Any:
+    """从用例结果中解析 HTTP 状态码"""
+    if item.get("response_status") is not None:
+        return item.get("response_status")
+    response_detail = item.get("response_detail") or {}
+    if isinstance(response_detail, dict) and response_detail.get("status_code") is not None:
+        return response_detail.get("status_code")
+    return None
 
 
 def format_display_json(data: Any) -> str:
@@ -516,6 +549,7 @@ def generate_case_html(item: Dict[str, Any]) -> str:
         req_body = request_detail.get('body_fields', {}).get('final')
     resp_headers = resolve_case_response_headers(item)
     resp_body = resolve_case_response_body(item)
+    resp_status = resolve_case_response_status(item) or response_status
     assertions = item.get('assertions', []) or item.get('assertions_result', [])
     extracted_vars = item.get('extracted_vars', {})
     extracted_meta = item.get('extracted_meta', {})
@@ -534,8 +568,8 @@ def generate_case_html(item: Dict[str, Any]) -> str:
         )
     if response_time is not None:
         html_parts.append(f'<span style="font-size:12px;color:#909399;">总 {response_time:.0f}ms</span>')
-    if response_status:
-        html_parts.append(f'<span style="font-size:12px;color:#666;">HTTP {response_status}</span>')
+    if resp_status:
+        html_parts.append(f'<span style="font-size:12px;color:#666;">HTTP {resp_status}</span>')
     html_parts.append(f'<span class="case-status-badge case-status-{status_class}">{status_text}</span>')
     html_parts.append('</div></div>')
     html_parts.append('<div class="case-content">')
@@ -557,6 +591,19 @@ def generate_case_html(item: Dict[str, Any]) -> str:
             <div class="detail-content">
                 <div style="margin-bottom:8px;"><span class="http-method {method_class}">{method}</span><span>{escape_html(str(url_final))}</span></div>
                 {f'<div style="font-size:12px;color:#999;margin-top:4px;">原始URL: {escape_html(str(url_original))}</div>' if url_original and url_original != url_final else ''}
+            </div>
+        </div>''')
+
+    # 响应信息摘要
+    total_ms_text = f"{response_time:.0f} ms" if response_time is not None else "-"
+    http_ms_text = f"{http_time:.0f} ms" if http_time is not None else "-"
+    html_parts.append(f'''
+        <div class="detail-block">
+            <div class="detail-title">响应信息</div>
+            <div class="detail-content" style="display:flex;flex-wrap:wrap;gap:16px;font-size:13px;">
+                <div><span style="color:#8c8c8c;">状态码：</span><b>{escape_html(str(resp_status if resp_status is not None else '-'))}</b></div>
+                <div><span style="color:#8c8c8c;">接口耗时：</span><b style="color:#67c23a;">{http_ms_text}</b></div>
+                <div><span style="color:#8c8c8c;">用例总耗时：</span><b>{total_ms_text}</b></div>
             </div>
         </div>''')
 

@@ -16,10 +16,32 @@ function detectLevel(text, fallback = 'info') {
   return fallback
 }
 
-function extractTime(message) {
+const LOG_TIME_RE = /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}|\d{2}:\d{2}:\d{2}[.:]?\d*)/
+
+/**
+ * 从日志正文提取发生时间（非接收时间）。
+ * 兼容：行首时间、【LEVEL】/ [LEVEL] 后紧跟时间（设备实时日志）。
+ */
+export function extractTime(message) {
   if (!message) return null
-  const match = message.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}|\d{2}:\d{2}:\d{2}[.:]?\d*)/)
-  return match ? match[1] : null
+  const text = String(message)
+  // [HH:mm:ss] [LEVEL] msg（报告日志常见）
+  const bracketed = text.match(/^\[(\d{2}:\d{2}:\d{2}[.:]?\d*)\]/)
+  if (bracketed) return bracketed[1]
+  // 行首时间，或 【LEVEL】/[LEVEL] 后紧跟时间（设备实时日志）
+  const head = text.match(
+    new RegExp(`^(?:[【\\[]\\w+[】\\]]\\s+)?${LOG_TIME_RE.source}`)
+  )
+  return head ? head[1] : null
+}
+
+/** 设备日志左侧时间列：优先 HH:mm:ss，便于与现有布局对齐 */
+export function formatLogTimeShort(rawTime) {
+  if (!rawTime) return null
+  const full = String(rawTime).match(/\d{4}-\d{2}-\d{2}\s+(\d{2}:\d{2}:\d{2})/)
+  if (full) return full[1]
+  const hm = String(rawTime).match(/^(\d{2}:\d{2}:\d{2})/)
+  return hm ? hm[1] : String(rawTime)
 }
 
 function parseStringLog(log, index) {

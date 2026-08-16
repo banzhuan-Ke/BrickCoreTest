@@ -22,7 +22,7 @@
             <el-input 
               v-model="caseInfo.name" 
               placeholder="请输入用例名称"
-              maxlength="100"
+              maxlength="50"
               show-word-limit
             />
           </el-form-item>
@@ -61,13 +61,15 @@
         </el-form>
 
         <CaseUsedVarsPanel :steps="caseInfo.steps" />
-        
+
         <!-- AI 生成/录制步骤按钮 -->
         <div class="ai-gen-bar">
           <el-button type="warning" @click="aiDialogVisible = true" icon="MagicStick">🤖 AI 生成步骤</el-button>
           <el-button type="success" @click="recordDialogVisible = true" icon="VideoCamera">🎬 AI 录制步骤</el-button>
           <el-button type="primary" plain @click="fragmentPickerVisible = true" icon="Collection">插入片段</el-button>
         </div>
+
+        <UiCaseAuthoringTips />
 
         <!-- 步骤编辑器 -->
         <div class="steps-section">
@@ -78,6 +80,7 @@
           <StepEditor
             v-model:steps="caseInfo.steps"
             :debug-selected-index="selectedStepIndex"
+            :allow-interactive-actions="false"
             @debug-select-step="selectedStepIndex = $event"
           />
         </div>
@@ -124,6 +127,7 @@ import UiCaseGenerator from '@/views/AI/components/UiCaseGenerator.vue'
 import UiCaseRecorder from '@/views/AI/components/UiCaseRecorder.vue'
 import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
 import CaseUsedVarsPanel from '@/components/CaseUsedVarsPanel.vue'
+import UiCaseAuthoringTips from '@/components/UiCaseAuthoringTips.vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import { resolveCaseDescriptionForContext, resolveDefaultStartUrl, extractOpenUrlFromSteps, normalizeRecorderApplyPayload } from '@/utils/caseDescription.js'
@@ -216,7 +220,7 @@ const recordingInitialUrl = computed(() => resolveDefaultStartUrl({
 const formRules = {
   name: [
     { required: true, message: '请输入用例名称', trigger: 'blur' },
-    { min: 2, max: 100, message: '长度在 2 到 100 个字符', trigger: 'blur' }
+    { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
   ],
   level: [
     { required: true, message: '请选择用例级别', trigger: 'change' }
@@ -226,14 +230,25 @@ const formRules = {
 // 保存用例
 async function saveCase() {
   const valid = await formRef.value.validate().catch(() => false)
-  if (!valid) return
+  if (!valid) {
+    ElMessage.warning('请先完善用例名称、级别等必填项后再保存')
+    return
+  }
   
   saving.value = true
   try {
     const res = await http.caseApi.create(caseInfo)
     if (res.status === 200 || res.status === 201) {
-      ElNotification.success('用例创建成功')
-      goBack()
+      const newId = res.data?.id ?? res.data?.data?.id
+      if (newId != null && Number(newId) > 0) {
+        ElNotification.success('用例创建成功，可在编辑页使用交互调试')
+        userStore.deleteTabs(route.path)
+        await router.replace({ path: `/case/edit/${newId}` })
+      } else {
+        ElNotification.warning('用例已创建，但未拿到用例 ID，请从列表进入编辑后再使用交互调试')
+        userStore.deleteTabs(route.path)
+        await router.replace({ path: '/case' })
+      }
     } else {
       ElNotification.error(res.data?.detail || '创建失败')
     }

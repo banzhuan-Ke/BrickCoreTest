@@ -66,7 +66,7 @@
           <div v-if="!hasLiveScreen" class="screen-placeholder">
             <el-icon :size="36"><Monitor /></el-icon>
             <span>等待执行机画面…</span>
-            <span class="screen-placeholder-hint">设备上线后约 2 秒内刷新；执行用例时实时更新</span>
+            <span class="screen-placeholder-hint">{{ screenPlaceholderHint }}</span>
           </div>
           <img
             id="screen"
@@ -127,6 +127,7 @@ import {
   CircleClose,
   FullScreen
 } from '@element-plus/icons-vue'
+import { extractTime, formatLogTimeShort } from '@/utils/executionLog.js'
 
 // 定义 props
 const props = defineProps({
@@ -140,12 +141,37 @@ const props = defineProps({
 const logs = ref([])
 const screenLoading = ref(false)
 const hasLiveScreen = ref(false)
+const waitScreenStartedAt = ref(0)
+const nowTick = ref(Date.now())
+let waitScreenTimer = null
 
 // 设备在线状态（以后端 status 为准，和列表页保持一致）
 const isConnected = computed(() => {
   const s = deviceDetail.value.status
   return s === '在线' || s === '执行中'
 })
+
+const screenPlaceholderHint = computed(() => {
+  if (
+    isConnected.value
+    && !hasLiveScreen.value
+    && waitScreenStartedAt.value > 0
+    && (nowTick.value - waitScreenStartedAt.value) >= 15000
+  ) {
+    return '长时间无画面：新版 Runner 会自动重试；Web 执行中应为浏览器当前页。仍黑屏可重启执行器'
+  }
+  return '设备上线后约 2 秒内刷新；Web 执行中推浏览器当前页，空闲可能为桌面'
+})
+
+function markWaitingForScreen() {
+  if (!waitScreenStartedAt.value) {
+    waitScreenStartedAt.value = Date.now()
+  }
+}
+
+function clearWaitingForScreen() {
+  waitScreenStartedAt.value = 0
+}
 
 // 设备详情
 const deviceDetail = ref({
@@ -161,8 +187,8 @@ const screenSrc = ref(new URL('@/assets/images/device.jpg', import.meta.url).hre
 // WebSocket实例
 let ws
 
-// 获取当前时间 HH:mm:ss
-const getTimeStr = () => {
+// 接收瞬间时间（仅当正文无时间戳时兜底）
+const getReceiveTimeStr = () => {
   const now = new Date()
   return String(now.getHours()).padStart(2, '0') + ':' +
          String(now.getMinutes()).padStart(2, '0') + ':' +
@@ -177,6 +203,11 @@ const parseLogLevel = (msg) => {
   return 'info'
 }
 
+/** 优先用日志正文里的实际时间；历史回放时勿用「打开页面」的当前时间 */
+const resolveLogDisplayTime = (msg) => {
+  return formatLogTimeShort(extractTime(msg)) || getReceiveTimeStr()
+}
+
 // 清空日志
 const clearLogs = () => {
   logs.value = []
@@ -186,6 +217,7 @@ const onScreenLoad = () => {
   screenLoading.value = false
   if (screenSrc.value && !screenSrc.value.includes('device.jpg')) {
     hasLiveScreen.value = true
+    clearWaitingForScreen()
   }
 }
 
@@ -208,7 +240,7 @@ const handleMessage = (event) => {
     if (message.type === 'log') {
       if (!message.data) return
       logs.value.push({
-        time: getTimeStr(),
+        time: resolveLogDisplayTime(message.data),
         level: parseLogLevel(message.data),
         message: message.data
       })
@@ -222,6 +254,7 @@ const handleMessage = (event) => {
       const fmt = (message.format || 'jpeg').replace('jpg', 'jpeg')
       screenLoading.value = true
       hasLiveScreen.value = true
+      clearWaitingForScreen()
       screenSrc.value = `data:image/${fmt};base64,${message.data}`
     }
   } catch (e) {
@@ -236,6 +269,8 @@ const setupWebSocket = () => {
   }
   logs.value = []
   hasLiveScreen.value = false
+  clearWaitingForScreen()
+  markWaitingForScreen()
   const wsUrl = `${import.meta.env.VITE_BASE_WS}/sys/devices/ws/${props.deviceId}`
   ws = new WebSocket(wsUrl)
   ws.onmessage = handleMessage
@@ -260,10 +295,22 @@ const getDeviceDetail = async () => {
 onMounted(async () => {
   await getDeviceDetail()
   setupWebSocket()
+  waitScreenTimer = setInterval(() => {
+    nowTick.value = Date.now()
+    if (isConnected.value && !hasLiveScreen.value) {
+      markWaitingForScreen()
+    } else if (!isConnected.value) {
+      clearWaitingForScreen()
+    }
+  }, 1000)
 })
 
 // 清理WebSocket连接
 onUnmounted(() => {
+  if (waitScreenTimer) {
+    clearInterval(waitScreenTimer)
+    waitScreenTimer = null
+  }
   if (ws) {
     ws.close()
   }

@@ -417,12 +417,13 @@ def should_repick_locator(step: dict) -> bool:
     locator = ((step.get("params") or {}).get("locator") or "").strip()
     if not locator:
         return False
+    meta = step.get("meta") or {}
+    # Runner 已按策略排好 candidates，转换侧勿再覆盖首位
+    if meta.get("locatorRankedByRunner") or meta.get("locatorRunnerFinal"):
+        return False
     if " >> " in locator or "||" in locator:
         return False
     if locator.startswith("//tr[contains"):
-        return False
-    meta = step.get("meta") or {}
-    if meta.get("locatorRunnerFinal"):
         return False
     popup = (meta.get("popupRoot") or "").strip()
     region = (meta.get("region") or "").strip()
@@ -449,6 +450,14 @@ def _normalize_desc(desc: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def _texts_loosely_match(a: str, b: str) -> bool:
+    """忽略空白/引号后的包含关系（AI 常把「登 录」润色成「登录」）。"""
+    na, nb = _normalize_desc(a), _normalize_desc(b)
+    if not na or not nb:
+        return False
+    return na in nb or nb in na
+
+
 def extract_desc_targets(desc: str) -> list[str]:
     """从步骤描述提取引号内或动作后的目标文案。"""
     desc = (desc or "").strip()
@@ -470,7 +479,17 @@ def extract_desc_targets(desc: str) -> list[str]:
 def _locator_mentions_text(locator: str, text: str) -> bool:
     if not locator or not text:
         return False
-    return text in locator
+    if text in locator:
+        return True
+    # 定位串通常无「登 录」原样；描述可能已去空格
+    loc_n = _normalize_desc(locator)
+    text_n = _normalize_desc(text)
+    return bool(text_n) and text_n in loc_n
+
+
+def _has_stable_locator(locator: str) -> bool:
+    """已消歧 / 稳定定位：描述润色不一致时不宜直接打成 risk。"""
+    return _locator_already_disambiguated(locator)
 
 
 def assess_step_quality(step: dict) -> dict[str, Any]:
@@ -516,18 +535,31 @@ def assess_step_quality(step: dict) -> dict[str, Any]:
             if not has_context and not meta.get("region"):
                 reasons.append(f"常见短词「{accessible}」且未使用区域上下文定位")
         if match_index > 1 and int(params.get("index") or 1) == 1:
-            reasons.append(f"页面上存在多个「{accessible or '相似元素'}」，建议设置 params.index={match_index}")
+            if not _locator_already_disambiguated(locator):
+                reasons.append(
+                    f"页面上存在多个「{accessible or '相似元素'}」，建议设置 params.index={match_index}"
+                )
 
         desc_targets = extract_desc_targets(desc)
         if desc_targets:
             primary = desc_targets[0]
-            if accessible and primary not in accessible and accessible not in primary:
-                if not _locator_mentions_text(locator, primary):
+            if accessible and not _texts_loosely_match(primary, accessible):
+                if not _locator_mentions_text(locator, primary) and not _locator_mentions_text(
+                    locator, accessible
+                ):
                     reasons.append(f"描述为「{primary}」，但捕获元素文案为「{accessible}」")
 
     level = "ok"
     if reasons:
-        level = "risk" if any("描述为" in r or "缺少定位" in r for r in reasons) else "warn"
+        hard_missing = any("缺少定位" in r for r in reasons)
+        desc_mismatch = any("描述为" in r for r in reasons)
+        # AI 润色描述易触发「描述 vs 捕获」；定位已是稳定 #id 时只标注意，避免优化后风险虚高
+        if hard_missing:
+            level = "risk"
+        elif desc_mismatch and not _has_stable_locator(locator):
+            level = "risk"
+        else:
+            level = "warn"
 
     meta["quality"] = {
         "level": level,
@@ -540,15 +572,54 @@ def assess_step_quality(step: dict) -> dict[str, Any]:
 
 
 def apply_index_from_meta(step: dict) -> dict:
-    """matchIndex>1 且未显式设置 index 时，写入默认 index。"""
+    """matchIndex>1 且未显式设置 index 时，写入默认 index。
+
+    若定位本身已带 name/placeholder/#id/nth-of-type 等消歧信息，复位 index=1，
+    避免 AI 优化换成结构路径后仍残留原 matchIndex 导致双重 .nth。
+    """
     meta = step.get("meta") or {}
     match_index = int(meta.get("matchIndex") or 0)
+    params = step.setdefault("params", {})
+    locator = str(params.get("locator") or "").strip()
+    if _locator_already_disambiguated(locator):
+        if int(params.get("index") or 1) != 1:
+            params["index"] = 1
+        return step
     if match_index <= 1:
         return step
-    params = step.setdefault("params", {})
     if step.get("method") in INDEX_ELIGIBLE_METHODS and int(params.get("index") or 1) == 1:
         params["index"] = match_index
     return step
+
+
+def _locator_already_disambiguated(locator: str) -> bool:
+    loc = (locator or "").strip()
+    if not loc:
+        return False
+    core = loc.split("||")[-1].strip()
+    if core.startswith("#") and " " not in core.split("[")[0]:
+        eid = core[1:].split()[0].split(":")[0]
+        if eid and not is_dynamic_element_id(eid):
+            return True
+    if core.startswith("[data-testid="):
+        return True
+    if core.startswith("get_by_placeholder=") or core.startswith("get_by_label="):
+        return True
+    # get_by_role=textbox, 用户名 — 已带 accessible name
+    if core.startswith("get_by_role=") and "," in core:
+        return True
+    if core.startswith("get_by_text=") and len(core) > len("get_by_text="):
+        return True
+    # 属性消歧
+    if re.search(r'\[(?:name|placeholder|aria-label|title)\s*=', core, re.I):
+        return True
+    # 结构路径 / 顺序选择器已消歧，勿再叠 params.index → .nth(N)
+    low = core.lower()
+    if "nth-of-type(" in low or "nth-child(" in low or ">> nth=" in low:
+        return True
+    if re.search(r":nth(?:-of-type|-child)?\s*\(", low):
+        return True
+    return False
 
 
 def _step_locator_key(step: dict) -> tuple:
@@ -668,8 +739,10 @@ def resolve_locators_after_optimize(
         from app.modules.ai.recorder_step_merge import (
             merge_meta_from_originals,
             merge_params_from_originals,
+            original_matches_opt_intent,
             parse_source_step_ids,
-            resolve_original_steps_for_optimized,
+            rebind_originals_to_opt_intent,
+            _pick_primary_original,
         )
 
         source_indices = parse_source_step_ids(opt)
@@ -681,13 +754,16 @@ def resolve_locators_after_optimize(
                 if 0 <= i < len(original_steps) and isinstance(original_steps[i], dict)
             ]
             if originals:
+                originals = rebind_originals_to_opt_intent(
+                    opt, originals, original_steps
+                )
                 merge_meta_from_originals(opt, originals)
                 merge_params_from_originals(opt, originals)
-                from app.modules.ai.recorder_step_merge import _pick_primary_original
                 orig = _pick_primary_original(opt, originals)
-                orig_idx = source_indices[0] if source_indices[0] not in used else None
-                if orig_idx is not None:
-                    used.add(orig_idx)
+                for i, s in enumerate(original_steps):
+                    if s is orig and i not in used:
+                        used.add(i)
+                        break
             else:
                 orig, orig_idx = _find_original_for_optimized(opt, original_steps, used)
                 if orig and orig_idx is not None:
@@ -700,6 +776,23 @@ def resolve_locators_after_optimize(
         if orig:
             merged_meta = dict(orig.get("meta") or {})
             merged_meta.update(opt.get("meta") or {})
+            # 主原始步 candidates 必须在前，避免错绑后的首位污染
+            orig_cands = [
+                str(c).strip()
+                for c in ((orig.get("meta") or {}).get("candidates") or [])
+                if str(c).strip()
+            ]
+            opt_cands = [
+                str(c).strip()
+                for c in (merged_meta.get("candidates") or [])
+                if str(c).strip()
+            ]
+            if orig_cands:
+                merged = list(orig_cands)
+                for c in opt_cands:
+                    if c not in merged:
+                        merged.append(c)
+                merged_meta["candidates"] = merged
             opt["meta"] = merged_meta
 
         opt_params = opt.setdefault("params", {})
@@ -730,6 +823,18 @@ def resolve_locators_after_optimize(
         ai_loc = opt_params.get("locator")
         orig_loc = orig_params.get("locator", "")
 
+        # 意图匹配的原始定位优先于被污染的 AI/合并定位
+        if orig and orig_loc and original_matches_opt_intent(opt, orig):
+            orig_cands = [
+                str(c).strip()
+                for c in ((orig.get("meta") or {}).get("candidates") or [])
+                if str(c).strip()
+            ]
+            cur = str(ai_loc or "").strip()
+            if cur and cur != orig_loc and cur not in orig_cands:
+                opt_params["locator"] = orig_loc
+                ai_loc = orig_loc
+
         lock_step = {"params": orig_params, "meta": opt.get("meta") or {}} if orig else None
         if lock_step and not should_repick_locator(lock_step):
             if orig_loc:
@@ -755,6 +860,9 @@ def resolve_locators_after_optimize(
             stats["rule_picked"] += 1
         else:
             stats["unchanged"] += 1
+
+        # 换 locator 后清理残留 index，避免结构路径 + .nth 双重消歧
+        apply_index_from_meta(opt)
 
     return stats
 

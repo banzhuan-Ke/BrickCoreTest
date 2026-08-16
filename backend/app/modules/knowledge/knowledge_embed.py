@@ -13,7 +13,6 @@ from openai import AsyncOpenAI
 from app.core.llm.ai_usage_log import log_ai_usage
 from app.core.llm.embed_providers import resolve_embed_api_base
 from app.core.llm.llm_invoke import is_retryable_llm_error
-from app.core.platform.config import KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB
 from app.core.platform.encryption import decrypt_value
 from app.models.ai import AiConfig
 from app.models.knowledge import AiKnowledgeChunk, AiKnowledgeDocument
@@ -25,7 +24,10 @@ from app.modules.knowledge.knowledge_embed_config import (
     resolve_embed_dimensions,
     resolve_embed_provider_model,
 )
-from app.modules.knowledge.knowledge_project_settings import is_vector_embed_active
+from app.modules.knowledge.knowledge_project_settings import (
+    is_vector_embed_active,
+    resolve_vector_embed_max_chunks_per_job,
+)
 from app.modules.knowledge.knowledge_rag import _term_freq, tokenize
 
 logger = logging.getLogger(__name__)
@@ -258,14 +260,16 @@ async def index_document_vectors(
         await doc.save()
         raise HTTPException(status_code=400, detail="请先建立词法分块索引")
 
-    if len(chunk_list) > KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"分块数 {len(chunk_list)} 超过单次上限 {KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB}，"
-                "请调大 KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB 或拆分文档"
-            ),
+    max_chunks = resolve_vector_embed_max_chunks_per_job(settings)
+    if len(chunk_list) > max_chunks:
+        detail = (
+            f"分块数 {len(chunk_list)} 超过单次上限 {max_chunks}，"
+            "请在「生成配置 → 向量 Embedding」调大「单次向量任务分块上限」，或拆分文档"
         )
+        doc.vector_status = "failed"
+        doc.vector_error = detail
+        await doc.save()
+        raise HTTPException(status_code=400, detail=detail)
 
     config, model = await resolve_embed_ai_config(settings)
     dimensions = resolve_embed_dimensions(config, model)

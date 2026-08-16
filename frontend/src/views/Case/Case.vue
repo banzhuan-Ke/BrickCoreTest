@@ -55,13 +55,27 @@
           icon="Download"
           @click="handleBatchExport"
         >导出选中({{ selectedCases.length }})</el-button>
+        <el-button
+          v-if="searchForm.catalog_id && selectedCases.length === 0"
+          type="primary"
+          plain
+          icon="Download"
+          @click="handleExportCurrentCatalog"
+        >导出当前目录</el-button>
         <el-upload
           accept=".json"
           :show-file-list="false"
           :before-upload="handleImport"
           style="display:inline-block; margin-left:4px"
         >
-          <el-button type="success" plain icon="Upload">导入用例</el-button>
+          <el-tooltip
+            :content="searchForm.catalog_id ? '导入到当前选中的测试目录' : '当前在「全部用例」，导入后无目录归属'"
+            placement="top"
+          >
+            <span>
+              <el-button type="success" plain icon="Upload">导入用例</el-button>
+            </span>
+          </el-tooltip>
         </el-upload>
       </div>
       <el-table
@@ -335,6 +349,7 @@
         v-model="runParams.failure_analysis_on_report"
         :options="healRunOptions"
       />
+      <UiRunTimeoutScaleField v-model="runParams.ui_timeout_scale" mode="case" />
       <el-form-item label="执行设备" required>
         <el-select v-model="runParams.device_id" placeholder="请选择执行设备" style="width: 100%">
           <el-option
@@ -446,6 +461,7 @@ import BatchCatalogDialog from '@/components/BatchCatalogDialog.vue'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
 import UiRunAiActDisabledTip from '@/components/UiRunAiActDisabledTip.vue'
 import UiRunFailureAnalysisField from '@/components/UiRunFailureAnalysisField.vue'
+import UiRunTimeoutScaleField from '@/components/UiRunTimeoutScaleField.vue'
 import {UserStore} from "@/stores/module/UserStore.js"
 import CopyToProjectDialog from '@/components/CopyToProjectDialog.vue'
 import { useAssetFavorites } from '@/composables/useAssetFavorites'
@@ -669,7 +685,18 @@ const runParams = reactive({
   ai_heal_enabled: true,
   ai_act_enabled: false,
   failure_analysis_on_report: true,
+  ui_timeout_scale: 1,
 })
+
+watch(
+  () => runParams.env_id,
+  (envId) => {
+    // 单用例：选环境不自动带慢站倍率，保持「按实际超时」；需要时用户点「用环境」
+    if (!envId && runParams.ui_timeout_scale == null) {
+      runParams.ui_timeout_scale = 1
+    }
+  }
+)
 
 const clickRun = async (case_id) => {
   // 重置运行参数
@@ -682,6 +709,7 @@ const clickRun = async (case_id) => {
   runParams.ai_heal_enabled = true
   runParams.ai_act_enabled = false
   runParams.failure_analysis_on_report = true
+  runParams.ui_timeout_scale = 1
   await loadHealRunOptions()
   // 获取设备列表
   await getDeviceList()
@@ -722,6 +750,9 @@ async function runCase() {
     }
     if (healRunOptions.value?.failure_analysis_allow_run_override) {
       payload.failure_analysis_on_report = runParams.failure_analysis_on_report
+    }
+    if (runParams.ui_timeout_scale != null) {
+      payload.ui_timeout_scale = runParams.ui_timeout_scale
     }
     const response = await http.runnerApi.runCase(payload.case_id, payload)
     showRunDlg.value = false
@@ -835,21 +866,64 @@ const handleBatchCatalogSuccess = () => {
   getCasesList()
 }
 
+const downloadExportBlob = async (blobData, fallbackLabel) => {
+  let countLabel = fallbackLabel
+  let payload = blobData
+  try {
+    const text = blobData instanceof Blob ? await blobData.text() : String(blobData)
+    const parsed = JSON.parse(text)
+    if (parsed?.meta?.count != null) {
+      countLabel = parsed.meta.count
+    }
+    payload = text
+  } catch {
+    /* 非 JSON 时原样下载 */
+  }
+  const url = URL.createObjectURL(new Blob([payload], { type: 'application/json' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `ui_cases_${Date.now()}.json`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  ElMessage.success(typeof countLabel === 'number' ? `已导出 ${countLabel} 条用例` : '导出成功')
+}
+
 const handleBatchExport = async () => {
   const ids = selectedCases.value.map(r => r.id)
   try {
     const res = await uiCaseApi.exportCases({ case_ids: ids })
-    const url = URL.createObjectURL(new Blob([res.data], { type: 'application/json' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `ui_cases_${Date.now()}.json`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    ElMessage.success(`已导出 ${ids.length} 条用例`)
+    await downloadExportBlob(res.data, ids.length)
   } catch (err) {
     ElMessage.error('导出失败: ' + (err.response?.data?.detail || err.message))
+  }
+}
+
+const handleExportCurrentCatalog = async () => {
+  if (!searchForm.catalog_id) {
+    ElMessage.warning('请先在左侧选择测试目录')
+    return
+  }
+  try {
+    const res = await uiCaseApi.exportCases({
+      project_id: proStore.projectInfo.id,
+      catalog_id: searchForm.catalog_id,
+      include_children: true,
+    })
+    await downloadExportBlob(res.data, '目录')
+  } catch (err) {
+    let msg = err.message
+    if (err.response?.data instanceof Blob) {
+      try {
+        const text = await err.response.data.text()
+        const parsed = JSON.parse(text)
+        msg = parsed.detail || text
+      } catch { /* keep */ }
+    } else if (err.response?.data?.detail) {
+      msg = err.response.data.detail
+    }
+    ElMessage.error('导出失败: ' + msg)
   }
 }
 
@@ -857,6 +931,9 @@ const handleImport = async (file) => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('project_id', proStore.projectInfo.id)
+  if (searchForm.catalog_id) {
+    formData.append('catalog_id', String(searchForm.catalog_id))
+  }
   try {
     const res = await uiCaseApi.importCases(formData)
     if (res.status === 200) {

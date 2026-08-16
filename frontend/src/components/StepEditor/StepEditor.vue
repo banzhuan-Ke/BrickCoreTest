@@ -1,10 +1,14 @@
 <template>
   <div class="step-editor">
-    <div v-if="selectionMode" class="selection-toolbar">
+    <div v-if="localSteps.length > 0" class="selection-toolbar">
       <span class="selection-summary">已选 <strong>{{ selectedCount }}</strong> 步</span>
       <el-button link type="primary" @click="selectAll">全选</el-button>
       <el-button link @click="clearSelection">清空</el-button>
-      <el-tooltip content="仅执行勾选的步骤（不连续也会按序号依次跑；需先打开交互调试）" placement="top">
+      <el-tooltip
+        v-if="enableRunSelected"
+        content="仅执行勾选的步骤（不连续也会按序号依次跑；需先打开交互调试）"
+        placement="top"
+      >
         <el-button
           type="success"
           size="small"
@@ -23,10 +27,6 @@
       >
         生成片段
       </el-button>
-      <el-button link @click="exitSelectionMode">退出多选</el-button>
-    </div>
-    <div v-else-if="localSteps.length > 0" class="selection-toolbar is-compact">
-      <el-button link type="primary" @click="enterSelectionMode">多选步骤</el-button>
       <el-button
         v-if="module !== 'app'"
         link
@@ -35,7 +35,9 @@
       >
         插入智能步骤
       </el-button>
-      <el-text type="info" size="small">勾选后点「执行勾选步骤」；卡片/工具条的「执行本步」只跑当前一步</el-text>
+      <el-text type="info" size="small">
+        勾选后可生成片段{{ enableRunSelected ? '；交互调试就绪后可「执行勾选步骤」' : '' }}；卡片「执行本步」只跑当前一步
+      </el-text>
     </div>
 
     <!-- 步骤列表 -->
@@ -63,11 +65,13 @@
             :step="step"
             :index="index"
             :parent-path="[]"
-            :selectable="selectionMode"
+            :selectable="true"
             :selected="selectedIndices.has(index)"
             :selected-count="selectedCount"
             :debug-enabled="debugEnabled"
+            :allow-interactive-actions="allowInteractiveActions"
             :execution-hint="stepExecutionHint(index)"
+            :recovery-hint="stepRecoveryHint(index)"
             :debug-selected="isDebugHighlighted(index)"
             :debug-run-result="stepDebugRunResult(index)"
             @toggle-select="toggleStepSelection(index)"
@@ -159,7 +163,7 @@ import {
 import { uiFragmentApi } from '@/api/modules/ui'
 import { appFragmentApi } from '@/api/modules/app'
 import { ProjectStore } from '@/stores/module/ProjectStore'
-import { getStepExecutionHint } from '@/utils/caseExecutionHints'
+import { getStepExecutionHint, getStepRecoveryHint } from '@/utils/caseExecutionHints'
 import { getDebugStepResult } from '@/utils/debugSession'
 
 const proStore = ProjectStore()
@@ -199,6 +203,16 @@ const props = defineProps({
     type: Boolean,
     default: true,
   },
+  /** 为 false 时禁用「从这里开始录制 / 调试到此步」（新建页未保存无 caseId） */
+  allowInteractiveActions: {
+    type: Boolean,
+    default: true,
+  },
+  /** 仅 Web 用例编辑（有交互调试）开启「执行勾选步骤」；其它页面只保留勾选生成片段 */
+  enableRunSelected: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 provide('stepEditorModule', computed(() => props.module))
@@ -207,6 +221,10 @@ function stepExecutionHint(index) {
   const fromDebug = getStepExecutionHint(props.debugExecutionHints, index, localSteps.value[index])
   if (fromDebug) return fromDebug
   return getStepExecutionHint(props.executionHints, index, localSteps.value[index])
+}
+
+function stepRecoveryHint(index) {
+  return getStepRecoveryHint(props.executionHints, index, localSteps.value[index])
 }
 
 function stepDebugRunResult(index) {
@@ -253,7 +271,6 @@ const fragmentDialogVisible = ref(false)
 const editingFragmentStep = ref(null)
 const editingFragmentIndex = ref(-1)
 const fragmentOnSave = ref(null)
-const selectionMode = ref(false)
 const selectedIndices = ref(new Set())
 const createFragmentVisible = ref(false)
 const pendingFragmentSteps = ref([])
@@ -342,16 +359,6 @@ function handleFragmentSave(updatedStep) {
   fragmentDialogVisible.value = false
 }
 
-function enterSelectionMode() {
-  selectionMode.value = true
-  selectedIndices.value = new Set()
-}
-
-function exitSelectionMode() {
-  selectionMode.value = false
-  selectedIndices.value = new Set()
-}
-
 function toggleStepSelection(index) {
   const next = new Set(selectedIndices.value)
   if (next.has(index)) {
@@ -383,13 +390,17 @@ function openCreateFragmentDialog() {
 }
 
 function runDebugSelectedSteps() {
+  if (!props.enableRunSelected) {
+    ElMessage.warning('当前页面不支持执行勾选步骤（可用于生成片段）')
+    return
+  }
   if (selectedCount.value === 0) {
     ElMessage.warning('请先勾选要调试的步骤')
     return
   }
   const indices = [...selectedIndices.value].sort((a, b) => a - b)
   emit('debug-selected-steps', indices)
-  exitSelectionMode()
+  clearSelection()
 }
 
 function handleFragmentCreated({ fragment, replaceWithRef }) {
@@ -406,7 +417,7 @@ function handleFragmentCreated({ fragment, replaceWithRef }) {
     localSteps.value = steps
   }
 
-  exitSelectionMode()
+  clearSelection()
 }
 
 function onDebugStep(index) {
@@ -422,9 +433,7 @@ function copyStep(index) {
   const duplicated = duplicateStepWithNewIds(steps[index])
   steps.splice(index + 1, 0, duplicated)
   localSteps.value = steps
-  if (selectionMode.value) {
-    exitSelectionMode()
-  }
+  clearSelection()
   ElMessage.success('步骤已复制')
 }
 
@@ -434,9 +443,7 @@ function onStepAdd(evt) {
   const rawData = JSON.parse(item.dataset.step || '{}')
   const { steps, insertIndex } = applyKeywordDragStep(localSteps.value, rawData, newIndex)
   localSteps.value = steps
-  if (selectionMode.value) {
-    exitSelectionMode()
-  }
+  clearSelection()
   nextTick(() => {
     editingStep.value = steps[insertIndex]
     editingIndex.value = insertIndex
@@ -448,9 +455,7 @@ function onStepAdd(evt) {
 
 // 处理拖拽排序结束
 function onDragEnd() {
-  if (selectionMode.value) {
-    exitSelectionMode()
-  }
+  clearSelection()
 }
 
 // 更新步骤
@@ -478,9 +483,7 @@ async function deleteStep(index) {
     const steps = [...localSteps.value]
     steps.splice(index, 1)
     localSteps.value = steps
-    if (selectionMode.value) {
-      exitSelectionMode()
-    }
+    clearSelection()
     ElMessage.success('删除成功')
   } catch {
     // 取消删除

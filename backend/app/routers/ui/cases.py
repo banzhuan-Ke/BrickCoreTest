@@ -12,7 +12,7 @@ from app.modules.ui.ui_project_guard import assert_user_project_member, assert_u
 from app.modules.ui.ui_execution_stale import cleanup_stale_ui_executions
 from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.schemas.ui import CaseSchemas, AddCaseForm, UpdateCaseForm, UiCaseBatchExportRequest, UiCaseImportResult, UiCaseBatchUpdateCatalogRequest
-from app.core.case.case_execution_hints import build_execution_hints_response, resolve_latest_failure_record
+from app.core.case.case_execution_hints import build_execution_hints_response, resolve_latest_execution_record
 from tortoise import connections
 from tortoise.functions import Count
 
@@ -223,7 +223,7 @@ async def get_case_detail(
 
 @router.get(
     "/{case_id}/execution-hints",
-    summary="用例最近失败执行提示（编辑页步骤高亮）",
+    summary="用例最近执行提示（编辑页失败高亮 / 自愈·Act 救回）",
     status_code=status.HTTP_200_OK,
     dependencies=[Depends(require_permissions(UI_CASE_VIEW))],
 )
@@ -232,7 +232,7 @@ async def get_case_execution_hints(
     execution_id: int | None = None,
     user_info: dict = Depends(require_permissions(UI_CASE_VIEW)),
 ):
-    """返回最近一次失败（或指定 execution_id）的步骤失败信息与日志摘要。"""
+    """返回最近一次执行（或指定 execution_id）的步骤失败与自愈/Act 救回信息。"""
     case = await Case.get_or_none(id=case_id, is_del=False)
     if not case:
         raise HTTPException(status_code=422, detail="用例不存在")
@@ -243,7 +243,7 @@ async def get_case_execution_hints(
         if not record or record.case_id != case_id:
             raise HTTPException(status_code=422, detail="执行记录不存在")
     else:
-        record = await resolve_latest_failure_record(UiCaseExecution, case_id)
+        record = await resolve_latest_execution_record(UiCaseExecution, case_id)
 
     if not record:
         return build_execution_hints_response(None)
@@ -338,12 +338,26 @@ async def batch_update_case_catalog(
 @router.post("/export", summary="批量导出UI用例",
              dependencies=[Depends(require_permissions(UI_CASE_VIEW))])
 async def export_ui_cases(item: UiCaseBatchExportRequest):
-    """批量导出 Web 自动化用例为 JSON 文件"""
-    if not item.case_ids:
-        raise HTTPException(status_code=400, detail="请选择要导出的用例")
-    if len(item.case_ids) > 500:
-        raise HTTPException(status_code=400, detail="单次最多导出 500 条")
-    cases = await Case.filter(id__in=item.case_ids, is_del=False).all()
+    """批量导出 Web 自动化用例为 JSON 文件（按勾选 ID，或按目录）。"""
+    cases = []
+    if item.case_ids:
+        if len(item.case_ids) > 500:
+            raise HTTPException(status_code=400, detail="单次最多导出 500 条")
+        cases = await Case.filter(id__in=item.case_ids, is_del=False).all()
+    elif item.project_id is not None and item.catalog_id is not None:
+        await resolve_catalog(item.project_id, item.catalog_id)
+        query = Case.filter(project_id=item.project_id, is_del=False)
+        query = await apply_catalog_filter(
+            query,
+            item.project_id,
+            item.catalog_id,
+            include_children=item.include_children,
+        )
+        cases = await query.limit(500).all()
+        if not cases:
+            raise HTTPException(status_code=400, detail="当前目录下没有可导出的用例")
+    else:
+        raise HTTPException(status_code=400, detail="请选择要导出的用例，或指定项目与目录")
     cases_data = [
         {"name": c.name, "level": c.level, "steps": c.steps, "description": c.description or ""}
         for c in cases
@@ -372,8 +386,9 @@ async def import_ui_cases(
     file: UploadFile = File(...),
     project_id: int = Form(...),
     username: str = Form(default="admin"),
+    catalog_id: Optional[int] = Form(None),
 ):
-    """从 JSON 文件批量导入 Web 自动化用例"""
+    """从 JSON 文件批量导入 Web 自动化用例；可选 catalog_id 归入当前选中目录。"""
     content = await file.read()
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="文件过大，最大支持 10MB")
@@ -392,6 +407,11 @@ async def import_ui_cases(
     project = await Project.get_or_none(id=project_id, is_del=False)
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
+
+    resolved_catalog_id = None
+    if catalog_id is not None:
+        await resolve_catalog(project_id, catalog_id)
+        resolved_catalog_id = catalog_id
 
     existing_raw = await Case.filter(project_id=project_id, is_del=False).values_list("name", flat=True)
     existing_names = set(existing_raw)
@@ -418,6 +438,7 @@ async def import_ui_cases(
             await Case.create(
                 name=new_name,
                 project_id=project_id,
+                catalog_id=resolved_catalog_id,
                 steps=c.get("steps") or [],
                 level=c.get("level") or "P2",
                 description=(c.get("description") or "").strip() or None,

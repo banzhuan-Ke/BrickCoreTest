@@ -617,9 +617,12 @@ async def copy_test_case(
 @router.post("/variables/preview", summary="预览合并变量与替换结果",
              dependencies=[Depends(require_permissions(API_CASE_VIEW))])
 async def preview_variables(body: VariablePreviewRequest):
-    """合并项目/环境/额外变量，返回快照及示例字符串替换结果（执行前预览）。"""
+    """合并项目/环境/额外变量/Token 授权缓存，返回快照及示例字符串替换结果（执行前预览）。
+
+    预览只读授权缓存，不触发登录刷新，避免登录慢/失败拖垮前端 10s 超时。
+    """
     from app.core.case.variable_resolver import VariableResolver
-    from app.modules.data_tools.tag_service import merge_execution_variables
+    from app.modules.http.api_auth_service import prepare_api_runtime_variables
     from app.models.sys import Environment
 
     project_id = body.project_id
@@ -628,10 +631,12 @@ async def preview_variables(body: VariablePreviewRequest):
         if env:
             project_id = project_id or env.project_id
 
-    merged = await merge_execution_variables(
+    merged, _auth_err, _auth_keys = await prepare_api_runtime_variables(
         project_id,
         body.env_id,
         body.extra_variables or {},
+        inject_auth=True,
+        allow_auth_refresh=False,
     )
     resolver = VariableResolver(merged)
 
@@ -657,8 +662,9 @@ async def preview_variables(body: VariablePreviewRequest):
 
     return {
         "variables": resolver.get_resolved_snapshot(),
-        "priority": "project_global_vars < env_global_vars < df_tags < extra_variables",
+        "priority": "project_global_vars < env_global_vars < df_tags < extra_variables < token_auth",
         "samples": samples_out,
+        "auth_error": _auth_err,
     }
 
 

@@ -76,13 +76,60 @@ def resolve_original_steps_for_optimized(
 
 
 def _pick_primary_original(opt: dict, originals: list[dict]) -> Optional[dict]:
-    """多步合并时，选取用于 locator/params 的主原始步骤。"""
+    """多步合并时，选取用于 locator/params 的主原始步骤。
+
+    优先：优化步 desc 目标文案与原始 accessibleName/desc/locator 对齐的步骤，
+    避免 LLM 把 [登录, 菜单] 合错源或写错 source_step_ids 后，候选首位变成 #btn-login。
+    """
     if not originals:
         return None
     if len(originals) == 1:
         return originals[0]
 
     method = opt.get("method") or ""
+    opt_targets = [
+        _normalize_desc(t) for t in extract_desc_targets(opt.get("desc") or "") if t
+    ]
+    opt_desc = _normalize_desc(opt.get("desc") or "")
+
+    def _match_score(orig: dict) -> int:
+        score = 0
+        if orig.get("method") == method:
+            score += 10
+        meta = orig.get("meta") or {}
+        label = _normalize_desc(
+            (meta.get("accessibleName") or meta.get("text") or "").strip()
+        )
+        orig_desc = _normalize_desc(orig.get("desc") or "")
+        loc = str((orig.get("params") or {}).get("locator") or "")
+        eid = str(meta.get("id") or "").strip().lower()
+        for t in opt_targets:
+            if not t:
+                continue
+            if label and (t == label or t in label or label in t):
+                score += 50
+            if t in orig_desc or (orig_desc and orig_desc in t):
+                score += 40
+            if t and (t in loc.replace(" ", "") or t in loc):
+                score += 25
+            # #menu-iframe-shell ↔ 多iframe壳：id 片段弱匹配
+            compact = t.replace(" ", "")
+            if eid and compact and (
+                compact in eid.replace("-", "")
+                or any(p and p in compact for p in eid.replace("_", "-").split("-") if len(p) >= 4)
+            ):
+                score += 15
+        if opt_desc and orig_desc and (
+            opt_desc == orig_desc or opt_desc in orig_desc or orig_desc in opt_desc
+        ):
+            score += 20
+        return score
+
+    scored = [( _match_score(o), i, o) for i, o in enumerate(originals)]
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    if scored[0][0] > 0:
+        return scored[0][2]
+
     for orig in reversed(originals):
         if orig.get("method") == method:
             return orig
@@ -97,17 +144,92 @@ def _pick_primary_original(opt: dict, originals: list[dict]) -> Optional[dict]:
     return originals[-1]
 
 
+def original_matches_opt_intent(opt: dict, orig: dict) -> bool:
+    """原始步是否与优化步描述意图一致（用于发现错误 source_step_ids）。"""
+    if not opt or not orig:
+        return False
+    targets = extract_desc_targets(opt.get("desc") or "")
+    if not targets:
+        # 无引号目标时，仅比较 method + 规范化 desc
+        opt_desc = _normalize_desc(opt.get("desc") or "")
+        orig_desc = _normalize_desc(orig.get("desc") or "")
+        if not opt_desc:
+            return True
+        return bool(orig_desc) and (
+            opt_desc == orig_desc or opt_desc in orig_desc or orig_desc in opt_desc
+        )
+    meta = orig.get("meta") or {}
+    label = _normalize_desc(
+        (meta.get("accessibleName") or meta.get("text") or "").strip()
+    )
+    orig_desc = _normalize_desc(orig.get("desc") or "")
+    loc = str((orig.get("params") or {}).get("locator") or "")
+    for t in targets:
+        nt = _normalize_desc(t)
+        if not nt:
+            continue
+        if label and (nt == label or nt in label or label in nt):
+            return True
+        if nt in orig_desc or (orig_desc and orig_desc in nt):
+            return True
+        if nt in loc or nt in loc.replace(" ", ""):
+            return True
+    return False
+
+
+def rebind_originals_to_opt_intent(
+    opt: dict,
+    originals: list[dict],
+    all_original_steps: list[dict],
+) -> list[dict]:
+    """若溯源原始步与优化 desc 意图不符，按描述在全量原始步中重绑。"""
+    if not originals:
+        return originals
+    primary = _pick_primary_original(opt, originals)
+    if primary and original_matches_opt_intent(opt, primary):
+        # 仍可能混入无关 click；只保留意图匹配的
+        matched = [o for o in originals if original_matches_opt_intent(opt, o)]
+        return matched or [primary]
+    # source_step_ids 整体错绑：忽略溯源与污染 locator，按 desc 重找
+    from app.modules.ai.recorder_quality import _find_original_for_optimized
+
+    probe = dict(opt)
+    probe.pop("source_step_ids", None)
+    meta = dict(probe.get("meta") or {})
+    meta.pop("source_step_ids", None)
+    probe["meta"] = meta
+    # 勿用错绑的 locator 去精确匹配原始步（否则永远命中登录 #btn-login）
+    params = dict(probe.get("params") or {})
+    params.pop("locator", None)
+    probe["params"] = params
+    found, _ = _find_original_for_optimized(probe, all_original_steps, set())
+    if found:
+        return [found]
+    return originals
+
+
 def merge_meta_from_originals(opt: dict, originals: list[dict]) -> bool:
-    """合并一个或多个原始步骤的 meta（含 candidates）到优化步骤。"""
+    """合并一个或多个原始步骤的 meta（含 candidates）到优化步骤。
+
+    candidates 以主原始步（意图匹配）为先，再追加其余，避免盲信错误首位。
+    """
     if not originals:
         return False
 
-    merged: dict[str, Any] = dict(opt.get("meta") or {})
+    primary = _pick_primary_original(opt, originals)
+    ordered: list[dict] = []
+    if primary is not None:
+        ordered.append(primary)
     for orig in originals:
+        if orig is not primary:
+            ordered.append(orig)
+
+    merged: dict[str, Any] = dict(opt.get("meta") or {})
+    for orig in ordered:
         om = orig.get("meta") or {}
         if not om:
             continue
-        # candidates 合并去重
+        # candidates 合并去重（主步在前）
         existing = list(merged.get("candidates") or [])
         for c in om.get("candidates") or []:
             if c and c not in existing:
@@ -117,7 +239,18 @@ def merge_meta_from_originals(opt: dict, originals: list[dict]) -> bool:
         for key, val in om.items():
             if key == "candidates":
                 continue
-            if key not in merged or merged[key] in (None, "", [], {}):
+            # 主步字段优先覆盖空值；非主步不覆盖已有非空
+            if orig is primary:
+                if key not in merged or merged[key] in (None, "", [], {}):
+                    merged[key] = val
+                elif key in ("id", "accessibleName", "text", "cssPath", "frameUrl") and val not in (
+                    None,
+                    "",
+                    [],
+                    {},
+                ):
+                    merged[key] = val
+            elif key not in merged or merged[key] in (None, "", [], {}):
                 merged[key] = val
 
     source_ids = parse_source_step_ids(opt)
@@ -126,7 +259,6 @@ def merge_meta_from_originals(opt: dict, originals: list[dict]) -> bool:
 
     opt["meta"] = merged
     return True
-
 
 def merge_params_from_originals(opt: dict, originals: list[dict]) -> int:
     """从原始步骤恢复关键 params，返回恢复字段数。"""
@@ -170,8 +302,22 @@ def merge_params_from_originals(opt: dict, originals: list[dict]) -> int:
                 restored += 1
                 break
 
-    # locator：若 LLM 改动了 locator，且原始有更具体的，在 merge 阶段先回填（后续 resolve_locators 再智能重选）
-    if method not in ("open_url", *DRAG_METHODS):
+    # locator：意图匹配的主原始步优先；防止错绑 source 后留下别步的 #btn-login
+    if method not in ("open_url", *DRAG_METHODS) and primary and original_matches_opt_intent(
+        opt, primary
+    ):
+        primary_loc = str((primary.get("params") or {}).get("locator") or "").strip()
+        if primary_loc:
+            cur = str(opt_params.get("locator") or "").strip()
+            primary_cands = [
+                str(c).strip()
+                for c in ((primary.get("meta") or {}).get("candidates") or [])
+                if str(c).strip()
+            ]
+            if not cur or (cur != primary_loc and cur not in primary_cands):
+                opt_params["locator"] = primary_loc
+                restored += 1
+    elif method not in ("open_url", *DRAG_METHODS):
         orig_locs = [
             (o.get("params") or {}).get("locator", "")
             for o in originals
@@ -277,6 +423,9 @@ def patch_meta_from_original_steps(optimized_steps: list, original_steps: list) 
                 if 0 <= i < len(original_steps) and isinstance(original_steps[i], dict)
             ]
             if originals:
+                originals = rebind_originals_to_opt_intent(
+                    opt, originals, original_steps
+                )
                 if merge_meta_from_originals(opt, originals):
                     stats["meta_patched"] += 1
                 stats["params_restored"] += merge_params_from_originals(opt, originals)

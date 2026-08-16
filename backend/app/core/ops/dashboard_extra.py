@@ -4,9 +4,24 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
+import pytz
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+
+_LOCAL_TZ = pytz.timezone("Asia/Shanghai")
+
+
+def _to_naive_local(dt: datetime) -> datetime:
+    """ORM / APScheduler 可能返回带时区时间，统一为上海本地 naive 再比较。"""
+    if dt.tzinfo is not None:
+        return dt.astimezone(_LOCAL_TZ).replace(tzinfo=None)
+    return dt
+
+
+def _to_aware_local(dt: datetime) -> datetime:
+    if dt.tzinfo is not None:
+        return dt.astimezone(_LOCAL_TZ)
+    return _LOCAL_TZ.localize(dt)
 
 
 def compute_next_run(
@@ -18,18 +33,22 @@ def compute_next_run(
     now: Optional[datetime] = None,
 ) -> Optional[datetime]:
     """根据定时任务配置计算下次执行时间。"""
-    now = now or datetime.now()
+    now = _to_naive_local(now or datetime.now())
     rt = (run_type or "").lower()
     try:
         if rt == "interval":
-            trigger = IntervalTrigger(seconds=interval or 3600)
-        elif rt == "date":
+            trigger = IntervalTrigger(seconds=interval or 3600, timezone=_LOCAL_TZ)
+            nxt = trigger.get_next_fire_time(None, _to_aware_local(now))
+            return _to_naive_local(nxt) if nxt else None
+        if rt == "date":
             if not run_date:
                 return None
             if isinstance(run_date, str):
                 run_date = datetime.strptime(run_date, "%Y-%m-%d %H:%M:%S")
+            else:
+                run_date = _to_naive_local(run_date)
             return run_date if run_date > now else None
-        elif rt == "crontab":
+        if rt == "crontab":
             c = crontab or {}
             trigger = CronTrigger(
                 minute=str(c.get("minute", "*")),
@@ -37,10 +56,11 @@ def compute_next_run(
                 day=str(c.get("day", "*")),
                 month=str(c.get("month", "*")),
                 day_of_week=str(c.get("day_of_week", "*")),
+                timezone=_LOCAL_TZ,
             )
-        else:
-            return None
-        return trigger.get_next_fire_time(None, now)
+            nxt = trigger.get_next_fire_time(None, _to_aware_local(now))
+            return _to_naive_local(nxt) if nxt else None
+        return None
     except Exception:
         return None
 
@@ -95,5 +115,6 @@ def sort_pending_jobs(jobs: list[dict[str, Any]], limit: int = 5) -> list[dict[s
 def within_hours(dt: Optional[datetime], hours: int = 48) -> bool:
     if not dt:
         return False
-    now = datetime.now()
+    now = _to_naive_local(datetime.now())
+    dt = _to_naive_local(dt)
     return now <= dt <= now + timedelta(hours=hours)

@@ -4,7 +4,8 @@
       <div v-loading="loading" class="preview-body">
         <p v-if="!envId && !projectId" class="preview-hint">请选择执行环境后查看可用变量</p>
         <template v-else>
-          <p class="preview-hint">优先级：项目变量 &lt; 环境变量 &lt; 额外传入</p>
+          <p class="preview-hint">优先级：项目变量 &lt; 环境变量 &lt; 数据工厂 &lt; 传入 &lt; Token 授权</p>
+          <p class="preview-hint sample-note">预览仅读取已有授权缓存，不会自动登录；缓存为空请到「Token 授权」刷新。</p>
           <el-table v-if="variableRows.length" :data="variableRows" size="small" border max-height="240">
             <el-table-column label="变量名" prop="key" width="120" show-overflow-tooltip />
             <el-table-column label="描述" prop="description" min-width="120" show-overflow-tooltip />
@@ -12,6 +13,9 @@
             <el-table-column label="来源" prop="source" width="72" />
           </el-table>
           <el-empty v-else description="暂无可用变量" :image-size="48" />
+          <p v-if="previewData.auth_error" class="preview-hint sample-note">
+            Token 授权：{{ previewData.auth_error }}
+          </p>
 
           <div v-if="sampleRows.length" class="sample-block">
             <div class="sample-title">示例替换（基于当前环境变量自动生成）</div>
@@ -36,10 +40,10 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { httpCaseApi } from '@/api/modules/http'
-import { getVarDescription } from '@/utils/globalVars.js'
+import { getVarDescription, BUILTIN_VAR_HINTS } from '@/utils/globalVars.js'
 
 const props = defineProps({
   envId: { type: Number, default: null },
@@ -51,7 +55,8 @@ const props = defineProps({
 const proStore = ProjectStore()
 const loading = ref(false)
 const activeNames = ref(['preview'])
-const previewData = ref({ variables: {}, samples: [] })
+const previewData = ref({ variables: {}, samples: [], auth_error: null })
+const builtinHintKeys = new Set(BUILTIN_VAR_HINTS.map((item) => item.key || item.name || item).filter(Boolean))
 
 const resolvedProjectId = computed(() => props.projectId || proStore.projectInfo?.id || null)
 
@@ -66,11 +71,18 @@ const variableRows = computed(() => {
     let description = ''
     if (envKeys.has(key)) description = getVarDescription(envVars, key)
     else if (projKeys.has(key)) description = getVarDescription(projVars, key)
+    let source = '其它'
+    if (props.extraVariables?.[key] !== undefined) source = '传入'
+    else if (envKeys.has(key)) source = '环境'
+    else if (projKeys.has(key)) source = '项目'
+    else if (String(key).startsWith('df:')) source = '工厂'
+    else if (builtinHintKeys.has(key)) source = '动态'
+    else source = '授权'
     return {
       key,
       description: description || '—',
       value: value === null || value === undefined ? '' : String(value),
-      source: props.extraVariables?.[key] !== undefined ? '传入' : envKeys.has(key) ? '环境' : projKeys.has(key) ? '项目' : '动态',
+      source,
     }
   })
 })
@@ -79,11 +91,15 @@ const sampleRows = computed(() => previewData.value.samples || [])
 
 const hasUnmatchedSamples = computed(() => sampleRows.value.some((row) => row.unchanged))
 
+let previewTimer = null
+let previewSeq = 0
+
 async function loadPreview() {
   if (!props.envId && !resolvedProjectId.value) {
-    previewData.value = { variables: {}, samples: [] }
+    previewData.value = { variables: {}, samples: [], auth_error: null }
     return
   }
+  const seq = ++previewSeq
   loading.value = true
   try {
     const res = await httpCaseApi.previewVariables({
@@ -92,23 +108,41 @@ async function loadPreview() {
       extra_variables: props.extraVariables || {},
       samples: props.samples?.length ? props.samples : [],
     })
-    previewData.value = res.data || { variables: {}, samples: [] }
+    if (seq !== previewSeq) return
+    previewData.value = {
+      variables: {},
+      samples: [],
+      auth_error: null,
+      ...(res.data || {}),
+    }
   } catch {
-    previewData.value = { variables: {}, samples: [] }
+    if (seq !== previewSeq) return
+    previewData.value = { variables: {}, samples: [], auth_error: null }
   } finally {
-    loading.value = false
+    if (seq === previewSeq) loading.value = false
   }
+}
+
+function schedulePreview() {
+  if (previewTimer) clearTimeout(previewTimer)
+  previewTimer = setTimeout(() => {
+    previewTimer = null
+    if (props.envId || resolvedProjectId.value) {
+      loadPreview()
+    }
+  }, 280)
 }
 
 watch(
   () => [props.envId, resolvedProjectId.value, props.extraVariables, props.samples],
-  () => {
-    if (props.envId || resolvedProjectId.value) {
-      loadPreview()
-    }
-  },
+  () => schedulePreview(),
   { deep: true, immediate: true }
 )
+
+onBeforeUnmount(() => {
+  if (previewTimer) clearTimeout(previewTimer)
+  previewSeq += 1
+})
 
 defineExpose({ reload: loadPreview })
 </script>

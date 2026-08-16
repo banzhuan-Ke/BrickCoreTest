@@ -40,6 +40,26 @@ def _strip_wrapping_quotes(value: str) -> str:
 
 
 _NAME_PREFIX_RE = re.compile(r"^name\s*=\s*(.+)$", re.I | re.DOTALL)
+_TITLE_PREFIX_RE = re.compile(r"^title\s*=\s*(.+)$", re.I | re.DOTALL)
+# get_by_role + title= 时尽量保留元素类型，降低仅 get_by_title 的误点面
+_ROLE_TITLE_TAG = {
+    "button": "button",
+    "link": "a",
+    "img": "img",
+    "checkbox": "input",
+    "radio": "input",
+    "textbox": "input",
+    "option": "option",
+    "tab": "[role=tab]",
+}
+_FUNC_GET_BY_RE = re.compile(
+    r"^get_by_(text|label|placeholder|title|alt_text)\s*\(\s*['\"](.+?)['\"]\s*\)$",
+    re.I,
+)
+_FUNC_GET_BY_ROLE_RE = re.compile(
+    r"^get_by_role\s*\(\s*['\"]([^'\"]+)['\"]\s*(?:,\s*name\s*=\s*['\"](.+?)['\"]\s*)?\)$",
+    re.I,
+)
 
 
 def _strip_role_name_part(value: str) -> str:
@@ -51,6 +71,20 @@ def _strip_role_name_part(value: str) -> str:
     return s
 
 
+def _coerce_function_locator_segment(segment: str) -> str:
+    """LLM/Act 偶发 get_by_text(\"x\") → get_by_text=x（含链式片段）。"""
+    s = (segment or "").strip()
+    m = _FUNC_GET_BY_RE.match(s)
+    if m:
+        kind = m.group(1).lower()
+        return f"get_by_{kind}={m.group(2)}"
+    m = _FUNC_GET_BY_ROLE_RE.match(s)
+    if m:
+        role, name = m.group(1), m.group(2)
+        return f"get_by_role={role}, {name}" if name else f"get_by_role={role}"
+    return s
+
+
 def _normalize_get_by_role_segment(segment: str) -> str:
     """规范化 get_by_role=role, name 片段（含链式子段）。"""
     if not segment.startswith("get_by_role="):
@@ -59,13 +93,25 @@ def _normalize_get_by_role_segment(segment: str) -> str:
     parts = role_part.split(",", 1)
     role = _strip_wrapping_quotes(parts[0])
     if len(parts) > 1:
-        name = _strip_role_name_part(parts[1])
+        raw_name = parts[1].strip()
+        # LLM: get_by_role=button, title="配置" → 优先保留元素类型的 title 属性选择器
+        # （title 不是 accessible name，不能当 get_by_role 的 name）
+        tm = _TITLE_PREFIX_RE.match(raw_name)
+        if tm:
+            title_val = _strip_wrapping_quotes(tm.group(1).strip())
+            tag = _ROLE_TITLE_TAG.get(role.lower())
+            if tag and title_val:
+                safe = title_val.replace("\\", "\\\\").replace('"', '\\"')
+                return f'{tag}[title="{safe}"]'
+            return f"get_by_title={title_val}"
+        name = _strip_role_name_part(raw_name)
         return f"get_by_role={role}, {name}"
     return f"get_by_role={role}"
 
 
 def _normalize_native_value_segment(segment: str) -> str:
     """规范化单段原生定位写法（去引号等）。"""
+    segment = _coerce_function_locator_segment(segment)
     for prefix in (
         "get_by_text=",
         "get_by_label=",
@@ -78,7 +124,6 @@ def _normalize_native_value_segment(segment: str) -> str:
     if segment.startswith("get_by_role="):
         return _normalize_get_by_role_segment(segment)
     return segment
-
 
 _ROLE_SHORTHAND_RE = re.compile(
     r"^(row|cell|columnheader|gridcell|button|link|menuitem|tab|textbox)=(.+)$",
@@ -265,8 +310,17 @@ def _resolve_child_locator(parent_loc, child_sel: str):
     return parent_loc.locator(child_sel)
 
 
+_NTH_SEGMENT_RE = re.compile(r"^nth\s*=\s*(\d+)$", re.I)
+
+
 def _resolve_locator_on_scope(scope, locator_str: str):
     locator_str = (locator_str or "").strip()
+    # iframe|| 链必须经拆分解析；整段进 locator() 会被当 XPath/CSS 炸
+    if "||" in locator_str:
+        raise ValueError(
+            "含 iframe|| 的定位不能直接解析，请先按 || 拆分 frame 与元素: "
+            f"{locator_str[:160]}"
+        )
     if " >> " in locator_str:
         parent_sel, child_sel = locator_str.split(" >> ", 1)
         parent_sel = parent_sel.strip()
@@ -274,6 +328,12 @@ def _resolve_locator_on_scope(scope, locator_str: str):
         if parent_sel and child_sel:
             parent_loc = _resolve_locator_on_scope(scope, parent_sel)
             return _resolve_locator_on_scope(parent_loc, child_sel)
+    # LLM/Act 偶发 Playwright 链尾：get_by_text=x >> .. >> div >> nth=0
+    nth_m = _NTH_SEGMENT_RE.match(locator_str)
+    if nth_m:
+        if hasattr(scope, "nth"):
+            return scope.nth(int(nth_m.group(1)))
+        raise ValueError(f"定位链无效：根节点上不能单独使用 {locator_str}")
     if locator_str.startswith(_NATIVE_PREFIXES):
         return _resolve_root_locator(scope, locator_str)
     return scope.locator(locator_str)

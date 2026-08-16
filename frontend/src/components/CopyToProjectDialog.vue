@@ -2,7 +2,13 @@
   <el-dialog v-model="visible" :title="title" width="480px" destroy-on-close @closed="reset">
     <el-form label-width="96px">
       <el-form-item label="目标项目" required>
-        <el-select v-model="form.target_project_id" filterable placeholder="选择目标项目" style="width: 100%">
+        <el-select
+          v-model="form.target_project_id"
+          filterable
+          placeholder="选择目标项目"
+          style="width: 100%"
+          @change="onTargetProjectChange"
+        >
           <el-option
             v-for="p in projectOptions"
             :key="p.id"
@@ -15,8 +21,9 @@
       <el-form-item v-if="showCatalog" label="目标目录">
         <CatalogTreeSelect
           v-model="form.target_catalog_id"
-          :project-id="form.target_project_id || currentProjectId"
-          placeholder="不选则保持原目录/无目录"
+          :project-id="form.target_project_id"
+          :disabled="!form.target_project_id"
+          placeholder="请先选择目标项目；不选则无目录"
           clearable
         />
       </el-form-item>
@@ -80,8 +87,19 @@ function reset() {
   form.new_name = ''
 }
 
+/** 切换目标项目时清空目录，避免沿用其它项目的 catalog_id */
+function onTargetProjectChange() {
+  form.target_catalog_id = null
+}
+
 watch(visible, (v) => {
-  if (v) loadProjects()
+  if (v) {
+    reset()
+    if (props.assetName) {
+      form.new_name = `${props.assetName}_副本`
+    }
+    loadProjects()
+  }
 })
 
 async function submit() {

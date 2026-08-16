@@ -1,0 +1,58 @@
+{
+  "meta": {
+    "version": "1.0",
+    "type": "ui_cases",
+    "export_time": "2026-07-31T08:00:00+00:00",
+    "count": 1
+  },
+  "cases": [
+    {
+      "name": "通用免登录-鉴权Token请求头",
+      "level": "P1",
+      "description": "通用模板：环境变量 BASE_URL、TOKEN。只注入 Authorization；若目标站还要把纯 token 写入 localStorage，在第3步填写 storage_key（如 token）。第4步打开业务页，勿停在登录页。",
+      "steps": [
+        {
+          "id": 1753950002001,
+          "desc": "打开浏览器",
+          "keyword": "打开浏览器",
+          "method": "open_browser",
+          "params": { "browser_type": "chromium" }
+        },
+        {
+          "id": 1753950002002,
+          "desc": "打开目标域",
+          "keyword": "访问页面url",
+          "method": "open_url",
+          "params": {
+            "url": "${{BASE_URL}}/",
+            "wait_until": "domcontentloaded",
+            "timeout": 30000
+          }
+        },
+        {
+          "id": 1753950002003,
+          "desc": "设置鉴权Token（通用：请求头；可选 LocalStorage 纯字符串）",
+          "keyword": "设置鉴权Token",
+          "method": "set_auth_token",
+          "params": {
+            "token": "${{TOKEN}}",
+            "header_name": "Authorization",
+            "header_prefix": "Bearer",
+            "storage_key": ""
+          }
+        },
+        {
+          "id": 1753950002004,
+          "desc": "打开业务页",
+          "keyword": "访问页面url",
+          "method": "open_url",
+          "params": {
+            "url": "${{BASE_URL}}/",
+            "wait_until": "domcontentloaded",
+            "timeout": 30000
+          }
+        }
+      ]
+    }
+  ]
+}

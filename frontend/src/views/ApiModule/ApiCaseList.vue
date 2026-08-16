@@ -292,10 +292,23 @@
           <el-option
             v-for="env in proStore.envList"
             :key="env.id"
-            :label="env.name"
+            :label="envAuthLabel(env)"
             :value="env.id"
           />
         </el-select>
+        <div class="env-auth-hint">
+          Token 授权按<strong>环境</strong>绑定。用例 Header 里的
+          <code v-pre>${{token1}}</code>
+          只有选中授权所在环境时才会注入；调试授权成功不等于已写入缓存（编辑态调试会写入）。
+        </div>
+        <el-alert
+          v-if="envAuthHint"
+          :type="envAuthHint.type"
+          :closable="false"
+          show-icon
+          style="margin-top: 8px;"
+          :title="envAuthHint.title"
+        />
       </el-form-item>
       <el-form-item label="Schema 校验">
         <el-checkbox v-model="envDialog.auto_validate_schema">自动校验响应 Schema</el-checkbox>
@@ -428,6 +441,24 @@
               <el-tab-pane v-if="runResponseDetail" label="响应详情" name="response">
                 <div class="run-tab-panel run-tab-panel--response">
                   <div class="detail-block">
+                    <div class="detail-title">响应信息</div>
+                    <el-descriptions border size="small">
+                      <el-descriptions-item label="状态码">
+                        {{ runResponseDetail.status_code ?? runDialog.result.results[runDialog.ddDetailIndex]?.response_status ?? '-' }}
+                      </el-descriptions-item>
+                      <el-descriptions-item label="接口耗时">
+                        {{ formatTimingMs(getHttpResponseMs(runDialog.result.results[runDialog.ddDetailIndex])) }}
+                      </el-descriptions-item>
+                      <el-descriptions-item label="用例总耗时">
+                        {{ formatTimingMs(getCaseTotalMs(runDialog.result.results[runDialog.ddDetailIndex])) }}
+                      </el-descriptions-item>
+                    </el-descriptions>
+                  </div>
+                  <div class="detail-block" v-if="hasRunResponseHeaders">
+                    <div class="detail-title">响应 Headers</div>
+                    <CopyablePre :text="runResponseDetail.headers" max-height="280px" wrap />
+                  </div>
+                  <div class="detail-block">
                     <div class="detail-title">响应 Body</div>
                     <ResponseBodyViewer
                       :body="runResponseDetail.body"
@@ -554,10 +585,7 @@
 
                 <!-- Headers -->
                 <div class="detail-block" v-if="Object.keys(runDialog.result.request_detail.headers?.final || {}).length > 0">
-                  <div class="detail-title-row">
-                    <div class="detail-title">请求 Headers</div>
-                    <CopyTextButton :text="runDialog.result.request_detail.headers?.final || {}" />
-                  </div>
+                  <div class="detail-title">请求 Headers</div>
                   <CopyablePre
                     :text="runDialog.result.request_detail.headers?.final || {}"
                     max-height="320px"
@@ -567,10 +595,7 @@
 
                 <!-- Params -->
                 <div class="detail-block" v-if="Object.keys(runDialog.result.request_detail.params?.final || {}).length > 0">
-                  <div class="detail-title-row">
-                    <div class="detail-title">请求参数</div>
-                    <CopyTextButton :text="runDialog.result.request_detail.params?.final || {}" />
-                  </div>
+                  <div class="detail-title">请求参数</div>
                   <CopyablePre
                     :text="runDialog.result.request_detail.params?.final || {}"
                     max-height="320px"
@@ -580,10 +605,7 @@
 
                 <!-- Body -->
                 <div class="detail-block" v-if="runDialog.result.request_detail.body_type === 'form-data' && runDialog.result.request_detail.body_fields?.final?.length">
-                  <div class="detail-title-row">
-                    <div class="detail-title">Form Data 字段</div>
-                    <CopyTextButton :text="runDialog.result.request_detail.body_fields.final" />
-                  </div>
+                  <div class="detail-title">Form Data 字段</div>
                   <CopyablePre
                     :text="runDialog.result.request_detail.body_fields.final"
                     max-height="320px"
@@ -591,10 +613,7 @@
                   />
                 </div>
                 <div class="detail-block" v-else-if="runDialog.result.request_detail.body?.final">
-                  <div class="detail-title-row">
-                    <div class="detail-title">请求 Body</div>
-                    <CopyTextButton :text="runDialog.result.request_detail.body?.final" />
-                  </div>
+                  <div class="detail-title">请求 Body</div>
                   <CopyablePre
                     :text="runDialog.result.request_detail.body?.final"
                     max-height="360px"
@@ -604,10 +623,7 @@
 
                 <!-- 脚本日志 -->
                 <div class="detail-block" v-if="runDialog.result.request_detail.script_logs?.length > 0">
-                  <div class="detail-title-row">
-                    <div class="detail-title">脚本日志</div>
-                    <CopyTextButton :text="runDialog.result.request_detail.script_logs.join('\n')" />
-                  </div>
+                  <div class="detail-title">脚本日志</div>
                   <CopyablePre
                     :text="runDialog.result.request_detail.script_logs.join('\n')"
                     max-height="240px"
@@ -664,6 +680,10 @@
                   {{ formatTimingMs(getCaseTotalMs(runDialog.result)) }}
                 </el-descriptions-item>
               </el-descriptions>
+            </div>
+            <div class="detail-block" v-if="hasRunResponseHeaders">
+              <div class="detail-title">响应 Headers</div>
+              <CopyablePre :text="runResponseDetail.headers" max-height="280px" wrap />
             </div>
             <div class="detail-block">
               <div class="detail-title">响应 Body</div>
@@ -879,6 +899,7 @@ import RunTimingBadges from './components/RunTimingBadges.vue'
 import CaseStageTimings from './components/CaseStageTimings.vue'
 import { getHttpResponseMs, getCaseTotalMs, formatTimingMs } from './utils/runTiming'
 import { provideAssertionResponseLocate } from '@/composables/assertionResponseLocate.js'
+import { httpAuthConfigApi } from '@/api/modules/httpAuth.js'
 
 const {
   activeColumns,
@@ -919,25 +940,71 @@ const caseTableRef = ref(null)
 const editDialog = reactive({ visible: false, data: null })
 
 /** 兼容旧执行结果：response_detail 为空时从 retry_info 最后一次尝试取响应 */
+const pickNonEmptyHeaders = (...candidates) => {
+  for (const headers of candidates) {
+    if (!headers) continue
+    if (Array.isArray(headers) && headers.length) return headers
+    if (typeof headers === 'object' && Object.keys(headers).length) return headers
+    if (typeof headers === 'string' && headers.trim()) return headers
+  }
+  return null
+}
+
 const getEffectiveResponseDetail = (result) => {
   if (!result) return null
-  if (result.response_detail) return result.response_detail
-  const attempts = result.request_detail?.retry_info?.attempts
+  const attempts =
+    result.request_detail?.retry_info?.attempts
+    || result.retry_info?.attempts
+  const last = attempts?.length ? attempts[attempts.length - 1] : null
+  const lastHeaders = last
+    ? pickNonEmptyHeaders(last.response_headers, last.headers)
+    : null
+
+  if (result.response_detail) {
+    const detail = { ...result.response_detail }
+    const headers = pickNonEmptyHeaders(detail.headers, result.response_headers, lastHeaders)
+    if (headers) detail.headers = headers
+    if (detail.status_code == null && result.response_status != null) {
+      detail.status_code = result.response_status
+    }
+    return detail
+  }
+  if (result.response_headers || result.response_body != null || result.response_status != null) {
+    return {
+      status_code: result.response_status,
+      http_time: getHttpResponseMs(result),
+      total_time: getCaseTotalMs(result),
+      time: getHttpResponseMs(result),
+      body: result.response_body,
+      headers: pickNonEmptyHeaders(result.response_headers, lastHeaders) || {},
+    }
+  }
   if (attempts?.length) {
-    const last = attempts[attempts.length - 1]
-    if (last.response_body !== undefined && last.response_body !== null) {
+    if (
+      last.response_body !== undefined && last.response_body !== null
+      || lastHeaders
+      || last.response_status != null
+    ) {
       return {
         status_code: last.response_status ?? result.response_status,
         http_time: getHttpResponseMs(result),
         total_time: getCaseTotalMs(result),
         time: getHttpResponseMs(result),
         body: last.response_body,
-        headers: {}
+        headers: pickNonEmptyHeaders(last.response_headers, last.headers) || {},
       }
     }
   }
   return null
 }
+
+const hasRunResponseHeaders = computed(() => {
+  const headers = runResponseDetail.value?.headers
+  if (!headers) return false
+  if (Array.isArray(headers)) return headers.length > 0
+  if (typeof headers === 'object') return Object.keys(headers).length > 0
+  return String(headers).trim().length > 0
+})
 
 const runDialog = reactive({
   visible: false,
@@ -1006,6 +1073,71 @@ const envDialog = reactive({
   auto_validate_schema: false,
   propagate_extracted: true,
 })
+const authConfigsByEnv = ref({}) // environment_id -> { name, is_enabled, vars }
+const envAuthHint = computed(() => {
+  const envId = envDialog.env_id
+  if (!envId) return null
+  const cfg = authConfigsByEnv.value[envId]
+  if (!cfg) {
+    return {
+      type: 'warning',
+      title: '当前环境未配置/未启用 Token 授权；若 Header 使用了授权变量将无法替换',
+    }
+  }
+  if (!cfg.is_enabled) {
+    return {
+      type: 'warning',
+      title: `授权「${cfg.name}」未启用`,
+    }
+  }
+  const vars = (cfg.var_names || []).join('、') || '（见提取规则）'
+  return {
+    type: 'success',
+    title: `将注入授权「${cfg.name}」变量：${vars}`,
+  }
+})
+
+const envAuthLabel = (env) => {
+  const cfg = authConfigsByEnv.value[env.id]
+  if (cfg?.is_enabled) return `${env.name}（Token 授权）`
+  return env.name
+}
+
+const loadAuthConfigsForRun = async () => {
+  authConfigsByEnv.value = {}
+  const projectId = proStore.projectInfo?.id
+  if (!projectId) return
+  try {
+    const res = await httpAuthConfigApi.getList({ project_id: projectId, page: 1, size: 100 })
+    const list = res.data?.data?.list || res.data?.list || []
+    const map = {}
+    for (const row of list) {
+      if (!row?.environment_id) continue
+      const names = (row.extractors || []).map(e => e?.name).filter(Boolean)
+      // 同环境多条时优先已启用且更新较新的（接口已按 update_time 排）
+      if (!map[row.environment_id] || (row.is_enabled && !map[row.environment_id].is_enabled)) {
+        map[row.environment_id] = {
+          name: row.name,
+          is_enabled: !!row.is_enabled,
+          var_names: names,
+        }
+      }
+    }
+    authConfigsByEnv.value = map
+  } catch {
+    authConfigsByEnv.value = {}
+  }
+}
+
+const pickDefaultRunEnvId = () => {
+  const envs = proStore.envList || []
+  if (!envs.length) return null
+  const enabledEnvId = Object.keys(authConfigsByEnv.value)
+    .map(Number)
+    .find((id) => authConfigsByEnv.value[id]?.is_enabled && envs.some((e) => e.id === id))
+  if (enabledEnvId) return enabledEnvId
+  return envs[0]?.id || null
+}
 const aiDialog = reactive({ visible: false, data: null })
 const varEditVisible = ref(false)
 const importResultDlg = reactive({ visible: false, result: null })
@@ -1231,6 +1363,9 @@ const handleImport = async (file) => {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('project_id', proStore.projectInfo.id)
+  if (searchForm.catalog_id) {
+    formData.append('catalog_id', String(searchForm.catalog_id))
+  }
   try {
     const res = await httpCaseApi.importCases(formData)
     if (res.status === 200) {
@@ -1263,30 +1398,32 @@ const openCopyDialog = (row) => {
 
 const submitCopyCase = (payload) => httpCaseApi.copy(copyDialog.row.id, payload)
 
-const handleBatchRun = () => {
+const handleBatchRun = async () => {
   if (!proStore.envList || proStore.envList.length === 0) {
     ElMessage.warning('请先创建测试环境')
     return
   }
+  await loadAuthConfigsForRun()
   envDialog.case = null
   envDialog.isBatch = true
-  envDialog.env_id = proStore.envList[0]?.id || null
+  envDialog.env_id = pickDefaultRunEnvId()
   envDialog.auto_validate_schema = false
   envDialog.propagate_extracted = true
   envDialog.visible = true
 }
 
-const handleRun = (row) => {
+const handleRun = async (row) => {
   // 检查是否有可用环境
   if (!proStore.envList || proStore.envList.length === 0) {
     ElMessage.warning('请先创建测试环境')
     return
   }
-  
-  // 打开环境选择弹窗
+
+  await loadAuthConfigsForRun()
+  // 打开环境选择弹窗：优先选中已启用 Token 授权的环境
   envDialog.case = row
   envDialog.isBatch = false
-  envDialog.env_id = proStore.envList[0]?.id || null
+  envDialog.env_id = pickDefaultRunEnvId()
   envDialog.auto_validate_schema = false
   envDialog.propagate_extracted = true
   envDialog.visible = true
@@ -1803,6 +1940,17 @@ watch(
 .env-select-dialog .el-dialog__body {
   overflow: auto;
   max-height: calc(90vh - 120px);
+}
+
+.env-auth-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}
+
+.env-auth-hint code {
+  font-size: 12px;
 }
 
 .run-result-dialog .el-dialog__body {

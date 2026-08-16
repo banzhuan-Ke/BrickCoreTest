@@ -12,6 +12,9 @@ export default defineConfig(({mode}) => {
             chunkSizeWarningLimit: 2500,
             rollupOptions: {
                 output: {
+                    // 默认 base64 哈希可能含 _AD / -ad- 等片段，会被广告拦截插件拦截导致路由白屏
+                    // （如 useFailureAnalysisGate-5NRpt_AD.js → ERR_BLOCKED_BY_CLIENT）
+                    hashCharacters: 'hex',
                     manualChunks(id) {
                         // 勿拆 vue / element-plus：强耦合，拆包易出现「Cannot access before initialization」白屏
                         // monaco 由 MonacoEditor 异步组件按需加载，勿放入 manualChunks

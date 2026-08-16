@@ -95,11 +95,15 @@ NOISE_LOG_PATHS = (
     "/runner/device-log",
     "/runner/device-log/batch",
     "/perf/workers/heartbeat",
+    "/runner/upload/presign",
+    "/runner/download/presign",
+    "/ai/generate/locator-heal/internal",
 )
 
 # 历史遗留：压测秒级上报（已改为不再写入，但需清理旧数据）
 NOISE_LOG_PATH_LIKE = (
     "/perf/workers/%/report",
+    "/ui/debug/sessions/%/compare-steps",
 )
 
 

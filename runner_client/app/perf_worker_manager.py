@@ -132,6 +132,29 @@ class PerfWorkerManager:
                 proc.kill()
                 proc.wait(timeout=5)
 
+    def discard_displayed_logs(self) -> None:
+        """面板「清空显示」：游标移到文件末尾，并排空 stdout 队列。"""
+        try:
+            if self.log_path.exists():
+                self._log_offset = self.log_path.stat().st_size
+            else:
+                self._log_offset = 0
+        except OSError:
+            self._log_offset = 0
+        if not self._out_queue:
+            return
+        saw_sentinel = False
+        while True:
+            try:
+                item = self._out_queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                saw_sentinel = True
+                break
+        if saw_sentinel:
+            self._out_queue.put(None)
+
     def read_new_log_lines(self, max_lines: int = 200) -> str:
         if not self.log_path.exists():
             return ""

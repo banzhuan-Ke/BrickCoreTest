@@ -49,8 +49,10 @@ function docTypeLabel(t) {
     requirement: '需求',
     iteration_plan: '迭代计划',
     test_plan: '测试计划',
+    test_scheme: '测试方案',
     bug_export: 'Bug导出',
     task_export: '任务导出',
+    case_export: '用例导出',
     summary: '总结',
     other: '其他'
   }

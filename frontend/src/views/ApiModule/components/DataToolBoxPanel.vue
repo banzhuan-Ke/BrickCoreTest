@@ -48,6 +48,17 @@
         <template v-if="currentTool">
           <p class="tool-desc">{{ currentTool.description }}</p>
           <el-alert
+            v-if="isLiveTimeTool"
+            type="warning"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 12px;"
+          >
+            需要<strong>每次执行取新时间</strong>时，请在用例里用「插入工具」写入
+            <code v-pre>${{dt:now_datetime}}</code>（或 now_timestamp）。
+            「保存为标签」后的 <code v-pre>${{df:标签名}}</code> 是<strong>保存当时的快照</strong>，不会随执行刷新。
+          </el-alert>
+          <el-alert
             v-if="factoryOnlyToolIds.has(currentTool.id)"
             type="warning"
             :closable="false"
@@ -119,7 +130,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { dataFactoryApi } from '@/api/modules/dataFactory'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import DfEnvScopeSelect from '@/components/DfEnvScopeSelect.vue'
@@ -132,6 +143,7 @@ const emit = defineEmits(['saved'])
 
 const proStore = ProjectStore()
 const factoryOnlyToolIds = new Set(['json_compare', 'cron_validate'])
+const liveTimeToolIds = new Set(['now_datetime', 'now_timestamp', 'timestamp_ms'])
 const categories = ref([])
 const tools = ref([])
 const activeCategory = ref('random')
@@ -153,6 +165,7 @@ const favoriteTools = computed(() => {
   return tools.value.filter((t) => ids.has(t.id))
 })
 const currentTool = computed(() => tools.value.find(t => t.id === selectedToolId.value))
+const isLiveTimeTool = computed(() => liveTimeToolIds.has(selectedToolId.value))
 const qrcodePreviewSrc = computed(() => {
   if (selectedToolId.value !== 'qrcode_base64') return ''
   const text = outputText.value || ''
@@ -241,6 +254,8 @@ async function loadCatalog() {
 async function runTool() {
   if (!selectedToolId.value) return
   executing.value = true
+  outputText.value = ''
+  outputData.value = null
   try {
     const res = await dataFactoryApi.executeTool({
       tool_id: selectedToolId.value,
@@ -272,6 +287,17 @@ async function saveRecord() {
   if (!saveTag.value?.trim()) {
     ElMessage.warning('请填写主标签')
     return
+  }
+  if (isLiveTimeTool.value) {
+    try {
+      await ElMessageBox.confirm(
+        '当前时间类工具保存为标签后是固定快照，用例每次执行不会自动刷新。若要实时时间，请改用「插入工具」${{dt:now_datetime}}。仍要保存快照吗？',
+        '保存为快照？',
+        { type: 'warning', confirmButtonText: '仍保存快照', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
   }
   saving.value = true
   try {

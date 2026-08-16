@@ -85,8 +85,8 @@ export const appRecordApi = {
   restorePlan: (id) => http.post(`${prefix}/records/plans/${id}/restore`),
   restoreSuite: (id) => http.post(`${prefix}/records/suites/${id}/restore`),
   restoreCase: (id) => http.post(`${prefix}/records/cases/${id}/restore`),
-  sendPlanReport: (id, data) => http.post(`${prefix}/records/plans/${id}/send-report`, data || {}),
-  sendSuiteReport: (id, data) => http.post(`${prefix}/records/suites/${id}/send-report`, data || {}),
+  sendPlanReport: (id, data) => http.post(`${prefix}/records/plans/${id}/send-report`, data || {}, { timeout: 120000 }),
+  sendSuiteReport: (id, data) => http.post(`${prefix}/records/suites/${id}/send-report`, data || {}, { timeout: 120000 }),
 }
 
 export const appElementApi = {

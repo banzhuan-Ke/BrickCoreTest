@@ -1,6 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#1f2937"/>
-  <rect x="5" y="11" width="22" height="12" rx="2.5" fill="#c2714f" stroke="#8b4513" stroke-width="1.2"/>
-  <line x1="7" y1="15" x2="25" y2="15" stroke="rgba(255,255,255,0.35)" stroke-width="1"/>
-  <line x1="7" y1="19" x2="25" y2="19" stroke="rgba(255,255,255,0.35)" stroke-width="1"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" role="img" aria-label="BrickCore">
+  <defs>
+    <linearGradient id="bc-bg" x1="8" y1="6" x2="40" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4b6fff"/>
+      <stop offset="1" stop-color="#7c5cff"/>
+    </linearGradient>
+    <linearGradient id="bc-brick" x1="14" y1="14" x2="34" y2="34" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" stop-opacity=".95"/>
+      <stop offset="1" stop-color="#dce4ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="40" height="40" rx="12" fill="url(#bc-bg)"/>
+  <rect x="13" y="14" width="11" height="9" rx="2.5" fill="url(#bc-brick)" stroke="#fff" stroke-width=".8" stroke-opacity=".6"/>
+  <rect x="24" y="14" width="11" height="9" rx="2.5" fill="url(#bc-brick)" stroke="#fff" stroke-width=".8" stroke-opacity=".45"/>
+  <rect x="13" y="25" width="22" height="9" rx="2.5" fill="#fff" fill-opacity=".92" stroke="#fff" stroke-width=".8" stroke-opacity=".5"/>
+  <circle cx="36" cy="12" r="2.5" fill="#21c4df" fill-opacity=".9"/>
 </svg>

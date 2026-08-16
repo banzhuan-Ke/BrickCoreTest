@@ -14,7 +14,7 @@
 
       @open="onDialogOpen"
 
-      @closed="resetOpenForm"
+      @closed="onOpenDialogClosed"
 
     >
 
@@ -154,44 +154,66 @@
 
           </el-button>
 
-          <el-button size="small" :loading="locatorBusy" :disabled="!canLocatorAction" @click="highlightSelectedStep">
-            高亮定位器
-          </el-button>
-          <el-button size="small" :loading="locatorBusy" :disabled="!canRun" @click="clearHighlight">
-            取消高亮
-          </el-button>
-          <el-button size="small" :loading="locatorBusy" :disabled="!canLocatorAction" @click="verifySelectedStep">
-            验证定位器
-          </el-button>
-          <el-button
-            size="small"
-            :type="pickModeActive ? 'warning' : 'default'"
-            :loading="pickModeLoading"
-            :disabled="!canRun"
-            @click="togglePickMode"
+          <el-tooltip content="按当前选中步骤的定位器，在调试浏览器中高亮目标元素" placement="top" :show-after="300">
+            <el-button size="small" :loading="locatorBusy" :disabled="!canLocatorAction" @click="highlightSelectedStep">
+              高亮定位器
+            </el-button>
+          </el-tooltip>
+          <el-tooltip content="清除调试浏览器中的定位器高亮" placement="top" :show-after="300">
+            <el-button size="small" :loading="locatorBusy" :disabled="!canRun" @click="clearHighlight">
+              取消高亮
+            </el-button>
+          </el-tooltip>
+          <el-tooltip content="验证当前步骤定位器是否能匹配到可见元素（多匹配会提示）" placement="top" :show-after="300">
+            <el-button size="small" :loading="locatorBusy" :disabled="!canLocatorAction" @click="verifySelectedStep">
+              验证定位器
+            </el-button>
+          </el-tooltip>
+          <el-tooltip
+            content="在调试浏览器中拾取元素并回填到步骤；悬浮/下拉可先「冻结页面」再确认。也可用浏览器底部操作条"
+            placement="top"
+            :show-after="300"
           >
-            {{ pickModeActive ? '退出拾取' : '拾取元素' }}
-          </el-button>
-          <el-button size="small" :loading="running" :disabled="!canRun" @click="runSingleStep">
+            <el-button
+              size="small"
+              :type="pickModeActive ? 'warning' : 'default'"
+              :loading="pickModeLoading"
+              :disabled="!canRun"
+              @click="togglePickMode"
+            >
+              {{ pickModeActive ? '退出拾取' : '拾取元素' }}
+            </el-button>
+          </el-tooltip>
+          <el-tooltip content="只执行当前选中的一步；浏览器操作条「执行本步」效果相同，结果会同步到步骤状态" placement="top" :show-after="300">
+            <el-button size="small" :loading="running" :disabled="!canRun" @click="runSingleStep">
+              执行当前步
+            </el-button>
+          </el-tooltip>
 
-            执行当前步
+          <el-tooltip content="从当前选中步连续执行到用例末尾；浏览器操作条「执行至末尾」效果相同" placement="top" :show-after="300">
+            <el-button size="small" :loading="running" :disabled="!canRun" @click="runThroughStep">
+              从当前步执行至末尾
+            </el-button>
+          </el-tooltip>
 
-          </el-button>
-
-          <el-button size="small" :loading="running" :disabled="!canRun" @click="runThroughStep">
-
-            从当前步执行至末尾
-
-          </el-button>
-
-          <el-button size="small" @click="hotkeyDialogVisible = true">
-            快捷键设置
-          </el-button>
-          <el-button size="small" type="danger" plain :loading="closing" @click="closeSession">
-
-            关闭浏览器
-
-          </el-button>
+          <el-tooltip content="自定义调试浏览器操作条快捷键，保存后会下发到当前会话" placement="top" :show-after="300">
+            <el-button size="small" @click="hotkeyDialogVisible = true">
+              快捷键设置
+            </el-button>
+          </el-tooltip>
+          <el-tooltip content="关闭调试浏览器并结束本次交互调试会话" placement="top" :show-after="300">
+            <el-button size="small" type="danger" plain :loading="closing" @click="closeSession">
+              关闭浏览器
+            </el-button>
+          </el-tooltip>
+          <el-tooltip placement="top" :show-after="200">
+            <template #content>
+              <div style="max-width: 280px; line-height: 1.5">
+                调试浏览器底部操作条可「执行本步 / 执行至末尾 / 高亮 / 验证 / 拾取」。执行完成后浏览器内会弹出结果提示，步骤成功/失败状态会同步到本页卡片（约 1～2 秒内刷新）。
+              </div>
+            </template>
+            <el-icon class="debug-help-icon"><QuestionFilled /></el-icon>
+          </el-tooltip>
 
         </div>
 
@@ -300,6 +322,14 @@
             </div>
 
             <p v-if="item.message" class="result-step-msg">{{ item.message }}</p>
+            <div v-else-if="item.variables?.length" class="result-step-msg">
+              <div v-for="(v, vi) in item.variables" :key="`${v.name}-${vi}`">
+                {{ v.name }} = {{ typeof v.value === 'string' ? v.value : JSON.stringify(v.value) }}
+              </div>
+            </div>
+            <p v-else-if="item.result != null && item.result !== ''" class="result-step-msg">
+              结果：{{ typeof item.result === 'string' ? item.result : JSON.stringify(item.result) }}
+            </p>
 
           </div>
 
@@ -310,7 +340,7 @@
     </div>
 
     <el-dialog v-model="pickDialogVisible" title="拾取元素 — 回填定位器" width="680px" destroy-on-close>
-      <p class="pick-dialog-tip">选择定位器用途：替换某个步骤，或在指定位置新增一步。</p>
+      <p class="pick-dialog-tip">相对参照步骤：可在其前/后新增，或直接替换该步定位器。</p>
       <p v-if="pickPreview.frame" class="pick-frame-hint">iframe：{{ pickPreview.frame }}</p>
       <p v-if="pickMatchIndex > 1" class="pick-frame-hint">
         同名匹配下标：{{ pickMatchIndex }}（写入步骤 params.index；若定位器已唯一可改为 1）
@@ -320,14 +350,21 @@
       <div class="pick-apply-form">
         <div class="pick-form-row">
           <span class="pick-form-label">应用方式</span>
-          <el-radio-group v-model="pickApplyMode" size="small">
-            <el-radio-button value="replace">替换已有步骤</el-radio-button>
-            <el-radio-button value="insert">新增步骤</el-radio-button>
+          <el-radio-group v-model="pickPlaceMode" size="small">
+            <el-radio-button value="before" :disabled="!pickHasSteps">步骤前插入</el-radio-button>
+            <el-radio-button value="after">步骤后插入</el-radio-button>
+            <el-radio-button value="replace" :disabled="!pickHasSteps">替换该步骤</el-radio-button>
           </el-radio-group>
         </div>
         <div class="pick-form-row">
-          <span class="pick-form-label">{{ pickApplyMode === 'insert' ? '插入位置' : '目标步骤' }}</span>
-          <el-select v-model="pickTargetStepIndex" size="small" style="width: 100%" filterable>
+          <span class="pick-form-label">参照步骤</span>
+          <el-select
+            v-model="pickTargetStepIndex"
+            size="small"
+            style="width: 100%"
+            filterable
+            :disabled="!pickHasSteps && pickPlaceMode !== 'after'"
+          >
             <el-option
               v-for="(step, idx) in (steps || [])"
               :key="step.id || idx"
@@ -335,23 +372,37 @@
               :value="idx"
             />
             <el-option
-              v-if="pickApplyMode === 'insert'"
-              :label="`末尾（第 ${(steps?.length || 0) + 1} 步）`"
+              v-if="pickPlaceMode === 'after'"
+              :label="pickHasSteps ? `末尾（第 ${(steps?.length || 0) + 1} 步）` : '作为第 1 步'"
               :value="steps?.length || 0"
             />
           </el-select>
         </div>
-        <div v-if="pickApplyMode === 'insert'" class="pick-form-row">
+        <p v-if="pickPlaceHint" class="pick-place-hint">{{ pickPlaceHint }}</p>
+        <div v-if="pickPlaceMode !== 'replace'" class="pick-form-row">
           <span class="pick-form-label">新步骤类型</span>
           <el-select v-model="pickInsertMethod" size="small" style="width: 220px">
             <el-option label="点击元素" value="click_ele" />
             <el-option label="元素输入" value="fill_value" />
+            <el-option
+              v-if="pickPreview.frame"
+              label="iframe内元素输入"
+              value="frame_fill_value"
+            />
             <el-option label="悬停元素" value="hover" />
           </el-select>
         </div>
       </div>
 
       <el-input v-model="pickPreview.locator" type="textarea" :rows="3" class="pick-locator-input" />
+      <el-alert
+        v-if="pickShellWarning"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="pick-shell-warning"
+        title="当前定位停在输入组件外壳，fill 可能失败；建议改选带「语义 / 可填」标签的候选，或落到 input.el-input__inner。"
+      />
       <div v-if="pickPreview.candidates?.length" class="pick-candidates">
         <span class="pick-label">候选定位器（点击选用）：</span>
         <el-tag
@@ -361,12 +412,12 @@
           :type="item === pickPreview.locator ? 'primary' : 'info'"
           class="pick-tag"
           @click="selectPickCandidate(item)"
-        >{{ item }}</el-tag>
+        >{{ formatPickCandidateLabel(item) }}</el-tag>
       </div>
       <template #footer>
         <el-button @click="pickDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="confirmApplyPick">
-          {{ pickApplyMode === 'insert' ? '新增并写入定位器' : '应用到选中步' }}
+          {{ pickPlaceMode === 'replace' ? '应用到选中步' : '新增并写入定位器' }}
         </el-button>
       </template>
     </el-dialog>
@@ -383,7 +434,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 
 import { ElMessage, ElNotification } from 'element-plus'
 
-import { ArrowDown, ArrowUp } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowUp, QuestionFilled } from '@element-plus/icons-vue'
 
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 
@@ -395,11 +446,11 @@ import { uiDebugApi } from '@/api/modules/ui.js'
 
 import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 
-import { buildDebugRunningHints, buildDebugExecutionHints, mergeDebugExecutionHints, formatDebugStepStatus, formatIdleRemaining, buildSessionToEditorMap, mapSessionStepResultsToEditor, mergeDebugRunStepResults, groupContiguousStepIndices } from '@/utils/debugSession.js'
+import { buildDebugRunningHints, buildOptimisticRunningHints, buildDebugExecutionHints, mergeDebugExecutionHints, formatDebugStepStatus, formatIdleRemaining, buildSessionToEditorMap, mapSessionStepResultsToEditor, mergeDebugRunStepResults, groupContiguousStepIndices, fingerprintDebugRunResult, mapDebugRunResultToEditor, mergeIncomingDebugRunResult, formatStepOutcomeText } from '@/utils/debugSession.js'
 
 import { resolveDefaultStartUrl } from '@/utils/caseDescription.js'
 
-import { formatLocatorActionSummary, pickResultKey, splitCombinedLocator, stepHasLocator, suggestPickStepTemplate } from '@/utils/debugLocator.js'
+import { formatLocatorActionSummary, formatPickCandidateLabel, isInputShellLocator, pickResultKey, splitCombinedLocator, stepHasLocator, suggestPickStepTemplate } from '@/utils/debugLocator.js'
 
 import {
   DEFAULT_HOTKEYS,
@@ -444,10 +495,14 @@ const uStore = UserStore()
 
 
 const openDialogVisible = ref(false)
+/** 打开浏览器请求世代号：弹窗取消时递增，丢弃进行中的 createSession 成功结果 */
+let openSessionGen = 0
 
 const opening = ref(false)
 
 const running = ref(false)
+/** 正在执行的编辑器步骤下标（乐观 UI，不依赖会话轮询） */
+const localRunningEditorIndices = ref([])
 
 const closing = ref(false)
 
@@ -479,9 +534,30 @@ const pickMatchIndex = computed(() => {
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1
 })
 const pickPollTimer = ref(null)
-const pickApplyMode = ref('replace')
+/** before | after | replace — 相对参照步骤的落点 */
+const pickPlaceMode = ref('after')
 const pickTargetStepIndex = ref(0)
 const pickInsertMethod = ref('click_ele')
+const pickHasSteps = computed(() => (props.steps?.length || 0) > 0)
+const pickPlaceHint = computed(() => {
+  const n = props.steps?.length || 0
+  let idx = Number(pickTargetStepIndex.value)
+  if (!Number.isFinite(idx)) idx = 0
+  if (pickPlaceMode.value === 'replace') {
+    if (!n) return '当前无步骤，请改为插入'
+    if (idx < 0 || idx >= n) return '请选择要替换的步骤'
+    return `将更新步骤 ${idx + 1} 的定位器（不新增步骤）`
+  }
+  if (pickPlaceMode.value === 'before') {
+    if (!n) return '将作为第 1 步写入'
+    if (idx < 0 || idx >= n) return '请选择参照步骤'
+    return `将在步骤 ${idx + 1} 之前插入新步骤（原步骤顺延）`
+  }
+  // after
+  if (!n || idx >= n) return `将追加为第 ${n + 1} 步`
+  return `将在步骤 ${idx + 1} 之后插入新步骤`
+})
+const pickShellWarning = computed(() => isInputShellLocator(pickPreview.locator))
 const ignoredPickKey = ref('')
 const handledPickKey = ref('')
 const handledFeedbackKey = ref('')
@@ -489,6 +565,8 @@ const handledRunSelectedKey = ref('')
 const handledPickFreezeKey = ref('')
 const staleCheckTimer = ref(null)
 const mergedLastResult = ref(null)
+/** 已吸收的 session.last_result 指纹；避免平台多段合并结果被工具条/轮询覆盖，也避免挡住工具条新结果 */
+const lastSeenRunFingerprint = ref('')
 const lastEditorMap = ref([])
 const idleBaseline = ref({ fetchedAt: 0, remaining: 0 })
 const idleTick = ref(0)
@@ -631,9 +709,15 @@ const lastRunSummary = computed(() => {
   }
 
   if (r.status === 'success') {
-
-    return `第 ${(r.from_index ?? 0) + 1}～${(r.through_index ?? 0) + 1} 步执行成功`
-
+    const from = Number(r.from_index ?? 0) + 1
+    const through = Number(r.through_index ?? from - 1) + 1
+    if (from === through) {
+      const step = r.steps.find((s) => Number(s?.step_index) === from - 1) || r.steps[0]
+      const outcome = formatStepOutcomeText(step)
+      const brief = outcome ? outcome.replace(/\s+/g, ' ').slice(0, 160) : ''
+      return brief ? `第 ${from} 步成功 — ${brief}` : `第 ${from} 步执行成功`
+    }
+    return `第 ${from}～${through} 步执行成功`
   }
 
   return ''
@@ -675,14 +759,36 @@ const previewInitialUrl = computed(() => resolveDefaultStartUrl({
 
 
 const debugHints = computed(() => {
+  const optimistic = buildOptimisticRunningHints(localRunningEditorIndices.value)
   const runningHints = buildDebugRunningHints(session.value)
   let resultHints = null
-  if (mergedLastResult.value) {
-    resultHints = buildDebugExecutionHints(mergedLastResult.value)
-  } else if (session.value?.last_result?.type === 'run') {
-    resultHints = buildDebugExecutionHints(session.value.last_result)
+  const sessionRun = session.value?.last_result?.type === 'run' ? session.value.last_result : null
+  const merged = mergedLastResult.value
+
+  // 工具条直报会更新 session.last_result（带 reported_at）；若比本地合并缓存新，优先用会话结果，避免卡片不刷新
+  const sessionNewer = (() => {
+    if (running.value || !sessionRun) return false
+    if (!merged) return true
+    const sAt = Number(sessionRun.reported_at)
+    const mAt = Number(merged.reported_at)
+    if (Number.isFinite(sAt) && Number.isFinite(mAt)) return sAt > mAt
+    if (Number.isFinite(sAt) && !Number.isFinite(mAt)) return true
+    return fingerprintDebugRunResult(sessionRun) !== fingerprintDebugRunResult(merged)
+  })()
+
+  if (sessionNewer) {
+    const mapped = mapDebugRunResultToEditor(sessionRun, lastEditorMap.value) || sessionRun
+    resultHints = buildDebugExecutionHints(mapped)
+  } else if (merged) {
+    resultHints = buildDebugExecutionHints(merged)
+  } else if (sessionRun) {
+    const mapped = mapDebugRunResultToEditor(sessionRun, lastEditorMap.value) || sessionRun
+    resultHints = buildDebugExecutionHints(mapped)
   }
-  return mergeDebugExecutionHints(runningHints, resultHints)
+  return mergeDebugExecutionHints(
+    mergeDebugExecutionHints(optimistic, runningHints),
+    resultHints,
+  )
 })
 
 
@@ -700,17 +806,30 @@ watch(session, (val, oldVal) => {
 
   const becameReady = val?.id && val?.status === 'ready' && oldVal?.status !== 'ready'
   if (becameReady) {
-
+    openDialogVisible.value = false
+    opening.value = false
     scheduleCheckStepsStale()
     scheduleSyncSelectedStepToRunner(props.selectedStepIndex)
 
   } else if (val?.id && val?.status === 'ready') {
 
+    openDialogVisible.value = false
     scheduleCheckStepsStale()
 
   }
 
 }, { deep: true })
+
+// 工具条执行完成后 last_result 变化：立刻吸收，不依赖下一次 1.5s 轮询才刷新卡片
+watch(
+  () => session.value?.last_result,
+  (lr, prev) => {
+    if (!lr || lr === prev) return
+    if (lr.type !== 'run') return
+    if (running.value) return
+    absorbExternalRunResultFromSession()
+  },
+)
 
 
 
@@ -758,6 +877,16 @@ function showOpenDialog() {
 
   }
 
+  const status = session.value?.status
+  if (status === 'ready') {
+    ElMessage.info('调试浏览器已打开，可直接试跑或拾取')
+    return
+  }
+  if (status && ['starting', 'running', 'closing'].includes(status)) {
+    ElMessage.warning('交互调试会话进行中，请稍候')
+    return
+  }
+
   openDialogVisible.value = true
 
 }
@@ -786,6 +915,14 @@ function resetOpenForm() {
 
   opening.value = false
 
+}
+
+function onOpenDialogClosed() {
+  // 请求进行中关窗视为取消：作废 in-flight，避免取消后仍挂上会话
+  if (opening.value) {
+    openSessionGen += 1
+  }
+  resetOpenForm()
 }
 
 
@@ -838,6 +975,14 @@ function notifyDebugSessionClosed(data) {
   const notice = resolveDebugCloseNotice(data)
   if (!notice) return
   if (notice.reason === 'browser_closed_by_user') {
+    ElNotification.warning(notice.message)
+    return
+  }
+  if (notice.reason === 'runner_offline' || notice.reason === '执行器异常下线') {
+    ElNotification.error(notice.message)
+    return
+  }
+  if (notice.reason === 'admin_force_stop') {
     ElNotification.warning(notice.message)
     return
   }
@@ -979,7 +1124,11 @@ async function syncStepsFromEditor({ quiet = false, silent = false } = {}) {
     const status = await waitUntilReady()
     if (status === 'ready') {
       stepsStale.value = false
-      mergedLastResult.value = null
+      // 静默自动同步很频繁，不能清空调试结果，否则工具条刚写入的「调试成功」会被抹掉
+      if (!silent) {
+        mergedLastResult.value = null
+        lastSeenRunFingerprint.value = ''
+      }
       if (!silent) {
         if (quiet) {
           ElMessage.success('已自动同步最新步骤')
@@ -1012,6 +1161,7 @@ async function startSession() {
 
   }
 
+  const gen = ++openSessionGen
   opening.value = true
 
   try {
@@ -1029,29 +1179,45 @@ async function startSession() {
     // 未在平台保存过快捷键时不下发，避免用默认表盖住执行器客户端偏好
     if (hotkeyOverride) createPayload.hotkeys = hotkeyOverride
     const res = await uiDebugApi.createSession(createPayload)
+    const created = parseSessionResponse(res)
 
-    session.value = parseSessionResponse(res)
+    if (gen !== openSessionGen) {
+      // 用户已取消弹窗：关闭刚创建的会话，避免「取消了浏览器还开着」
+      if (created?.id) {
+        try {
+          await uiDebugApi.closeSession(created.id)
+        } catch {
+          /* ignore */
+        }
+      }
+      return
+    }
+
+    session.value = created
 
     syncIdleBaseline(session.value)
 
     mergedLastResult.value = null
+    lastSeenRunFingerprint.value = ''
     lastEditorMap.value = []
-
-    stepsStale.value = false
-
-    openDialogVisible.value = false
 
     startPolling()
 
+    opening.value = false
+    openDialogVisible.value = false
     ElNotification.success('调试浏览器正在 Runner 上启动，请稍候…')
 
   } catch (e) {
 
-    ElMessage.error(e?.response?.data?.detail || e?.message || '打开调试会话失败')
+    if (gen === openSessionGen) {
+      ElMessage.error(e?.response?.data?.detail || e?.message || '打开调试会话失败')
+    }
 
   } finally {
 
-    opening.value = false
+    if (gen === openSessionGen) {
+      opening.value = false
+    }
 
   }
 
@@ -1178,7 +1344,9 @@ async function runEditorIndices(editorIndices, { skipEnsure = false } = {}) {
     : buildSessionToEditorMap(editorMap)
   const accumulated = []
 
+  localRunningEditorIndices.value = [...valid]
   running.value = true
+  ElMessage.info(valid.length === 1 ? `正在执行第 ${valid[0] + 1} 步…` : `正在执行 ${valid.length} 个步骤…`)
   try {
     for (const [fromIndex, throughIndex] of segments) {
       const ok = await runSessionSegment(fromIndex, throughIndex)
@@ -1207,9 +1375,12 @@ async function runEditorIndices(editorIndices, { skipEnsure = false } = {}) {
       mergedLastResult.value = mergeDebugRunStepResults(accumulated)
       resultExpanded.value = true
     }
+    // 记住本轮平台执行留下的 session.last_result，后续轮询不要当成「工具条新结果」冲掉合并缓存
+    lastSeenRunFingerprint.value = fingerprintDebugRunResult(session.value?.last_result)
     return accumulated.length > 0 && mergedLastResult.value?.status !== 'fail'
   } finally {
     running.value = false
+    localRunningEditorIndices.value = []
   }
 }
 
@@ -1285,6 +1456,7 @@ async function closeSession() {
 
       session.value = null
       mergedLastResult.value = null
+      lastSeenRunFingerprint.value = ''
       lastEditorMap.value = []
 
       stepsStale.value = false
@@ -1434,6 +1606,63 @@ function consumeRunSelectedRequestFromSession() {
   emit('run-selected-request', { requestId: key })
 }
 
+/**
+ * 工具条「执行本步/到结尾」直报 step_result：不经平台 run API，不会走 runEditorIndices。
+ * 若仍保留上次平台多段的 mergedLastResult，步骤卡片状态会一直不更新。
+ */
+async function absorbExternalRunResultFromSession(options = {}) {
+  if (running.value) return
+  const lr = session.value?.last_result
+  if (lr?.type !== 'run') return
+  const fp = fingerprintDebugRunResult(lr)
+  if (!fp || fp === lastSeenRunFingerprint.value) return
+  lastSeenRunFingerprint.value = fp
+
+  let editorMap = lastEditorMap.value
+  if ((!editorMap || !editorMap.length) && props.steps?.length) {
+    try {
+      const allIdx = props.steps.map((_, i) => i)
+      const plan = await resolveEditorRunPlan(allIdx)
+      if (!plan.stale && plan.editorMap?.length) {
+        lastEditorMap.value = plan.editorMap
+        editorMap = plan.editorMap
+      }
+    } catch {
+      // 映射失败时按会话下标展示，无片段场景通常仍正确
+    }
+  }
+
+  const mapped = mapDebugRunResultToEditor(lr, editorMap)
+  if (!mapped) return
+  mergedLastResult.value = mergeIncomingDebugRunResult(mergedLastResult.value, mapped)
+  resultExpanded.value = true
+  if (options.notify !== false) {
+    notifyToolbarRunResult(mapped)
+  }
+}
+
+function notifyToolbarRunResult(mapped) {
+  if (!mapped) return
+  const steps = mapped.steps || []
+  const failed = steps.find((s) => ['fail', 'failed', 'error'].includes(String(s?.status || '').toLowerCase()))
+  const statusFail = ['fail', 'failed', 'error', 'cancelled'].includes(String(mapped.status || '').toLowerCase())
+  if (failed || statusFail) {
+    const idx = Number(failed?.step_index ?? mapped.from_index ?? 0) + 1
+    const detail = String(failed?.message || mapped.message || '').trim()
+    ElMessage.error(detail ? `工具条：第 ${idx} 步失败 — ${detail}` : `工具条：第 ${idx} 步失败`)
+    return
+  }
+  const from = Number(mapped.from_index ?? 0) + 1
+  const through = Number(mapped.through_index ?? from - 1) + 1
+  if (from === through) {
+    const outcome = formatStepOutcomeText(steps.find((s) => Number(s?.step_index) === from - 1) || steps[0])
+    const brief = outcome ? outcome.replace(/\s+/g, ' ').slice(0, 120) : ''
+    ElMessage.success(brief ? `工具条：第 ${from} 步成功 — ${brief}` : `工具条：第 ${from} 步执行成功`)
+  } else {
+    ElMessage.success(`工具条：第 ${from}～${through} 步执行成功`)
+  }
+}
+
 async function refreshSession() {
 
   if (!session.value?.id) return
@@ -1453,7 +1682,8 @@ async function refreshSession() {
       stopPolling()
 
       session.value = null
-
+      mergedLastResult.value = null
+      lastSeenRunFingerprint.value = ''
       stepsStale.value = false
 
     } else if (session.value?.status === 'error') {
@@ -1461,6 +1691,7 @@ async function refreshSession() {
       stopPolling()
 
     } else {
+      await absorbExternalRunResultFromSession()
       consumePickResultFromSession()
       consumePickFreezeFromSession()
       consumeRunSelectedRequestFromSession()
@@ -1627,8 +1858,11 @@ function selectPickCandidate(item) {
     pickPreview.frame = split.frame
     pickPreview.element_locator = split.locator
   } else {
-    pickPreview.frame = ''
+    // 候选通常无 iframe|| 前缀；保留拾取时已解析的 frame，避免切候选后丢失
     pickPreview.element_locator = split.locator || item
+    if (pickPreview.frame) {
+      pickPreview.locator = `${pickPreview.frame}||${pickPreview.element_locator}`
+    }
   }
 }
 
@@ -1638,10 +1872,19 @@ function openPickDialog(payload) {
   pickPreview.element_locator = payload.element_locator || ''
   pickPreview.candidates = payload.candidates || payload.meta?.candidates || []
   pickPreview.meta = payload.meta || {}
-  pickApplyMode.value = 'replace'
+  const stepCount = props.steps?.length || 0
   const sel = Number(props.selectedStepIndex)
-  pickTargetStepIndex.value = Number.isFinite(sel) && sel >= 0 ? sel : 0
-  const suggested = suggestPickStepTemplate(payload.meta || payload.element || {})
+  if (stepCount <= 0) {
+    pickPlaceMode.value = 'after'
+    pickTargetStepIndex.value = 0
+  } else {
+    // 有选中步时默认「步骤后插入」，便于连点补步骤；要改定位器可选手动切到「替换」
+    pickPlaceMode.value = 'after'
+    pickTargetStepIndex.value = Number.isFinite(sel) && sel >= 0 && sel < stepCount ? sel : stepCount - 1
+  }
+  const suggested = suggestPickStepTemplate(payload.meta || payload.element || {}, {
+    frame: payload.frame || '',
+  })
   pickInsertMethod.value = suggested.method || 'click_ele'
   pickDialogVisible.value = true
 }
@@ -1705,6 +1948,18 @@ async function saveHotkeys() {
 
 watch(hotkeyDialogVisible, (v) => { if (v) loadHotkeyDraft() })
 
+watch(pickPlaceMode, (mode) => {
+  const n = props.steps?.length || 0
+  if (!n && mode !== 'after') {
+    pickPlaceMode.value = 'after'
+    pickTargetStepIndex.value = 0
+    return
+  }
+  if ((mode === 'before' || mode === 'replace') && Number(pickTargetStepIndex.value) >= n) {
+    pickTargetStepIndex.value = Math.max(0, n - 1)
+  }
+})
+
 async function togglePickMode() {
   if (!session.value?.id) return
   if (pickModeActive.value) {
@@ -1753,6 +2008,13 @@ function pickInsertTemplate() {
       params: { locator: '', value: '', timeout: 20000 },
     }
   }
+  if (pickInsertMethod.value === 'frame_fill_value') {
+    return {
+      keyword: 'iframe内元素输入',
+      method: 'frame_fill_value',
+      params: { frame: '', locator: '', value: '', index: 1 },
+    }
+  }
   if (pickInsertMethod.value === 'hover') {
     return {
       keyword: '鼠标悬停到元素上方',
@@ -1786,35 +2048,47 @@ async function confirmApplyPick() {
     return
   }
   const stepCount = props.steps?.length || 0
-  let stepIndex = Number(pickTargetStepIndex.value)
-  if (pickApplyMode.value === 'replace') {
-    if (!Number.isFinite(stepIndex) || stepIndex < 0 || stepIndex >= stepCount) {
-      ElMessage.warning('请选择有效的目标步骤')
+  let refIndex = Number(pickTargetStepIndex.value)
+  const place = pickPlaceMode.value
+  const common = {
+    locator: pickPreview.locator,
+    frame: pickPreview.frame,
+    element_locator: pickPreview.element_locator,
+    match_index: pickPreview.meta?.matchIndex || 1,
+    candidates: pickPreview.candidates,
+    meta: pickPreview.meta,
+  }
+
+  if (place === 'replace') {
+    if (!stepCount || !Number.isFinite(refIndex) || refIndex < 0 || refIndex >= stepCount) {
+      ElMessage.warning('请选择要替换的步骤')
       return
     }
     emit('apply-locator', {
       mode: 'replace',
-      stepIndex,
-      locator: pickPreview.locator,
-      frame: pickPreview.frame,
-      element_locator: pickPreview.element_locator,
-      match_index: pickPreview.meta?.matchIndex || 1,
-      candidates: pickPreview.candidates,
-      meta: pickPreview.meta,
+      stepIndex: refIndex,
+      ...common,
     })
   } else {
-    if (!Number.isFinite(stepIndex) || stepIndex < 0) stepIndex = stepCount
-    stepIndex = Math.min(Math.max(0, stepIndex), stepCount)
+    let insertAt = 0
+    if (!stepCount) {
+      insertAt = 0
+    } else if (place === 'before') {
+      if (!Number.isFinite(refIndex) || refIndex < 0 || refIndex >= stepCount) {
+        ElMessage.warning('请选择参照步骤')
+        return
+      }
+      insertAt = refIndex
+    } else {
+      // after：参照步之后；选「末尾」时 value 已是 length
+      if (!Number.isFinite(refIndex) || refIndex < 0) refIndex = stepCount
+      insertAt = refIndex >= stepCount ? stepCount : refIndex + 1
+    }
     emit('apply-locator', {
       mode: 'insert',
-      insertAt: stepIndex,
+      insertAt,
       template: pickInsertTemplate(),
-      locator: pickPreview.locator,
-      frame: pickPreview.frame,
-      element_locator: pickPreview.element_locator,
-      match_index: pickPreview.meta?.matchIndex || 1,
-      candidates: pickPreview.candidates,
-      meta: pickPreview.meta,
+      ...common,
     })
   }
   pickDialogVisible.value = false
@@ -1841,7 +2115,8 @@ async function resumeActiveSession() {
     if (!data?.id || ['closed', 'error'].includes(data.status)) return
     session.value = data
     syncIdleBaseline(data)
-    // 恢复会话时忽略历史拾取/高亮结果，避免立刻弹出旧窗或刷提示
+    // 恢复会话时忽略历史拾取/高亮/执行结果提示，避免立刻弹旧窗或刷 toast
+    lastSeenRunFingerprint.value = fingerprintDebugRunResult(data.last_result)
     const stale = data.last_result
     if (stale?.type === 'pick') {
       const key = pickResultKey(stale)
@@ -2076,12 +2351,32 @@ defineExpose({
 
   flex-wrap: wrap;
 
+  align-items: center;
+
+}
+
+.debug-help-icon {
+  margin-left: 2px;
+  font-size: 15px;
+  color: var(--el-text-color-secondary);
+  cursor: help;
+  vertical-align: middle;
+}
+
+.debug-help-icon:hover {
+  color: var(--el-color-primary);
 }
 
 .pick-dialog-tip {
   margin: 0 0 12px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+.pick-place-hint {
+  margin: -2px 0 0 84px;
+  font-size: 12px;
+  color: var(--el-color-primary);
+  line-height: 1.4;
 }
 .pick-apply-form {
   display: flex;
@@ -2101,6 +2396,9 @@ defineExpose({
 }
 .pick-locator-input {
   margin-top: 4px;
+}
+.pick-shell-warning {
+  margin-top: 10px;
 }
 .pick-candidates {
   margin-top: 12px;

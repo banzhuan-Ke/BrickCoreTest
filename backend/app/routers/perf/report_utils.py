@@ -987,11 +987,17 @@ def _load_echarts_js_for_html() -> str:
     return ""
 
 
-def _render_echarts_script_tag() -> str:
-    js = _load_echarts_js_for_html()
-    if not js:
-        return '  <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>'
-    return f"  <script>\n{js}\n  </script>"
+def _render_echarts_script_tag(*, embed: bool = True) -> str:
+    """生成 ECharts 脚本标签。
+
+    embed=True：内嵌本地 JS（离线打开可用，体积约 1MB，适合本地下载导出）。
+    embed=False：走 CDN（邮件附件更小，降低企业邮拦截概率）。
+    """
+    if embed:
+        js = _load_echarts_js_for_html()
+        if js:
+            return f"  <script>\n{js}\n  </script>"
+    return '  <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>'
 
 
 def _h(val: Any) -> str:
@@ -1346,16 +1352,18 @@ def render_perf_html_chart_parts(
     trend_heading: str = "性能趋势",
     hist_heading: str = "响应时间分布",
     include_echarts: bool = True,
+    embed_echarts: bool = True,
     ai_trend_note: str = "",
     ai_dist_note: str = "",
 ) -> tuple[str, str]:
     """导出 HTML 报告用：ECharts 趋势图 + RT 分布图。
 
-    返回 (图表区块 HTML, 页脚脚本 HTML)。ECharts 内嵌至页脚脚本，导出文件可离线打开；
+    返回 (图表区块 HTML, 页脚脚本 HTML)。默认内嵌 ECharts，导出文件可离线打开；
     脚本置于文档末尾，不阻塞上方表格渲染。
 
     prefix: 多记录同页时用于区分 DOM id（如 ``rec37``）。
     include_echarts: 同页多个图表时仅第一次为 True，避免重复内嵌库。
+    embed_echarts: False 时用 CDN，显著减小邮件附件体积。
     """
     from types import SimpleNamespace
 
@@ -1449,7 +1457,7 @@ def render_perf_html_chart_parts(
 
     sections = trend_section + hist_section + zoom_modal
 
-    echarts_tag = _render_echarts_script_tag() if include_echarts else ""
+    echarts_tag = _render_echarts_script_tag(embed=embed_echarts) if include_echarts else ""
     scripts = f"""
   <script type="application/json" id="{data_id}">{chart_payload}</script>
 {echarts_tag}
@@ -1829,7 +1837,7 @@ def render_compare_overlay_charts(
     parts.append("</div>")
     sections = "\n".join(parts)
 
-    echarts_tag = _render_echarts_script_tag() if include_echarts else ""
+    echarts_tag = _render_echarts_script_tag(embed=embed_echarts) if include_echarts else ""
     scripts = f"""
   <script type="application/json" id="{data_id}">{chart_payload}</script>
 {echarts_tag}

@@ -1,6 +1,18 @@
 <template>
-  <el-table :data="RunRecordList" style="width: calc(100% - 40px)" :header-cell-style="{'text-align':'center'}"
-            :cell-style="{'text-align':'center'}" stripe>
+  <div class="suite-record-panel">
+    <div class="toolbar" v-if="selectedRecords.length > 0">
+      <el-button type="danger" size="small" @click="handleBatchDelete">
+        批量删除({{ selectedRecords.length }})
+      </el-button>
+    </div>
+  <el-table
+    :data="RunRecordList"
+    style="width: calc(100% - 40px)"
+    :header-cell-style="{'text-align':'center'}"
+    :cell-style="{'text-align':'center'}"
+    stripe
+    @selection-change="handleSelectionChange"
+  >
     <template #empty>
       <div class="table-empty">
         <div class="empty-icon">
@@ -9,6 +21,7 @@
         <div>暂无数据</div>
       </div>
     </template>
+    <el-table-column type="selection" width="48" />
     <el-table-column label="序号" type="index" :index="tableRowIndex" width="90"/>
     <el-table-column prop="suite_name" label="套件名称" min-width='100' show-overflow-tooltip/>
     <el-table-column prop="status" label="执行状态" min-width='100'>
@@ -18,6 +31,20 @@
         <el-tag v-else-if="scope.row.status === '执行中'" type="primary">执行中</el-tag>
         <el-tag v-else-if="scope.row.status === '已停止'" type="warning">已停止</el-tag>
         <el-tag v-else type="info">{{ scope.row.status }}</el-tag>
+      </template>
+    </el-table-column>
+    <el-table-column label="进度" min-width="140">
+      <template #default="scope">
+        <div class="progress-cell">
+          <el-progress
+            :percentage="uiExecutionProgress(scope.row).percent"
+            :stroke-width="10"
+            :status="progressStatus(scope.row)"
+          />
+          <span class="progress-text">
+            {{ uiExecutionProgress(scope.row).done }}/{{ uiExecutionProgress(scope.row).total || '—' }}
+          </span>
+        </div>
       </template>
     </el-table-column>
     <el-table-column label="浏览器" prop="browser">
@@ -37,7 +64,6 @@
     </el-table-column>
     <el-table-column prop="duration" label="执行耗时">
       <template #default="scope">
-        <!-- 保留两位小数-->
         {{ (scope.row.duration ?? 0).toFixed(2) }}秒
       </template>
     </el-table-column>
@@ -97,6 +123,7 @@
       :total="pageConfig.total"
       @current-change="getRunRecordList"
       @size-change="getRunRecordList"/>
+  </div>
 </template>
 
 <script setup>
@@ -107,8 +134,12 @@ import {useRouter} from 'vue-router'
 import {ElMessageBox, ElMessage, ElNotification} from 'element-plus'
 import dateTools from "@/tools/dateTools.js"
 import { makeTableRowIndex } from '@/utils/tableIndex'
+import {
+  isUiExecutionActive,
+  uiExecutionProgress,
+  useUiExecutionProgressPoll,
+} from '@/composables/useUiExecutionProgressPoll.js'
 
-// 定义props
 const props = defineProps({
   suite_id: {
     type: Number,
@@ -117,8 +148,9 @@ const props = defineProps({
 })
 
 const router = useRouter()
-// 获取运行记录列表数据
 const RunRecordList = ref([])
+const selectedRecords = ref([])
+const deleteMode = ref('logical')
 
 const pageConfig = reactive({
   suite_id: 0,
@@ -129,28 +161,57 @@ const pageConfig = reactive({
 
 const tableRowIndex = makeTableRowIndex(pageConfig)
 
-// 获取运行记录数据
+const handleSelectionChange = (rows) => {
+  selectedRecords.value = rows
+}
+
+const getDeleteConfirmMessage = () => {
+  if (deleteMode.value === 'physical') {
+    return '将立即从数据库永久删除（含下属用例记录），此操作不可恢复，确定继续吗？'
+  }
+  return '记录将从列表中隐藏（逻辑删除，含下属用例记录），确定继续吗？'
+}
+
+const progressStatus = (row) => {
+  if (row.status === '已停止') return 'warning'
+  if (row.status === '执行完成') {
+    return (row.fail || 0) + (row.error || 0) > 0 ? 'exception' : 'success'
+  }
+  return undefined
+}
+
 const getRunRecordList = async () => {
   pageConfig.suite_id = props.suite_id
   const res = await http.resultApi.getSuiteRecord(pageConfig)
-  RunRecordList.value = res.data.data
-  pageConfig.total = res.data.total
+  const payload = res.data || {}
+  if (payload.delete_mode) {
+    deleteMode.value = payload.delete_mode
+  }
+  RunRecordList.value = payload.data || []
+  pageConfig.total = payload.total || 0
+  selectedRecords.value = []
+  syncPoll()
 }
+
+const { syncPoll } = useUiExecutionProgressPoll(
+  getRunRecordList,
+  () => (RunRecordList.value || []).some((r) => isUiExecutionActive(r.status)),
+  { intervalMs: 3000 }
+)
 
 getRunRecordList()
 
-// 侦听器，监听任务id
-watch(() => props.suite_id, (newVal, oldVal) => {
+watch(() => props.suite_id, (newVal) => {
   pageConfig.suite_id = newVal
   getRunRecordList()
 })
 
-const isSuiteStoppable = (status) => ['执行中', '等待执行'].includes(status)
+const isSuiteStoppable = (status) => isUiExecutionActive(status)
 
 const clickStop = async (record_id) => {
   try {
     await ElMessageBox.confirm(
-      '确定停止当前套件执行吗？执行器将收到中断信号。删除记录不会停止执行，请使用停止。',
+      '确定停止当前套件执行吗？已跑完的用例结果会保留；执行器将收到中断信号。删除记录不会停止执行，请使用停止。',
       '停止执行',
       { type: 'warning' }
     )
@@ -162,50 +223,80 @@ const clickStop = async (record_id) => {
   }
 }
 
-// 删除套件运行记录
 const clickDelete = async (record_id) => {
-  ElMessageBox.confirm(
-      '此操作不可恢复，确定删除该套件运行记录吗？',
-      '提示', {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        center: true,
-        type: 'warning'
+  try {
+    await ElMessageBox.confirm(getDeleteConfirmMessage(), '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      center: true,
+      type: 'warning'
+    })
+    const res = await http.resultApi.deleteSuiteRecord(record_id)
+    if (res.status === 204) {
+      await getRunRecordList()
+      ElNotification({
+        type: 'success',
+        title: '已成功删除套件运行记录！',
+        duration: 1500,
       })
-      .then(async () => {
-        const res = await http.resultApi.deleteSuiteRecord(record_id)
-        if (res.status === 204) {
-          await getRunRecordList()
-          ElNotification({
-            type: 'success',
-            title: '已成功删除套件运行记录！',
-            duration: 1500,
-          })
-        } else {
-          ElMessage({
-            type: 'error',
-            title: '套件运行记录删除失败！',
-            duration: 1500,
-            message: res.data.detail
-          })
-        }
+    }
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElNotification({
+        type: 'error',
+        title: '套件运行记录删除失败！',
+        message: e.response?.data?.detail || e.message,
+        duration: 2000,
       })
-      .catch(() => {
-        ElMessage({
-          type: 'info',
-          message: '已取消删除操作。',
-          duration: 1500,
-        })
-      })
+    }
+  }
+}
+
+const handleBatchDelete = async () => {
+  const ids = selectedRecords.value.map((row) => row.id)
+  if (!ids.length) return
+  try {
+    await ElMessageBox.confirm(getDeleteConfirmMessage(), '批量删除', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    const res = await http.resultApi.batchDeleteSuiteRecords(ids)
+    const count = res.data?.deleted ?? ids.length
+    ElMessage.success(`已删除 ${count} 条记录`)
+    await getRunRecordList()
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.response?.data?.detail || e.message || '批量删除失败')
+    }
+  }
 }
 </script>
 
 <style scoped>
+.suite-record-panel {
+  width: 100%;
+}
+.toolbar {
+  margin-bottom: 10px;
+}
 .op-btns {
   display: inline-flex;
   flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
   white-space: nowrap;
+}
+.progress-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 4px;
+}
+.progress-text {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.2;
 }
 </style>

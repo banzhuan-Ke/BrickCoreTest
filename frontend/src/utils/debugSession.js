@@ -1,5 +1,42 @@
 /** 交互调试：将 last_result 转为步骤编辑器可用的 execution hints */
 
+/** 透传步骤结果中的变量写入 / 返回值摘要，供步骤卡回显 */
+export function pickStepOutcomeFields(item = {}) {
+  const out = {}
+  if (Array.isArray(item.variables) && item.variables.length) {
+    out.variables = item.variables
+  }
+  if (item.result != null && item.result !== '') {
+    out.result = item.result
+  }
+  return out
+}
+
+export function formatStepOutcomeText(item) {
+  if (!item) return ''
+  if (item.message) return String(item.message)
+  const vars = item.variables
+  if (Array.isArray(vars) && vars.length) {
+    return vars
+      .map((v) => `${v?.name || '?'} = ${formatOutcomeValue(v?.value)}`)
+      .join('\n')
+  }
+  if (item.result != null && item.result !== '') {
+    return `结果：${formatOutcomeValue(item.result)}`
+  }
+  return ''
+}
+
+export function formatOutcomeValue(value) {
+  if (value == null) return 'null'
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
 export function buildDebugExecutionHints(lastResult) {
 
   if (!lastResult) return null
@@ -46,6 +83,8 @@ export function buildDebugExecutionHints(lastResult) {
 
         keyword: lastResult.keyword || '',
 
+        ...pickStepOutcomeFields(lastResult),
+
       }],
 
       from_index: lastResult.step_index,
@@ -60,9 +99,26 @@ export function buildDebugExecutionHints(lastResult) {
 
   if (resultType && resultType !== 'run') return null
 
-  if (!lastResult?.steps?.length) return null
-
-
+  // 工具条异常回包可能只有 step_index、无 steps
+  if (!lastResult?.steps?.length) {
+    if (lastResult.step_index == null) return null
+    const idx = Number(lastResult.step_index)
+    const status = String(lastResult.status || 'fail').toLowerCase() === 'success' ? 'success' : 'fail'
+    const row = {
+      step_index: idx,
+      status,
+      message: lastResult.message || '',
+      keyword: lastResult.keyword || '',
+      ...pickStepOutcomeFields(lastResult),
+    }
+    return {
+      has_failure: status !== 'success',
+      step_failures: status === 'success' ? [] : [row],
+      step_results: [row],
+      from_index: idx,
+      through_index: idx,
+    }
+  }
 
   const stepFailures = lastResult.steps
 
@@ -80,6 +136,8 @@ export function buildDebugExecutionHints(lastResult) {
 
       keyword: item.keyword || item.desc || '',
 
+      ...pickStepOutcomeFields(item),
+
     }))
 
 
@@ -95,6 +153,8 @@ export function buildDebugExecutionHints(lastResult) {
     screenshot: item.screenshot || '',
 
     keyword: item.keyword || item.desc || '',
+
+    ...pickStepOutcomeFields(item),
 
   }))
 
@@ -152,6 +212,25 @@ export function buildDebugRunningHints(session) {
 
   }
 
+}
+
+/** 本地已发起执行、会话轮询尚未变为 running 时的乐观「执行中」提示（编辑器下标）。 */
+export function buildOptimisticRunningHints(editorIndices) {
+  const indices = [...new Set((editorIndices || []).map((i) => Number(i)))]
+    .filter((i) => Number.isFinite(i) && i >= 0)
+    .sort((a, b) => a - b)
+  if (!indices.length) return null
+  return {
+    has_failure: false,
+    step_failures: [],
+    step_results: indices.map((i) => ({
+      step_index: i,
+      status: 'running',
+      message: '执行中…',
+    })),
+    from_index: indices[0],
+    through_index: indices[indices.length - 1],
+  }
 }
 
 
@@ -334,6 +413,86 @@ export function mergeDebugRunStepResults(resultList) {
     from_index: editorIndices.length ? Math.min(...editorIndices) : 0,
     through_index: editorIndices.length ? Math.max(...editorIndices) : 0,
     steps: allSteps,
+  }
+}
+
+/** 识别 Runner/工具条上报的 run 结果是否相对上次有变化（含 reported_at） */
+export function fingerprintDebugRunResult(lastResult) {
+  if (!lastResult || lastResult.type !== 'run') return ''
+  const steps = (lastResult.steps || [])
+    .map((s) => `${Number(s.step_index)}:${String(s.status || '').toLowerCase()}:${String(s.message || '')}`)
+    .join('|')
+  const reported = lastResult.reported_at != null ? String(lastResult.reported_at) : ''
+  return `${lastResult.status}|${lastResult.from_index}|${lastResult.through_index}|${reported}|${steps}`
+}
+
+/**
+ * 将会话侧 run 结果映射为编辑器下标。
+ * editorMap 为空时保持 session 下标（无片段展开时通常一致）。
+ */
+export function mapDebugRunResultToEditor(lastResult, editorMapPayload) {
+  if (!lastResult || lastResult.type !== 'run') return null
+  let sourceSteps = lastResult.steps
+  if (!sourceSteps?.length && lastResult.step_index != null) {
+    sourceSteps = [{
+      step_index: Number(lastResult.step_index),
+      status: lastResult.status || 'fail',
+      message: lastResult.message || '',
+      keyword: lastResult.keyword || '',
+    }]
+  }
+  const sessionToEditor = buildSessionToEditorMap(editorMapPayload)
+  const hasMap = Object.keys(sessionToEditor).length > 0
+  const steps = hasMap
+    ? mapSessionStepResultsToEditor(sourceSteps, sessionToEditor)
+    : (sourceSteps || []).map((item) => ({
+      ...item,
+      session_step_index: Number(item.step_index),
+    }))
+  const editorIndices = steps.map((s) => Number(s.step_index)).filter((i) => !Number.isNaN(i))
+  return {
+    type: 'run',
+    status: lastResult.status,
+    from_index: editorIndices.length ? Math.min(...editorIndices) : lastResult.from_index,
+    through_index: editorIndices.length ? Math.max(...editorIndices) : lastResult.through_index,
+    steps,
+    message: lastResult.message || '',
+    reported_at: lastResult.reported_at,
+  }
+}
+
+/** 按编辑器 step_index 合并新结果（工具条单步可叠加到此前多段结果上） */
+export function mergeIncomingDebugRunResult(existing, incoming) {
+  if (!incoming) return existing || null
+  if (!existing?.steps?.length) return incoming
+  if (!incoming.steps?.length) {
+    return {
+      ...existing,
+      status: incoming.status || existing.status,
+      message: incoming.message || existing.message || '',
+      reported_at: incoming.reported_at ?? existing.reported_at,
+    }
+  }
+  const byIdx = new Map()
+  for (const item of existing.steps) {
+    byIdx.set(Number(item.step_index), item)
+  }
+  for (const item of incoming.steps) {
+    byIdx.set(Number(item.step_index), item)
+  }
+  const steps = [...byIdx.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, item]) => item)
+  const failed = steps.some((s) => ['fail', 'failed', 'error'].includes(String(s.status || '').toLowerCase()))
+  const indices = steps.map((s) => Number(s.step_index)).filter((i) => !Number.isNaN(i))
+  return {
+    type: 'run',
+    status: failed ? 'fail' : (incoming.status || existing.status || 'success'),
+    from_index: indices.length ? Math.min(...indices) : existing.from_index,
+    through_index: indices.length ? Math.max(...indices) : existing.through_index,
+    steps,
+    message: incoming.message || existing.message || '',
+    reported_at: incoming.reported_at ?? existing.reported_at,
   }
 }
 

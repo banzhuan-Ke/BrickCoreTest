@@ -82,8 +82,7 @@ import secrets
 import base64
 import os
 
-# CORS 允许来源：默认仅本地开发；正式/局域网 IP 用环境变量追加，勿把生产 IP 写进公开仓源码
-# 例：CORS_ALLOWED_ORIGINS=http://192.168.1.100:8080,http://your.domain
+# CORS：本地默认 + Pro 正式机；额外来源可用 CORS_ALLOWED_ORIGINS 追加（逗号分隔）
 def _cors_allowed_origins() -> list[str]:
     defaults = [
         "http://localhost:8080",
@@ -91,6 +90,10 @@ def _cors_allowed_origins() -> list[str]:
         "http://localhost",
         "http://127.0.0.1:8080",
         "http://127.0.0.1:8000",
+        "http://47.111.226.241",
+        "http://47.111.226.241:8000",
+        "http://47.111.226.241:81",
+        "http://47.111.226.241:80",
     ]
     raw = (os.getenv("CORS_ALLOWED_ORIGINS") or "").strip()
     extras = [x.strip() for x in raw.split(",") if x.strip()]
@@ -109,6 +112,8 @@ ALLOWED_ORIGINS = _cors_allowed_origins()
 _ACCESS_LOG_QUIET_PATHS = (
     "/runner/health",
     "/runner/heartbeat",
+    "/runner/version",
+    "/runner/active-recording",
 )
 
 
@@ -180,6 +185,8 @@ async def _core_lifespan(app: FastAPI):
     register_debug_session_cleanup_job(scheduler)
     from app.modules.app.app_execution_stale import register_stale_cleanup_job as register_app_stale_cleanup_job
     register_app_stale_cleanup_job(scheduler)
+    from app.modules.runner.runner_offline_cleanup import register_runner_heartbeat_stale_job
+    register_runner_heartbeat_stale_job(scheduler)
     api_cron_scheduler.start()
     app_cron_scheduler.start()
     perf_scheduler.start()
@@ -214,6 +221,13 @@ async def _core_lifespan(app: FastAPI):
             await ensure_builtin_stream_parser_configs()
         except Exception as exc:
             logging.getLogger(__name__).warning("SSE 解析配置种子初始化失败: %s", exc)
+        # ORM 已可用后再校准，避免启动早期查库失败
+        try:
+            from app.routers.schedule.jobs import reconcile_ui_cron_jobs
+
+            await reconcile_ui_cron_jobs()
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Web 定时任务启动校准失败: %s", exc)
         yield
     finally:
         scheduler.shutdown()

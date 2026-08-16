@@ -86,9 +86,36 @@ def auth_config_to_dict(cfg: ApiAuthConfig, env_name: str = "", api_name: str = 
     }
 
 
+def expected_auth_variable_names(cfg: ApiAuthConfig) -> list[str]:
+    """从提取器配置得到执行时应收齐的变量名（自定义代码无固定名，返回空列表）。"""
+    names: list[str] = []
+    for raw in cfg.extractors or []:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _cache_has_expected_keys(cfg: ApiAuthConfig) -> bool:
+    cache = cfg.cache_data if isinstance(cfg.cache_data, dict) else {}
+    if not cache:
+        return False
+    expected = expected_auth_variable_names(cfg)
+    if not expected:
+        # 自定义代码：只要缓存非空即可
+        return any(v not in (None, "") for v in cache.values())
+    for key in expected:
+        val = cache.get(key)
+        if val is None or val == "":
+            return False
+    return True
+
+
 def _cache_needs_refresh(cfg: ApiAuthConfig, now: Optional[datetime] = None) -> bool:
     now = _naive_dt(now) or _now_naive()
-    if not cfg.cache_data:
+    if not _cache_has_expected_keys(cfg):
         return True
     expires_at = _naive_dt(cfg.cache_expires_at)
     if not expires_at:
@@ -99,18 +126,28 @@ def _cache_needs_refresh(cfg: ApiAuthConfig, now: Optional[datetime] = None) -> 
 
 async def _acquire_refresh_lock(config_id: int) -> bool:
     key = f"api_auth_refresh_lock:{config_id}"
-    return bool(await redis_cli.set(key, "1", nx=True, ex=REFRESH_LOCK_TTL))
+    try:
+        return bool(await redis_cli.set(key, "1", nx=True, ex=REFRESH_LOCK_TTL))
+    except Exception as e:
+        logger.warning("[api_auth] 获取刷新锁失败 config=%s: %s，改为直接刷新", config_id, e)
+        return True
 
 
 async def _release_refresh_lock(config_id: int) -> None:
-    await redis_cli.delete(f"api_auth_refresh_lock:{config_id}")
+    try:
+        await redis_cli.delete(f"api_auth_refresh_lock:{config_id}")
+    except Exception as e:
+        logger.warning("[api_auth] 释放刷新锁失败 config=%s: %s", config_id, e)
 
 
 async def _wait_for_refresh(config_id: int) -> bool:
     deadline = time.monotonic() + REFRESH_WAIT_TIMEOUT
     while time.monotonic() < deadline:
-        if not await redis_cli.exists(f"api_auth_refresh_lock:{config_id}"):
-            return True
+        try:
+            if not await redis_cli.exists(f"api_auth_refresh_lock:{config_id}"):
+                return True
+        except Exception:
+            return False
         await asyncio.sleep(REFRESH_POLL_INTERVAL)
     return False
 
@@ -320,16 +357,26 @@ async def ensure_auth_cache(
 
     waited = await _wait_for_refresh(cfg.id)
     await cfg.refresh_from_db()
-    if _cache_needs_refresh(cfg):
-        msg = "等待其他执行者刷新授权超时" if not waited else "授权刷新后仍无效"
-        raise RuntimeError(msg)
-    return dict(cfg.cache_data or {})
+    if not _cache_needs_refresh(cfg):
+        return dict(cfg.cache_data or {})
+    # 等待其他执行者超时/失败后仍无效：自行刷新，避免用例静默拿不到 token
+    logger.warning(
+        "[api_auth] 锁等待后缓存仍无效 config=%s waited=%s，改为本进程刷新",
+        cfg.id,
+        waited,
+    )
+    return await refresh_auth_config(cfg, base_variables)
 
 
 async def get_enabled_auth_config(project_id: int, environment_id: int) -> Optional[ApiAuthConfig]:
+    try:
+        pid = int(project_id)
+        eid = int(environment_id)
+    except (TypeError, ValueError):
+        return None
     return await ApiAuthConfig.filter(
-        project_id=project_id,
-        environment_id=environment_id,
+        project_id=pid,
+        environment_id=eid,
         is_enabled=True,
         is_del=False,
     ).order_by("-update_time").first()
@@ -339,13 +386,47 @@ async def inject_auth_variables(
     project_id: int,
     environment_id: int,
     variables: dict[str, Any],
+    *,
+    allow_refresh: bool = True,
 ) -> tuple[dict[str, Any], Optional[str]]:
-    """执行前注入授权变量，返回 (auth_vars, error)"""
+    """注入授权变量，返回 (auth_vars, error)。
+
+    allow_refresh=False 时仅读取已有缓存，不触发登录刷新（供变量预览等轻量接口）。
+    """
     cfg = await get_enabled_auth_config(project_id, environment_id)
     if not cfg:
+        logger.info(
+            "[api_auth] 未找到启用中的授权配置 project_id=%s environment_id=%s",
+            project_id,
+            environment_id,
+        )
         return {}, None
+
+    if not allow_refresh:
+        cache = dict(cfg.cache_data or {}) if isinstance(cfg.cache_data, dict) else {}
+        cleaned = {k: v for k, v in cache.items() if v not in (None, "")}
+        if not cleaned:
+            hint = f"授权「{cfg.name}」暂无可用缓存，预览不自动登录；请到 Token 授权页「刷新」或「调试」"
+            if cfg.last_refresh_error:
+                hint = f"{hint}（最近错误：{cfg.last_refresh_error}）"
+            return {}, hint
+        if _cache_needs_refresh(cfg):
+            return cleaned, (
+                f"授权「{cfg.name}」缓存将过期或缺少提取键，预览仅展示当前缓存；"
+                "用例执行时会自动刷新"
+            )
+        return cleaned, None
+
     try:
         cache = await ensure_auth_cache(cfg, variables)
+        if not isinstance(cache, dict):
+            cache = {}
+        # 接口登录：缓存缺提取器变量名时再刷一次，避免旧 key（如 token）挡住 token1
+        expected = expected_auth_variable_names(cfg)
+        if expected and any(k not in cache or cache.get(k) in (None, "") for k in expected):
+            cache = await refresh_auth_config(cfg, variables)
+        if not cache:
+            return {}, f"授权「{cfg.name}」缓存为空，请检查提取规则或点击「刷新」"
         return cache, None
     except Exception as e:
         err = str(e)
@@ -353,3 +434,53 @@ async def inject_auth_variables(
         await cfg.save(update_fields=["last_refresh_error", "update_time"])
         logger.warning("[api_auth] 刷新失败 config=%s: %s", cfg.id, err)
         return {}, err
+
+
+async def persist_auth_preview_cache(
+    cfg: ApiAuthConfig,
+    cache_data: dict[str, Any],
+) -> dict[str, Any]:
+    """将调试得到的变量写入缓存，便于立刻被用例执行注入。"""
+    cleaned = {k: v for k, v in (cache_data or {}).items() if v is not None and v != ""}
+    if not cleaned:
+        raise RuntimeError("调试结果为空，无法写入缓存")
+    now = _now_naive()
+    cfg.cache_data = cleaned
+    cfg.cache_expires_at = now + timedelta(minutes=cfg.ttl_minutes or 1440)
+    cfg.last_refresh_time = now
+    cfg.last_refresh_error = None
+    await cfg.save(
+        update_fields=["cache_data", "cache_expires_at", "last_refresh_time", "last_refresh_error", "update_time"]
+    )
+    return cleaned
+
+
+async def prepare_api_runtime_variables(
+    project_id: int | None,
+    environment_id: int | None,
+    extra: Optional[dict[str, Any]] = None,
+    *,
+    inject_auth: bool = True,
+    allow_auth_refresh: bool = True,
+) -> tuple[dict[str, Any], Optional[str], list[str]]:
+    """合并项目/环境/数据工厂变量，并按需注入 Token 授权缓存。
+
+    返回 (variables, auth_error, auth_injected_keys)。
+    allow_auth_refresh=False 时只读授权缓存，不发起登录（变量预览用）。
+    """
+    from app.modules.data_tools.tag_service import merge_execution_variables
+
+    variables = await merge_execution_variables(project_id, environment_id, extra)
+    auth_err: Optional[str] = None
+    auth_keys: list[str] = []
+    if inject_auth and project_id and environment_id:
+        auth_vars, auth_err = await inject_auth_variables(
+            project_id,
+            environment_id,
+            variables,
+            allow_refresh=allow_auth_refresh,
+        )
+        if auth_vars:
+            auth_keys = list(auth_vars.keys())
+            variables.update(auth_vars)
+    return variables, auth_err, auth_keys

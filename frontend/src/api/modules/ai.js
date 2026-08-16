@@ -771,6 +771,10 @@ export const aiRecordApi = {
     async saveVariable(id, data) {
         return await http.post(`/ai/record/${id}/save-variable`, data, { timeout: 15000 })
     },
+    /** W-33：重新注入 iframe 录制监听 */
+    async retryInject(id, data = {}) {
+        return await http.post(`/ai/record/${id}/retry-inject`, data || {}, { timeout: 20000 })
+    },
     // 手动转换
     async convert(id) {
         return await http.post(`/ai/record/${id}/convert`, {}, { timeout: 30000 })

@@ -126,20 +126,22 @@ export const UserStore = defineStore('uStore', {
             this.syncThemeToDocument()
         },
     },
-    // 持久化存储配置
+    // 持久化存储配置（pinia-plugin-persistedstate v4）
+    // 旧 strategies 配置会被忽略并落到键 uStore；现统一为 userInfo，并兼容迁移旧键
     persist: {
-        // 持久化存储开启
-        enabled: true,
-        // 用户状态信息持久化配置
-        strategies: [
-            {
-                // 存储键名
-                key: 'userInfo',
-                // 使用localStorage
-                storage: localStorage,
-                // 指定要持久化的字段
-                paths: ['token', 'username', 'userInfo', 'isAuthenticated', 'isCollapse', 'permissions']
+        key: 'userInfo',
+        pick: ['token', 'username', 'userInfo', 'isAuthenticated', 'isCollapse', 'permissions'],
+        beforeHydrate() {
+            try {
+                if (!localStorage.getItem('userInfo')) {
+                    const legacy = localStorage.getItem('uStore')
+                    if (legacy) {
+                        localStorage.setItem('userInfo', legacy)
+                    }
+                }
+            } catch {
+                // ignore
             }
-        ]
-    }
+        },
+    },
 })

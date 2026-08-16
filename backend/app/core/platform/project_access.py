@@ -40,13 +40,12 @@ async def user_bypasses_project_membership(user_id: int, is_superuser: bool = Fa
     if is_superuser:
         return True
     from app.core.platform.default_roles import SYSTEM_ADMIN_CODE
-    from app.models.sys import User
+    from app.models.sys import Role
 
-    user = await User.get_or_none(id=user_id, is_del=False).prefetch_related("roles")
-    if not user:
-        return False
-    roles = await user.roles.all()
-    return any(r.code == SYSTEM_ADMIN_CODE for r in roles)
+    # 不 prefetch User.roles：高并发下易 KeyError('_backward_relation_key')
+    return await Role.filter(
+        users__id=user_id, code=SYSTEM_ADMIN_CODE, is_del=False
+    ).exists()
 
 
 async def get_user_project_role(user_id: int, project_id: int) -> str | None:

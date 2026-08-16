@@ -1,84 +1,24 @@
 """接口测试执行相关 API"""
-import json
 import time
-from typing import List, Optional
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query, status, BackgroundTasks
-from tortoise import transactions
+from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks
+from pydantic import BaseModel, Field
 
 from app.models.http import (
-    ApiTestSuite, ApiSuiteCase, ApiTestCase, ApiDefinition,
-    ApiRunRecord, ApiSuiteRunRecord
+    ApiTestSuite, ApiSuiteCase, ApiTestCase,
+    ApiSuiteRunRecord
+)
+from app.schemas.http import (
+    ApiBatchRunRequest,
+    ApiBatchRunResult,
+    ApiSuiteRunRequest,
 )
 from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
 from app.core.platform.permissions import API_CASE_EXECUTE
 from app.core.ops.notification import NotificationService
 from app.modules.data_tools.inline_tools import ensure_dt_cache
 from app.models.sys import Environment, NotificationConfig, Project
-
-# 导入 schemas
-from pydantic import BaseModel, Field
-from datetime import datetime
-from typing import Dict, Any
-
-
-class ApiAssertionResult(BaseModel):
-    """断言结果"""
-    type: str
-    target: Optional[str]
-    operator: str
-    expected: Any
-    actual: Any
-    passed: bool
-
-
-class ApiRunResult(BaseModel):
-    """执行结果"""
-    record_id: int
-    status: str = Field(..., description="success/failed")
-    response_status: Optional[int] = None
-    response_time: Optional[float] = Field(
-        default=None,
-        description="用例执行总耗时(ms)：含重试等待、断言、变量提取、脚本等",
-    )
-    http_response_time: Optional[float] = Field(
-        default=None,
-        description="纯 HTTP 请求耗时(ms)：httpx 发起到收到响应",
-    )
-    assertions: List[ApiAssertionResult] = Field(default=[])
-    extracted_vars: Dict[str, Any] = Field(default={})
-    error: Optional[str] = None
-    request_detail: Optional[Dict[str, Any]] = Field(default=None, description="请求详情")
-    response_detail: Optional[Dict[str, Any]] = Field(default=None, description="响应详情")
-    case_id: Optional[int] = Field(default=None, description="用例ID")
-    case_name: Optional[str] = Field(default=None, description="用例名称")
-    retry_info: Optional[Dict[str, Any]] = Field(default=None, description="重试信息")
-
-
-class ApiBatchRunRequest(BaseModel):
-    """批量执行请求"""
-    case_ids: List[int] = Field(..., description="用例ID列表")
-    env_id: int = Field(..., description="环境ID")
-    suite_id: Optional[int] = Field(None, description="所属套件ID")
-    auto_validate_schema: bool = Field(default=False, description="是否自动校验响应 Schema")
-
-
-class ApiSuiteRunRequest(BaseModel):
-    """套件执行请求"""
-    env_id: Optional[int] = Field(None, description="环境ID，不传则使用套件默认环境")
-    auto_validate_schema: bool = Field(default=False, description="是否自动校验响应 Schema")
-    trigger_type: str = Field(default="manual", description="触发方式: manual/cron/assistant 等")
-
-
-class ApiBatchRunResult(BaseModel):
-    """批量执行结果"""
-    record_id: Optional[int] = None
-    total: int
-    success: int
-    failed: int
-    total_time: Optional[float] = None
-    results: List[ApiRunResult]
-
 
 router = APIRouter(prefix="/exec", tags=["接口测试执行"], dependencies=[Depends(is_authenticated), Depends(require_permissions(API_CASE_EXECUTE))])
 
@@ -189,7 +129,8 @@ async def batch_run(request: ApiBatchRunRequest, background_tasks: BackgroundTas
                     "link": ""
                 },
                 related_id=suite_record.id,
-                related_type="api_suite_run_record"
+                related_type="api_suite_run_record",
+                alert_scope="api",
             )
 
         # 自动推送报告（执行完成后无论成功/失败都推送，便于查看详细结果）
@@ -203,7 +144,8 @@ async def batch_run(request: ApiBatchRunRequest, background_tasks: BackgroundTas
             try:
                 await NotificationService.send_api_report(
                     project_id=suite_record.project_id,
-                    record_id=suite_record.id
+                    record_id=suite_record.id,
+                    auto_push_only=True,
                 )
             except Exception as e:
                 print(f"[AutoReport] API 报告自动推送失败: {e}")
@@ -356,7 +298,8 @@ async def run_suite_async(suite_id: int, request: ApiSuiteRunRequest, background
                     "link": ""
                 },
                 related_id=suite_record.id,
-                related_type="api_suite_run_record"
+                related_type="api_suite_run_record",
+                alert_scope="api",
             )
 
         # 自动推送报告
@@ -371,7 +314,8 @@ async def run_suite_async(suite_id: int, request: ApiSuiteRunRequest, background
             try:
                 await NotificationService.send_api_report(
                     project_id=suite_record.project_id,
-                    record_id=suite_record.id
+                    record_id=suite_record.id,
+                    auto_push_only=True,
                 )
             except Exception as e:
                 print(f"[AutoReport] API 报告自动推送失败: {e}")

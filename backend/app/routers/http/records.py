@@ -21,6 +21,12 @@ from datetime import datetime
 from typing import Dict, Any
 
 
+class SendReportPayload(BaseModel):
+    """手动推送报告：勾选项目通知配置 id；不传则按启用邮件配置发送。"""
+    config_ids: Optional[List[int]] = Field(default=None, description="通知配置 ID 列表")
+    recipients: Optional[List[str]] = Field(default=None, description="覆盖邮件收件人")
+
+
 class ApiSuiteRunRecordOut(BaseModel):
     """套件执行记录输出"""
     id: int
@@ -377,18 +383,23 @@ async def get_run_record_detail(record_id: int):
 
 # ============ 单个用例执行记录查询 ============
 
-@router.post("/suites/{record_id}/send-report", summary="发送 API 测试报告邮件", status_code=status.HTTP_200_OK)
-async def send_suite_report(record_id: int):
-    """手动发送 API 测试报告邮件"""
+@router.post("/suites/{record_id}/send-report", summary="发送 API 测试报告", status_code=status.HTTP_200_OK)
+async def send_suite_report(record_id: int, payload: Optional[SendReportPayload] = None):
+    """手动发送 API 测试报告（可指定通知配置 id）"""
+    body = payload or SendReportPayload()
     record = await ApiSuiteRunRecord.get_or_none(id=record_id)
     if not record:
         raise HTTPException(status_code=404, detail="记录不存在")
     try:
-        await NotificationService.send_api_report(
+        result = await NotificationService.send_api_report(
             project_id=record.project_id,
-            record_id=record_id
+            record_id=record_id,
+            recipients=body.recipients,
+            config_ids=body.config_ids,
         )
-        return {"detail": "报告邮件已发送"}
+        return {"detail": NotificationService.format_dispatch_detail(result)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"发送失败: {e}")
 

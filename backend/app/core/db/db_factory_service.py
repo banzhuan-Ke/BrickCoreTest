@@ -37,6 +37,19 @@ DB_ASSERT_OPERATORS = {
     "not_exists",
 }
 
+# 调试/报告中返回的查询行预览上限（完整断言仍基于全量拉取结果，受数据源 max_rows 约束）
+DB_ASSERT_PREVIEW_ROWS = 10
+
+_FIELD_COMPARE_OPS = frozenset({
+    "equals",
+    "not_equals",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "contains",
+})
+
 
 def mask_password(_: str) -> str:
     return "******"
@@ -171,6 +184,70 @@ async def get_datasource_by_id(datasource_id: int, project_id: Optional[int] = N
     return await qs.first()
 
 
+def _format_env_ref(env_id: Optional[int], env_name: Optional[str] = None) -> str:
+    if env_name:
+        return f"「{env_name}」(id={env_id})"
+    if env_id is not None:
+        return f"环境 id={env_id}"
+    return "未知环境"
+
+
+def build_datasource_env_mismatch_message(
+    *,
+    ds_name: str,
+    ds_id: int,
+    ds_env_id: int,
+    ds_env_name: Optional[str],
+    current_env_id: int,
+    current_env_name: Optional[str],
+) -> str:
+    return (
+        f"数据源「{ds_name}」(id={ds_id}) 绑定在 {_format_env_ref(ds_env_id, ds_env_name)}，"
+        f"与当前调试环境 {_format_env_ref(current_env_id, current_env_name)} 不一致。"
+        "请切换顶部调试环境，或在断言中改选当前环境下的数据源。"
+    )
+
+
+async def _env_name(env_id: Optional[int]) -> Optional[str]:
+    if not env_id:
+        return None
+    from app.models.sys import Environment
+
+    env = await Environment.get_or_none(id=env_id)
+    return getattr(env, "name", None) if env else None
+
+
+async def diagnose_datasource_resolve_error(
+    *,
+    datasource_id: int,
+    project_id: int,
+    env_id: int,
+) -> str:
+    """生成可读的数据源解析失败原因（环境不一致 / 禁用 / 删除等）。"""
+    ds = await EnvDatasource.filter(id=datasource_id).first()
+    if not ds:
+        return f"数据源 id={datasource_id} 不存在，请重新选择数据源"
+    if ds.is_del:
+        return f"数据源「{ds.name}」(id={datasource_id}) 已删除，请重新选择数据源"
+    if project_id and ds.project_id != project_id:
+        return f"数据源「{ds.name}」(id={datasource_id}) 不属于当前项目，请重新选择数据源"
+    if not ds.is_enabled:
+        return (
+            f"数据源「{ds.name}」(id={datasource_id}) 已禁用。"
+            "请到「数据工厂 → 数据源」启用，或改选其他数据源"
+        )
+    if ds.environment_id != env_id:
+        return build_datasource_env_mismatch_message(
+            ds_name=ds.name,
+            ds_id=ds.id,
+            ds_env_id=ds.environment_id,
+            ds_env_name=await _env_name(ds.environment_id),
+            current_env_id=env_id,
+            current_env_name=await _env_name(env_id),
+        )
+    return f"数据源「{ds.name}」(id={datasource_id}) 不可用，请检查配置"
+
+
 async def resolve_datasource(
     env_id: int,
     project_id: int,
@@ -178,9 +255,13 @@ async def resolve_datasource(
 ) -> tuple[Optional[EnvDatasource], Optional[str]]:
     if datasource_id:
         ds = await get_datasource_by_id(datasource_id, project_id)
-        if not ds or ds.environment_id != env_id:
-            return None, f"数据源 {datasource_id} 不存在或未绑定当前环境"
-        return ds, None
+        if ds and ds.environment_id == env_id:
+            return ds, None
+        return None, await diagnose_datasource_resolve_error(
+            datasource_id=int(datasource_id),
+            project_id=project_id,
+            env_id=env_id,
+        )
 
     ds = await EnvDatasource.filter(
         project_id=project_id,
@@ -199,7 +280,11 @@ async def resolve_datasource(
     ).order_by("id").first()
     if ds:
         return ds, None
-    return None, "当前环境未配置可用数据源，请先在「数据工厂」中添加"
+    env_label = _format_env_ref(env_id, await _env_name(env_id))
+    return None, (
+        f"当前调试环境 {env_label} 未配置可用数据源。"
+        "请先在「数据工厂 → 数据源」为该环境添加并启用"
+    )
 
 
 def substitute_sql(sql: str, variables: dict[str, Any]) -> tuple[str, list[dict]]:
@@ -298,6 +383,68 @@ def _extract_actual_from_rows(rows: list[dict], field: Optional[str], operator: 
     return None
 
 
+def _field_resolve_note(rows: list[dict], field: Optional[str]) -> str:
+    """说明字段取值来源（首行 / 首列回退）。"""
+    if not rows:
+        return "查询无结果"
+    row = rows[0]
+    field_name = (field or "").strip()
+    if field_name and field_name in row:
+        return f"首行.{field_name}"
+    if field_name:
+        first_key = next(iter(row.keys()), None) if row else None
+        if first_key is not None:
+            return f"字段「{field_name}」不存在，已回退首行首列「{first_key}」"
+        return f"字段「{field_name}」不存在"
+    first_key = next(iter(row.keys()), None) if row else None
+    if first_key is not None:
+        return f"未填字段，取首行首列「{first_key}」"
+    return "首行"
+
+
+def _build_db_assert_message(
+    *,
+    operator: str,
+    field: Optional[str],
+    expected: Any,
+    actual: Any,
+    rows: list[dict],
+    passed: bool,
+) -> str:
+    op = (operator or "equals").lower()
+    row_count = len(rows or [])
+
+    if op == "row_count_equals":
+        base = f"行数实际={actual}，期望={expected}"
+        return f"{base}，{'通过' if passed else '未通过'}"
+
+    if op == "exists":
+        if passed:
+            return f"存在记录（共 {row_count} 行）"
+        return "期望存在记录，但查询无结果"
+
+    if op == "not_exists":
+        if passed:
+            return "不存在记录（查询为空）"
+        return f"期望无记录，但查询返回 {row_count} 行"
+
+    source = _field_resolve_note(rows, field)
+    parts = [f"实际值={actual!r}（{source}）", f"期望 {op} {expected!r}"]
+    if op in _FIELD_COMPARE_OPS and row_count > 1:
+        parts.append(
+            f"字段比较仅取查询结果首行，共 {row_count} 行；"
+            "若要对指定记录断言，请用 WHERE 收窄，或改用「行数等于 / 存在记录」"
+        )
+    parts.append("通过" if passed else "未通过")
+    return "；".join(parts)
+
+
+def _preview_rows(rows: list[dict], limit: int = DB_ASSERT_PREVIEW_ROWS) -> tuple[list[dict], bool]:
+    preview = list(rows or [])[:limit]
+    truncated = len(rows or []) > limit
+    return preview, truncated
+
+
 async def evaluate_db_assertions(
     assertions: list[dict],
     variables: dict[str, Any],
@@ -312,16 +459,23 @@ async def evaluate_db_assertions(
             continue
         name = raw.get("name") or raw.get("description") or "数据库断言"
         operator = (raw.get("operator") or "equals").lower()
+        field = raw.get("field")
+        expected = raw.get("expected")
         if operator not in DB_ASSERT_OPERATORS:
             results.append({
                 "type": "db",
                 "target": name,
                 "operator": operator,
-                "expected": raw.get("expected"),
+                "field": field,
+                "expected": expected,
                 "actual": None,
                 "passed": False,
                 "error": f"不支持的操作符: {operator}",
+                "message": f"不支持的操作符: {operator}",
                 "sql": raw.get("sql"),
+                "row_count": 0,
+                "rows_preview": [],
+                "preview_truncated": False,
             })
             all_passed = False
             continue
@@ -332,10 +486,15 @@ async def evaluate_db_assertions(
                 "type": "db",
                 "target": name,
                 "operator": operator,
-                "expected": raw.get("expected"),
+                "field": field,
+                "expected": expected,
                 "actual": None,
                 "passed": False,
                 "error": "SQL 不能为空",
+                "message": "SQL 不能为空",
+                "row_count": 0,
+                "rows_preview": [],
+                "preview_truncated": False,
             })
             all_passed = False
             continue
@@ -346,46 +505,69 @@ async def evaluate_db_assertions(
                 "type": "db",
                 "target": name,
                 "operator": operator,
-                "expected": raw.get("expected"),
+                "field": field,
+                "expected": expected,
                 "actual": None,
                 "passed": False,
                 "error": ds_err or "数据源不可用",
+                "message": ds_err or "数据源不可用",
                 "sql": sql,
+                "row_count": 0,
+                "rows_preview": [],
+                "preview_truncated": False,
             })
             all_passed = False
             continue
 
         exec_result = await execute_sql_on_datasource(ds, sql, variables, for_assertion=True)
         if not exec_result.get("success"):
+            err = exec_result.get("error")
             results.append({
                 "type": "db",
                 "target": name,
                 "operator": operator,
-                "expected": raw.get("expected"),
+                "field": field,
+                "expected": expected,
                 "actual": None,
                 "passed": False,
-                "error": exec_result.get("error"),
+                "error": err,
+                "message": err or "SQL 执行失败",
                 "sql": exec_result.get("sql"),
+                "row_count": 0,
+                "rows_preview": [],
+                "preview_truncated": False,
             })
             all_passed = False
             continue
 
         rows = exec_result.get("rows") or []
-        actual = _extract_actual_from_rows(rows, raw.get("field"), operator)
-        passed = _compare(actual, raw.get("expected"), operator)
+        actual = _extract_actual_from_rows(rows, field, operator)
+        passed = _compare(actual, expected, operator)
         if not passed:
             all_passed = False
+        preview, truncated = _preview_rows(rows)
+        message = _build_db_assert_message(
+            operator=operator,
+            field=field,
+            expected=expected,
+            actual=actual,
+            rows=rows,
+            passed=passed,
+        )
 
         results.append({
             "type": "db",
             "target": name,
             "operator": operator,
-            "expected": raw.get("expected"),
+            "field": field,
+            "expected": expected,
             "actual": actual,
             "passed": passed,
+            "message": message,
             "sql": exec_result.get("sql"),
             "row_count": len(rows),
-            "rows_preview": rows[:5],
+            "rows_preview": preview,
+            "preview_truncated": truncated,
         })
 
     return {"all_passed": all_passed, "results": results}

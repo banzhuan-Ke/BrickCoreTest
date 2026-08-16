@@ -148,7 +148,7 @@ async def close_inflight_executions_for_udid(udid: str) -> dict[str, int]:
         log = list(record.execution_log or [])
         log.append({
             "type": "runner_offline",
-            "message": "执行器已下线，系统自动结束执行",
+            "message": "执行器异常下线，系统已自动结束执行",
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
         record.execution_log = log

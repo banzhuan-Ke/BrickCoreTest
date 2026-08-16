@@ -5,6 +5,7 @@ import copy
 from typing import Any, Optional
 
 from app.core.platform.config import (
+    KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB,
     KNOWLEDGE_FULLTEXT_MAX_CHARS,
     KNOWLEDGE_MAPREDUCE_CHUNK_CHARS,
     KNOWLEDGE_MAPREDUCE_CONCURRENCY,
@@ -48,6 +49,7 @@ DEFAULT_KNOWLEDGE_PROJECT_SETTINGS: dict[str, Any] = {
     "retrieve_strategy": KNOWLEDGE_RETRIEVE_STRATEGY if KNOWLEDGE_RETRIEVE_STRATEGY in ("lexical", "vector", "hybrid") else "lexical",
     "hybrid_lexical_weight": 0.4,
     "vector_embed_doc_types": list(DEFAULT_VECTOR_EMBED_DOC_TYPES),
+    "vector_embed_max_chunks_per_job": max(50, int(KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB or 500)),
     "knowledge_qa_ai_config_id": None,
     "knowledge_image_parse_mode": "ocr_then_vision",
     "knowledge_doc_vision_ai_config_id": None,
@@ -279,6 +281,18 @@ KNOWLEDGE_SETTING_FIELD_DEFS: list[dict[str, Any]] = [
         "tip": "单文档可在文件夹详情覆盖为「仅词法」或「启用向量」。",
     },
     {
+        "key": "vector_embed_max_chunks_per_job",
+        "label": "单次向量任务分块上限",
+        "type": "int",
+        "group": "vector_embed",
+        "min": 50,
+        "max": 5000,
+        "step": 50,
+        "recommended": str(max(50, int(KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB or 500))),
+        "description": "单篇文档一次「重建向量」允许的最大分块数，防止超大文档费用失控。",
+        "tip": "大 Bug 导出常超过 500；可调到 800～1500。仍超限请拆分文档。环境变量 KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB 仅作新项目默认值。",
+    },
+    {
         "key": "knowledge_qa_ai_config_id",
         "label": "资料问答 · 智能模式模型",
         "type": "ai_config_id",
@@ -433,6 +447,12 @@ def normalize_knowledge_project_settings(raw: Any) -> dict[str, Any]:
     )
     if raw.get("vector_embed_doc_types") is not None:
         base["vector_embed_doc_types"] = normalize_vector_embed_doc_types(raw.get("vector_embed_doc_types"))
+    base["vector_embed_max_chunks_per_job"] = _clamp_int(
+        raw.get("vector_embed_max_chunks_per_job"),
+        50,
+        5000,
+        base["vector_embed_max_chunks_per_job"],
+    )
     base["default_knowledge_auto_folders"] = _clamp_int(
         raw.get("default_knowledge_auto_folders"), 1, 10, base["default_knowledge_auto_folders"]
     )
@@ -529,3 +549,11 @@ async def resolve_knowledge_settings(project_id: Optional[int]) -> dict[str, Any
 def is_vector_embed_active(settings: dict[str, Any]) -> bool:
     """运行时是否实际走向量 Embedding（仅看项目配置，默认关闭）。"""
     return bool(settings.get("vector_embed_enabled"))
+
+
+def resolve_vector_embed_max_chunks_per_job(settings: Optional[dict[str, Any]] = None) -> int:
+    """单次向量任务分块上限：项目配置优先，否则环境变量默认。"""
+    default = max(50, int(KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB or 500))
+    if not isinstance(settings, dict):
+        return default
+    return _clamp_int(settings.get("vector_embed_max_chunks_per_job"), 50, 5000, default)

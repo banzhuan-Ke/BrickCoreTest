@@ -211,10 +211,10 @@ def write_apply_helper_script(
         "  exit /b %RC%",
         ")",
         "echo Restarting client ...",
-        "start \"\" \"%EXE%\"",
+        # /D 保证工作目录正确；勿在本脚本内 del %~f0，否则 cmd 读后续行会报「找不到批处理文件」
+        "start \"\" /D \"%INSTALL%\" \"%EXE%\"",
         "timeout /t 2 /nobreak >nul",
         "rmdir /s /q \"%CLEANUP%\" 2>nul",
-        "del \"%~f0\" >nul 2>&1",
         "exit /b 0",
         "",
     ]

@@ -68,6 +68,10 @@ Web 界面回归：登录、表单、列表、多步骤业务流程。支持手�
 
 需填写：起始 URL（Agent/探索必填）、测试描述、可选 AI 模型。
 
+> **部署注意**：Agent / 多轮探索 /「抓取页面」在 **Backend 本机** 启动 Chromium，不经过 Runner。  
+> Windows/Linux 源码部署需在 Backend 虚拟环境执行 `python -m playwright install chromium`（见 [Windows 部署](windows-deploy.md)）。  
+> 若报 `Executable doesn't exist ... ms-playwright`，按该命令补装并重启 Backend。
+
 ### AI 录制步骤
 
 1. 点击 **AI 录制步骤**（录前 checklist 见弹窗提示与 [录制指南 §1.3](./web-recording-playback.md#_1-3-录前-checklist建议每次录制前核对)）
@@ -312,3 +316,26 @@ Cron 示例：`0 8 * * 1-5` 表示工作日 8:00。
 
 **Q：与接口测试的关系？**  
 UI 与接口独立模块；**环境变量池共用**（项目/环境 global_vars），故 UI 报告 env 中可能出现接口相关变量名。登录态若走 HTTP 接口，可在 **接口自动化 → Token 授权** 维护。
+
+### 免登录 / 会话保持（可选）
+
+不想每次回放都跑登录 UI 时：
+
+1. **环境 → 编辑 →「Web 启动登录态注入」**：配置 `Authorization`、LocalStorage、Cookie，或填执行机上的 `storage_state` 路径。
+2. **用例步骤**：`设置鉴权Token` / `设置LocalStorage` / `设置SessionStorage` / `设置Cookie`（LocalStorage 类须先 `访问页面url` 打开目标域）。
+3. **导出复用**：登录成功后用「导出登录态」生成文件，再把路径填回环境启动注入。
+
+仍可用 **步骤片段** 做完整登录流；平台不破解验证码/SSO。
+
+#### 免登录通用配法（设置鉴权Token）
+
+1. 环境变量准备 `TOKEN`（登录接口或抓包拿到的凭证）。
+2. 步骤：
+   - 打开浏览器 → 访问目标域（要写 LocalStorage 时必须先打开同域）
+   - **设置鉴权Token**：
+     - `token=${{TOKEN}}`
+     - 请求头名默认 `Authorization`，前缀默认 `Bearer`（按目标站改）
+     - LocalStorage 键：**可选**；目标站把纯 token 存在某键时再填（写入**字符串**）
+   - 再打开业务页（不要刻意停在登录页）
+3. 更通用：登录一次后用「导出登录态」，环境里配 `storage_state` 路径。
+4. 若目标站 LocalStorage 需要 **JSON 整包**（少见），用「设置LocalStorage」自己填 JSON，不要指望鉴权Token 步骤拼业务结构。

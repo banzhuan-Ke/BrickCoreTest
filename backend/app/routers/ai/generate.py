@@ -26,6 +26,7 @@ from app.core.shared.ui_keywords import (
     UI_REQUIRED_PARAMS as _UI_REQUIRED_PARAMS,
     UI_VALID_METHODS as _UI_VALID_METHODS,
     METHOD_TO_KEYWORD as _UI_METHOD_TO_KEYWORD,
+    validate_smart_step_params as _validate_smart_step_params,
 )
 from app.models.ai import AiConfig, AiGenerateRecord
 from app.models.http import ApiDefinition, ApiTestCase
@@ -229,7 +230,7 @@ def _validate_api_cases(cases: list) -> tuple[list[str], list[dict]]:
     required_fields = {"name", "request_headers", "request_params", "request_body", "assertions", "extractors"}
     valid_assertion_types = {"status_code", "json_path", "header", "response_time", "contains", "not_contains"}
     valid_assertion_operators = {"equals", "not_equals", "contains", "not_contains", "regex", "gt", "lt", "gte", "lte", "in", "not_in"}
-    valid_extractor_sources = {"json", "header"}
+    valid_extractor_sources = {"json", "header", "regex"}
 
     for i, case in enumerate(cases):
         if not isinstance(case, dict):
@@ -331,6 +332,9 @@ def _normalize_ui_steps(steps: list) -> tuple[list[dict], list[str]]:
         missing = required - set(params.keys())
         if missing:
             errors.append(f"第 {i + 1} 步 '{method}' 缺少必填参数: {', '.join(missing)}")
+
+        for smart_err in _validate_smart_step_params(method, params):
+            errors.append(f"第 {i + 1} 步 '{method}' {smart_err}")
 
         # 填充默认值
         defaults = _UI_DEFAULT_PARAMS.get(method, {})

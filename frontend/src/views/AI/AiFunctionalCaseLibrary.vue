@@ -319,7 +319,7 @@
             :width="col.width"
           />
         </template>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
             <el-button
@@ -328,11 +328,30 @@
               type="success"
               @click="goUiCase(row.ui_case_id)"
             >UI 用例</el-button>
+            <el-dropdown
+              v-else-if="canImportUi"
+              trigger="click"
+              @command="(cmd) => onRowUiCaseCommand(cmd, row)"
+            >
+              <el-button link type="success">UI 用例</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="ai">AI 生成 UI</el-dropdown-item>
+                  <el-dropdown-item command="record">录制生成 UI</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button
               v-if="row.app_case_id"
               link
               type="success"
               @click="goAppCase(row.app_case_id)"
+            >App 用例</el-button>
+            <el-button
+              v-else-if="canImportApp"
+              link
+              type="success"
+              @click="openToAppForRow(row)"
             >App 用例</el-button>
           </template>
         </el-table-column>
@@ -972,6 +991,42 @@ const goUiCase = (id) => {
 
 const goAppCase = (id) => {
   router.push({ name: 'appCaseEdit', params: { id } })
+}
+
+const onRowUiCaseCommand = (cmd, row) => {
+  if (!row?.id) return
+  if (cmd === 'record') {
+    if (!projectId()) {
+      ElMessage.warning('请先选择项目')
+      return
+    }
+    recordCase.value = row
+    recordVisible.value = true
+    return
+  }
+  // 行内生成只作用于本行，不改动表格勾选态
+  const prev = selectedIds.value.slice()
+  selectedIds.value = [row.id]
+  openToUiDialog()
+  const stop = watch(toUiVisible, (v) => {
+    if (!v) {
+      selectedIds.value = prev
+      stop()
+    }
+  })
+}
+
+const openToAppForRow = (row) => {
+  if (!row?.id) return
+  const prev = selectedIds.value.slice()
+  selectedIds.value = [row.id]
+  openToAppDialog()
+  const stop = watch(toAppVisible, (v) => {
+    if (!v) {
+      selectedIds.value = prev
+      stop()
+    }
+  })
 }
 
 const goSourceRequirement = (row) => {

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 import time
 from datetime import datetime
@@ -31,6 +32,7 @@ from app.schemas.runner import (
 )
 
 router = APIRouter(prefix="/runner", tags=["Runner 客户端"])
+logger = logging.getLogger(__name__)
 
 
 def _request_base_url(request: Request) -> str:
@@ -139,16 +141,22 @@ async def runner_disconnect(
     if not device:
         return {"ok": True, "message": "设备不存在或已删除"}
 
-    device.status = "离线"
-    device.runner_session_jti = ""
-    device.runner_bound_user_id = None
     mq_user = device.runner_mq_username
     redis_user = device.runner_redis_username
-    device.runner_mq_username = ""
-    device.runner_mq_password = ""
-    device.runner_redis_username = ""
-    device.runner_redis_password = ""
-    await device.save()
+    udid = (device.app_udid or "").strip()
+    persisted = await _update_device_with_retry(
+        device_id,
+        {
+            "status": "离线",
+            "runner_session_jti": "",
+            "runner_bound_user_id": None,
+            "runner_mq_username": "",
+            "runner_mq_password": "",
+            "runner_redis_username": "",
+            "runner_redis_password": "",
+        },
+        purpose="设备下线写库",
+    )
 
     try:
         await revoke_device_middleware(
@@ -159,16 +167,20 @@ async def runner_disconnect(
     except Exception:
         pass
 
-    from app.modules.app.app_execution_stale import close_inflight_executions_for_udid
+    from app.modules.runner.runner_offline_cleanup import on_runner_device_offline
 
-    udid = (device.app_udid or "").strip()
-    if udid:
-        try:
-            await close_inflight_executions_for_udid(udid)
-        except Exception:
-            pass
+    cleanup = {}
+    try:
+        cleanup = await on_runner_device_offline(device_id, udid=udid)
+    except Exception as exc:
+        logger.warning("Runner 下线联动收尾失败 device=%s: %s", device_id, exc)
 
-    return {"ok": True, "device_id": device_id}
+    return {
+        "ok": True,
+        "device_id": device_id,
+        "disconnect_persisted": persisted,
+        "cleanup": cleanup,
+    }
 
 
 def _merge_runner_capabilities(device: Device, item: RunnerHeartbeatRequest) -> None:
@@ -206,15 +218,33 @@ def _heartbeat_update_fields(device: Device, item: RunnerHeartbeatRequest) -> di
     return fields
 
 
-async def _update_device_with_retry(device_id: str, fields: dict, *, attempts: int = 3) -> None:
+async def _update_device_with_retry(
+    device_id: str,
+    fields: dict,
+    *,
+    attempts: int = 4,
+    purpose: str = "设备写库",
+) -> bool:
+    """设备行更新；遇 InnoDB 行锁超时则退避重试，最终仍失败则软降级，避免拖垮连接池。"""
     for attempt in range(attempts):
         try:
             await Device.filter(id=device_id, is_del=False).update(**fields)
-            return
+            return True
         except OperationalError as ex:
-            if attempt >= attempts - 1 or "1205" not in str(ex):
+            msg = str(ex)
+            if "1205" not in msg and "Lock wait" not in msg.lower():
                 raise
-            await asyncio.sleep(0.05 * (attempt + 1))
+            if attempt >= attempts - 1:
+                logger.warning(
+                    "%s锁等待超时 device_id=%s attempts=%s: %s",
+                    purpose,
+                    device_id,
+                    attempts,
+                    ex,
+                )
+                return False
+            await asyncio.sleep(0.25 * (2 ** attempt))
+    return False
 
 
 @router.post(
@@ -234,8 +264,8 @@ async def runner_heartbeat(
     if item.client_version:
         device.runner_client_version = item.client_version
     fields = _heartbeat_update_fields(device, item)
-    await _update_device_with_retry(device_id, fields)
-    return {"ok": True, "device_id": device_id}
+    persisted = await _update_device_with_retry(device_id, fields, purpose="设备心跳写库")
+    return {"ok": True, "device_id": device_id, "heartbeat_persisted": persisted}
 
 
 @router.get(

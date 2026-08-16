@@ -13,6 +13,7 @@ from app.core.db.db_factory_service import (
     evaluate_db_assertions,
     execute_sql_on_datasource,
     get_datasource_by_id,
+    resolve_datasource,
     run_sql_templates_by_ids,
     sql_template_to_dict,
     substitute_sql,
@@ -453,9 +454,9 @@ async def delete_sql_template(tpl_id: int):
 
 @router.post("/sql/execute", summary="调试执行 SQL", dependencies=[Depends(require_permissions(DATA_FACTORY_EDIT))])
 async def execute_sql_debug(body: SqlExecuteRequest):
-    ds = await get_datasource_by_id(body.datasource_id, body.project_id)
-    if not ds or ds.environment_id != body.environment_id:
-        raise HTTPException(status_code=422, detail="数据源不存在或未绑定当前环境")
+    ds, ds_err = await resolve_datasource(body.environment_id, body.project_id, body.datasource_id)
+    if ds_err or not ds:
+        raise HTTPException(status_code=422, detail=ds_err or "数据源不可用")
     result = await execute_sql_on_datasource(
         ds, body.sql, body.variables, for_assertion=body.for_assertion
     )

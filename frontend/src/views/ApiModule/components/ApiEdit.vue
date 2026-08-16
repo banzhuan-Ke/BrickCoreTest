@@ -87,9 +87,9 @@
           <VarInsertButton
             :env-id="refEnvId"
             :show-env-edit="false"
-            hint-text="含项目/环境/Token 授权/内置/用例变量；授权变量执行时自动注入。工厂标签与工具请用旁侧按钮。"
+            hint-text="含项目/环境/Token 授权/内置/用例变量；授权变量在调试与执行时自动注入。工厂标签与工具请用旁侧按钮。"
           />
-          <ToolInsertButton />
+          <ToolInsertButton :env-id="refEnvId" />
           <el-button type="info" link size="small" @click="tagPickerVisible = true">数据工厂标签</el-button>
         </div>
         <span class="var-toolbar-hint">先点击下方输入框再插入；参考环境仅预览变量列表，<strong>执行</strong>时以运行环境为准</span>
@@ -430,6 +430,24 @@
         <!-- 响应详情 -->
         <el-tab-pane label="响应详情" name="response">
           <div v-if="testResult.response_detail" class="detail-section">
+            <div class="detail-block">
+              <div class="detail-title">响应信息</div>
+              <el-descriptions border size="small">
+                <el-descriptions-item label="状态码">{{ testResult.response_detail.status_code ?? '-' }}</el-descriptions-item>
+                <el-descriptions-item label="接口耗时">
+                  {{ testResult.response_detail.http_time != null ? `${Number(testResult.response_detail.http_time).toFixed(2)} ms` : '-' }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </div>
+            <div
+              class="detail-block"
+              v-if="testResult.response_detail.headers && Object.keys(testResult.response_detail.headers || {}).length"
+            >
+              <div class="detail-title">响应 Headers</div>
+              <div class="detail-content">
+                <pre>{{ typeof testResult.response_detail.headers === 'object' ? JSON.stringify(testResult.response_detail.headers, null, 2) : testResult.response_detail.headers }}</pre>
+              </div>
+            </div>
             <div class="detail-block">
               <div class="detail-title" style="display: flex; justify-content: space-between; align-items: center;">
                 <span>响应 Body</span>

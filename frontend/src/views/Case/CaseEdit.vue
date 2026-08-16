@@ -22,7 +22,7 @@
             <el-input 
               v-model="caseInfo.name" 
               placeholder="请输入用例名称"
-              maxlength="100"
+              maxlength="50"
               show-word-limit
             />
           </el-form-item>
@@ -63,11 +63,11 @@
         <CaseUsedVarsPanel :steps="caseInfo.steps" />
 
         <el-collapse
-          v-if="executionHints?.has_failure"
+          v-if="executionHints?.has_failure || recoveryCount > 0"
           v-model="hintsExpanded"
           class="execution-hints-collapse"
         >
-          <el-collapse-item name="failure">
+          <el-collapse-item v-if="executionHints?.has_failure" name="failure">
             <template #title>
               <span class="execution-hints-collapse-title">
                 <el-icon color="#f56c6c"><WarningFilled /></el-icon>
@@ -77,6 +77,26 @@
             </template>
             <div class="execution-hints-body">
               <p v-if="executionHints.error_msg" class="execution-hints-error">{{ executionHints.error_msg }}</p>
+              <ul
+                v-if="executionHints.step_failures?.length"
+                class="execution-hints-failures"
+              >
+                <li
+                  v-for="(fail, idx) in executionHints.step_failures.filter((f) => f && !f.unresolved)"
+                  :key="`${fail.step_id || fail.step_index}-${idx}`"
+                >
+                  <span>步骤 {{ (fail.step_index ?? idx) + 1 }}</span>
+                  <el-tag
+                    v-if="fail.failure_code"
+                    size="small"
+                    :type="failureCodeTagType(fail.failure_code)"
+                    effect="plain"
+                    class="execution-hints-code"
+                  >{{ formatFailureCode(fail.failure_code) }}</el-tag>
+                  <span v-if="fail.keyword || fail.desc"> · {{ fail.keyword || fail.desc }}</span>
+                  <span v-if="fail.message" class="execution-hints-fail-msg"> — {{ fail.message }}</span>
+                </li>
+              </ul>
               <pre v-if="executionHints.log_excerpt" class="execution-hints-log">{{ executionHints.log_excerpt }}</pre>
               <p v-else-if="executionHints.log_tail" class="execution-hints-log-muted">{{ executionHints.log_tail }}</p>
               <p v-if="executionHints.start_time" class="execution-hints-meta">
@@ -89,6 +109,45 @@
                 :project-id="proStore.projectInfo?.id"
                 @loaded="onFailureAnalysisLoaded"
               />
+            </div>
+          </el-collapse-item>
+          <el-collapse-item v-if="recoveryCount > 0" name="recovery">
+            <template #title>
+              <span class="execution-hints-collapse-title execution-hints-recovery-title">
+                <el-icon color="#e6a23c"><WarningFilled /></el-icon>
+                最近一次执行有 {{ recoveryCount }} 步被自愈 / AI Act 救过
+              </span>
+            </template>
+            <div class="execution-hints-body">
+              <ul class="execution-hints-failures">
+                <li
+                  v-for="(item, idx) in visibleRecoveries"
+                  :key="`rec-${item.step_id || item.step_index}-${idx}`"
+                >
+                  <span>步骤 {{ (item.step_index ?? idx) + 1 }}</span>
+                  <el-tag
+                    v-if="item.kinds?.includes('heal')"
+                    size="small"
+                    type="warning"
+                    effect="plain"
+                    class="execution-hints-code"
+                  >自愈</el-tag>
+                  <el-tag
+                    v-if="item.kinds?.includes('act')"
+                    size="small"
+                    type="success"
+                    effect="plain"
+                    class="execution-hints-code"
+                  >AI Act</el-tag>
+                  <span v-if="item.keyword || item.desc"> · {{ item.keyword || item.desc }}</span>
+                  <span v-if="item.message" class="execution-hints-fail-msg"> — {{ item.message }}</span>
+                </li>
+              </ul>
+              <p v-if="executionHints.start_time" class="execution-hints-meta">
+                执行时间：{{ dateTools.rTime(executionHints.start_time) }}
+                <span v-if="executionHints.execution_id"> · 记录 #{{ executionHints.execution_id }}</span>
+                · 详情也可在步骤卡片上查看
+              </p>
             </div>
           </el-collapse-item>
         </el-collapse>
@@ -115,6 +174,8 @@
           @run-selected-request="onToolbarRunSelected"
         />
 
+        <UiCaseAuthoringTips />
+
         <!-- 步骤编辑器 -->
         <div class="steps-section">
           <div class="section-title">
@@ -128,6 +189,7 @@
             :debug-execution-hints="debugExecutionHints"
             :debug-selected-index="selectedStepIndex"
             :debug-selected-indices="debugHighlightIndices"
+            :enable-run-selected="true"
             @debug-step="openDebugDialog"
             @debug-select-step="onDebugSelectStep"
             @debug-selected-steps="onDebugSelectedSteps"
@@ -183,7 +245,7 @@
         <div class="action-bar">
           <el-button type="primary" @click="saveCase" :loading="saving">
             <el-icon><Check /></el-icon>
-            保存
+            保存用例
           </el-button>
           <el-button @click="goBack">
             <el-icon><Close /></el-icon>
@@ -196,8 +258,8 @@
 </template>
 
 <script setup>
-import { reactive, ref, onMounted, computed, provide, watch, nextTick } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { reactive, ref, onMounted, computed, provide, watch, nextTick, onBeforeUnmount } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { StepEditor, KeywordSidebar } from '@/components/StepEditor'
 import UiCaseGenerator from '@/views/AI/components/UiCaseGenerator.vue'
 import UiCaseRecorder from '@/views/AI/components/UiCaseRecorder.vue'
@@ -206,6 +268,7 @@ import CaseDebugDialog from '@/components/CaseDebugDialog.vue'
 import UiInteractiveDebugPanel from '@/components/UiInteractiveDebugPanel.vue'
 import CaseUsedVarsPanel from '@/components/CaseUsedVarsPanel.vue'
 import CaseExecutionFailureAi from '@/components/CaseExecutionFailureAi.vue'
+import UiCaseAuthoringTips from '@/components/UiCaseAuthoringTips.vue'
 import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
 import { UserStore } from '@/stores/module/UserStore'
 import { ProjectStore } from '@/stores/module/ProjectStore'
@@ -217,7 +280,8 @@ import { ElNotification, ElMessage, ElMessageBox } from 'element-plus'
 import dateTools from '@/tools/dateTools'
 import ActionGroup from '@/datas/ActionGroup.js'
 import { applyPickLocatorToSteps } from '@/utils/debugLocator.js'
-import { parseExecutionIdQuery } from '@/utils/caseExecutionHints'
+import { parseExecutionIdQuery, hasExecutionHintsPayload } from '@/utils/caseExecutionHints'
+import { formatFailureCode, failureCodeTagType } from '@/utils/uiFailureCode'
 import { formatDebugStepRange } from '@/utils/debugSession.js'
 import { insertStepIntoList, resolveInsertAfterIndex } from '@/utils/stepHelper'
 import {
@@ -308,6 +372,11 @@ const executionHints = ref(null)
 const hintsExpanded = ref([])
 const hasFailureAnalysis = ref(false)
 
+const visibleRecoveries = computed(() =>
+  (executionHints.value?.step_recoveries || []).filter((item) => item && !item.unresolved),
+)
+const recoveryCount = computed(() => visibleRecoveries.value.length)
+
 // 默认展开所有分组
 const activeGroups = ref(['1', '2', '2b', '3', '4', '5', '6', '7', '8'])
 
@@ -359,12 +428,58 @@ const keywordGroups = computed(() => {
 const formRules = {
   name: [
     { required: true, message: '请输入用例名称', trigger: 'blur' },
-    { min: 2, max: 100, message: '长度在 2 到 100 个字符', trigger: 'blur' }
+    { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
   ],
   level: [
     { required: true, message: '请选择用例级别', trigger: 'change' }
   ]
 }
+
+/** 用于判断是否有未落库的编辑（含步骤弹窗「确定」后的内存变更） */
+const savedSnapshot = ref('')
+let bypassLeaveGuard = false
+
+function captureSavedSnapshot() {
+  savedSnapshot.value = JSON.stringify({
+    name: caseInfo.name,
+    level: caseInfo.level,
+    catalog_id: caseInfo.catalog_id,
+    description: caseInfo.description || '',
+    steps: caseInfo.steps || [],
+  })
+}
+
+function isCaseDirty() {
+  if (!savedSnapshot.value) return false
+  const now = JSON.stringify({
+    name: caseInfo.name,
+    level: caseInfo.level,
+    catalog_id: caseInfo.catalog_id,
+    description: caseInfo.description || '',
+    steps: caseInfo.steps || [],
+  })
+  return now !== savedSnapshot.value
+}
+
+function onBeforeUnload(e) {
+  if (!isCaseDirty()) return
+  e.preventDefault()
+  e.returnValue = ''
+}
+
+onBeforeRouteLeave(async () => {
+  if (bypassLeaveGuard || !isCaseDirty()) return true
+  try {
+    await ElMessageBox.confirm(
+      '用例有未保存的修改（步骤弹窗里点「确定」只改当前页，还需点底部「保存用例」才会写入服务器）。确定离开吗？',
+      '未保存提示',
+      { type: 'warning', confirmButtonText: '离开', cancelButtonText: '留下' }
+    )
+    return true
+  } catch {
+    return false
+  }
+})
 
 async function loadExecutionHints() {
   try {
@@ -375,10 +490,13 @@ async function loadExecutionHints() {
     }
     const res = await http.caseApi.getExecutionHints(caseId, params)
     const payload = res.data?.data ?? res.data
-    executionHints.value = payload?.has_failure ? payload : null
+    executionHints.value = hasExecutionHintsPayload(payload) ? payload : null
     hasFailureAnalysis.value = false
     if (executionHints.value) {
-      hintsExpanded.value = ['failure']
+      const expand = []
+      if (executionHints.value.has_failure) expand.push('failure')
+      if (recoveryCount.value > 0) expand.push('recovery')
+      hintsExpanded.value = expand
     }
   } catch {
     executionHints.value = null
@@ -405,6 +523,8 @@ async function getCaseDetail() {
       caseInfo.description = res.data.description || ''
       // 确保 steps 是数组
       caseInfo.steps = Array.isArray(res.data.steps) ? res.data.steps : []
+      await nextTick()
+      captureSavedSnapshot()
     }
   } catch (error) {
     ElNotification.error('获取用例详情失败')
@@ -414,16 +534,31 @@ async function getCaseDetail() {
 // 保存用例
 async function saveCase() {
   const valid = await formRef.value.validate().catch(() => false)
-  if (!valid) return
+  if (!valid) {
+    ElMessage.warning('请先完善用例名称、级别等必填项后再保存')
+    return
+  }
   
   saving.value = true
   try {
-    const res = await http.caseApi.update(caseId, caseInfo)
+    const payload = {
+      name: caseInfo.name,
+      level: caseInfo.level,
+      catalog_id: caseInfo.catalog_id,
+      description: caseInfo.description || '',
+      steps: JSON.parse(JSON.stringify(caseInfo.steps || [])),
+    }
+    const res = await http.caseApi.update(caseId, payload)
     if (res.status === 200 || res.status === 201) {
+      captureSavedSnapshot()
+      bypassLeaveGuard = true
       ElNotification.success('用例保存成功')
       goBack()
     } else {
-      ElNotification.error(res.data?.detail || '保存失败')
+      const detail = res.data?.detail
+      ElNotification.error(
+        typeof detail === 'string' ? detail : (detail?.message || '保存失败')
+      )
     }
   } catch (error) {
     ElNotification.error('保存用例失败')
@@ -757,9 +892,14 @@ function openInteractiveDebug() {
 }
 
 onMounted(async () => {
+  window.addEventListener('beforeunload', onBeforeUnload)
   await getCaseDetail()
   await loadExecutionHints()
   await handleDebugFromStepQuery()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', onBeforeUnload)
 })
 
 watch(
@@ -808,6 +948,23 @@ watch(
 .execution-hints-error {
   font-size: 13px;
   line-height: 1.5;
+}
+
+.execution-hints-failures {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular);
+}
+
+.execution-hints-code {
+  margin: 0 4px;
+  vertical-align: middle;
+}
+
+.execution-hints-fail-msg {
+  color: var(--el-text-color-secondary);
 }
 
 .execution-hints-log {

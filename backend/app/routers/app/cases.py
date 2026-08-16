@@ -8,7 +8,7 @@ from app.core.platform.auth import get_current_username, is_authenticated, requi
 from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog
 from app.core.platform.permissions import APP_CASE_EDIT, APP_CASE_VIEW
 from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
-from app.core.case.case_execution_hints import build_execution_hints_response, resolve_latest_failure_record
+from app.core.case.case_execution_hints import build_execution_hints_response, resolve_latest_execution_record
 from app.modules.app.app_locator_validate import validate_case_steps_driver_mode_for_project
 from app.models.app import AppCase, AppCaseExecution
 from app.models.sys import Project
@@ -93,7 +93,7 @@ async def get_case_execution_hints(
         if not record or record.case_id != case_id:
             raise HTTPException(status_code=422, detail="执行记录不存在")
     else:
-        record = await resolve_latest_failure_record(AppCaseExecution, case_id)
+        record = await resolve_latest_execution_record(AppCaseExecution, case_id)
 
     if not record:
         return build_execution_hints_response(None)

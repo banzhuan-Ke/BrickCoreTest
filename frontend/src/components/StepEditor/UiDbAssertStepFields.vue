@@ -29,10 +29,18 @@
       </el-form-item>
       <el-form-item :label="sqlLabel">
         <div class="sql-editor-wrap">
+          <div class="sql-editor-head">
+            <span class="sql-editor-hint">可放大编辑长 SQL</span>
+            <el-tooltip content="放大编辑" placement="top">
+              <el-button type="primary" link size="small" :icon="FullScreen" @click="sqlExpandVisible = true">
+                放大
+              </el-button>
+            </el-tooltip>
+          </div>
           <MonacoEditor v-model="params.sql" language="sql" height="140px" />
           <div class="sql-toolbar">
             <VarInsertButton :env-id="envId" label="变量" />
-            <ToolInsertButton label="工具" />
+            <ToolInsertButton :env-id="envId" label="工具" />
           </div>
         </div>
         <p class="field-hint">{{ sqlHint }}</p>
@@ -53,11 +61,31 @@
         />
       </el-form-item>
     </el-form>
+
+    <el-dialog
+      v-model="sqlExpandVisible"
+      :title="`编辑 ${sqlLabel}`"
+      width="860px"
+      top="8vh"
+      destroy-on-close
+      append-to-body
+    >
+      <MonacoEditor
+        v-if="sqlExpandVisible"
+        v-model="params.sql"
+        language="sql"
+        height="56vh"
+      />
+      <template #footer>
+        <el-button type="primary" @click="sqlExpandVisible = false">完成</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { FullScreen } from '@element-plus/icons-vue'
 import MonacoEditor from '@/components/MonacoEditor'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
@@ -71,6 +99,7 @@ const props = defineProps({
 
 const datasources = ref([])
 const dsLoading = ref(false)
+const sqlExpandVisible = ref(false)
 
 const operators = [
   { label: '等于', value: 'equals' },
@@ -138,6 +167,16 @@ watch(() => [props.projectId, props.envId], loadDatasources, { immediate: true }
 .sql-editor-wrap {
   width: 100%;
   overflow: hidden;
+}
+.sql-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.sql-editor-hint {
+  font-size: 12px;
+  color: #909399;
 }
 .sql-toolbar {
   display: flex;

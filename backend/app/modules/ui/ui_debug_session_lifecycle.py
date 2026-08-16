@@ -33,6 +33,9 @@ _CLOSE_REASON_MESSAGES: dict[str, str] = {
     "force_closed": "关闭耗时过长，系统已强制结束会话",
     "关闭超时，系统已强制结束会话": "关闭耗时过长，系统已强制结束会话",
     "stop_requested": "收到停止指令，调试会话已结束",
+    "runner_offline": "执行器异常下线，调试会话已自动结束",
+    "执行器异常下线": "执行器异常下线，调试会话已自动结束",
+    "admin_force_stop": "管理员已强制停止执行器，调试会话已结束",
 }
 
 
@@ -168,8 +171,13 @@ async def resend_close_stop(session: UiDebugSession) -> None:
     _send_stop_task(session)
 
 
-async def force_close_session(session: UiDebugSession, reason: str) -> None:
-    if session.status not in ("closed",) and session.device_id:
+async def force_close_session(
+    session: UiDebugSession,
+    reason: str,
+    *,
+    notify_runner: bool = True,
+) -> None:
+    if notify_runner and session.status not in ("closed",) and session.device_id:
         try:
             _send_stop_task(session)
         except Exception as exc:
@@ -184,6 +192,30 @@ async def force_close_session(session: UiDebugSession, reason: str) -> None:
     if reason and not session.error:
         session.error = session.last_result.get("message")
     await session.save()
+
+
+async def close_debug_sessions_for_device(
+    device_id: str,
+    *,
+    reason: str = "runner_offline",
+    notify_runner: bool = False,
+) -> int:
+    """执行器下线时强制结束该设备上的交互调试会话。
+
+    默认不再向 MQ 发 stop：设备已失联时发停止只会拖慢 disconnect / 心跳清理。
+    """
+    device_id = (device_id or "").strip()
+    if not device_id:
+        return 0
+    sessions = await UiDebugSession.filter(
+        device_id=device_id,
+        status__in=list(_ACTIVE_STATUSES),
+    ).all()
+    closed = 0
+    for session in sessions:
+        await force_close_session(session, reason, notify_runner=notify_runner)
+        closed += 1
+    return closed
 
 
 async def cleanup_stale_debug_sessions() -> dict[str, int]:

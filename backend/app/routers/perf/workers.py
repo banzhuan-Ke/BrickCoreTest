@@ -65,13 +65,16 @@ async def _require_worker_project_auth(
             raise HTTPException(status_code=401, detail="Runner token 缺少用户信息")
         from app.models.sys import User
 
-        user = await User.get_or_none(id=user_id, is_del=False)
-        if not user or not user.is_active:
+        user_rows = await User.filter(id=user_id, is_del=False).values(
+            "id", "username", "is_active", "is_superuser"
+        )
+        if not user_rows or not user_rows[0].get("is_active", True):
             raise HTTPException(status_code=403, detail="Runner 关联用户无效或已停用")
+        u = user_rows[0]
         user_info = {
-            "id": user.id,
-            "username": user.username,
-            "is_superuser": bool(user.is_superuser),
+            "id": u["id"],
+            "username": u.get("username") or "",
+            "is_superuser": bool(u.get("is_superuser")),
         }
         await assert_project_access(user_info, project_id, min_role=PROJECT_ROLE_MEMBER)
         return {"runner": True, **user_info, "project_id": project_id}

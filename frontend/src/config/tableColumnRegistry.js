@@ -198,13 +198,14 @@ export const TABLE_COLUMN_REGISTRY = {
 
   'execution.records': {
     pageId: 'execution.records',
-    version: 2,
+    version: 3,
     columns: [
       col('index', '序号', { width: 70, required: true }),
       col('name', '名称', { minWidth: 160, required: true }),
       col('browser_type', '浏览器'),
       col('base_url', 'Base_url', { minWidth: 100 }),
       col('status', '执行状态', { width: 100 }),
+      col('progress', '进度', { minWidth: 140 }),
       col('case_count', '用例总数'),
       col('success', '成功'),
       col('fail', '失败'),
@@ -216,7 +217,7 @@ export const TABLE_COLUMN_REGISTRY = {
       col('run_time', '执行时间', { minWidth: 150 }),
       col('duration', '执行耗时')
     ],
-    defaultVisible: ['index', 'name', 'browser_type', 'base_url', 'status', 'case_count', 'success', 'fail', 'error', 'skip', 'no_run', 'pass_rate', 'username', 'run_time', 'duration']
+    defaultVisible: ['index', 'name', 'browser_type', 'base_url', 'status', 'progress', 'case_count', 'success', 'fail', 'error', 'skip', 'no_run', 'pass_rate', 'username', 'run_time', 'duration']
   },
 
   'perf.scenes': {

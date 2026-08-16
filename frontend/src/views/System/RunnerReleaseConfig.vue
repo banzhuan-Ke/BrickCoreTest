@@ -111,7 +111,11 @@ const loadConfig = async () => {
       Object.assign(form, res.data)
     }
   } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || '获取配置失败')
+    if (e?.code === 'ECONNABORTED' || /timeout/i.test(String(e?.message || ''))) {
+      ElMessage.error('获取发布配置超时（可能数据库繁忙或刚上传大包）。请稍后刷新；可用服务器 ls 确认 zip/patches 是否已在')
+    } else {
+      ElMessage.error(e?.response?.data?.detail || '获取配置失败')
+    }
   }
 }
 

@@ -389,7 +389,14 @@ class ApiRunResult(BaseModel):
     record_id: int
     status: str = Field(..., description="success/failed")
     response_status: Optional[int] = None
-    response_time: Optional[float] = None
+    response_time: Optional[float] = Field(
+        default=None,
+        description="用例执行总耗时(ms)：含重试等待、断言、变量提取、脚本等",
+    )
+    http_response_time: Optional[float] = Field(
+        default=None,
+        description="纯 HTTP 请求耗时(ms)：httpx 发起到收到响应",
+    )
     assertions: List[ApiAssertionResult] = Field(default=[])
     extracted_vars: Dict[str, Any] = Field(default={})
     extractor_results: List[Dict[str, Any]] = Field(default=[], description="变量提取详情")

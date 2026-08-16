@@ -8,6 +8,7 @@ from app.modules.http.api_auth_service import (
     DEFAULT_CUSTOM_CODE,
     auth_config_to_dict,
     get_enabled_auth_config,
+    persist_auth_preview_cache,
     preview_auth_config,
     refresh_auth_config,
 )
@@ -29,6 +30,23 @@ def _normalize_auth_extractors(extractors: list[dict[str, Any]] | None) -> list[
         if ext.get("name"):
             result.append(ext)
     return result
+
+
+def _release_auth_config_name(cfg: ApiAuthConfig) -> None:
+    """软删时改名，释放 (project_id, environment_id, name) 唯一键，便于同名重建。"""
+    suffix = f"__del_{cfg.id}"
+    base = (cfg.name or "auth")[: max(1, 100 - len(suffix))]
+    cfg.name = f"{base}{suffix}"
+
+
+async def _purge_soft_deleted_auth_name(project_id: int, environment_id: int, name: str) -> None:
+    """清掉同名软删残留（兼容历史未改名数据）。"""
+    await ApiAuthConfig.filter(
+        project_id=project_id,
+        environment_id=environment_id,
+        name=name,
+        is_del=True,
+    ).delete()
 
 
 class AuthConfigCreate(BaseModel):
@@ -58,13 +76,14 @@ class AuthConfigUpdate(BaseModel):
 
 
 class AuthConfigTestRequest(BaseModel):
-    """调试授权（不保存缓存）"""
+    """调试授权；传入 config_id 时会把调试结果写入该配置缓存"""
     project_id: int
     environment_id: int
     auth_type: str = Field(default="api_login", description="api_login | custom_code")
     login_api_id: Optional[int] = None
     extractors: list[dict[str, Any]] = Field(default_factory=list)
     custom_code: Optional[str] = None
+    config_id: Optional[int] = Field(None, description="已有配置 ID；调试成功后写入缓存")
 
 
 async def _enrich_dict(cfg: ApiAuthConfig) -> dict[str, Any]:
@@ -117,6 +136,8 @@ async def create_auth_config(
     if exists:
         raise HTTPException(status_code=400, detail="同环境下授权名称已存在")
 
+    await _purge_soft_deleted_auth_name(body.project_id, body.environment_id, body.name)
+
     cfg = await ApiAuthConfig.create(
         project_id=body.project_id,
         environment_id=body.environment_id,
@@ -140,9 +161,12 @@ async def get_custom_code_template():
     return StandardResponse(data={"code": DEFAULT_CUSTOM_CODE})
 
 
-@router.post("/test-preview", summary="调试授权（不写入缓存）", dependencies=[Depends(require_permissions(API_AUTH_EDIT))])
+@router.post("/test-preview", summary="调试授权（可选写入缓存）", dependencies=[Depends(require_permissions(API_AUTH_EDIT))])
 async def test_auth_preview(body: AuthConfigTestRequest):
-    """按当前表单配置试跑登录/自定义代码，返回将注入的变量"""
+    """按当前表单配置试跑登录/自定义代码，返回将注入的变量。
+
+    若传入 config_id，调试成功后写入该配置缓存，便于立刻执行用例。
+    """
     if body.auth_type not in ("api_login", "custom_code"):
         raise HTTPException(status_code=400, detail="auth_type 仅支持 api_login / custom_code")
     if body.auth_type == "api_login" and not body.login_api_id:
@@ -166,14 +190,36 @@ async def test_auth_preview(body: AuthConfigTestRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    cache_written = False
+    if body.config_id:
+        cfg = await ApiAuthConfig.get_or_none(
+            id=body.config_id, project_id=body.project_id, is_del=False
+        )
+        if not cfg:
+            raise HTTPException(status_code=404, detail="授权配置不存在")
+        if cfg.environment_id != body.environment_id:
+            raise HTTPException(status_code=400, detail="调试环境与配置绑定环境不一致")
+        try:
+            await persist_auth_preview_cache(cfg, variables)
+            cache_written = True
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"写入缓存失败: {e}")
+
+    hint = "执行用例时在 Header/Body 中使用 ${{变量名}}，例如 ${{token}}"
+    if cache_written:
+        hint = "已写入授权缓存。" + hint
+    else:
+        hint = "调试未写入缓存（新建请先保存）。" + hint
+
     return StandardResponse(
         data={
             "variables": variables,
-            "usage_hint": "执行用例时在 Header/Body 中使用 ${{变量名}}，例如 ${{token}}",
+            "usage_hint": hint,
+            "cache_written": cache_written,
         },
         message="调试成功",
     )
-
 
 @router.get("/variables-preview", summary="变量插入预览：Token 授权变量", dependencies=[Depends(require_permissions(API_AUTH_VIEW))])
 async def auth_variables_preview(
@@ -255,9 +301,18 @@ async def update_auth_config(
         ).exclude(id=config_id).exists()
         if dup:
             raise HTTPException(status_code=400, detail="同环境下授权名称已存在")
+        await _purge_soft_deleted_auth_name(project_id, cfg.environment_id, data["name"])
 
+    # 登录/提取规则变更后旧缓存键可能失效（如 token → token1），必须清空
+    invalidate_cache = any(
+        k in data for k in ("extractors", "login_api_id", "auth_type", "custom_code")
+    )
     for k, v in data.items():
         setattr(cfg, k, v)
+    if invalidate_cache:
+        cfg.cache_data = {}
+        cfg.cache_expires_at = None
+        cfg.last_refresh_error = None
     cfg.update_by = username
     await cfg.save()
     return StandardResponse(data=await _enrich_dict(cfg), message="更新成功")
@@ -272,9 +327,10 @@ async def delete_auth_config(
     cfg = await ApiAuthConfig.get_or_none(id=config_id, project_id=project_id, is_del=False)
     if not cfg:
         raise HTTPException(status_code=404, detail="配置不存在")
+    _release_auth_config_name(cfg)
     cfg.is_del = True
     cfg.update_by = username
-    await cfg.save(update_fields=["is_del", "update_by", "update_time"])
+    await cfg.save(update_fields=["name", "is_del", "update_by", "update_time"])
     return StandardResponse(message="删除成功")
 
 

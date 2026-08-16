@@ -22,7 +22,7 @@
           </el-form-item>
           <el-form-item label="并行执行：">
             <el-switch v-model="taskInfo.parallel" active-text="套件按执行器权重分发" inactive-text="串行（单执行器）" />
-            <div class="field-hint">开启后，运行计划时可选择多个执行器并设置权重；套件内用例仍串行。</div>
+            <div class="field-hint">开启后，运行时可多选执行器：权重决定套件分给谁，并发决定本机同时跑几个套件；套件内用例始终串行，不会拆到多机。</div>
           </el-form-item>
         </el-form>
         <div class="title">测试计划中的套件</div>

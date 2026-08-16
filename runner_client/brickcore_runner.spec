@@ -12,11 +12,14 @@ root = client.parent
 _crypto_datas, _crypto_binaries, _crypto_hidden = collect_all("cryptography")
 _crypto_hidden += collect_submodules("cryptography")
 
+_icon = client / "icon.ico"
+_extra_datas = [(str(_icon), ".")] if _icon.is_file() else []
+
 a = Analysis(
     [str(client / "__main__.py")],
     pathex=[str(root)],
     binaries=_crypto_binaries,
-    datas=_crypto_datas,
+    datas=_crypto_datas + _extra_datas,
     hiddenimports=[
         "runner_client",
         "runner_client.main",
@@ -72,6 +75,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(client / "icon.ico"),
 )
 
 coll = COLLECT(

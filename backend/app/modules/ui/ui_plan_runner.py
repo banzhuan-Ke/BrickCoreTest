@@ -101,6 +101,7 @@ async def execute_ui_plan(
     ai_heal_enabled: Optional[bool] = None,
     ai_act_enabled: Optional[bool] = None,
     failure_analysis_on_report: Optional[bool] = None,
+    ui_timeout_scale: Optional[float] = None,
     trigger_source: Optional[str] = None,
     cronjob_id: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -144,6 +145,7 @@ async def execute_ui_plan(
         ai_heal_enabled,
         ai_act_enabled,
         failure_analysis_on_report,
+        ui_timeout_scale,
     )
     env_payload = ExecutionService.with_trigger_source(env_payload, trigger_source)
     if task_.parallel or max_device_concurrency(device_assignments) > 1:

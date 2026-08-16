@@ -11,6 +11,7 @@ from app.modules.ui.ui_case_status import normalize_ui_case_status
 from app.modules.ui.plan_reaggregation import aggregate_plan_from_suites
 from app.modules.ui.ui_execution_status import (
     is_ui_case_terminal,
+    should_apply_case_status_update,
     should_apply_plan_status_update,
     should_apply_suite_status_update,
 )
@@ -56,13 +57,54 @@ async def _save_case_result(case_result: dict[str, Any], case_execution_id: Opti
         logger.error("用例执行记录不存在: %s", case_execution_id)
         return
     new_status = normalize_ui_case_status(case_result.get("status")) or record.status
-    if is_ui_case_terminal(record.status) and new_status != record.status:
-        record.result_data = case_result
-        await record.save()
+    existing = record.result_data if isinstance(record.result_data, dict) else {}
+    # 系统收尾后：offline 拒绝；stale 误杀若迟到结果有实质内容则允许覆盖
+    from app.modules.ui.ui_execution_stale import should_accept_case_result_after_system_close
+
+    if not should_accept_case_result_after_system_close(existing, case_result):
         return
+    was_stale = bool(existing.get("stale_auto_closed"))
+    if is_ui_case_terminal(record.status) and new_status != record.status:
+        if not should_apply_case_status_update(record.status, new_status):
+            # 禁止变差覆盖；仍刷新 result_data 便于排查，但不改 status
+            # 例外：超时误杀后的实质迟到结果允许连同 status 一并纠正
+            if was_stale:
+                record.status = new_status
+            record.result_data = case_result
+            _apply_case_start_time(record, case_result)
+            await record.save()
+            return
     record.status = new_status
     record.result_data = case_result
+    _apply_case_start_time(record, case_result)
     await record.save()
+
+
+def _apply_case_start_time(record: UiCaseExecution, case_result: dict[str, Any]) -> None:
+    """用 Runner 上报的实际开始时间覆盖派发时写入的 auto_now_add。"""
+    raw = case_result.get("start_time")
+    if not raw:
+        return
+    parsed = _parse_runner_datetime(raw)
+    if parsed is not None:
+        record.start_time = parsed
+
+
+def _parse_runner_datetime(raw: Any):
+    """解析 Runner 本地时间字符串。"""
+    from datetime import datetime
+
+    if isinstance(raw, datetime):
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return datetime.strptime(text[:26], fmt)
+        except ValueError:
+            continue
+    return None
 
 
 async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> None:
@@ -98,10 +140,26 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
         status,
         result_cancelled=bool(result.get("cancelled")),
     )
+    # 超时误杀后 Runner 最终回报：允许用真实结果复活套件状态/统计
+    from app.modules.ui.ui_execution_stale import suite_log_has_stale_close
+
+    if (
+        not apply_status
+        and is_final
+        and not result.get("cancelled")
+        and suite_log_has_stale_close(suite_data.execution_log)
+        and status in ("执行完成", "已停止")
+    ):
+        apply_status = True
     if not apply_status:
         if is_final:
-            suite_data.execution_log = result.get("execution_log", suite_data.execution_log or [])
-            await suite_data.save()
+            existing_log = suite_data.execution_log if isinstance(suite_data.execution_log, list) else []
+            if not any(
+                isinstance(item, dict) and item.get("type") == "runner_offline"
+                for item in existing_log
+            ):
+                suite_data.execution_log = result.get("execution_log", existing_log)
+                await suite_data.save()
         for case in result.get("executed_cases", []):
             await _save_case_result(case, case.get("execution_id"))
         for case in result.get("pending_cases", []):
@@ -117,6 +175,9 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
     suite_data.fail = result.get("fail", 0)
     suite_data.error = result.get("error", 0)
     suite_data.skip = result.get("skip", 0)
+    parsed_start = _parse_runner_datetime(result.get("start_time"))
+    if parsed_start is not None:
+        suite_data.start_time = parsed_start
     if is_final:
         suite_data.duration = result.get("duration", 0)
         suite_data.execution_log = result.get("execution_log", [])
@@ -137,7 +198,8 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
                 plan = await UiPlanExecution.get_or_none(id=suite_data.plan_execution_id)
                 if plan:
                     project_id = plan.project_id
-            if project_id:
+            if project_id and not suite_data.plan_execution_id:
+                # 计划内套件失败只发计划级告警，避免每个套件各发一封
                 await NotificationService.send_alert(
                     project_id=project_id,
                     title=f"UI套件执行失败：{suite_name}",
@@ -155,6 +217,7 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
                     },
                     related_id=suite_record_id,
                     related_type="ui_suite_execution",
+                    alert_scope="ui",
                 )
 
     for case in result.get("executed_cases", []):
@@ -250,6 +313,7 @@ async def _reaggregate_plan_execution(task_record_id: int) -> None:
             },
             related_id=task_record_id,
             related_type="ui_plan_execution",
+            alert_scope="ui",
         )
 
     if status == "执行完成" and project_id:
@@ -261,7 +325,10 @@ async def _reaggregate_plan_execution(task_record_id: int) -> None:
         ).first()
         if push_cfg:
             try:
-                await NotificationService.send_ui_report(plan_execution_id=task_record_id)
+                await NotificationService.send_ui_report(
+                    plan_execution_id=task_record_id,
+                    auto_push_only=True,
+                )
             except Exception as exc:
                 logger.error("自动推送 UI 报告失败 plan=%s: %s", task_record_id, exc)
 

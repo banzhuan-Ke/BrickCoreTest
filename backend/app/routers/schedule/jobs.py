@@ -1,4 +1,5 @@
 import datetime
+import logging
 import time
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import APIRouter, HTTPException, Depends, status
@@ -6,8 +7,6 @@ from app.models.schedule import Cronjob
 from app.schemas.schedule import CronjobForm, CronjobUpdateForm, CronjobSchemas
 from app.models.sys import Project
 from app.models.sys import Environment
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.jobstores.redis import RedisJobStore
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -20,7 +19,7 @@ from app.core.platform.permissions import UI_CRON_VIEW, UI_CRON_EDIT
 from tortoise import transactions
 from app.models.ui import UiPlanExecution
 from app.core.infra.scheduler_lock import with_scheduler_lock
-from app.models.sys import Device
+from app.modules.ui.ui_cron_run_config import normalize_run_config
 
 # 创建路由对象
 router = APIRouter(prefix="/jobs", tags=["定时任务"], dependencies=[Depends(is_authenticated), Depends(require_permissions(UI_CRON_VIEW))])
@@ -30,42 +29,208 @@ job_stores = {
     'default': RedisJobStore(host=settings.APSCHEDULER_CONFIG['host'], port=settings.APSCHEDULER_CONFIG['port'],
                              db=settings.APSCHEDULER_CONFIG['db'], password=settings.APSCHEDULER_CONFIG['password'])
 }
-# 任务默认参数
-job_defaults = {'coalesce': False, 'max_instances': 10}
+# 任务默认参数（misfire 与接口/App/压测定时对齐：错过触发点后仍允许约 1 小时内补跑）
+_MISFIRE_GRACE_SECONDS = 3600
+job_defaults = {"coalesce": False, "max_instances": 10, "misfire_grace_time": _MISFIRE_GRACE_SECONDS}
+
 # 时区
 local_timezone = pytz.timezone('Asia/Shanghai')
 # 创建异步调度器
 scheduler = AsyncIOScheduler(jobstores=job_stores, job_defaults=job_defaults, timezone=local_timezone)
+logger = logging.getLogger(__name__)
+
+
+def _to_naive_local(value) -> datetime.datetime:
+    """把表单字符串 / ORM datetime 统一成上海本地 naive。"""
+    if isinstance(value, datetime.datetime):
+        if value.tzinfo is not None:
+            return value.astimezone(local_timezone).replace(tzinfo=None)
+        return value
+    if isinstance(value, str):
+        return datetime.datetime.strptime(value.strip(), "%Y-%m-%d %H:%M:%S")
+    raise ValueError(f"无法解析执行时间: {value!r}")
+
+
+def _build_trigger(run_type: str, interval: int, date_value, crontab: dict | None):
+    if run_type == "date":
+        date_obj = _to_naive_local(date_value)
+        return DateTrigger(run_date=local_timezone.localize(date_obj))
+    if run_type == "crontab":
+        c = crontab or {}
+        return CronTrigger(
+            minute=str(c.get("minute", "*")),
+            hour=str(c.get("hour", "*")),
+            day=str(c.get("day", "*")),
+            month=str(c.get("month", "*")),
+            day_of_week=str(c.get("day_of_week", "*")),
+            timezone=local_timezone,
+        )
+    if run_type == "Interval":
+        return IntervalTrigger(seconds=interval or 60, timezone=local_timezone)
+    raise ValueError(f"不支持的任务类型: {run_type}")
+
+
+def _upsert_scheduler_job(
+    *,
+    cronjob_id: str,
+    name: str,
+    run_type: str,
+    interval: int,
+    date_value,
+    crontab: dict | None,
+    task_id: int,
+    env_id: int,
+    state: bool,
+) -> None:
+    """按 DB 配置强制重挂到 APScheduler（replace），避免 Redis 里旧 job / 过短 misfire 残留。"""
+    trigger = _build_trigger(run_type, interval, date_value, crontab)
+    if run_type == "date":
+        run_at = _to_naive_local(date_value)
+        grace_deadline = datetime.datetime.now() - datetime.timedelta(seconds=_MISFIRE_GRACE_SECONDS)
+        if run_at < grace_deadline:
+            try:
+                if scheduler.get_job(cronjob_id):
+                    scheduler.remove_job(cronjob_id)
+            except Exception:
+                pass
+            logger.warning(
+                "Web 定时任务已超过 misfire 窗口，跳过挂载 cronjob_id=%s run_at=%s",
+                cronjob_id,
+                run_at,
+            )
+            return
+
+    try:
+        if scheduler.get_job(cronjob_id):
+            scheduler.remove_job(cronjob_id)
+    except Exception:
+        pass
+
+    scheduler.add_job(
+        func=run_task,
+        trigger=trigger,
+        id=str(cronjob_id),
+        name=name,
+        kwargs={"task_id": task_id, "env_id": env_id, "cronjob_id": str(cronjob_id)},
+        replace_existing=True,
+        misfire_grace_time=_MISFIRE_GRACE_SECONDS,
+    )
+    if not state:
+        try:
+            scheduler.pause_job(job_id=str(cronjob_id))
+        except Exception:
+            pass
+
+
+async def reconcile_ui_cron_jobs() -> dict:
+    """进程启动后按 DB 校准启用中的 Web 定时任务（修复 Redis 丢失 / 旧 misfire）。"""
+    synced = 0
+    skipped = 0
+    rows = await Cronjob.filter(is_del=False, state=True).all()
+    for job in rows:
+        try:
+            _upsert_scheduler_job(
+                cronjob_id=str(job.id),
+                name=job.name,
+                run_type=job.run_type,
+                interval=job.interval or 60,
+                date_value=job.date,
+                crontab=job.crontab if isinstance(job.crontab, dict) else None,
+                task_id=job.task_id,
+                env_id=job.env_id,
+                state=True,
+            )
+            if scheduler.get_job(str(job.id)):
+                synced += 1
+            else:
+                skipped += 1
+        except Exception as exc:
+            skipped += 1
+            logger.warning("校准 Web 定时任务失败 id=%s: %s", job.id, exc)
+    logger.info("Web 定时任务校准完成 synced=%s skipped=%s", synced, skipped)
+    return {"synced": synced, "skipped": skipped}
 
 
 @with_scheduler_lock(lock_prefix="scheduler:ui", expire_seconds=300)
 async def run_task(task_id, env_id, cronjob_id=None):
-    """提交任务到 RabbitMQ（支持计划级并行：多在线执行器等权分配套件）"""
+    """提交任务到 RabbitMQ（支持计划级并行；可读 Cronjob.run_config）。"""
+    from app.core.ops.notification import NotificationService
+    from app.modules.ui.ui_cron_run_config import normalize_run_config, resolve_cron_dispatch
+    from app.modules.ui.ui_plan_runner import execute_ui_plan
+
+    logger.info("Web 定时任务触发 cronjob_id=%s task_id=%s env_id=%s", cronjob_id, task_id, env_id)
     task = await Task.get_or_none(id=task_id, is_del=False).prefetch_related("suites", "project")
     if not task:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="测试计划不存在或已被删除！")
+        logger.error("定时任务触发失败：计划不存在 task_id=%s", task_id)
+        return {"ok": False, "detail": "测试计划不存在或已被删除"}
 
-    online_devices = await Device.filter(status="在线", is_del=False).all()
-    if not online_devices:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="在线设备不存在！")
+    run_config = None
+    cron_name = getattr(task, "name", "") or str(task_id)
+    if cronjob_id:
+        cron = await Cronjob.get_or_none(id=str(cronjob_id), is_del=False)
+        if cron:
+            run_config = cron.run_config
+            cron_name = cron.name or cron_name
 
-    if task.parallel and len(online_devices) > 1:
-        devices = [{"device_id": d.id, "weight": 1} for d in online_devices]
-        device_id = None
-    else:
-        devices = []
-        device_id = online_devices[0].id
+    device_id, devices, concurrency, browser_type, headless, warning = await resolve_cron_dispatch(
+        parallel=bool(task.parallel),
+        run_config=run_config,
+    )
+    if warning:
+        logger.warning("定时任务 %s：%s", cronjob_id or task_id, warning)
 
-    from app.modules.ui.ui_plan_runner import execute_ui_plan
+    if not device_id and not devices:
+        detail = "无在线 Web 执行器，定时任务未派发"
+        logger.error("%s cronjob_id=%s task_id=%s", detail, cronjob_id, task_id)
+        plan_record = await UiPlanExecution.create(
+            task=task,
+            username=task.username or "cron",
+            env={
+                "trigger_source": "cron",
+                "cron_skip_reason": detail,
+                "run_config": normalize_run_config(run_config),
+            },
+            device_id=None,
+            project=task.project,
+            is_del=False,
+            status="执行完成",
+            execution_log=[{"level": "error", "message": detail}],
+            error=1,
+            cronjob_id=str(cronjob_id) if cronjob_id else None,
+        )
+        try:
+            await NotificationService.send_alert(
+                task.project_id,
+                title=f"定时任务未执行：{cron_name}",
+                content={
+                    "execution_type": "UI计划(定时)",
+                    "name": cron_name,
+                    "status": "failed",
+                    "total": 0,
+                    "success": 0,
+                    "failed": 1,
+                    "pass_rate": 0,
+                    "duration": 0,
+                    "run_by": task.username or "cron",
+                    "message": detail,
+                },
+                related_id=plan_record.id,
+                related_type="ui_plan_execution",
+                alert_scope="ui",
+            )
+        except Exception as exc:
+            logger.warning("定时无执行器告警发送失败: %s", exc)
+        return {"ok": False, "detail": detail, "plan_execution_id": plan_record.id}
 
     return await execute_ui_plan(
         task,
         env_id=env_id,
-        browser_type="chromium",
-        headless=True,
+        browser_type=browser_type,
+        headless=headless,
         username=task.username,
         device_id=device_id,
         devices=devices,
+        concurrency=concurrency,
         ai_heal_enabled=None,
         trigger_source="cron",
         cronjob_id=cronjob_id,
@@ -108,17 +273,10 @@ async def create_cronjob(item: CronjobForm):
     # 创建事务
     async with transactions.in_transaction('default') as cronjob_transaction:
         try:
-            # 创建触发器
-            if item.run_type == "date":
-                trigger = DateTrigger(run_date=date_obj, timezone=local_timezone)
-            elif item.run_type == "crontab":
-                trigger = CronTrigger(**item.crontab.model_dump(), timezone=local_timezone)
-            elif item.run_type == "Interval":
-                trigger = IntervalTrigger(seconds=item.interval, timezone=local_timezone)
-            else:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="定时任务类型参数错误")
-
             # 创建定时任务记录（显式设置is_del=False，使用本地时间）
+            run_cfg = None
+            if item.run_config is not None:
+                run_cfg = normalize_run_config(item.run_config.model_dump())
             cronjob = await Cronjob.create(
                 id=cronjob_id,
                 name=item.name,
@@ -130,33 +288,31 @@ async def create_cronjob(item: CronjobForm):
                 interval=item.interval,
                 date=date_obj.strftime("%Y-%m-%d %H:%M:%S"),
                 crontab=item.crontab.model_dump(),
+                run_config=run_cfg or None,
                 state=item.state,
                 is_del=False  # 新增：默认未删除
             )
-            # 添加任务到调度器
-            scheduler.add_job(
-                func=run_task,
-                trigger=trigger,
-                id=cronjob_id,
+            _upsert_scheduler_job(
+                cronjob_id=cronjob_id,
                 name=item.name,
-                kwargs={'task_id': item.task, 'env_id': item.env, 'cronjob_id': cronjob_id}
+                run_type=item.run_type,
+                interval=item.interval,
+                date_value=date_obj,
+                crontab=item.crontab.model_dump() if item.crontab else None,
+                task_id=item.task,
+                env_id=item.env,
+                state=bool(item.state),
             )
         except Exception as e:
             # 失败回滚
-            scheduler.remove_job(job_id=cronjob_id)
+            try:
+                scheduler.remove_job(job_id=cronjob_id)
+            except Exception:
+                pass
             await cronjob_transaction.rollback()
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail=f"定时任务调度器创建失败：{str(e)}")
         else:
-            # 处理任务状态（启用/暂停）
-            try:
-                if cronjob.state:
-                    scheduler.resume_job(job_id=cronjob_id)
-                else:
-                    scheduler.pause_job(job_id=cronjob_id)
-                await cronjob.save()
-            except Exception as e:
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="修改任务状态失败")
             await cronjob_transaction.commit()
             return cronjob
 
@@ -197,6 +353,7 @@ async def get_cronjob(project_id: int | None = None, name: str | None = None,
             "crontab": cronjob.crontab,
             "state": cronjob.state,
             "is_del": cronjob.is_del,  # 新增：返回删除状态
+            "run_config": cronjob.run_config,
             "task": task.id if task else None,
             "env": env.id if env else None,
             "env_name": env.name if env else "已删除环境",
@@ -241,13 +398,55 @@ async def switch_cronjob(cronjob_id: str):
             # 切换状态（启用↔暂停）
             cronjob.state = not cronjob.state
             if cronjob.state:
-                scheduler.resume_job(job_id=cronjob_id)
+                # 启用：强制按 DB 重挂（date 任务 misfire 后 Redis 里可能已无 job，resume 会失败）
+                _upsert_scheduler_job(
+                    cronjob_id=str(cronjob.id),
+                    name=cronjob.name,
+                    run_type=cronjob.run_type,
+                    interval=cronjob.interval or 60,
+                    date_value=cronjob.date,
+                    crontab=cronjob.crontab if isinstance(cronjob.crontab, dict) else None,
+                    task_id=cronjob.task_id,
+                    env_id=cronjob.env_id,
+                    state=True,
+                )
+                if cronjob.run_type == "date":
+                    run_at = _to_naive_local(cronjob.date)
+                    if run_at < datetime.datetime.now() - datetime.timedelta(seconds=_MISFIRE_GRACE_SECONDS):
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="固定执行时间已过期，请先编辑为未来时间再启用",
+                        )
+                    if not scheduler.get_job(str(cronjob.id)):
+                        raise HTTPException(
+                            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="固定执行时间已过期，请先编辑为未来时间再启用",
+                        )
             else:
-                scheduler.pause_job(job_id=cronjob_id)
+                try:
+                    scheduler.pause_job(job_id=cronjob_id)
+                except Exception:
+                    try:
+                        scheduler.remove_job(job_id=cronjob_id)
+                    except Exception:
+                        pass
             await cronjob.save()
+        except HTTPException:
+            await tx.rollback()
+            raise
         except Exception as e:
             await tx.rollback()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"修改状态失败：{str(e)}")
+            # 调度器缺 job / Redis 抖动：勿把开关打成 500，引导用户改时间或重试
+            detail = str(e)
+            if "No job by the id" in detail or "JobLookupError" in type(e).__name__:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="调度任务已失效，请编辑为未来时间后重新保存再启用",
+                ) from e
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"修改状态失败：{detail}",
+            ) from e
         await tx.commit()
         return cronjob
 
@@ -348,53 +547,32 @@ async def update_cronjob(cronjob_id: str, item: CronjobUpdateForm):
 
     async with transactions.in_transaction('default') as tx:
         try:
-            # 构建新触发器
-            if item.run_type:
-                run_type = item.run_type
+            run_type = item.run_type or cronjob.run_type
+            date_value = item.date if item.date else cronjob.date
+            if item.crontab is not None:
+                crontab_value = item.crontab.model_dump()
+            elif isinstance(cronjob.crontab, dict):
+                crontab_value = cronjob.crontab
             else:
-                run_type = cronjob.run_type
+                crontab_value = None
+            interval_value = item.interval if item.interval is not None else (cronjob.interval or 60)
+            next_state = bool(item.state) if item.state is not None else bool(cronjob.state)
 
-            if run_type == "date":
-                date = item.date or cronjob.date
-                date_obj = datetime.datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
-                trigger = DateTrigger(run_date=date_obj, timezone=local_timezone)
-            elif run_type == "crontab":
-                crontab = item.crontab.model_dump() if item.crontab else cronjob.crontab
-                trigger = CronTrigger(**crontab, timezone=local_timezone)
-            elif run_type == "Interval":
-                interval = item.interval or cronjob.interval
-                trigger = IntervalTrigger(seconds=interval, timezone=local_timezone)
-            else:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="任务类型错误")
-
-            # 更新调度器任务（如果不存在则重新添加）
-            try:
-                scheduler.modify_job(job_id=cronjob_id, trigger=trigger)
-            except:
-                # 调度器中不存在该任务，重新添加
-                scheduler.add_job(
-                    func=run_task,
-                    trigger=trigger,
-                    id=cronjob_id,
-                    name=cronjob.name,
-                    kwargs={'task_id': cronjob.task_id, 'env_id': cronjob.env_id, 'cronjob_id': cronjob_id}
-                )
-                # 根据状态启用或暂停
-                if cronjob.state:
-                    scheduler.resume_job(job_id=cronjob_id)
-                else:
-                    scheduler.pause_job(job_id=cronjob_id)
-            
             # 更新数据库记录（使用本地时间，不转换UTC）
             if item.date:
-                item.date = date_obj.strftime("%Y-%m-%d %H:%M:%S")
-            
-            # 排除外键字段，手动处理，避免 update_from_dict 直接赋 int 给 ForeignKey
+                item.date = _to_naive_local(item.date).strftime("%Y-%m-%d %H:%M:%S")
+
+            # 排除外键字段与嵌套模型，手动处理
             update_data = item.model_dump(exclude_unset=True)
             for fk_field in ['project', 'env', 'task']:
                 update_data.pop(fk_field, None)
+            if "run_config" in update_data:
+                raw_cfg = update_data.pop("run_config")
+                cronjob.run_config = (
+                    normalize_run_config(raw_cfg) if raw_cfg is not None else None
+                )
             await cronjob.update_from_dict(update_data)
-            
+
             # 手动设置外键关联
             if item.project is not None:
                 cronjob.project_id = item.project
@@ -402,8 +580,21 @@ async def update_cronjob(cronjob_id: str, item: CronjobUpdateForm):
                 cronjob.env_id = item.env
             if item.task is not None:
                 cronjob.task_id = item.task
-            
+
             await cronjob.save()
+
+            # 按最新 DB 强制重挂调度（对齐接口定时：remove + add）
+            _upsert_scheduler_job(
+                cronjob_id=str(cronjob_id),
+                name=cronjob.name,
+                run_type=run_type,
+                interval=interval_value,
+                date_value=date_value,
+                crontab=crontab_value,
+                task_id=cronjob.task_id,
+                env_id=cronjob.env_id,
+                state=next_state,
+            )
         except Exception as e:
             await tx.rollback()
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"修改任务失败：{str(e)}")

@@ -109,14 +109,20 @@ class MQProducer:
         *,
         var_name=None,
         source="text",
+        frame_url=None,
+        frame_name=None,
+        slot_id=None,
     ):
-        """发送录制控制消息（暂停/恢复/存变量）"""
+        """发送录制控制消息（暂停/恢复/存变量/重试注入）"""
         data = {
             "action": "record_control",
             "record_session_id": record_session_id,
             "command": command,
             "var_name": var_name,
             "source": source,
+            "frame_url": frame_url or "",
+            "frame_name": frame_name or "",
+            "slot_id": slot_id or "",
         }
         msg = json.dumps(data, ensure_ascii=False).encode('utf-8')
         if self.connection is None or self.channel is None or self.connection.is_closed or self.channel.is_closed:

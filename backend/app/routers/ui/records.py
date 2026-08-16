@@ -3,7 +3,7 @@ import os
 import time
 import uuid
 import asyncio
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, status, Response
 from pydantic import BaseModel, Field
 from app.models.ui import (
@@ -15,6 +15,8 @@ from app.core.platform.permissions import UI_RECORD_EDIT, UI_RECORD_VIEW
 from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.core.platform.platform_settings_service import (
     delete_ui_case_execution,
+    delete_ui_plan_execution,
+    delete_ui_suite_execution,
     get_ui_case_record_delete_mode,
     restore_ui_case_execution,
 )
@@ -81,6 +83,7 @@ async def get_task_record(project_id: int, task_id: int = None, page: int = 1, s
     query = query.order_by("-id")
     total = await query.count()
     data = await query.offset((page - 1) * size).limit(size).prefetch_related('task')
+    delete_mode = await get_ui_case_record_delete_mode()
     result = []
     for i in data:
         result.append({
@@ -99,14 +102,46 @@ async def get_task_record(project_id: int, task_id: int = None, page: int = 1, s
             "case_count": i.case_count,
             "no_run": i.no_run,
             "env": i.env,
+            "device_id": i.device_id,
             "pass_rate": i.pass_rate,
             "execution_log": i.execution_log,
             "is_del": i.is_del
         })
-    return {"total": total, "data": result}
+    return {"total": total, "data": result, "delete_mode": delete_mode}
 
 
-# 未知
+class RecordIdsForm(BaseModel):
+    record_ids: List[int] = Field(..., min_length=1, description="记录 ID 列表")
+    permanent: bool = Field(default=False, description="是否永久删除（预留；套件/计划暂无回收站）")
+
+
+@router.post(
+    "/tasks/batch-delete",
+    summary="批量删除计划运行记录",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permissions(UI_RECORD_EDIT))],
+)
+async def batch_delete_task_records(
+    body: RecordIdsForm,
+    user_info: dict = Depends(require_permissions(UI_RECORD_EDIT)),
+):
+    """批量删除计划运行记录（遵循平台删除策略，级联套件/用例）"""
+    deleted = 0
+    for record_id in body.record_ids:
+        if body.permanent:
+            record = await UiPlanExecution.get_or_none(id=record_id, is_del=True)
+        else:
+            record = await UiPlanExecution.get_or_none(id=record_id, is_del=False)
+        if not record:
+            continue
+        await assert_user_project_member(user_info, record.project_id)
+        await delete_ui_plan_execution(record, permanent=body.permanent)
+        deleted += 1
+    if deleted == 0:
+        raise HTTPException(status_code=400, detail="未找到可删除的记录")
+    return {"deleted": deleted}
+
+
 @router.delete(
     '/tasks/{record_id}',
     summary='删除任务运行记录',
@@ -115,16 +150,18 @@ async def get_task_record(project_id: int, task_id: int = None, page: int = 1, s
 )
 async def delete_task_record(
     record_id: int,
+    permanent: bool = False,
     user_info: dict = Depends(require_permissions(UI_RECORD_EDIT)),
 ):
-    """删除任务运行记录"""
-    record = await UiPlanExecution.get_or_none(id=record_id, is_del=False)
+    """删除任务运行记录（遵循平台删除策略，级联套件/用例）"""
+    if permanent:
+        record = await UiPlanExecution.get_or_none(id=record_id, is_del=True)
+    else:
+        record = await UiPlanExecution.get_or_none(id=record_id, is_del=False)
     if not record:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="任务运行记录不存在或已被删除")
     await assert_user_project_member(user_info, record.project_id)
-    # 逻辑删除
-    record.is_del = True
-    await record.save()
+    await delete_ui_plan_execution(record, permanent=permanent)
 
 
 # 获取单个测试计划执行结果详情
@@ -185,6 +222,7 @@ async def get_suite_record(
         query = query.order_by("-id")
     total = await query.count()
     data = await query.offset((page - 1) * size).limit(size).prefetch_related('suite')
+    delete_mode = await get_ui_case_record_delete_mode()
     result = []
     for i in data:
         result.append({
@@ -207,10 +245,36 @@ async def get_suite_record(
             "execution_log": i.execution_log,
             "is_del": i.is_del
         })
-    return {"total": total, "data": result}
+    return {"total": total, "data": result, "delete_mode": delete_mode}
 
 
-# 未知
+@router.post(
+    "/suites/batch-delete",
+    summary="批量删除套件运行记录",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permissions(UI_RECORD_EDIT))],
+)
+async def batch_delete_suite_records(
+    body: RecordIdsForm,
+    user_info: dict = Depends(require_permissions(UI_RECORD_EDIT)),
+):
+    """批量删除套件运行记录（遵循平台删除策略，级联用例）"""
+    deleted = 0
+    for record_id in body.record_ids:
+        if body.permanent:
+            record = await UiSuiteExecution.get_or_none(id=record_id, is_del=True).prefetch_related("suite")
+        else:
+            record = await UiSuiteExecution.get_or_none(id=record_id, is_del=False).prefetch_related("suite")
+        if not record:
+            continue
+        await assert_user_project_member(user_info, record.suite.project_id)
+        await delete_ui_suite_execution(record, permanent=body.permanent)
+        deleted += 1
+    if deleted == 0:
+        raise HTTPException(status_code=400, detail="未找到可删除的记录")
+    return {"deleted": deleted}
+
+
 @router.delete(
     '/suites/{record_id}',
     summary='删除套件运行记录',
@@ -219,16 +283,18 @@ async def get_suite_record(
 )
 async def delete_suite_record(
     record_id: int,
+    permanent: bool = False,
     user_info: dict = Depends(require_permissions(UI_RECORD_EDIT)),
 ):
-    """删除套件运行记录"""
-    record = await UiSuiteExecution.get_or_none(id=record_id, is_del=False).prefetch_related("suite")
+    """删除套件运行记录（遵循平台删除策略，级联用例）"""
+    if permanent:
+        record = await UiSuiteExecution.get_or_none(id=record_id, is_del=True).prefetch_related("suite")
+    else:
+        record = await UiSuiteExecution.get_or_none(id=record_id, is_del=False).prefetch_related("suite")
     if not record:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="套件运行记录不存在或已被删除")
     await assert_user_project_member(user_info, record.suite.project_id)
-    # 逻辑删除
-    record.is_del = True
-    await record.save()
+    await delete_ui_suite_execution(record, permanent=permanent)
 
 
 # 获取单个测试套件执行结果详情
@@ -618,3 +684,44 @@ async def export_report_status(task_id: str):
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="导出任务不存在")
     return task
+
+
+# ==================== 邮件推送报告 ====================
+
+class SendUiReportBody(BaseModel):
+    config_ids: Optional[list[int]] = None
+    recipients: Optional[list[str]] = None
+
+
+@router.post(
+    "/tasks/{record_id}/send-report",
+    summary="手动推送 UI 计划执行报告",
+    status_code=status.HTTP_200_OK,
+)
+async def send_task_report(
+    record_id: int,
+    payload: Optional[SendUiReportBody] = None,
+    user_info: dict = Depends(require_permissions(UI_RECORD_VIEW)),
+):
+    """按勾选的通知渠道发送报告；邮件附 HTML，IM 仅摘要。"""
+    from app.core.ops.notification import NotificationService
+    from app.modules.ui.ui_execution_stop import STOPPABLE_PLAN_STATUSES
+
+    body = payload or SendUiReportBody()
+    record = await UiPlanExecution.get_or_none(id=record_id, is_del=False)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="计划执行记录不存在")
+    await assert_user_project_viewer(user_info, record.project_id)
+    if record.status in STOPPABLE_PLAN_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="执行尚未结束，请稍后再推送报告")
+    try:
+        result = await NotificationService.send_ui_report(
+            plan_execution_id=record_id,
+            recipients=body.recipients,
+            config_ids=body.config_ids,
+        )
+        return {"detail": NotificationService.format_dispatch_detail(result)}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"发送失败: {e}")

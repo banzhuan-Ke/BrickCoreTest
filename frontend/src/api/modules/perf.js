@@ -188,9 +188,9 @@ export const perfRecordApi = {
             timeout: 180000,
         })
     },
-    // 发送性能测试报告邮件
-    async sendReport(record_id) {
-        return await http.post(`/perf/records/${record_id}/send-report`, {}, { timeout: 120000 })
+    // 发送性能测试报告
+    async sendReport(record_id, data = {}) {
+        return await http.post(`/perf/records/${record_id}/send-report`, data, { timeout: 120000 })
     },
     // 报告对比
     async compare(record_ids) {
