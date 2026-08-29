@@ -90,6 +90,18 @@ async def stop_plan_execution(record_id: int) -> dict:
         status__in=list(STOPPABLE_SUITE_STATUSES),
     ).update(status="已停止")
 
+    stopped_suite_ids = await AppSuiteExecution.filter(
+        plan_execution_id=record_id,
+        is_del=False,
+        status="已停止",
+    ).values_list("id", flat=True)
+    if stopped_suite_ids:
+        await AppCaseExecution.filter(
+            suite_execution_id__in=list(stopped_suite_ids),
+            is_del=False,
+            status__in=list(STOPPABLE_CASE_STATUSES),
+        ).update(status="no_run")
+
     sent = _send_stop_to_devices(device_ids, plan_execution_id=record_id)
     await _release_plan_exec_locks(record_id)
     detail = "停止成功，已通知执行器中断" if sent else "停止成功，但未找到可通知的执行设备"
@@ -118,7 +130,7 @@ async def stop_suite_execution(record_id: int) -> dict:
         suite_execution_id=record_id,
         is_del=False,
         status__in=list(STOPPABLE_CASE_STATUSES),
-    ).update(status="error")
+    ).update(status="no_run")
 
     sent = _send_stop_to_devices(
         device_ids,
@@ -142,7 +154,7 @@ async def stop_case_execution(record_id: int) -> dict:
     if env.get("device_id"):
         device_ids.add(str(env["device_id"]))
 
-    record.status = "error"
+    record.status = "no_run"
     await record.save()
 
     sent = _send_stop_to_devices(

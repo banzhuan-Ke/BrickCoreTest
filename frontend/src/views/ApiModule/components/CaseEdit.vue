@@ -10,6 +10,12 @@
     <template #header>
       <div class="dialog-header">
         <span>{{ isEdit ? '编辑测试用例' : '新建测试用例' }}</span>
+        <LinkFunctionalCaseButton
+          v-if="isEdit && props.data?.id"
+          asset-type="api_case"
+          :asset-id="props.data.id"
+          size="small"
+        />
         <el-tooltip placement="bottom" :show-after="300" :hide-after="0">
           <template #content>
             <div class="help-content">
@@ -22,7 +28,7 @@
               <p class="help-item">• form-data 文件字段：本地选文件后会自动上传到 MinIO，仅保存引用信息</p>
               <p class="help-section"><b>2. 断言规则</b> - 验证接口返回结果</p>
               <p class="help-item">• 状态：检查 HTTP 状态码</p>
-              <p class="help-item">• 响应体：JSON 路径 / 全文包含 / 全文不包含</p>
+              <p class="help-item">• 响应体：JSON 路径 / 全文包含 / 全文不包含（JSON 路径可点右侧图标对照示例取值）</p>
               <p class="help-item">• 响应头：按 Header 名称取值后再比较</p>
               <p class="help-section"><b>3. 变量提取</b> - 从响应体或响应头提取数据</p>
               <p class="help-item">• 将登录接口返回的 token 提取出来</p>
@@ -389,9 +395,13 @@
         </template>
       </div>
       <p v-if="assertionMode === 'flat'" class="section-hint">
-        断言针对<strong>响应</strong>：可选状态码、响应体或响应头；选响应头时「目标」填 Header 名（如 Content-Type）。
+        断言针对<strong>响应</strong>：可选状态码、响应体或响应头；选响应头时「目标」填 Header 名（如 Content-Type）。JSON 路径可点输入框右侧图标对照示例取值。
       </p>
-      <AssertionGroupsEditor v-if="assertionMode === 'conditional'" v-model="form.assertion_groups" />
+      <AssertionGroupsEditor
+        v-if="assertionMode === 'conditional'"
+        v-model="form.assertion_groups"
+        :sample-json="jsonPathSample"
+      />
       <el-table v-else :data="form.assertions" size="small" border class="config-table">
         <el-table-column label="断言方式" min-width="168">
           <template #default="{ $index }">
@@ -403,10 +413,17 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="目标" min-width="150">
+        <el-table-column label="目标" min-width="200">
           <template #default="{ $index }">
+            <JsonPathField
+              v-if="isJsonPathAssertionType(form.assertions[$index].type)"
+              v-model="form.assertions[$index].target"
+              size="small"
+              :sample-json="jsonPathSample"
+              :placeholder="assertionTargetPlaceholder(form.assertions[$index].type, { includeWs: isWsApi })"
+            />
             <el-input
-              v-if="assertionNeedsTarget(form.assertions[$index].type, { includeWs: isWsApi })"
+              v-else-if="assertionNeedsTarget(form.assertions[$index].type, { includeWs: isWsApi })"
               v-model="form.assertions[$index].target"
               size="small"
               :placeholder="assertionTargetPlaceholder(form.assertions[$index].type, { includeWs: isWsApi })"
@@ -475,7 +492,7 @@
         <el-button type="primary" link size="small" @click="addExtractor" icon="Plus">添加</el-button>
       </div>
       <p class="section-hint">
-        从<strong>响应体</strong>或<strong>响应头</strong>提取；Cookie 一般在登录响应的 <code>Set-Cookie</code> 响应头。
+        从<strong>响应体</strong>或<strong>响应头</strong>提取；Cookie 一般在登录响应的 <code>Set-Cookie</code> 响应头。JSON 路径可点右侧图标打开提取工具。
       </p>
       <el-table :data="form.extractors" size="small" border class="config-table">
         <el-table-column label="变量名" width="140">
@@ -483,14 +500,22 @@
             <el-input v-model="form.extractors[$index].name" size="small" placeholder="token"/>
           </template>
         </el-table-column>
-        <el-table-column label="提取来源" width="150">
+        <el-table-column label="提取来源" width="180">
           <template #default="{ $index }">
             <HttpExtractorSourceSelect v-model="form.extractors[$index].source" size="small" />
           </template>
         </el-table-column>
-        <el-table-column label="提取表达式" min-width="200">
+        <el-table-column label="提取表达式" min-width="220">
           <template #default="{ $index }">
+            <JsonPathField
+              v-if="isJsonPathExtractorSource(form.extractors[$index].source)"
+              v-model="form.extractors[$index].path"
+              size="small"
+              :sample-json="jsonPathSample"
+              :placeholder="extractorPathPlaceholder(form.extractors[$index].source)"
+            />
             <el-input
+              v-else
               v-model="form.extractors[$index].path"
               size="small"
               :placeholder="extractorPathPlaceholder(form.extractors[$index].source)"
@@ -705,7 +730,7 @@
     <div class="gen-dialog-content">
       <el-alert type="info" :closable="false" show-icon class="gen-hint">
         <template #title>
-          <span>粘贴 JSON 响应示例，系统会根据字段类型和值智能推荐断言（如 status/code 等于期望值、字符串精确匹配等）。支持从接口定义的 response_schema 预填充。</span>
+          <span>粘贴 JSON 响应示例，系统会根据字段类型和值智能推荐断言。打开时优先预填接口「响应示例」；若未维护示例则留空，请自行粘贴。</span>
         </template>
       </el-alert>
 
@@ -781,6 +806,7 @@ import DbAssertionTestResult from './DbAssertionTestResult.vue'
 import AssertionGroupsEditor from './AssertionGroupsEditor.vue'
 import HttpExtractorSourceSelect from './HttpExtractorSourceSelect.vue'
 import HttpAssertionTypeSelect from './HttpAssertionTypeSelect.vue'
+import JsonPathField from '@/components/JsonPathField.vue'
 import JsonTextarea from '@/components/JsonTextarea.vue'
 import HeaderEditorPanel from '@/components/HeaderEditorPanel.vue'
 import DataFactoryTagPicker from './DataFactoryTagPicker.vue'
@@ -793,7 +819,11 @@ import {
   assertionTargetPlaceholder,
   assertionTypeLabel,
   extractorPathPlaceholder,
+  isJsonPathAssertionType,
+  isJsonPathExtractorSource,
 } from '../utils/httpExtractAssertUi.js'
+import { sampleJsonTextFromApi } from '@/utils/jsonPath.js'
+import LinkFunctionalCaseButton from '@/views/TestManagement/components/LinkFunctionalCaseButton.vue'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -911,6 +941,8 @@ const selectedApi = computed(() => {
   return props.apis.find(api => api.id === form.api_id)
 })
 
+const jsonPathSample = computed(() => sampleJsonTextFromApi(selectedApi.value))
+
 
 // 是否显示请求体覆盖区域
 const isWsApi = computed(() => {
@@ -1027,6 +1059,7 @@ const tagSuggestions = [
   { label: '压测', value: 'perf' },
   { label: '业务链路', value: 'journey' },
   { label: '登录', value: 'login' },
+  { label: '已隔离（计划默认跳过）', value: 'quarantine' },
 ]
 
 const rules = {
@@ -1421,16 +1454,10 @@ const openGenDialog = () => {
   genDialog.generatedAssertions = []
   genDialog.checkedItems = []
 
-  const api = selectedApi.value
-  if (api && api.response_schema) {
-    try {
-      const schema = typeof api.response_schema === 'string'
-        ? JSON.parse(api.response_schema)
-        : api.response_schema
-      genDialog.jsonInput = JSON.stringify(schema, null, 2)
-    } catch {
-      // ignore
-    }
+  // 只预填响应示例（example），不要整包 stringify schema（会导致断言生成失败）
+  const sample = sampleJsonTextFromApi(selectedApi.value)
+  if (sample) {
+    genDialog.jsonInput = sample
   }
 }
 
@@ -1764,11 +1791,13 @@ const handleSave = async () => {
 
   :deep(.el-table__cell) {
     padding: 8px 10px;
+    vertical-align: middle;
   }
 
   :deep(.el-table .cell) {
     padding: 0 4px;
     line-height: 1.4;
+    overflow: hidden;
   }
 }
 .operator-fixed {

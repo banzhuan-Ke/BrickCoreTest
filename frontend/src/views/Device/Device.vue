@@ -57,7 +57,7 @@
             <span v-else class="text-muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="工具链" width="140">
+        <el-table-column label="工具链" width="180">
           <template #default="scope">
             <template v-if="toolchainTags(scope.row).length">
               <el-tag
@@ -187,6 +187,10 @@ function engineTypeLabel(type) {
 function toolchainTags(row) {
   const ts = row?.toolchain_status || {}
   const tags = []
+  if (ts.browser_use === 'ok') tags.push({ key: 'browser-use', ok: true })
+  else if (ts.browser_use === 'missing') tags.push({ key: 'browser-use', ok: false })
+  if (ts.web === 'ok') tags.push({ key: 'web', ok: true })
+  else if (ts.web === 'missing') tags.push({ key: 'web', ok: false })
   if (ts.adb === 'ok') tags.push({ key: 'adb', ok: true })
   else if (ts.adb === 'missing') tags.push({ key: 'adb', ok: false })
   if (ts.uiautomator2 === 'ok') tags.push({ key: 'u2', ok: true })

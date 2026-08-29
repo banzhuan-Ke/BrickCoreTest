@@ -493,10 +493,12 @@ storage_key：access_token
       },
       {
         title: '导出登录态 / 清空Cookie',
-        example: `手工或步骤登录成功后：
+        example: `手工或步骤登录成功并进入业务页后：
 导出登录态
 path：D:/auth/demo.json
-（保存 Playwright storage_state；后续加载能力按环境/版本说明使用）
+（须带 .json 文件名；新 Runner 会附带 sessionStorageOrigins）
+再在环境「Web 启动登录态注入」填同一路径。
+会话过期后重新导出，或改用登录步骤片段。
 
 清空Cookie
 （重置浏览器上下文 Cookie，需重新登录或再注入）`,

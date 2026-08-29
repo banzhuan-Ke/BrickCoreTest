@@ -95,16 +95,32 @@ class AppExecutionService:
             raise HTTPException(status_code=422, detail=f"App 套件前置 SQL 失败: {detail}")
 
     @staticmethod
-    async def build_case_item(case_execution: AppCaseExecution, case: AppCase, step_meta: AppSuiteStep | None):
+    async def build_case_item(
+        case_execution: AppCaseExecution,
+        case: AppCase,
+        step_meta: AppSuiteStep | None,
+        *,
+        include_quarantine: bool = False,
+    ):
+        from app.modules.stability.quarantine import resolve_case_skip
+
         steps = await expand_app_steps(case.steps or [], case.project_id)
-        return {
+        skip, skip_reason = resolve_case_skip(
+            membership_skip=bool(step_meta.skip) if step_meta else False,
+            tags=getattr(case, "tags", None),
+            include_quarantine=include_quarantine,
+        )
+        item = {
             "execution_id": case_execution.id,
             "id": case.id,
             "name": case.name,
-            "skip": step_meta.skip if step_meta else False,
+            "skip": skip,
             "driver_mode": case.driver_mode,
             "steps": steps,
         }
+        if skip_reason:
+            item["skip_reason"] = skip_reason
+        return item
 
     @staticmethod
     async def build_suite_payload(
@@ -384,7 +400,12 @@ async def execute_app_suite_internal(
                 is_del=False,
             )
             cases_payload.append(
-                await AppExecutionService.build_case_item(case_exec, case, step)
+                await AppExecutionService.build_case_item(
+                    case_exec,
+                    case,
+                    step,
+                    include_quarantine=bool(getattr(item, "include_quarantine", False)),
+                )
             )
 
         suite_record.case_count = len(cases_payload)

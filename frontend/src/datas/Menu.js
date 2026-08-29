@@ -13,6 +13,18 @@ export const MenuGroups = [
                 path: '/dashboard',
                 icon: 'Odometer',
                 permission: 'project:view'
+            },
+            {
+                name: '通知中心',
+                path: '/notifications',
+                icon: 'Bell',
+                noProjectRequired: true
+            },
+            {
+                name: '执行可信度',
+                path: '/stability',
+                icon: 'TrendCharts',
+                anyPermissions: ['api_case:view', 'ui_case:view', 'app_case:view']
             }
         ]
     },
@@ -290,15 +302,15 @@ export const MenuGroups = [
         ]
     },
     {
-        title: 'AI 测试',
-        icon: 'Cpu',
+        title: '测试管理',
+        icon: 'Flag',
         expanded: false,
         items: [
             {
-                name: 'AI 工作台',
-                path: '/ai-test',
-                icon: 'ChatDotSquare',
-                permission: 'ai_test:view'
+                name: '版本',
+                path: '/test-releases',
+                icon: 'CollectionTag',
+                permission: 'test_release:view'
             },
             {
                 name: '需求测试中心',
@@ -310,6 +322,37 @@ export const MenuGroups = [
                 name: '功能用例库',
                 path: '/ai-functional-cases',
                 icon: 'DocumentChecked',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '追溯矩阵',
+                path: '/test-traceability',
+                icon: 'Connection',
+                permission: 'test_release:view'
+            },
+            {
+                name: '评审模板',
+                path: '/test-review-templates',
+                icon: 'Document',
+                permission: 'test_review:view'
+            },
+            {
+                name: '缺陷台账',
+                path: '/test-defects',
+                icon: 'Warning',
+                permission: 'test_defect:view'
+            },
+        ]
+    },
+    {
+        title: 'AI 测试',
+        icon: 'Cpu',
+        expanded: false,
+        items: [
+            {
+                name: 'AI 工作台',
+                path: '/ai-test',
+                icon: 'ChatDotSquare',
                 permission: 'ai_test:view'
             },
 

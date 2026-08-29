@@ -45,6 +45,13 @@
           <div class="stat-label">跳过</div>
         </div>
       </div>
+      <div v-if="(quarantineSkip || 0) > 0" class="stat-card info">
+        <div class="stat-icon"><el-icon :size="22"><Remove /></el-icon></div>
+        <div class="stat-body">
+          <div class="stat-num">{{ quarantineSkip }}</div>
+          <div class="stat-label">已隔离未跑</div>
+        </div>
+      </div>
       </template>
     </div>
     <el-descriptions v-if="showMeta" :column="3" border size="small" class="meta-descriptions">
@@ -69,6 +76,7 @@ const props = defineProps({
   fail: { type: Number, default: 0 },
   error: { type: Number, default: 0 },
   skip: { type: Number, default: 0 },
+  quarantineSkip: { type: Number, default: 0 },
   caseCount: { type: Number, default: null },
   duration: { type: Number, default: null },
   username: { type: String, default: '' },

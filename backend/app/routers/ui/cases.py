@@ -133,6 +133,10 @@ def _serialize_case_list_item(
         "catalog_id": case.catalog_id,
         "create_time": case.create_time.strftime("%Y-%m-%d %H:%M:%S"),
         "update_time": case.update_time.strftime("%Y-%m-%d %H:%M:%S"),
+        "tags": getattr(case, "tags", None) or [],
+        "quarantine": "quarantine" in {
+            str(t).strip().lower() for t in (getattr(case, "tags", None) or [])
+        },
     }
 
 

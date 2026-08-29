@@ -20,11 +20,19 @@
           @update:model-value="onConditionTypeChange(group.condition)"
         />
         <el-input
-          v-if="assertionNeedsTarget(group.condition.type)"
+          v-if="assertionNeedsTarget(group.condition.type) && !isJsonPathAssertionType(group.condition.type)"
           v-model="group.condition.target"
           size="small"
           :placeholder="assertionTargetPlaceholder(group.condition.type)"
           style="width: 140px"
+        />
+        <JsonPathField
+          v-else-if="isJsonPathAssertionType(group.condition.type)"
+          v-model="group.condition.target"
+          size="small"
+          :sample-json="sampleJson"
+          :placeholder="assertionTargetPlaceholder(group.condition.type)"
+          input-style="width: 220px"
         />
         <el-select
           v-if="!['contains', 'not_contains'].includes(group.condition.type)"
@@ -56,10 +64,17 @@
               />
             </template>
           </el-table-column>
-          <el-table-column label="目标" width="130">
+          <el-table-column label="目标" min-width="180">
             <template #default="{ $index }">
+              <JsonPathField
+                v-if="isJsonPathAssertionType(group.assertions[$index].type)"
+                v-model="group.assertions[$index].target"
+                size="small"
+                :sample-json="sampleJson"
+                :placeholder="assertionTargetPlaceholder(group.assertions[$index].type)"
+              />
               <el-input
-                v-if="assertionNeedsTarget(group.assertions[$index].type)"
+                v-else-if="assertionNeedsTarget(group.assertions[$index].type)"
                 v-model="group.assertions[$index].target"
                 size="small"
                 :placeholder="assertionTargetPlaceholder(group.assertions[$index].type)"
@@ -107,13 +122,16 @@
 
 <script setup>
 import HttpAssertionTypeSelect from './HttpAssertionTypeSelect.vue'
+import JsonPathField from '@/components/JsonPathField.vue'
 import {
   assertionNeedsTarget,
   assertionTargetPlaceholder,
+  isJsonPathAssertionType,
 } from '../utils/httpExtractAssertUi.js'
 
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
+  sampleJson: { type: String, default: '' },
 })
 const emit = defineEmits(['update:modelValue'])
 

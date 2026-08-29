@@ -27,7 +27,7 @@ if not exist "%RUNNER_DIR%\venv\Scripts\python.exe" (
 echo [3/3] Installing runner dependencies...
 "%RUNNER_DIR%\venv\Scripts\python.exe" -m pip install -r "%RUNNER_DIR%\requirements.txt" -i "%PIP_MIRROR%"
 if errorlevel 1 goto :fail
-"%RUNNER_DIR%\venv\Scripts\python.exe" -c "import jsonpath_ng, pika, playwright"
+"%RUNNER_DIR%\venv\Scripts\python.exe" -c "import jsonpath_ng, pika, playwright, browser_use"
 if errorlevel 1 goto :fail
 
 cd /d "%ROOT%"

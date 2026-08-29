@@ -22,6 +22,7 @@
           <el-option label="等待执行" value="等待执行"/>
           <el-option label="执行中" value="执行中"/>
           <el-option label="执行完成" value="执行完成"/>
+          <el-option label="已停止" value="已停止"/>
         </el-select>
         <el-button type="primary" @click="handleSearch" icon="Search">搜索</el-button>
         <el-button @click="resetSearch" icon="RefreshRight">重置</el-button>
@@ -52,6 +53,8 @@
             <el-tag v-if='scope.row.status==="执行中"' type="primary">执行中</el-tag>
             <el-tag v-else-if='scope.row.status==="等待执行"' type="info">等待执行</el-tag>
             <el-tag v-else-if='scope.row.status==="执行完成"' type="success">执行完成</el-tag>
+            <el-tag v-else-if='scope.row.status==="已停止"' type="warning">已停止</el-tag>
+            <el-tag v-else type="info">未执行</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="username" label="创建人"/>
@@ -133,10 +136,11 @@
   </el-dialog>
 
   <!-- 运行计划的弹框-->
-  <el-dialog v-model="showRunDlg" title="计划运行配置" width="720px" destroy-on-close>
+  <el-dialog v-model="showRunDlg" title="计划运行配置" width="720px" destroy-on-close class="bc-dialog bc-dialog--wide">
     <el-form label-width="88px" class="ui-run-config-form">
       <el-form-item label="运行环境" required>
         <UiRunEnvSelect v-model="runParams.env_id" />
+        <UiRunAuthInjectHint :env-id="runParams.env_id" />
       </el-form-item>
       <el-form-item label="浏览器" required>
         <div class="ui-run-segment-group">
@@ -231,6 +235,7 @@
         :options="healRunOptions"
       />
       <UiRunTimeoutScaleField v-model="runParams.ui_timeout_scale" mode="batch" />
+      <IncludeQuarantineCheckbox v-model="runParams.include_quarantine" />
       <el-form-item label="执行设备" required>
         <el-alert
           type="warning"
@@ -391,9 +396,11 @@ import PageCard from "@/components/PageCard.vue"
 import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
+import UiRunAuthInjectHint from '@/components/UiRunAuthInjectHint.vue'
 import UiRunAiActDisabledTip from '@/components/UiRunAiActDisabledTip.vue'
 import UiRunFailureAnalysisField from '@/components/UiRunFailureAnalysisField.vue'
 import UiRunTimeoutScaleField from '@/components/UiRunTimeoutScaleField.vue'
+import IncludeQuarantineCheckbox from '@/components/IncludeQuarantineCheckbox.vue'
 import {useRouter, useRoute} from "vue-router"
 import {UserStore} from "@/stores/module/UserStore.js"
 import { makeTableRowIndex } from '@/utils/tableIndex'
@@ -613,6 +620,7 @@ const runParams = reactive({
   failure_analysis_on_report: true,
   ui_timeout_scale: null,
   concurrency: 3,
+  include_quarantine: false,
 })
 
 watch(
@@ -655,6 +663,7 @@ const clickRun = async (task_id, prefills = null) => {
   runParams.failure_analysis_on_report = true
   runParams.ui_timeout_scale = null
   runParams.concurrency = 3
+  runParams.include_quarantine = false
   runTaskParallel.value = false
   await loadHealRunOptions()
   try {

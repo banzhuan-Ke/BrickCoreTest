@@ -68,13 +68,15 @@
             type="textarea"
             :rows="10"
             placeholder="请粘贴 curl 命令，例如：
-curl -X POST 'http://api.example.com/users' \\
-  -H 'Content-Type: application/json' \\
-  -H 'Authorization: Bearer token' \\
-  -d '{&quot;name&quot;:&quot;test&quot;,&quot;age&quot;:18}'"
+curl --location --request POST 'http://api.example.com/users' \\
+  --header 'Content-Type: application/json' \\
+  --header 'Authorization: Bearer token' \\
+  --data-raw '{&quot;name&quot;:&quot;test&quot;,&quot;age&quot;:18}'
+
+也支持短选项：curl -X POST '...' -H '...' -d '...'"
           />
           <div class="el-form-item__tip">
-            支持标准 curl 命令格式，包括 -X, -H, -d 等常用参数
+            支持 Apifox / Postman 导出的长选项（--location、--request、--header、--data-raw）及 -X / -H / -d 等短选项
           </div>
         </el-form-item>
       </el-form>

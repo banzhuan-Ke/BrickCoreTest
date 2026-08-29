@@ -257,22 +257,42 @@
 
     <!-- 执行历史记录弹窗 -->
     <!-- 执行确认弹窗 -->
-    <el-dialog v-model="runDialogVisible" title="执行测试计划" width="400px" :close-on-click-modal="false">
-      <el-form label-width="80px">
-        <el-form-item label="执行计划">
-          <span style="font-weight:500">{{ runTarget?.name }}</span>
-        </el-form-item>
-        <el-form-item label="选择环境">
-          <el-select v-model="runEnvId" placeholder="请选择环境" style="width:100%">
-            <el-option
-              v-for="env in proStore.envList"
-              :key="env.id"
-              :label="env.name"
-              :value="env.id"
-            />
-          </el-select>
-        </el-form-item>
-      </el-form>
+    <el-dialog
+      v-model="runDialogVisible"
+      title="执行测试计划"
+      width="560px"
+      :close-on-click-modal="false"
+      destroy-on-close
+      class="bc-dialog"
+    >
+      <div class="bc-dialog-body">
+        <section class="bc-dialog-section">
+          <div class="bc-dialog-section__title">执行配置</div>
+          <el-form label-width="96px" class="bc-dialog-form">
+            <el-form-item label="执行计划">
+              <span class="plan-run-name">{{ runTarget?.name }}</span>
+            </el-form-item>
+            <el-form-item label="选择环境">
+              <el-select v-model="runEnvId" placeholder="请选择环境" filterable style="width:100%">
+                <el-option
+                  v-for="env in proStore.envList"
+                  :key="env.id"
+                  :label="env.name"
+                  :value="env.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="执行机">
+              <ViaWorkerSelect
+                v-model="runWorkerId"
+                :env-id="runEnvId"
+                force-serial-hint
+              />
+            </el-form-item>
+            <IncludeQuarantineCheckbox v-model="runIncludeQuarantine" />
+          </el-form>
+        </section>
+      </div>
       <template #footer>
         <el-button @click="runDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="runningId !== null" :disabled="!runEnvId" @click="confirmRun">
@@ -282,22 +302,26 @@
     </el-dialog>
 
     <!-- 从模板创建 -->
-    <el-dialog v-model="templateDialogVisible" title="从模板创建计划" width="480px">
-      <el-form label-width="90px">
-        <el-form-item label="选择模板">
-          <el-select v-model="templateForm.templateId" placeholder="请选择模板" style="width:100%" filterable>
-            <el-option v-for="t in templateList" :key="t.id" :label="t.name" :value="t.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="计划名称">
-          <el-input v-model="templateForm.name" placeholder="新计划名称" />
-        </el-form-item>
-        <el-form-item label="默认环境">
-          <el-select v-model="templateForm.envId" placeholder="可选" style="width:100%" clearable>
-            <el-option v-for="env in proStore.envList" :key="env.id" :label="env.name" :value="env.id" />
-          </el-select>
-        </el-form-item>
-      </el-form>
+    <el-dialog v-model="templateDialogVisible" title="从模板创建计划" width="480px" class="bc-dialog">
+      <div class="bc-dialog-body">
+        <section class="bc-dialog-section">
+          <el-form label-width="90px" class="bc-dialog-form">
+            <el-form-item label="选择模板">
+              <el-select v-model="templateForm.templateId" placeholder="请选择模板" style="width:100%" filterable>
+                <el-option v-for="t in templateList" :key="t.id" :label="t.name" :value="t.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="计划名称">
+              <el-input v-model="templateForm.name" placeholder="新计划名称" />
+            </el-form-item>
+            <el-form-item label="默认环境">
+              <el-select v-model="templateForm.envId" placeholder="可选" style="width:100%" clearable>
+                <el-option v-for="env in proStore.envList" :key="env.id" :label="env.name" :value="env.id" />
+              </el-select>
+            </el-form-item>
+          </el-form>
+        </section>
+      </div>
       <template #footer>
         <el-button @click="templateDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="templateCreating" @click="confirmCreateFromTemplate">创建</el-button>
@@ -308,14 +332,15 @@
     <el-dialog
       v-model="pollingDialogVisible"
       title="计划执行中"
-      width="400px"
+      width="420px"
       :close-on-click-modal="false"
       :show-close="false"
+      class="bc-dialog"
     >
-      <div style="text-align:center; padding: 20px 0">
-        <el-icon class="is-loading" style="font-size:40px; color:#409eff; margin-bottom:16px"><Loading /></el-icon>
-        <div style="font-size:15px; color:#333; margin-bottom:8px">「{{ pollingPlanName }}」执行中，请稍候…</div>
-        <div style="font-size:12px; color:#999">计划已在后台运行，关闭页面不影响执行</div>
+      <div class="bc-dialog-progress">
+        <el-icon class="is-loading bc-dialog-progress__icon"><Loading /></el-icon>
+        <p class="bc-dialog-progress__title">「{{ pollingPlanName }}」执行中，请稍候…</p>
+        <p class="bc-dialog-progress__desc">计划已在后台运行，关闭页面不影响执行</p>
       </div>
       <template #footer>
         <el-button @click="stopPollingAndClose">后台继续，关闭此窗口</el-button>
@@ -360,6 +385,7 @@
             <span :style="row.failed_cases > 0 ? 'color:#f56c6c' : 'color:#67c23a'">
               {{ row.success_cases }}/{{ row.total_cases }}
             </span>
+            <span v-if="row.quarantine_skip" class="qs-hint">隔{{ row.quarantine_skip }}</span>
           </template>
         </el-table-column>
         <el-table-column label="耗时(ms)" prop="duration" width="90" align="center" />
@@ -402,6 +428,9 @@
           <el-col :span="6"><el-statistic title="总用例" :value="currentRecord.total_cases" /></el-col>
           <el-col :span="6"><el-statistic title="成功" :value="currentRecord.success_cases" value-style="color:#67c23a" /></el-col>
           <el-col :span="6"><el-statistic title="失败" :value="currentRecord.failed_cases" value-style="color:#f56c6c" /></el-col>
+          <el-col v-if="currentRecord.quarantine_skip" :span="6">
+            <el-statistic title="已隔离未跑" :value="currentRecord.quarantine_skip" />
+          </el-col>
           <el-col :span="6"><el-statistic title="耗时(ms)" :value="currentRecord.duration" /></el-col>
         </el-row>
         <el-divider />
@@ -451,6 +480,8 @@ import { Plus, Delete, Edit, Search, Document, VideoPlay, Loading, DocumentCopy 
 import { httpPlanApi } from '@/api/modules/http'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import CatalogListLayout from '@/components/CatalogListLayout.vue'
+import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
+import IncludeQuarantineCheckbox from '@/components/IncludeQuarantineCheckbox.vue'
 import TableColumnPicker from '@/components/TableColumnPicker.vue'
 import { useTableColumns } from '@/composables/useTableColumns.js'
 import { makeTableRowIndexRefs } from '@/utils/tableIndex'
@@ -651,6 +682,8 @@ const handleBatchDelete = async () => {
 const runDialogVisible = ref(false)
 const runTarget = ref(null)
 const runEnvId = ref(null)
+const runWorkerId = ref(null)
+const runIncludeQuarantine = ref(false)
 const runningId = ref(null)
 
 // 轮询相关
@@ -662,6 +695,8 @@ const pollingTimer = ref(null)
 const handleRun = (row) => {
   runTarget.value = row
   runEnvId.value = row.env_id || (proStore.envList[0]?.id ?? null)
+  runWorkerId.value = null
+  runIncludeQuarantine.value = false
   runDialogVisible.value = true
 }
 
@@ -670,7 +705,11 @@ const confirmRun = async () => {
   runningId.value = runTarget.value.id
   try {
     // 调用异步接口，立即拿到 record_id
-    const res = await httpPlanApi.runPlanAsync(runTarget.value.id, { env_id: runEnvId.value })
+    const res = await httpPlanApi.runPlanAsync(runTarget.value.id, {
+      env_id: runEnvId.value,
+      include_quarantine: !!runIncludeQuarantine.value,
+      ...(runWorkerId.value ? { worker_id: runWorkerId.value } : {}),
+    })
     const data = res.data
     runDialogVisible.value = false
     pollingRecordId.value = data.record_id
@@ -804,6 +843,11 @@ watch(
 <style scoped>
 .plan-list {
   padding: 16px;
+}
+
+.plan-run-name {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
 }
 
 .plan-stats {

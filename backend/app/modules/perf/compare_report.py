@@ -1,4 +1,4 @@
-"""压测多记录对比 / 异场景合订报告构建（2–10 条）。"""
+"""压测多记录对比 / 异场景合订报告构建（2–20 条）。"""
 from __future__ import annotations
 
 from typing import Any, Optional, Sequence
@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from app.modules.perf.metrics_accuracy import build_comparison_trust
 from app.modules.perf.perf_html_theme import metric_lower_is_better
 
-MAX_COMPARE_RECORDS = 10
+MAX_COMPARE_RECORDS = 20
 MIN_COMPARE_RECORDS = 2
 
 REPORT_KIND_COMPARE = "compare"
@@ -923,6 +923,13 @@ def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
         "same_scene": snapshot.get("same_scene"),
         "case_common_count": snapshot.get("case_common_count"),
     }
+    # 给 AI 的显式分析模式，避免 merge 误用「指标对照」话术
+    if kind == REPORT_KIND_MERGE or (
+        kind == REPORT_KIND_HYBRID and not base["baseline_enabled"]
+    ):
+        base["analysis_mode"] = "chapter_portrait"
+    else:
+        base["analysis_mode"] = "baseline_delta"
 
     if kind == REPORT_KIND_MERGE:
         records_by_id = {

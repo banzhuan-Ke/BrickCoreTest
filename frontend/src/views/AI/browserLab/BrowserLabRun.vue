@@ -20,7 +20,10 @@
           </template>
           <el-form :model="form" label-width="96px" @submit.prevent>
             <el-form-item label="起始 URL" required>
-              <el-input v-model="form.start_url" placeholder="https://example.com" clearable />
+              <div class="param-input-row">
+                <el-input v-model="form.start_url" placeholder="https://example.com" clearable />
+                <VarInsertButton :env-id="numericRunEnvId" label="变量" />
+              </div>
             </el-form-item>
             <BrowserLabTaskTextField
               v-model="form.task_text"
@@ -29,6 +32,7 @@
               :case-name="caseName"
               :ai-config-id="aiConfigId"
               :project-id="projectId"
+              :env-id="form.env_id"
             />
             <el-form-item label="AI 模型">
               <el-select v-model="aiConfigId" placeholder="选择模型" style="width: 100%;" :loading="loadingConfigs">
@@ -70,15 +74,19 @@
               <a :href="gifPreviewHref" target="_blank" rel="noopener">查看回放 GIF</a>
             </div>
           </div>
+          <div v-if="liveHint" class="live-hint">{{ liveHint }}</div>
           <div class="log-wrap">
-            <div v-for="(item, idx) in stepLogs" :key="idx" class="log-item">
+            <div v-for="(item, idx) in displaySteps" :key="`${item.index}-${idx}`" class="log-item">
               <div class="log-head">
-                <span class="log-step">Step {{ item.index }}</span>
+                <span class="log-step">{{ stepLabel(item) }}</span>
+                <el-tag v-if="item.step_status === 'failed'" size="small" type="danger">重试/跳过</el-tag>
+                <el-tag v-else-if="item.step_status === 'recovered'" size="small" type="warning">已补齐</el-tag>
                 <span class="log-url">{{ item.url }}</span>
               </div>
               <div v-if="item.next_goal" class="log-goal">{{ item.next_goal }}</div>
+              <div v-if="item.thinking && item.step_status !== 'ok'" class="log-think">{{ item.thinking }}</div>
             </div>
-            <el-empty v-if="!stepLogs.length && !running" description="暂无执行日志" :image-size="48" />
+            <el-empty v-if="!displaySteps.length && !running" description="暂无执行日志" :image-size="48" />
           </div>
         </el-card>
       </el-col>
@@ -113,9 +121,18 @@ import { browserLabGifPreviewHref } from './browserLabGif.js'
 import BrowserLabExecOptionsFields from './BrowserLabExecOptionsFields.vue'
 import BrowserLabTaskTextField from './BrowserLabTaskTextField.vue'
 import { mergeBrowserLabExecForm, browserLabExecConfigPayload } from './browserLabExecOptions.js'
+import { buildExecConfirmContext } from './browserLabExecConfirmHelpers.js'
+import { openBrowserLabExecConfirm } from '@/composables/useBrowserLabExecConfirm.js'
 import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
+import { useBrowserLabTaskPoll } from '@/composables/useBrowserLabTaskPoll.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+import VarInsertButton from '@/components/VarInsertButton.vue'
+import {
+  browserLabLiveHint,
+  browserLabStepLabel,
+  normalizeBrowserLabSteps,
+} from './browserLabStepLog.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -146,11 +163,21 @@ const gifPreviewHref = computed(() =>
     : ''
 )
 const stepLogs = ref([])
+const displaySteps = computed(() => normalizeBrowserLabSteps(stepLogs.value))
+const liveHint = computed(() =>
+  browserLabLiveHint(stepLogs.value, { running: running.value, status: liveStatus.value })
+)
+const stepLabel = browserLabStepLabel
+const taskPoll = useBrowserLabTaskPoll()
 const currentScreenshotUrl = ref('')
 const screenshotObjectUrls = ref([])
 const saveDialog = ref({ visible: false, saving: false, form: { name: '', description: '', tags: '' } })
 
 const isActive = computed(() => ['pending', 'running'].includes(liveStatus.value))
+const numericRunEnvId = computed(() => {
+  const n = Number(form.value.env_id)
+  return Number.isFinite(n) && n > 0 ? n : null
+})
 
 function statusLabel(s) {
   const map = { pending: '等待', running: '执行中', done: '完成', failed: '失败', stopped: '已停止' }
@@ -169,7 +196,11 @@ function revokeScreenshots() {
   screenshotObjectUrls.value = []
 }
 
-async function loadScreenshot(taskId, filename) {
+async function loadScreenshot(taskId, filename, directUrl) {
+  if (directUrl) {
+    currentScreenshotUrl.value = directUrl
+    return
+  }
   if (!filename || !projectId.value) return
   try {
     const blob = await browserLabApi.fetchScreenshotBlob(taskId, filename, projectId.value)
@@ -184,7 +215,11 @@ async function loadScreenshot(taskId, filename) {
 function handleStreamEvent(data) {
   if (data.type === 'step') {
     stepLogs.value.push(data)
-    if (data.screenshot_file && activeTaskId.value) loadScreenshot(activeTaskId.value, data.screenshot_file)
+    if (data.screenshot_url) {
+      currentScreenshotUrl.value = data.screenshot_url
+    } else if (data.screenshot_file && activeTaskId.value) {
+      loadScreenshot(activeTaskId.value, data.screenshot_file)
+    }
   } else if (data.type === 'done') {
     liveStatus.value = data.status || 'done'
     liveSummary.value = data.error_message || data.summary || ''
@@ -202,12 +237,45 @@ function handleStreamEvent(data) {
 }
 
 function subscribeTask(taskId) {
-  browserLabApi.streamTask(taskId, projectId.value, {
-    onEvent: handleStreamEvent,
+  taskPoll.start(taskId, projectId.value, {
     onDone: (data) => handleStreamEvent({ ...data, type: 'done' }),
-    onError: (msg) => handleStreamEvent({ type: 'error', message: msg })
+    onFail: (payload) => handleStreamEvent({ type: 'error', message: payload.error_message }),
   })
 }
+
+watch(taskPoll.displayedSteps, (steps) => {
+  stepLogs.value = steps
+  if (!activeTaskId.value || !steps?.length) return
+  const last = [...steps].reverse().find((s) => s.screenshot_url || s.screenshot_file)
+  if (!last) return
+  if (last.screenshot_url) {
+    currentScreenshotUrl.value = last.screenshot_url
+  } else if (last.screenshot_file) {
+    loadScreenshot(activeTaskId.value, last.screenshot_file, last.screenshot_url)
+  }
+}, { deep: true })
+
+watch(
+  () => taskPoll.taskStatus.value,
+  (status) => {
+    if (status) liveStatus.value = status
+  }
+)
+
+watch(
+  () => taskPoll.taskData.value,
+  (task) => {
+    if (!task) return
+    liveStatus.value = task.status || liveStatus.value
+    if (task.result_summary && ['done', 'failed', 'stopped'].includes(task.status)) {
+      liveSummary.value = task.error_message || task.result_summary || liveSummary.value
+      liveTokens.value = Number(task.tokens_used || liveTokens.value)
+      hasGif.value = Boolean(task.gif_url || task.gif_path || hasGif.value)
+      running.value = false
+    }
+  },
+  { deep: true }
+)
 
 async function syncGifFromTask(taskId) {
   if (!projectId.value) return
@@ -221,9 +289,35 @@ async function syncGifFromTask(taskId) {
   }
 }
 
-async function startTask() {
+async function startTask(execOverride = null) {
   if (!projectId.value) return ElMessage.warning('请先选择项目')
   if (!canExecute.value) return ElMessage.warning('需要 ai_test:execute 权限')
+
+  let execForm = execOverride?.execForm || { ...form.value }
+  if (!execOverride) {
+    const ctx = buildExecConfirmContext({
+      title: caseName.value ? `确认执行：${caseName.value}` : '确认执行',
+      name: caseName.value || '',
+      source: { ...form.value, ai_config_id: aiConfigId.value },
+      aiConfigs: enabledConfigs.value,
+      caseId: caseId.value,
+    })
+    let confirmed
+    try {
+      confirmed = await openBrowserLabExecConfirm(ctx)
+    } catch {
+      return ElMessage.warning('执行确认弹窗未就绪，请刷新页面后重试')
+    }
+    if (!confirmed) return
+    execForm = confirmed.execForm
+    form.value.device_id = confirmed.device_id
+    form.value.headless = confirmed.execForm?.headless !== false
+  } else if (execOverride.execForm) {
+    execForm = execOverride.execForm
+    form.value.device_id = execOverride.device_id
+    form.value.headless = execOverride.execForm.headless !== false
+  }
+
   revokeScreenshots()
   stepLogs.value = []
   liveSummary.value = ''
@@ -233,16 +327,20 @@ async function startTask() {
   liveStatus.value = 'running'
   running.value = true
   try {
-    const res = await browserLabApi.createTask({
-      ...form.value,
+    const payload = {
+      start_url: form.value.start_url,
+      task_text: form.value.task_text,
       ai_config_id: aiConfigId.value || null,
-      case_id: caseId.value || null
-    }, projectId.value)
+      case_id: caseId.value || null,
+      ...browserLabExecConfigPayload(execForm),
+    }
+    const res = await browserLabApi.createTask(payload, projectId.value)
     if (res.data?.code !== 200) throw new Error(res.data?.message || '创建失败')
     const task = res.data.data
     activeTaskId.value = task.id
     liveStatus.value = task.status
     subscribeTask(task.id)
+    router.replace({ path: '/browser-lab/run', query: { taskId: task.id } })
   } catch (e) {
     running.value = false
     liveStatus.value = 'failed'
@@ -334,14 +432,17 @@ async function loadRunningTask(taskId) {
   const task = res.data.data
   activeTaskId.value = task.id
   liveStatus.value = task.status
-  stepLogs.value = (task.step_log || []).filter((e) => e.type === 'step')
   liveSummary.value = task.error_message || task.result_summary || ''
   liveTokens.value = Number(task.tokens_used || 0)
   hasGif.value = Boolean(task.gif_url || task.gif_path)
   running.value = ['pending', 'running'].includes(task.status)
-  const lastShot = [...stepLogs.value].reverse().find((s) => s.screenshot_file)
-  if (lastShot) await loadScreenshot(task.id, lastShot.screenshot_file)
-  if (running.value) subscribeTask(task.id)
+  if (running.value) {
+    subscribeTask(task.id)
+  } else {
+    stepLogs.value = normalizeBrowserLabSteps(task.step_log || [])
+    const lastShot = [...stepLogs.value].reverse().find((s) => s.screenshot_file)
+    if (lastShot) await loadScreenshot(task.id, lastShot.screenshot_file)
+  }
 }
 
 async function initFromRoute() {
@@ -352,9 +453,25 @@ async function initFromRoute() {
   }
   const qCase = route.query.caseId
   const qRun = route.query.run === '1'
+  const qDeviceId = route.query.deviceId
+  const qHeadless = route.query.headless
   if (qCase && projectId.value) {
     await loadCase(Number(qCase))
-    if (qRun && canExecute.value) startTask()
+    if (qDeviceId) form.value.device_id = String(qDeviceId)
+    if (qHeadless === '0') form.value.headless = false
+    if (qRun && canExecute.value) {
+      const execOverride = qDeviceId
+        ? {
+            device_id: String(qDeviceId),
+            execForm: {
+              ...mergeBrowserLabExecForm(form.value),
+              device_id: String(qDeviceId),
+              headless: qHeadless !== '0',
+            },
+          }
+        : null
+      await startTask(execOverride)
+    }
   }
 }
 
@@ -366,7 +483,10 @@ onMounted(async () => {
   await initFromRoute()
 })
 
-onBeforeUnmount(() => revokeScreenshots())
+onBeforeUnmount(() => {
+  taskPoll.stop()
+  revokeScreenshots()
+})
 </script>
 
 <style scoped>
@@ -389,10 +509,16 @@ onBeforeUnmount(() => revokeScreenshots())
 .log-step { font-weight: 600; color: var(--el-color-primary); }
 .log-url { color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log-goal { margin-top: 4px; font-size: 13px; }
+.log-think { margin-top: 4px; font-size: 12px; color: var(--el-text-color-secondary); white-space: pre-wrap; }
+.live-hint {
+  margin-bottom: 8px; padding: 8px 10px; font-size: 13px;
+  background: var(--el-color-primary-light-9); border-radius: 6px; color: var(--el-text-color-regular);
+}
 .result-box { margin-bottom: 12px; padding: 10px 12px; background: var(--el-fill-color-light); border-radius: 8px; }
 .result-title { font-weight: 600; margin-bottom: 6px; }
 .result-tokens { font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 6px; }
 .result-text { white-space: pre-wrap; font-size: 13px; }
 .gif-row { margin-top: 8px; }
 .field-hint { margin-top: 6px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.5; }
+.param-input-row { display: flex; gap: 8px; align-items: flex-start; width: 100%; }
 </style>

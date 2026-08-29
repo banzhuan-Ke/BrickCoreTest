@@ -20,6 +20,7 @@ class AppCaseSchemas(BaseModel):
     create_time: datetime
     update_time: datetime
     is_del: bool = False
+    tags: list = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -35,6 +36,7 @@ class AddAppCaseForm(BaseModel):
     description: Optional[str] = None
     username: str
     catalog_id: Optional[int] = None
+    tags: Optional[list] = None
 
 
 class UpdateAppCaseForm(BaseModel):
@@ -46,6 +48,7 @@ class UpdateAppCaseForm(BaseModel):
     description: Optional[str] = None
     catalog_id: Optional[int] = None
     is_del: bool = False
+    tags: Optional[list] = None
 
 
 class AppSuiteSchemas(BaseModel):
@@ -164,6 +167,7 @@ class AppRunForm(BaseModel):
         description="本次执行是否启用 AI 定位器自愈；不传则使用项目默认",
     )
     trigger_source: Optional[str] = None
+    include_quarantine: bool = Field(default=False, description="是否包含已隔离用例；默认跳过")
 
 
 class AppCaseDebugForm(AppRunForm):

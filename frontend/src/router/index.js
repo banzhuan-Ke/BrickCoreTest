@@ -50,6 +50,16 @@ const routes = [
                 }
             },
             {
+                path: '/stability',
+                component: () => import('../views/Stability/Stability.vue'),
+                name: 'stability',
+                meta: {
+                    title: '执行可信度',
+                    icon: 'TrendCharts',
+                    anyPermissions: ['api_case:view', 'ui_case:view', 'app_case:view']
+                }
+            },
+            {
                 path: '/docs',
                 name: 'docsCenter',
                 component: () => import('../views/Docs/DocsCenter.vue'),
@@ -687,6 +697,107 @@ const routes = [
                     title: '功能用例库',
                     icon: 'DocumentChecked',
                     permission: 'ai_test:view'
+                }
+            },
+            {
+                path: '/test-releases',
+                name: 'testReleases',
+                component: () => import('../views/TestManagement/ReleaseList.vue'),
+                meta: {
+                    title: '测试版本',
+                    icon: 'CollectionTag',
+                    permission: 'test_release:view'
+                }
+            },
+            {
+                path: '/test-releases/:id',
+                name: 'testReleaseDetail',
+                component: () => import('../views/TestManagement/ReleaseDetail.vue'),
+                meta: {
+                    title: '版本详情',
+                    icon: 'CollectionTag',
+                    permission: 'test_release:view'
+                }
+            },
+            {
+                path: '/case-reviews/:id',
+                name: 'caseReviewDetail',
+                component: () => import('../views/TestManagement/CaseReviewDetail.vue'),
+                meta: {
+                    title: '用例评审',
+                    icon: 'DocumentChecked',
+                    permission: 'test_review:view'
+                }
+            },
+            {
+                path: '/notifications',
+                name: 'notificationCenter',
+                component: () => import('../views/Notifications/NotificationCenter.vue'),
+                meta: {
+                    title: '通知中心',
+                    icon: 'Bell'
+                }
+            },
+            {
+                path: '/test-plans/:id',
+                name: 'testPlanDetail',
+                component: () => import('../views/TestManagement/TestPlanDetail.vue'),
+                meta: {
+                    title: '测试计划',
+                    icon: 'Notebook',
+                    permission: 'test_plan:view'
+                }
+            },
+            {
+                path: '/test-plan-runs/:id',
+                name: 'testPlanRunDetail',
+                component: () => import('../views/TestManagement/TestPlanRunDetail.vue'),
+                meta: {
+                    title: '计划运行',
+                    icon: 'VideoPlay',
+                    permission: 'test_plan:view'
+                }
+            },
+            {
+                path: '/test-defects',
+                name: 'testDefects',
+                component: () => import('../views/TestManagement/DefectList.vue'),
+                meta: {
+                    title: '缺陷台账',
+                    icon: 'Warning',
+                    permission: 'test_defect:view'
+                }
+            },
+            {
+                path: '/test-traceability',
+                name: 'testTraceability',
+                component: () => import('../views/TestManagement/TraceabilityMatrix.vue'),
+                meta: {
+                    title: '追溯矩阵',
+                    icon: 'Connection',
+                    permission: 'test_release:view'
+                }
+            },
+            {
+                path: '/test-review-templates',
+                name: 'testReviewTemplates',
+                component: () => import('../views/TestManagement/ReviewTemplates.vue'),
+                meta: {
+                    title: '评审模板',
+                    icon: 'Document',
+                    permission: 'test_review:view'
+                }
+            },
+            {
+                path: '/test-requirement-reviews',
+                redirect: (to) => {
+                    const rid = to.query?.release_id
+                    if (rid) {
+                        const q = { tab: 'req-reviews' }
+                        if (to.query?.requirement_id) q.requirement_id = to.query.requirement_id
+                        return { path: `/test-releases/${rid}`, query: q }
+                    }
+                    return { path: '/test-releases' }
                 }
             },
             {

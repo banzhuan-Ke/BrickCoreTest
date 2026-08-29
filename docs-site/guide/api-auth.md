@@ -72,7 +72,7 @@ Authorization: Bearer ${{access_token}}
 | tenant_id | JSON | `$.data.tenantId` |
 | session | Header | `Set-Cookie` 或具体 Header 名 |
 
-按实际响应结构调整路径；支持 JSON / Header / 正则三种来源。
+按实际响应结构调整路径；支持 JSON / Header / 正则三种来源。JSON 路径可点输入框右侧图标打开提取工具，对照登录接口的响应示例点选字段。
 
 ### 3. 自定义代码（高级选项）
 

@@ -8,9 +8,10 @@
 - 查看：project_settings:view 或兼容 ai_config:view
 - 编辑：project_settings:edit 或兼容 ai_config:edit
 """
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.core.platform.auth import is_authenticated, require_any_permissions
 from app.core.platform.permissions import (
@@ -33,6 +34,28 @@ router = APIRouter(
     tags=["项目设置"],
     dependencies=[Depends(is_authenticated)],
 )
+
+
+class TestNotifySettingsBody(BaseModel):
+    inbox_enabled: Optional[bool] = None
+    external_enabled: Optional[bool] = None
+    external_channels: Optional[List[str]] = None
+    on_scope_owner_assigned: Optional[bool] = None
+    on_defect_assigned: Optional[bool] = None
+    on_review_invited: Optional[bool] = None
+    on_plan_run_item_assigned: Optional[bool] = None
+    on_review_item_pending: Optional[bool] = None
+    on_quality_gate_failed: Optional[bool] = None
+    default_scope_owner_id: Optional[int] = None
+    digest_minutes: Optional[int] = Field(None, ge=0, le=1440)
+
+
+class QualityGateSettingsBody(BaseModel):
+    required_completion_min: Optional[float] = Field(None, ge=0, le=1)
+    required_pass_rate_min: Optional[float] = Field(None, ge=0, le=1)
+    blocker_open_max: Optional[int] = Field(None, ge=0)
+    critical_open_max: Optional[int] = Field(None, ge=0)
+    high_risk_without_result_max: Optional[int] = Field(None, ge=0)
 
 
 @router.get(
@@ -59,6 +82,8 @@ async def get_project_settings_overview(
             "sections": {
                 "execution": True,
                 "notification": True,
+                "test_notify": True,
+                "quality_gate": True,
             },
             "execution_summary": {
                 "locator_heal_enabled": settings.get("locator_heal_enabled"),
@@ -105,6 +130,98 @@ async def update_project_execution_settings(
         status_code = 404 if msg == "项目不存在" else 422
         raise HTTPException(status_code=status_code, detail=msg) from e
     return StandardResponse(data=saved, message="执行设置已保存")
+
+
+@router.get(
+    "/test-notify",
+    summary="获取测试管理通知策略",
+    dependencies=[Depends(require_any_permissions(PROJECT_SETTINGS_VIEW, AI_CONFIG_VIEW))],
+)
+async def get_test_notify_settings(
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.modules.test_management.premium_gateway import tm_premium_ready
+    from app.modules.test_management.tm_premium_defaults import DEFAULT_TM_NOTIFY_SETTINGS
+
+    pid = _resolve_project_id(user_info, project_id)
+    if not tm_premium_ready():
+        return StandardResponse(data={**DEFAULT_TM_NOTIFY_SETTINGS, "premium_required": True})
+    from app.modules.test_management.tm_notify_settings import load_tm_notify_settings
+
+    data = await load_tm_notify_settings(pid)
+    return StandardResponse(data=data)
+
+
+@router.put(
+    "/test-notify",
+    summary="保存测试管理通知策略",
+    dependencies=[Depends(require_any_permissions(PROJECT_SETTINGS_EDIT, AI_CONFIG_EDIT))],
+)
+async def update_test_notify_settings(
+    body: TestNotifySettingsBody,
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.modules.test_management.premium_gateway import raise_tm_premium_required, tm_premium_ready
+    from app.modules.test_management.tm_notify_settings import save_tm_notify_settings
+
+    if not tm_premium_ready():
+        raise_tm_premium_required()
+    pid = _resolve_project_id(user_info, project_id)
+    try:
+        saved = await save_tm_notify_settings(pid, body.model_dump(exclude_unset=True))
+    except ValueError as e:
+        msg = str(e)
+        status_code = 404 if msg == "项目不存在" else 422
+        raise HTTPException(status_code=status_code, detail=msg) from e
+    return StandardResponse(data=saved, message="测试通知策略已保存")
+
+
+@router.get(
+    "/quality-gate",
+    summary="获取测试管理质量门禁阈值",
+    dependencies=[Depends(require_any_permissions(PROJECT_SETTINGS_VIEW, AI_CONFIG_VIEW))],
+)
+async def get_quality_gate_settings(
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.modules.test_management.premium_gateway import tm_premium_ready
+    from app.modules.test_management.tm_premium_defaults import DEFAULT_QUALITY_RULES
+
+    pid = _resolve_project_id(user_info, project_id)
+    if not tm_premium_ready():
+        return StandardResponse(data={**DEFAULT_QUALITY_RULES, "premium_required": True})
+    from app.modules.test_management.tm_quality_gate_settings import load_tm_quality_gate_settings
+
+    data = await load_tm_quality_gate_settings(pid)
+    return StandardResponse(data=data)
+
+
+@router.put(
+    "/quality-gate",
+    summary="保存测试管理质量门禁阈值",
+    dependencies=[Depends(require_any_permissions(PROJECT_SETTINGS_EDIT, AI_CONFIG_EDIT))],
+)
+async def update_quality_gate_settings(
+    body: QualityGateSettingsBody,
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.modules.test_management.premium_gateway import raise_tm_premium_required, tm_premium_ready
+    from app.modules.test_management.tm_quality_gate_settings import save_tm_quality_gate_settings
+
+    if not tm_premium_ready():
+        raise_tm_premium_required()
+    pid = _resolve_project_id(user_info, project_id)
+    try:
+        saved = await save_tm_quality_gate_settings(pid, body.model_dump(exclude_unset=True))
+    except ValueError as e:
+        msg = str(e)
+        status_code = 404 if msg == "项目不存在" else 422
+        raise HTTPException(status_code=status_code, detail=msg) from e
+    return StandardResponse(data=saved, message="质量门禁阈值已保存")
 
 
 __all__ = [

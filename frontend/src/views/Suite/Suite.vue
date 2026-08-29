@@ -23,6 +23,7 @@
         <el-option label="等待执行" value="等待执行"/>
         <el-option label="执行中" value="执行中"/>
         <el-option label="执行完成" value="执行完成"/>
+        <el-option label="已停止" value="已停止"/>
       </el-select>
       <el-button type="primary" @click="handleSearch" icon="Search">搜索</el-button>
       <el-button @click="resetSearch" icon="RefreshRight">重置</el-button>
@@ -114,6 +115,7 @@
               <el-tag v-if='scope.row.status==="执行中"' type="primary">执行中</el-tag>
               <el-tag v-else-if='scope.row.status==="等待执行"' type="info">等待执行</el-tag>
               <el-tag v-else-if='scope.row.status==="执行完成"' type="success">执行完成</el-tag>
+              <el-tag v-else-if='scope.row.status==="已停止"' type="warning">已停止</el-tag>
               <el-tag v-else type="info">未执行</el-tag>
             </template>
           </el-table-column>
@@ -186,10 +188,11 @@
       <SuiteRunRecord :suite_id="showSuite.id"></SuiteRunRecord>
     </el-dialog>
 
-    <el-dialog v-model="showRunDlg" title="套件运行配置" width="560px" destroy-on-close>
-      <el-form label-width="88px" class="ui-run-config-form">
+    <el-dialog v-model="showRunDlg" title="套件运行配置" width="560px" destroy-on-close class="bc-dialog">
+      <el-form label-width="88px" class="ui-run-config-form bc-dialog-form">
         <el-form-item label="运行环境" required>
           <UiRunEnvSelect v-model="runParams.env_id" />
+          <UiRunAuthInjectHint :env-id="runParams.env_id" />
         </el-form-item>
         <el-form-item label="浏览器" required>
           <div class="ui-run-segment-group">
@@ -279,6 +282,7 @@
           :options="healRunOptions"
         />
         <UiRunTimeoutScaleField v-model="runParams.ui_timeout_scale" mode="batch" />
+        <IncludeQuarantineCheckbox v-model="runParams.include_quarantine" />
         <el-form-item label="执行设备" required>
           <el-select v-model="runParams.device_id" placeholder="请选择执行设备" style="width: 100%">
             <el-option
@@ -331,9 +335,11 @@ import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import { useTableColumns } from '@/composables/useTableColumns.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
+import UiRunAuthInjectHint from '@/components/UiRunAuthInjectHint.vue'
 import UiRunAiActDisabledTip from '@/components/UiRunAiActDisabledTip.vue'
 import UiRunFailureAnalysisField from '@/components/UiRunFailureAnalysisField.vue'
 import UiRunTimeoutScaleField from '@/components/UiRunTimeoutScaleField.vue'
+import IncludeQuarantineCheckbox from '@/components/IncludeQuarantineCheckbox.vue'
 import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 
 const {
@@ -476,6 +482,7 @@ const runParams = reactive({
   ai_act_enabled: false,
   failure_analysis_on_report: true,
   ui_timeout_scale: null,
+  include_quarantine: false,
 })
 const healRunOptions = ref(null)
 
@@ -516,6 +523,7 @@ const clickRun = async (id) => {
   runParams.ai_act_enabled = false
   runParams.failure_analysis_on_report = true
   runParams.ui_timeout_scale = null
+  runParams.include_quarantine = false
   await loadHealRunOptions()
   // 获取设备列表
   await getDeviceList()
@@ -558,6 +566,7 @@ const confirmRun = async () => {
     if (runParams.ui_timeout_scale != null) {
       payload.ui_timeout_scale = runParams.ui_timeout_scale
     }
+    payload.include_quarantine = !!runParams.include_quarantine
     const res = await http.suiteApi.runSuite(showSuite.value.id, payload)
     if (res.status === 200 || res.status === 201) {
       const dispatched = res.data?.dispatched !== false

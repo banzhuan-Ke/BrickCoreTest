@@ -523,12 +523,20 @@ class OperationLogMiddleware:
             return
 
         body = await request.body()
+        # ASGI receive 只能完整交付一次 body；二次调用须返回空帧，避免下游重复拼接
+        body_sent = False
 
         async def receive_wrapper():
-            return {"type": "http.request", "body": body}
+            nonlocal body_sent
+            if not body_sent:
+                body_sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return {"type": "http.request", "body": b"", "more_body": False}
 
         request_for_log = Request(scope, receive_wrapper)
         params = await _parse_request_body(request_for_log)
+        # 日志解析已消费一次 receive；给下游再准备一份可回放的 body
+        body_sent = False
 
         status_code = 200
 

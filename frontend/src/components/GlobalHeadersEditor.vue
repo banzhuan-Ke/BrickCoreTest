@@ -6,30 +6,69 @@
       <el-button size="small" link :disabled="!headerList.length" @click="exportJson">导出 JSON</el-button>
     </div>
 
+    <div class="var-toolbar">
+      <div class="var-toolbar-actions">
+        <el-select
+          v-model="refEnvId"
+          placeholder="参考环境"
+          clearable
+          size="small"
+          style="width: 160px"
+        >
+          <el-option
+            v-for="env in proStore.envList"
+            :key="env.id"
+            :label="env.name"
+            :value="env.id"
+          />
+        </el-select>
+        <VarInsertButton
+          :env-id="refEnvId"
+          :show-env-edit="false"
+          label="插入变量"
+          hint-text="含项目/环境/Token 授权/内置变量；工厂标签与工具请用旁侧按钮。"
+        />
+        <ToolInsertButton :env-id="refEnvId" label="插入工具" />
+        <el-button type="info" link size="small" icon="Collection" @click="openTagPicker">
+          数据工厂标签
+        </el-button>
+      </div>
+      <span class="var-toolbar-hint">先点击下方「Header 值」输入框再插入</span>
+    </div>
+
     <input ref="fileInputRef" type="file" accept=".json,application/json" class="hidden-file" @change="onFileImport" />
 
     <el-table :data="headerList" size="small" border max-height="320" empty-text="暂无全局 Header">
       <el-table-column label="启用" width="64" align="center">
-        <template #default="{ row, $index }">
+        <template #default="{ $index }">
           <el-switch v-model="headerList[$index].enabled" size="small" @change="syncFromTable" />
         </template>
       </el-table-column>
-      <el-table-column label="Header 名" min-width="160">
+      <el-table-column label="Header 名" min-width="140">
         <template #default="{ $index }">
           <el-input v-model="headerList[$index].key" size="small" placeholder="Authorization" @blur="syncFromTable" />
         </template>
       </el-table-column>
-      <el-table-column label="Header 值" min-width="220">
+      <el-table-column label="Header 值" min-width="280">
         <template #default="{ $index }">
-          <el-input
-            v-model="headerList[$index].value"
-            size="small"
-            placeholder="Bearer token 或 ${{变量名}}"
-            @blur="syncFromTable"
-          />
+          <div class="value-row">
+            <el-input
+              v-model="headerList[$index].value"
+              size="small"
+              placeholder="Bearer token 或 ${{变量名}}"
+              @blur="syncFromTable"
+            />
+            <VarInsertButton
+              :env-id="refEnvId"
+              :show-env-edit="false"
+              label="变量"
+              size="small"
+            />
+            <ToolInsertButton :env-id="refEnvId" label="工具" size="small" link />
+          </div>
         </template>
       </el-table-column>
-      <el-table-column label="说明" min-width="140">
+      <el-table-column label="说明" min-width="120">
         <template #default="{ $index }">
           <el-input v-model="headerList[$index].description" size="small" placeholder="描述" @blur="syncFromTable" />
         </template>
@@ -47,13 +86,25 @@
     </div>
 
     <el-alert v-if="lastError" :title="lastError" type="error" show-icon closable class="validate-alert" @close="lastError = ''" />
+
+    <DataFactoryTagPicker
+      v-if="projectId"
+      v-model="tagPickerVisible"
+      :project-id="projectId"
+      @insert="onDfTagInsert"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { normalizeHeaderList, validateDefaultHeaders } from '@/utils/globalHeaders.js'
+import { ProjectStore } from '@/stores/module/ProjectStore'
+import VarInsertButton from '@/components/VarInsertButton.vue'
+import ToolInsertButton from '@/components/ToolInsertButton.vue'
+import DataFactoryTagPicker from '@/views/ApiModule/components/DataFactoryTagPicker.vue'
+import { insertVarRef, snapshotInsertTarget } from '@/utils/varInsert.js'
 
 const props = defineProps({
   modelValue: {
@@ -64,10 +115,15 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'validate'])
 
+const proStore = ProjectStore()
 const headerList = ref([])
 const lastError = ref('')
 const fileInputRef = ref(null)
 const syncing = ref(false)
+const refEnvId = ref(null)
+const tagPickerVisible = ref(false)
+
+const projectId = computed(() => proStore.projectInfo?.id)
 
 function loadFromModel(val) {
   syncing.value = true
@@ -79,6 +135,16 @@ watch(
   () => props.modelValue,
   (v) => loadFromModel(v),
   { immediate: true, deep: true }
+)
+
+watch(
+  () => proStore.envList,
+  (list) => {
+    if (!refEnvId.value && Array.isArray(list) && list.length) {
+      refEnvId.value = list[0].id
+    }
+  },
+  { immediate: true }
 )
 
 function emitList() {
@@ -142,6 +208,27 @@ function exportJson() {
   URL.revokeObjectURL(url)
 }
 
+function openTagPicker() {
+  if (!projectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  snapshotInsertTarget()
+  tagPickerVisible.value = true
+}
+
+async function onDfTagInsert(refStr) {
+  const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
+  const name = m ? m[1] : refStr
+  const result = await insertVarRef(name)
+  if (result?.ok) {
+    syncFromTable()
+    ElMessage.success(result.mode === 'copy' ? `已复制 ${refStr}，请粘贴到输入框` : `已插入 ${refStr}`)
+  } else {
+    ElMessage.warning('请先将光标放入「Header 值」输入框')
+  }
+}
+
 function validateAndGet() {
   const check = validateDefaultHeaders(headerList.value)
   if (!check.ok) {
@@ -166,7 +253,40 @@ defineExpose({ validateAndGet })
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
+  margin-bottom: 8px;
+}
+
+.var-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   margin-bottom: 10px;
+  padding: 8px 10px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 6px;
+}
+
+.var-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.var-toolbar-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.value-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+
+  .el-input {
+    flex: 1;
+    min-width: 0;
+  }
 }
 
 .hidden-file {

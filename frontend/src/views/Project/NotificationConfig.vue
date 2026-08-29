@@ -71,6 +71,7 @@
                 <el-tag v-if="scope.row.ui_alert_on_failure !== false" size="small" type="danger">Web失败告警</el-tag>
                 <el-tag v-if="scope.row.perf_alert_on_failure !== false" size="small" type="danger">压测失败告警</el-tag>
                 <el-tag v-if="scope.row.app_alert_on_failure !== false" size="small" type="danger">App失败告警</el-tag>
+                <el-tag v-if="scope.row.tm_assignment_notify !== false" size="small" type="warning">测试指派</el-tag>
                 <template v-if="scope.row.channel_type === 'email'">
                   <el-tag v-if="scope.row.api_auto_push_report" size="small" type="success">API自动推送</el-tag>
                   <el-tag v-if="scope.row.ui_auto_push_report" size="small" type="info">Web自动推送</el-tag>
@@ -115,6 +116,7 @@
         </div>
         <div style="margin-top: 4px; color: #909399;">
           Web 跑计划时：失败只发<strong>计划级</strong>一封告警。手动「发送报告」可勾选渠道——邮件附 HTML，IM 仅摘要。
+          测试管理<strong>指派邮件</strong>走全局 SMTP、发给被指派人个人邮箱，与下方邮件渠道开关无关。
         </div>
       </div>
       <el-tooltip placement="top">
@@ -144,7 +146,12 @@
       <!-- 邮件配置 -->
       <template v-if="formData.channel_type === 'email'">
         <el-form-item label="收件人：">
-          <el-input v-model="recipientsText" type="textarea" :rows="2" placeholder="多个邮箱用逗号或换行分隔"/>
+          <el-input
+            v-model="recipientsText"
+            type="textarea"
+            :rows="2"
+            placeholder="告警/报告收件人，多个邮箱用逗号或换行分隔；测试指派邮件发给被指派人个人邮箱，可不填"
+          />
         </el-form-item>
       </template>
 
@@ -181,6 +188,13 @@
           <div style="font-size: 12px; color: #909399; line-height: 1.4;">
             与「自动推报告」独立。只想手动发报告时：保持启用，关掉对应失败告警，并关掉自动推报告。
           </div>
+        </div>
+      </el-form-item>
+
+      <el-form-item label="测试指派：">
+        <el-switch v-model="formData.tm_assignment_notify" active-text="接收测试管理指派通知（站外）"/>
+        <div style="font-size: 12px; color: #909399; line-height: 1.4; margin-top: 4px;">
+          开启后，测试范围用例指派/缺陷指派/评审邀请等事件会通过本渠道外发（邮件发给被指派人邮箱）。
         </div>
       </el-form-item>
 
@@ -252,6 +266,7 @@ const formData = reactive({
   ui_auto_push_report: false,
   perf_auto_push_report: false,
   app_auto_push_report: false,
+  tm_assignment_notify: true,
 })
 const recipientsText = ref('')
 
@@ -346,6 +361,7 @@ const buildPayload = () => ({
   ui_auto_push_report: formData.ui_auto_push_report,
   perf_auto_push_report: formData.perf_auto_push_report,
   app_auto_push_report: formData.app_auto_push_report,
+  tm_assignment_notify: formData.tm_assignment_notify,
 })
 
 const openAddDialog = () => {
@@ -366,6 +382,7 @@ const openAddDialog = () => {
   formData.ui_auto_push_report = false
   formData.perf_auto_push_report = false
   formData.app_auto_push_report = false
+  formData.tm_assignment_notify = true
   recipientsText.value = ''
   dialogVisible.value = true
 }
@@ -384,6 +401,7 @@ const openEditDialog = (row) => {
   formData.ui_auto_push_report = row.ui_auto_push_report || false
   formData.perf_auto_push_report = row.perf_auto_push_report || false
   formData.app_auto_push_report = row.app_auto_push_report || false
+  formData.tm_assignment_notify = row.tm_assignment_notify !== false
   if (row.channel_type === 'email') {
     recipientsText.value = (row.config.recipients || []).join(',')
   }
@@ -397,10 +415,6 @@ const submitForm = async () => {
   }
   if (formData.channel_type === 'email') {
     const list = recipientsText.value.split(/[,，\n]/).map(s => s.trim()).filter(Boolean)
-    if (list.length === 0) {
-      ElMessage.warning('请至少填写一个收件人邮箱')
-      return
-    }
     formData.config.recipients = list
   }
 
@@ -442,6 +456,7 @@ const toggleEnabled = async (row) => {
       ui_auto_push_report: row.ui_auto_push_report,
       perf_auto_push_report: row.perf_auto_push_report,
       app_auto_push_report: row.app_auto_push_report || false,
+      tm_assignment_notify: row.tm_assignment_notify !== false,
     })
     ElMessage.success('状态更新成功')
   } catch (error) {

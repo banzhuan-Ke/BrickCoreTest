@@ -1,30 +1,33 @@
 <template>
   <div class="api-suite-case-picker">
-    <el-alert
-      type="info"
-      :closable="false"
-      show-icon
-      class="order-tip"
-    >
-      套件按<strong>执行序号</strong>从上到下依次运行；前置用例提取的变量（如 token）可在后续用例中通过
-      <code v-pre>${{变量名}}</code> 引用。请把登录、取 token 等用例排在前面。
-    </el-alert>
-
-    <el-alert
-      type="warning"
-      :closable="false"
-      show-icon
-      class="order-tip auth-priority-tip"
-    >
-      若已在 <strong>Token 授权</strong> 中启用登录并提取同名变量（如 <code v-pre>token</code>），
-      授权会在每条用例执行前<strong>覆盖</strong>套件传递的值，前序登录用例 extract 的 token 对后续用例通常<strong>不生效</strong>。
-      请与 Token 授权<strong>二选一</strong>：要么关闭授权、用套件链式登录；要么用授权、不必在套件里放登录用例。
-    </el-alert>
+    <div class="bc-picker-tips">
+      <el-alert type="info" :closable="false" show-icon class="bc-picker-tip bc-picker-tip--compact">
+        <template #title>
+          <div class="bc-picker-tip__row">
+            <span class="bc-picker-tip__text">
+              按<strong>执行序号</strong>从上到下运行；前置用例提取的变量可在后续用例用
+              <code v-pre>${{变量名}}</code> 引用。
+            </span>
+            <el-popover placement="bottom-end" :width="360" trigger="click">
+              <template #reference>
+                <el-button class="bc-picker-tip__more" type="warning" link size="small">Token 授权注意</el-button>
+              </template>
+              <div class="auth-tip-popover">
+                若已在 <strong>Token 授权</strong> 中启用登录并提取同名变量（如
+                <code v-pre>token</code>），授权会在每条用例执行前<strong>覆盖</strong>套件传递的值，
+                前序登录用例 extract 的 token 对后续用例通常<strong>不生效</strong>。
+                请与 Token 授权<strong>二选一</strong>：要么关闭授权、用套件链式登录；要么用授权、不必在套件里放登录用例。
+              </div>
+            </el-popover>
+          </div>
+        </template>
+      </el-alert>
+    </div>
 
     <div class="picker-panels">
       <div class="panel available-panel">
         <div class="panel-header">
-          <span>可选用例</span>
+          <span class="panel-title">可选用例</span>
           <el-select
             v-model="filterPriority"
             placeholder="优先级"
@@ -71,8 +74,8 @@
 
       <div class="panel selected-panel">
         <div class="panel-header">
-          <span>已选用例（{{ selectedList.length }}）</span>
-          <span class="sub-title">拖拽或使用箭头调整执行顺序</span>
+          <span class="panel-title">已选（{{ selectedList.length }}）</span>
+          <span class="sub-title">拖拽或箭头调整顺序</span>
         </div>
         <div class="panel-body selected-body">
           <VueDraggable
@@ -235,18 +238,20 @@ const moveDown = (index) => {
   width: 100%;
 }
 
-.order-tip {
-  margin-bottom: 12px;
+.auth-tip-popover {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular);
 
   code {
-    padding: 0 4px;
+    padding: 0 3px;
     font-size: 12px;
   }
 }
 
 .picker-panels {
   display: flex;
-  gap: 16px;
+  gap: 14px;
   min-height: 320px;
 
   @media (max-width: 900px) {
@@ -256,11 +261,22 @@ const moveDown = (index) => {
 
 .panel {
   flex: 1;
-  border: 1px solid var(--el-border-color);
-  border-radius: 6px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-bg-color);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow: hidden;
+}
+
+.available-panel {
+  background: var(--el-fill-color-blank);
+}
+
+.selected-panel {
+  border-color: var(--el-color-primary-light-5);
 }
 
 .panel-header {
@@ -270,8 +286,13 @@ const moveDown = (index) => {
   gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--el-border-color-lighter);
-  font-weight: 500;
-  font-size: 14px;
+  background: var(--el-bg-color);
+
+  .panel-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--el-text-color-primary);
+  }
 
   .sub-title {
     font-weight: normal;
@@ -306,25 +327,27 @@ const moveDown = (index) => {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-radius: 4px;
+  border-radius: 8px;
   margin-bottom: 6px;
   font-size: 13px;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
 
 .available-row {
   cursor: pointer;
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-fill-color-blank);
+  border: 1px solid transparent;
+  background: var(--el-bg-color);
 
   &:hover {
     border-color: var(--el-color-primary-light-5);
     background: var(--el-color-primary-light-9);
+    box-shadow: 0 1px 4px rgba(64, 158, 255, 0.12);
   }
 }
 
 .selected-row {
   border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-fill-color-light);
+  background: var(--el-fill-color-blank);
 
   .drag-handle {
     cursor: grab;
@@ -335,13 +358,17 @@ const moveDown = (index) => {
       cursor: grabbing;
     }
   }
+
+  &:hover {
+    border-color: var(--el-color-primary-light-5);
+  }
 }
 
 .exec-order {
   flex-shrink: 0;
-  width: 26px;
-  height: 26px;
-  line-height: 26px;
+  width: 24px;
+  height: 24px;
+  line-height: 24px;
   text-align: center;
   border-radius: 50%;
   background: var(--el-color-primary);

@@ -44,9 +44,9 @@ class PerfWorkerManager:
         access_token: str | None = None,
     ) -> None:
         if self.is_running:
-            raise RuntimeError("压测 Worker 已在运行")
+            raise RuntimeError("执行机已在运行")
         if not (self.runner_dir / "perf_worker.py").is_file():
-            raise FileNotFoundError(f"找不到压测脚本: {self.runner_dir / 'perf_worker.py'}")
+            raise FileNotFoundError(f"找不到执行机脚本: {self.runner_dir / 'perf_worker.py'}")
 
         ok, message, repair = diagnose_perf_runtime(self.runner_dir)
         if not ok:
@@ -56,15 +56,15 @@ class PerfWorkerManager:
         if max_concurrent < 1:
             raise ValueError("最大并发必须大于 0")
         if project_id < 1:
-            raise ValueError("请选择有效的压测项目")
+            raise ValueError("请选择有效的所属项目")
 
         rt = (runner_token or "").strip()
         at = (access_token or "").strip()
-        # 仅「性能测试」角色不上报 UI 设备，不会拿到 X-Runner-Token；须用登录 JWT 注册
+        # 仅接口代发/压测不上报 UI 设备，不会拿到 X-Runner-Token；须用登录 JWT 注册
         if not rt and not at:
             raise RuntimeError(
-                "压测 Worker 注册缺少认证：请先登录；"
-                "若仅开压测角色，将使用登录 JWT；也可改选「UI + 压测」上线。"
+                "执行机注册缺少认证：请先登录；"
+                "仅勾选接口代发或压测时使用登录 JWT；也可同时勾选 Web/App 上线。"
             )
 
         self.log_path.parent.mkdir(parents=True, exist_ok=True)

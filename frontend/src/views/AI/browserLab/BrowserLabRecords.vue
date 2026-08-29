@@ -35,6 +35,14 @@
       <el-table-column prop="tokens_used" label="Tokens" width="88" align="right">
         <template #default="{ row }">{{ formatTokens(row.tokens_used) }}</template>
       </el-table-column>
+      <el-table-column label="缓存" width="110" align="center">
+        <template #default="{ row }">
+          <el-tag v-if="row.cache_status" :type="cacheTag(row.cache_status)" size="small">
+            {{ cacheLabel(row.cache_status) }}
+          </el-tag>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="duration_sec" label="耗时(s)" width="80" align="center">
         <template #default="{ row }">{{ row.duration_sec ?? '-' }}</template>
       </el-table-column>
@@ -69,6 +77,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { browserLabApi } from '@/api/modules/ai.js'
+import { cacheStatusLabel, cacheStatusTag } from './browserLabExecOptions.js'
+import { buildExecConfirmContext } from './browserLabExecConfirmHelpers.js'
+import { openBrowserLabExecConfirm } from '@/composables/useBrowserLabExecConfirm.js'
+import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
 
@@ -76,6 +88,7 @@ const route = useRoute()
 const router = useRouter()
 const projectId = computed(() => ProjectStore().projectInfo?.id)
 const canExecute = computed(() => UserStore().hasPermission('ai_test:execute'))
+const { enabledConfigs, loadConfigs } = useAiConfigSelect({ scene: 'browser_lab' })
 
 const loading = ref(false)
 const list = ref([])
@@ -99,6 +112,8 @@ function statusLabel(s) {
 function statusTag(s) {
   return { done: 'success', running: 'warning', failed: 'danger', stopped: 'info' }[s] || 'info'
 }
+const cacheLabel = cacheStatusLabel
+const cacheTag = cacheStatusTag
 function formatTime(t) {
   return t ? String(t).replace('T', ' ').slice(0, 19) : '-'
 }
@@ -137,7 +152,31 @@ function goReport(row) {
 }
 
 async function rerun(row) {
-  const res = await browserLabApi.rerunTask(row.id, projectId.value)
+  let taskData = row
+  try {
+    const res = await browserLabApi.getTask(row.id, projectId.value)
+    if (res.data?.code === 200) taskData = res.data.data
+  } catch {
+    /* 列表数据降级 */
+  }
+  const ctx = buildExecConfirmContext({
+    title: '确认重跑',
+    name: taskData.case_name || (taskData.case_id ? `用例 #${taskData.case_id}` : `记录 #${row.id}`),
+    source: taskData,
+    aiConfigs: enabledConfigs.value,
+    taskId: row.id,
+  })
+  let confirmed
+  try {
+    confirmed = await openBrowserLabExecConfirm(ctx)
+  } catch {
+    return ElMessage.warning('执行确认弹窗未就绪，请刷新页面后重试')
+  }
+  if (!confirmed) return
+  const res = await browserLabApi.rerunTask(row.id, projectId.value, {
+    device_id: confirmed.device_id,
+    headless: confirmed.execForm?.headless,
+  })
   if (res.data?.code === 200) {
     ElMessage.success('已重新执行')
     router.push({ path: '/browser-lab/run', query: { taskId: res.data.data?.id } })
@@ -183,8 +222,9 @@ watch(() => route.query.caseId, (v) => {
   loadList()
 })
 
-onMounted(() => {
+onMounted(async () => {
   if (route.query.caseId) filters.value.case_id = Number(route.query.caseId)
+  await loadConfigs()
   loadList()
 })
 </script>

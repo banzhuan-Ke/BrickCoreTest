@@ -57,7 +57,7 @@
       />
 
       <div v-if="conclusionPoints.length" class="block">
-        <div class="block-label">关键指标对照</div>
+        <div class="block-label">{{ conclusionPointsLabel }}</div>
         <ul class="tone-list">
           <li
             v-for="(p, i) in conclusionPoints"
@@ -170,6 +170,8 @@ const props = defineProps({
   variant: { type: String, default: 'conclusion' },
   /** 指标 key → 中文名，用于清洗展示 */
   labelMap: { type: Object, default: () => ({}) },
+  /** 对比报告类型：compare | merge | hybrid；汇总时要点标题改为「分章要点」 */
+  reportKind: { type: String, default: '' },
 })
 
 const emit = defineEmits(['analysis-updated'])
@@ -183,6 +185,10 @@ const disabledByProject = ref(false)
 const expanded = ref(false)
 
 const isConclusion = computed(() => props.variant === 'conclusion')
+const isChapterPortrait = computed(() => String(props.reportKind || '').toLowerCase() === 'merge')
+const conclusionPointsLabel = computed(() =>
+  isChapterPortrait.value ? '分章要点' : '关键指标对照'
+)
 const hasSummary = computed(() => {
   const a = analysis.value
   if (!a) return false
@@ -202,7 +208,7 @@ const conclusionPoints = computed(() => {
       return {
         label: String(p.label || '').trim(),
         text: String(p.text || p.note || '').trim(),
-        tone: String(p.tone || 'flat').toLowerCase(),
+        tone: isChapterPortrait.value ? 'flat' : String(p.tone || 'flat').toLowerCase(),
       }
     })
     .filter((p) => p && (p.text || p.label))
@@ -244,6 +250,7 @@ const richText = (text, metricKey = '') =>
     lowerIsBetter: metricLowerIsBetter(metricKey),
   })
 const pointTone = (p) => {
+  if (isChapterPortrait.value) return 'flat'
   const t = String(p?.tone || 'flat').toLowerCase()
   if (t === 'better' || t === 'improved') return 'better'
   if (t === 'worse' || t === 'degraded') return 'worse'

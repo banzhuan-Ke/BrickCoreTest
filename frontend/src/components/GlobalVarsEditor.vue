@@ -64,9 +64,21 @@
             <el-switch v-model="varList[$index].secret" size="small" />
           </template>
         </el-table-column>
-        <el-table-column width="56" align="center">
-          <template #default="{ $index }">
-            <el-button type="danger" link size="small" icon="Delete" @click="removeRow($index)" />
+        <el-table-column label="操作" :width="showUsages ? 120 : 64" align="center" fixed="right">
+          <template #default="{ row, $index }">
+            <div class="row-actions">
+              <el-button
+                v-if="showUsages"
+                type="primary"
+                link
+                size="small"
+                :disabled="!row.key?.trim()"
+                @click="emit('view-usages', String(row.key || '').trim())"
+              >
+                引用
+              </el-button>
+              <el-button type="danger" link size="small" @click="removeRow($index)">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -107,6 +119,8 @@ import {
   BUILTIN_VAR_HINTS,
   isSecretKey,
   listToVarsObject,
+  mergeUserVarsWithSystem,
+  stripSystemGlobalVars,
   validateVarsObject,
   varsObjectToList,
 } from '@/utils/globalVars.js'
@@ -120,9 +134,14 @@ const props = defineProps({
     type: String,
     default: '280px',
   },
+  /** 行内显示「引用」快捷查看 */
+  showUsages: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['update:modelValue', 'validate'])
+const emit = defineEmits(['update:modelValue', 'validate', 'view-usages'])
 
 const mode = ref('table')
 const varList = ref([])
@@ -139,7 +158,7 @@ const jsonRows = computed(() => {
 })
 
 const hasVars = computed(() => {
-  const obj = normalizeObject(props.modelValue)
+  const obj = stripSystemGlobalVars(normalizeObject(props.modelValue))
   return Object.keys(obj).length > 0
 })
 
@@ -175,7 +194,8 @@ function parseJsonText() {
 
 function loadFromModel(val) {
   syncing.value = true
-  const obj = normalizeObject(val)
+  // 表格/JSON 只展示用户变量；ai_settings 等系统嵌套配置不进入编辑器
+  const obj = stripSystemGlobalVars(normalizeObject(val))
   varList.value = varsObjectToList(obj)
   if (mode.value !== 'json') {
     jsonText.value = stringifyObject(obj)
@@ -192,8 +212,11 @@ watch(
   { immediate: true, deep: true }
 )
 
-function emitObject(obj) {
-  const check = validateVarsObject(obj)
+function emitObject(userObj) {
+  // 始终先剥离系统配置再校验，避免 case_naming 等嵌套对象误报红提示
+  const cleaned = stripSystemGlobalVars(userObj)
+  const merged = mergeUserVarsWithSystem(cleaned, props.modelValue)
+  const check = validateVarsObject(cleaned)
   if (!check.ok) {
     lastError.value = check.error
     emit('validate', check)
@@ -201,7 +224,7 @@ function emitObject(obj) {
   }
   lastError.value = ''
   syncing.value = true
-  emit('update:modelValue', obj)
+  emit('update:modelValue', merged)
   emit('validate', check)
   syncing.value = false
   return true
@@ -209,6 +232,7 @@ function emitObject(obj) {
 
 function syncFromTable() {
   if (syncing.value) return
+  varList.value = varList.value.filter((row) => !row._rawObject)
   varList.value.forEach((row) => {
     if (!row.secret && row.key) row.secret = isSecretKey(row.key)
   })
@@ -224,7 +248,7 @@ function onModeChange(nextMode) {
     return
   }
   try {
-    const obj = parseJsonText()
+    const obj = stripSystemGlobalVars(parseJsonText())
     const check = validateVarsObject(obj)
     if (!check.ok) {
       lastError.value = check.error
@@ -266,7 +290,7 @@ function validateCurrent() {
   let obj
   if (mode.value === 'json') {
     try {
-      obj = parseJsonText()
+      obj = stripSystemGlobalVars(parseJsonText())
     } catch (err) {
       lastError.value = err.message
       ElMessage.error(err.message)
@@ -274,7 +298,7 @@ function validateCurrent() {
       return false
     }
   } else {
-    obj = listToVarsObject(varList.value)
+    obj = stripSystemGlobalVars(listToVarsObject(varList.value))
   }
   const check = validateVarsObject(obj)
   if (check.ok) {
@@ -334,12 +358,12 @@ function exportJson() {
   URL.revokeObjectURL(url)
 }
 
-/** 供父组件保存前调用 */
+/** 供父组件保存前调用：返回已合并系统配置的完整 global_vars */
 function validateAndGet() {
   if (mode.value === 'json') {
     try {
-      const obj = parseJsonText()
-      const check = validateVarsObject(obj)
+      const userObj = stripSystemGlobalVars(parseJsonText())
+      const check = validateVarsObject(userObj)
       if (!check.ok) {
         lastError.value = check.error
         ElMessage.error(check.error)
@@ -347,8 +371,9 @@ function validateAndGet() {
         return null
       }
       lastError.value = ''
-      emitObject(obj)
-      return obj
+      const merged = mergeUserVarsWithSystem(userObj, props.modelValue)
+      emitObject(userObj)
+      return merged
     } catch (err) {
       lastError.value = err.message
       ElMessage.error(err.message)
@@ -357,7 +382,8 @@ function validateAndGet() {
     }
   }
   if (!validateCurrent()) return null
-  return listToVarsObject(varList.value)
+  const userObj = listToVarsObject(varList.value)
+  return mergeUserVarsWithSystem(userObj, props.modelValue)
 }
 
 defineExpose({ validateAndGet, validateCurrent })
@@ -388,17 +414,42 @@ defineExpose({ validateAndGet, validateCurrent })
   display: none;
 }
 
+.table-panel {
+  width: 100%;
+}
+
+.table-panel :deep(.el-table .el-table__cell) {
+  padding: 8px 12px;
+}
+
+.table-panel :deep(.el-table th.el-table__cell) {
+  background: var(--el-fill-color-lighter);
+}
+
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
 .quick-hints {
-  margin-top: 10px;
+  margin-top: 12px;
+  padding: 8px 10px;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
   font-size: 12px;
+  line-height: 1.5;
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
 }
 
 .hint-label {
   color: var(--el-text-color-secondary);
+  padding-right: 2px;
 }
 
 .hint-tag {

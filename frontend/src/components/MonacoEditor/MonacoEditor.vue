@@ -105,11 +105,13 @@ watch(() => props.height, () => {
 <style scoped>
 .monaco-editor-host {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   position: relative;
   border: 1px solid var(--el-border-color);
   border-radius: 4px;
   overflow: hidden;
-  flex-shrink: 0;
+  flex-shrink: 1;
   box-sizing: border-box;
 }
 .monaco-editor-host :deep(.monaco-editor),

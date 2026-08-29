@@ -103,28 +103,56 @@
     </el-card>
     
     <!-- 执行套件对话框 -->
-    <el-dialog v-model="runDialogVisible" title="执行套件" width="400px" destroy-on-close>
-      <el-form :model="runForm" label-width="100px">
-        <el-form-item label="执行环境" required>
-          <el-select v-model="runForm.env_id" placeholder="选择环境" style="width: 100%">
-            <el-option
-              v-for="env in proStore.envList"
-              :key="env.id"
-              :label="env.name"
-              :value="env.id"
-            />
-          </el-select>
-        </el-form-item>
-      </el-form>
+    <el-dialog v-model="runDialogVisible" title="执行套件" width="560px" destroy-on-close class="bc-dialog">
+      <div class="bc-dialog-body">
+        <section class="bc-dialog-section">
+          <div class="bc-dialog-section__title">执行配置</div>
+          <el-form :model="runForm" label-width="96px" class="bc-dialog-form">
+            <el-form-item label="执行环境" required>
+              <el-select v-model="runForm.env_id" placeholder="选择环境" filterable style="width: 100%">
+                <el-option
+                  v-for="env in proStore.envList"
+                  :key="env.id"
+                  :label="env.name"
+                  :value="env.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="执行机">
+              <ViaWorkerSelect
+                v-model="runForm.worker_id"
+                :env-id="runForm.env_id"
+                force-serial-hint
+              />
+            </el-form-item>
+            <IncludeQuarantineCheckbox v-model="runForm.include_quarantine" />
+          </el-form>
+        </section>
+      </div>
       <template #footer>
         <el-button @click="runDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="confirmRun" :loading="running">执行</el-button>
       </template>
     </el-dialog>
-    
+
     <!-- 编辑用例对话框 -->
-    <el-dialog v-model="editDialogVisible" title="编辑套件用例" width="960px" destroy-on-close>
-      <ApiSuiteCasePicker v-model="selectedCaseIds" :case-options="allCases" />
+    <el-dialog
+      v-model="editDialogVisible"
+      title="编辑套件用例"
+      width="980px"
+      top="5vh"
+      destroy-on-close
+      class="bc-dialog bc-dialog--wide"
+    >
+      <div class="bc-dialog-body">
+        <section class="bc-dialog-section">
+          <div class="bc-dialog-section__title">
+            套件用例
+            <span class="bc-dialog-section__meta">按序号决定执行顺序</span>
+          </div>
+          <ApiSuiteCasePicker v-model="selectedCaseIds" :case-options="allCases" />
+        </section>
+      </div>
       <template #footer>
         <el-button @click="editDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="saveCases" :loading="saving">保存</el-button>
@@ -147,6 +175,8 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import http from '@/api/index'
 import ApiRunDetail from './components/ApiRunDetail.vue'
 import ApiSuiteCasePicker from './components/ApiSuiteCasePicker.vue'
+import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
+import IncludeQuarantineCheckbox from '@/components/IncludeQuarantineCheckbox.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -180,7 +210,7 @@ const orderedCaseList = computed(() => {
 
 // 执行对话框
 const runDialogVisible = ref(false)
-const runForm = reactive({ env_id: null })
+const runForm = reactive({ env_id: null, worker_id: null, include_quarantine: false })
 const running = ref(false)
 
 // 编辑用例
@@ -263,6 +293,8 @@ const handleRun = () => {
     return
   }
   runForm.env_id = suiteInfo.env_id || proStore.envList[0]?.id
+  runForm.worker_id = null
+  runForm.include_quarantine = false
   runDialogVisible.value = true
 }
 
@@ -273,7 +305,11 @@ const confirmRun = async () => {
   }
   running.value = true
   try {
-    const res = await http.apiModuleApi.runSuiteAsync(suiteId.value, runForm)
+    const res = await http.apiModuleApi.runSuiteAsync(suiteId.value, {
+      env_id: runForm.env_id,
+      include_quarantine: !!runForm.include_quarantine,
+      ...(runForm.worker_id ? { worker_id: runForm.worker_id } : {}),
+    })
     const data = res.data
     runDialogVisible.value = false
     ElMessage.info('套件已开始后台执行，请稍候…')

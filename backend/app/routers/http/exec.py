@@ -2,7 +2,7 @@
 import time
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks, Query
 from pydantic import BaseModel, Field
 
 from app.models.http import (
@@ -15,6 +15,7 @@ from app.schemas.http import (
     ApiSuiteRunRequest,
 )
 from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
+from app.core.platform.project_access import PROJECT_ROLE_VIEWER, assert_project_access
 from app.core.platform.permissions import API_CASE_EXECUTE
 from app.core.ops.notification import NotificationService
 from app.modules.data_tools.inline_tools import ensure_dt_cache
@@ -42,6 +43,12 @@ async def batch_run(request: ApiBatchRunRequest, background_tasks: BackgroundTas
     if not env:
         raise HTTPException(status_code=404, detail="环境不存在")
 
+    from app.modules.http.worker_http_proxy import require_api_proxy_worker_http, worker_record_fields
+
+    proxy_worker = None
+    if request.worker_id is not None:
+        proxy_worker = await require_api_proxy_worker_http(env.project_id, request.worker_id)
+
     suite = await ApiTestSuite.get_or_none(id=request.suite_id, is_del=False) if request.suite_id else None
     proj = await Project.get_or_none(id=env.project_id, is_del=False)
     project_global_vars = (proj.global_vars or {}) if proj else {}
@@ -57,7 +64,8 @@ async def batch_run(request: ApiBatchRunRequest, background_tasks: BackgroundTas
             total_cases=len(request.case_ids),
             env_id=request.env_id,
             env_name=env.name,
-            run_by=username
+            run_by=username,
+            **worker_record_fields(proxy_worker),
         )
     
     batch_start_time = time.time()
@@ -71,24 +79,40 @@ async def batch_run(request: ApiBatchRunRequest, background_tasks: BackgroundTas
             username=username,
             auto_validate_schema=getattr(request, "auto_validate_schema", False),
             project_global_vars=project_global_vars,
+            worker_id=request.worker_id,
+            include_quarantine=bool(getattr(request, "include_quarantine", False)),
         )
         results = run_result["case_results"]
         success_count = run_result["success_count"]
         failed_count = run_result["failed_count"]
         hooks_result = run_result["hooks_result"]
     else:
+        from app.modules.stability.quarantine import split_quarantined_ids, write_api_quarantine_skips
+
         results = []
         success_count = 0
         failed_count = 0
         accumulated_vars = ensure_dt_cache({})
         hooks_result: dict = {"setup": [], "teardown": [], "db_assertions": [], "success": True}
+        runnable_ids, quarantined_ids = await split_quarantined_ids(
+            "api",
+            request.case_ids,
+            include_quarantine=bool(getattr(request, "include_quarantine", False)),
+        )
+        results.extend(await write_api_quarantine_skips(
+            case_ids=quarantined_ids,
+            project_id=env.project_id,
+            username=username,
+            suite_record_id=None,
+        ))
 
         try:
-            for case_id in request.case_ids:
+            for case_id in runnable_ids:
                 result = await run_single_case(
                     case_id, request.env_id, None, username,
                     accumulated_vars, getattr(request, "auto_validate_schema", False),
                     project_global_vars=project_global_vars,
+                    worker_id=request.worker_id,
                 )
                 results.append(result)
                 accumulated_vars.update(result.extracted_vars)
@@ -188,7 +212,14 @@ async def run_suite(suite_id: int, request: ApiSuiteRunRequest, username: str = 
         raise HTTPException(status_code=422, detail="请指定执行环境")
     
     return await batch_run(
-        ApiBatchRunRequest(case_ids=case_ids, env_id=env_id, suite_id=suite_id, auto_validate_schema=getattr(request, 'auto_validate_schema', False)),
+        ApiBatchRunRequest(
+            case_ids=case_ids,
+            env_id=env_id,
+            suite_id=suite_id,
+            auto_validate_schema=getattr(request, 'auto_validate_schema', False),
+            worker_id=request.worker_id,
+            include_quarantine=bool(getattr(request, "include_quarantine", False)),
+        ),
         None,
         username
     )
@@ -221,6 +252,12 @@ async def run_suite_async(suite_id: int, request: ApiSuiteRunRequest, background
     if not env:
         raise HTTPException(status_code=404, detail="环境不存在")
 
+    from app.modules.http.worker_http_proxy import require_api_proxy_worker_http, worker_record_fields
+
+    proxy_worker = None
+    if request.worker_id is not None:
+        proxy_worker = await require_api_proxy_worker_http(suite.project_id, request.worker_id)
+
     # 立即创建执行记录（状态为 running），并返回 record_id
     suite_record = await ApiSuiteRunRecord.create(
         suite_id=suite_id,
@@ -230,14 +267,17 @@ async def run_suite_async(suite_id: int, request: ApiSuiteRunRequest, background
         total_cases=len(case_ids),
         env_id=env_id,
         env_name=env.name,
-        run_by=username
+        run_by=username,
+        **worker_record_fields(proxy_worker),
     )
 
     batch_request = ApiBatchRunRequest(
         case_ids=case_ids,
         env_id=env_id,
         suite_id=suite_id,
-        auto_validate_schema=getattr(request, 'auto_validate_schema', False)
+        auto_validate_schema=getattr(request, 'auto_validate_schema', False),
+        worker_id=request.worker_id,
+        include_quarantine=bool(getattr(request, "include_quarantine", False)),
     )
 
     async def _run_in_background():
@@ -255,6 +295,8 @@ async def run_suite_async(suite_id: int, request: ApiSuiteRunRequest, background
                 username=username,
                 auto_validate_schema=getattr(batch_request, "auto_validate_schema", False),
                 project_global_vars=project_global_vars,
+                worker_id=request.worker_id,
+                include_quarantine=bool(getattr(request, "include_quarantine", False)),
             )
         except Exception as e:
             print(f"[AsyncSuiteRun] 执行异常: {e}")
@@ -330,6 +372,21 @@ class ApiRunCaseRequest(BaseModel):
     variables: Optional[Dict[str, Any]] = Field(default={}, description="变量")
     auto_validate_schema: bool = Field(default=False, description="是否自动校验响应 Schema")
     propagate_extracted: bool = Field(default=True, description="数据驱动时行间传递提取变量")
+    worker_id: Optional[int] = Field(
+        None,
+        description="经在线压测执行机代发时指定 Worker ID；不传则由平台本机发送",
+    )
+
+
+@router.get("/idle-workers", summary="列出可用于接口代发的在线空闲执行机")
+async def list_idle_workers(
+    project_id: int = Query(..., description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.modules.http.worker_http_proxy import list_idle_api_proxy_workers
+
+    await assert_project_access(user_info, project_id, min_role=PROJECT_ROLE_VIEWER)
+    return await list_idle_api_proxy_workers(project_id)
 
 
 @router.post("/cases/{case_id}", summary="执行单条用例", status_code=status.HTTP_201_CREATED)
@@ -337,6 +394,13 @@ async def run_single_case_endpoint(case_id: int, request: ApiRunCaseRequest, use
     """执行单个接口测试用例；如果用例配置了数据集，则执行数据驱动（返回 ApiDataDrivenRunResult）"""
     from app.schemas.http import ApiDataDrivenRunResult
     from .suites import run_single_case as _run_single_case, run_data_driven_case
+
+    if request.worker_id is not None:
+        case = await ApiTestCase.get_or_none(id=case_id, is_del=False)
+        if not case:
+            raise HTTPException(status_code=404, detail="用例不存在")
+        from app.modules.http.worker_http_proxy import require_api_proxy_worker_http
+        await require_api_proxy_worker_http(case.project_id, request.worker_id)
 
     case = await ApiTestCase.get_or_none(id=case_id, is_del=False)
     if case and case.data_set:
@@ -347,6 +411,7 @@ async def run_single_case_endpoint(case_id: int, request: ApiRunCaseRequest, use
             request.variables,
             request.auto_validate_schema,
             request.propagate_extracted,
+            worker_id=request.worker_id,
         )
     return await _run_single_case(
         case_id,
@@ -355,4 +420,5 @@ async def run_single_case_endpoint(case_id: int, request: ApiRunCaseRequest, use
         username,
         request.variables,
         request.auto_validate_schema,
+        worker_id=request.worker_id,
     )

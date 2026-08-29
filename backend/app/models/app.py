@@ -21,6 +21,7 @@ class AppCase(models.Model):
         max_length=20, default="hybrid", description="native|vision|hybrid|hybrid_web|mobile_chrome"
     )
     description = fields.TextField(null=True, description="用例描述")
+    tags = fields.JSONField(default=list, description="用例标签（含 quarantine）")
     username = fields.CharField(max_length=50, description="创建人")
     update_by = fields.CharField(max_length=50, null=True, description="最后更新人")
     create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
@@ -145,6 +146,7 @@ class AppPlanExecution(models.Model):
     fail = fields.IntField(default=0)
     error = fields.IntField(default=0)
     skip = fields.IntField(default=0)
+    quarantine_skip = fields.IntField(default=0, description="已隔离未跑数")
     pass_rate = fields.FloatField(default=0)
     execution_log = fields.JSONField(default=list, null=True)
     username = fields.CharField(max_length=50, description="创建人")
@@ -171,6 +173,7 @@ class AppSuiteExecution(models.Model):
     fail = fields.IntField(default=0)
     error = fields.IntField(default=0)
     skip = fields.IntField(default=0)
+    quarantine_skip = fields.IntField(default=0, description="已隔离未跑数")
     start_time = fields.DatetimeField(auto_now_add=True)
     duration = fields.FloatField(default=0)
     execution_log = fields.JSONField(default=list)

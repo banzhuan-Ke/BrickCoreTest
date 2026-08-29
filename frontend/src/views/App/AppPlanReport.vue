@@ -39,6 +39,7 @@
         :fail="runInfo.fail"
         :error="runInfo.error"
         :skip="runInfo.skip"
+        :quarantine-skip="runInfo.quarantine_skip"
         :case-count="runInfo.case_count"
         :duration="runInfo.duration"
         :username="runInfo.username"

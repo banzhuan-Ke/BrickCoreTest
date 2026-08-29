@@ -11,6 +11,14 @@
       <el-button type="primary" @click="loadList">查询</el-button>
       <el-button v-if="canExecute" type="success" @click="openEdit()">新建用例</el-button>
     </div>
+    <el-alert
+      v-if="cacheStats"
+      type="info"
+      :closable="false"
+      show-icon
+      class="cache-stats"
+      :title="`动作缓存：${cacheStats.ready_entries || 0} 条可用 · 累计命中 ${cacheStats.total_hits || 0} 次（加速同任务复跑，进 CI 请导入 Web 用例）`"
+    />
 
     <el-table :data="list" v-loading="loading" stripe @row-dblclick="(row) => openEdit(row)">
       <el-table-column prop="name" label="用例名称" min-width="120">
@@ -31,11 +39,12 @@
       <el-table-column prop="update_time" label="更新时间" width="160">
         <template #default="{ row }">{{ formatTime(row.update_time) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="220" fixed="right">
+      <el-table-column label="操作" width="280" fixed="right">
         <template #default="{ row }">
           <el-button v-if="canExecute" link type="primary" @click="runCase(row)">执行</el-button>
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button link type="primary" @click="viewRecords(row)">记录</el-button>
+          <el-button v-if="canExecute" link type="warning" @click="clearCache(row)">清缓存</el-button>
           <el-button v-if="canExecute" link type="danger" @click="removeCase(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -60,7 +69,10 @@
           <el-input v-model="editDialog.form.description" type="textarea" :rows="2" />
         </el-form-item>
         <el-form-item label="起始 URL" required>
-          <el-input v-model="editDialog.form.start_url" />
+          <div class="param-input-row">
+            <el-input v-model="editDialog.form.start_url" />
+            <VarInsertButton :env-id="numericCaseEnvId" label="变量" />
+          </div>
         </el-form-item>
         <BrowserLabTaskTextField
           v-model="editDialog.form.task_text"
@@ -70,6 +82,7 @@
           :case-name="editDialog.form.name"
           :ai-config-id="editDialog.aiConfigId"
           :project-id="projectId"
+          :env-id="editDialog.form.env_id"
         />
         <el-form-item label="标签">
           <el-input v-model="editDialog.form.tags" placeholder="逗号分隔" />
@@ -98,12 +111,19 @@ import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
 import BrowserLabExecOptionsFields from './BrowserLabExecOptionsFields.vue'
 import BrowserLabTaskTextField from './BrowserLabTaskTextField.vue'
 import { mergeBrowserLabExecForm, browserLabExecConfigPayload } from './browserLabExecOptions.js'
+import { buildExecConfirmContext } from './browserLabExecConfirmHelpers.js'
+import { openBrowserLabExecConfirm } from '@/composables/useBrowserLabExecConfirm.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+import VarInsertButton from '@/components/VarInsertButton.vue'
 
 const router = useRouter()
 const projectId = computed(() => ProjectStore().projectInfo?.id)
 const canExecute = computed(() => UserStore().hasPermission('ai_test:execute'))
+const numericCaseEnvId = computed(() => {
+  const n = Number(editDialog.value.form?.env_id)
+  return Number.isFinite(n) && n > 0 ? n : null
+})
 const { aiConfigId, enabledConfigs, loadConfigs } = useAiConfigSelect({ scene: 'browser_lab' })
 
 const loading = ref(false)
@@ -112,6 +132,7 @@ const page = ref(1)
 const size = ref(20)
 const total = ref(0)
 const filters = ref({ keyword: '' })
+const cacheStats = ref(null)
 const editDialog = ref({
   visible: false,
   id: null,
@@ -145,8 +166,21 @@ async function loadList() {
       list.value = res.data.data?.list || []
       total.value = res.data.data?.total || 0
     }
+    loadCacheStats()
   } finally {
     loading.value = false
+  }
+}
+
+async function loadCacheStats() {
+  if (!projectId.value) return
+  try {
+    const res = await browserLabApi.getActionCacheStats(projectId.value)
+    if (res.data?.code === 200) {
+      cacheStats.value = res.data.data
+    }
+  } catch {
+    cacheStats.value = null
   }
 }
 
@@ -200,11 +234,47 @@ async function saveCase() {
 }
 
 async function runCase(row) {
-  router.push({ path: '/browser-lab/run', query: { caseId: row.id, run: '1' } })
+  let caseData = row
+  try {
+    const res = await browserLabApi.getCase(row.id, projectId.value)
+    if (res.data?.code === 200) caseData = res.data.data
+  } catch {
+    /* 列表数据降级 */
+  }
+  const ctx = buildExecConfirmContext({
+    title: '确认执行',
+    name: caseData.name,
+    source: caseData,
+    aiConfigs: enabledConfigs.value,
+    caseId: caseData.id,
+  })
+  let confirmed
+  try {
+    confirmed = await openBrowserLabExecConfirm(ctx)
+  } catch {
+    return ElMessage.warning('执行确认弹窗未就绪，请刷新页面后重试')
+  }
+  if (!confirmed) return
+  const q = { caseId: row.id, run: '1', deviceId: confirmed.device_id }
+  if (confirmed.execForm?.headless === false) q.headless = '0'
+  router.push({ path: '/browser-lab/run', query: q })
 }
 
 function viewRecords(row) {
   router.push({ path: '/browser-lab/records', query: { caseId: row.id } })
+}
+
+async function clearCache(row) {
+  await ElMessageBox.confirm(
+    `清除用例「${row.name}」的动作缓存？下次执行将重新走 LLM 并写入新缓存。`,
+    '清除动作缓存',
+    { type: 'warning' }
+  )
+  const res = await browserLabApi.clearCaseActionCache(row.id, projectId.value)
+  if (res.data?.code === 200) {
+    ElMessage.success(res.data?.message || '已清除缓存')
+    loadCacheStats()
+  }
 }
 
 async function removeCase(row) {
@@ -228,6 +298,7 @@ onMounted(async () => {
 
 <style scoped>
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.cache-stats { margin-bottom: 12px; }
 .pager { margin-top: 12px; display: flex; justify-content: flex-end; }
 .bl-case-name {
   display: inline-block;
@@ -235,5 +306,11 @@ onMounted(async () => {
   line-height: 1.4;
   word-break: break-all;
   vertical-align: middle;
+}
+.param-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  width: 100%;
 }
 </style>

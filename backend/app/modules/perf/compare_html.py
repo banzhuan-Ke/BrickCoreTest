@@ -26,8 +26,8 @@ from app.modules.perf.perf_html_theme import (
 from app.routers.perf.report_utils import render_perf_html_chart_parts, render_compare_overlay_charts
 
 
-def _ai_conclusion(ai: dict, *, fallback_html: str = "") -> str:
-    return render_conclusion_box(ai, fallback_html=fallback_html)
+def _ai_conclusion(ai: dict, *, fallback_html: str = "", kind: str | None = None) -> str:
+    return render_conclusion_box(ai, fallback_html=fallback_html, kind=kind)
 
 
 def _rec_label(r: dict) -> str:
@@ -1145,6 +1145,7 @@ def _render_merge_html(report: Any) -> str:
 
     conclusion = _ai_conclusion(
         ai,
+        kind=REPORT_KIND_MERGE,
         fallback_html=(
             f"<p>共汇总 {len(chapters)} 个章节，请按章节查看各轮表现。</p>"
         ) if records else "",
@@ -1314,7 +1315,10 @@ def _render_compare_html(report: Any, *, hybrid: bool = False) -> str:
 
     metric_html = _render_metric_compare_section(snap, ai, heading=sec_metric)
 
-    conclusion = _ai_conclusion(ai)
+    conclusion = _ai_conclusion(
+        ai,
+        kind=REPORT_KIND_HYBRID if hybrid else REPORT_KIND_COMPARE,
+    )
     if not conclusion and len(records) >= 2:
         best_qps = max(records, key=lambda x: float(x.get("qps") or 0))
         ref_label = next((_round_heading(r, ref_id=ref_id, baseline=baseline) for r in records if r.get("id") == ref_id), f"#{ref_id}")
@@ -1380,7 +1384,12 @@ def _render_compare_html(report: Any, *, hybrid: bool = False) -> str:
 
 
 def _cn_num(n: int) -> str:
-    mapping = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九", 10: "十"}
+    mapping = {
+        1: "一", 2: "二", 3: "三", 4: "四", 5: "五",
+        6: "六", 7: "七", 8: "八", 9: "九", 10: "十",
+        11: "十一", 12: "十二", 13: "十三", 14: "十四", 15: "十五",
+        16: "十六", 17: "十七", 18: "十八", 19: "十九", 20: "二十",
+    }
     return mapping.get(n, str(n))
 
 

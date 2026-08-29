@@ -9,7 +9,7 @@
 ## 适用范围
 
 - **包含**：官方发布的 BrickCoreRunner 客户端安装包及其内置的运行时组件（不含本仓库源码）
-- **不包含**：本 Gitee 仓库中的平台前后端源码（其许可见 [`LICENSE`](LICENSE)）
+- **不包含**：本开源仓库（GitHub / Gitee 镜像）中的平台前后端源码（其许可见 [`LICENSE`](LICENSE)）
 
 ---
 

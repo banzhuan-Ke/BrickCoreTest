@@ -604,8 +604,9 @@ export const UI_STEP_PARAM_TOOLTIPS = {
   },
   save_storage_state: {
     path:
-      '执行机本机文件路径（如 D:\\\\auth\\\\state.json）。\n'
-      + '导出后可在环境「Web 启动登录态注入 → storage_state」填同一路径，下次开浏览器自动加载。',
+      '执行机本机 .json 文件路径（如 D:\\\\auth\\\\state.json，须含文件名）。\n'
+      + '须先登录并进入业务页；多域名 SSO 请先打开各认证/业务域。\n'
+      + '导出后在环境「Web 启动登录态注入 → storage_state」填同一路径。',
   },
   switch_to_page: {
     tag: '可选。按页面标签名切换（与新建窗口时填写的 tag 对应）',
@@ -930,11 +931,14 @@ export const UI_STEP_USAGE_GUIDES = {
     title: '导出登录态',
     type: 'info',
     paragraphs: [
-      '把当前浏览器 Cookie/Storage 导出为 Playwright storage_state 文件（路径在执行机本机）。',
-      '跨站点最省事的免登录：先正常登录一次 → 导出 → 环境「启动登录态」填同一路径，后续用例跳过登录 UI。',
+      '把当前浏览器 Cookie、LocalStorage 导出为文件，并附加各页 Session Storage（字段 sessionStorageOrigins）。',
+      '路径须为执行机本机 .json 文件（含文件名）；登录进入业务页后再导出。多域名 SSO 请先打开各认证/业务域。',
+      '环境「Web 启动登录态注入」填同一路径即可免重复登录 UI。不会自动跳到登录后地址——用例仍打开业务 URL。',
+      'Playwright 原生 storage_state 不含 Session Storage；本平台扩展后，凭证在 Session Storage 的站点也可走文件免登。',
+      '会话过期后重新导出或跑登录步骤片段；与接口「Token 授权（过期自动再登录）」不是同一套。',
     ],
     example:
-      '登录成功后 → 导出登录态 path=D:\\\\auth\\\\state.json\n'
+      '登录成功并进入业务页 → 导出登录态 path=D:\\\\auth\\\\state.json\n'
       + '环境启动登录态填写同一路径',
   },
   scroll_to_height: {

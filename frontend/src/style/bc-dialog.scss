@@ -1,0 +1,277 @@
+/* 平台通用弹窗美化：执行配置 / 新建编辑表单 / 进度提示 */
+
+.bc-dialog.el-dialog {
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12);
+
+  .el-dialog__header {
+    padding: 16px 20px 12px;
+    margin-right: 0;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+  }
+
+  .el-dialog__title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+    letter-spacing: 0.01em;
+  }
+
+  .el-dialog__headerbtn {
+    top: 16px;
+    right: 16px;
+  }
+
+  .el-dialog__body {
+    padding: 16px 20px 8px;
+    max-height: min(72vh, 760px);
+    overflow: auto;
+  }
+
+  .el-dialog__footer {
+    padding: 12px 20px 16px;
+    border-top: 1px solid var(--el-border-color-lighter);
+    background: var(--el-fill-color-blank);
+  }
+}
+
+.bc-dialog--wide .el-dialog__body {
+  max-height: min(78vh, 820px);
+}
+
+.bc-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bc-dialog-section {
+  padding: 14px 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: var(--el-bg-color);
+}
+
+.bc-dialog-section--muted {
+  background: var(--el-fill-color-blank);
+}
+
+.bc-dialog-section__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  line-height: 1.4;
+
+  &::before {
+    content: '';
+    width: 3px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--el-color-primary);
+    flex-shrink: 0;
+  }
+}
+
+.bc-dialog-section__meta {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+}
+
+.bc-dialog-form {
+  .el-form-item {
+    margin-bottom: 16px;
+  }
+
+  .el-form-item:last-child {
+    margin-bottom: 0;
+  }
+
+  .el-form-item__label {
+    color: var(--el-text-color-regular);
+    font-weight: 500;
+  }
+}
+
+.bc-dialog-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--el-text-color-secondary);
+
+  code {
+    padding: 0 4px;
+    border-radius: 3px;
+    background: var(--el-fill-color);
+    font-size: 12px;
+  }
+
+  strong {
+    color: var(--el-text-color-regular);
+    font-weight: 600;
+  }
+}
+
+.bc-dialog-alert {
+  margin-top: 8px;
+  border-radius: 8px;
+
+  .el-alert__title {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+}
+
+.bc-dialog-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  align-items: flex-start;
+}
+
+.bc-dialog-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bc-dialog-actions-inline {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 12px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.bc-dialog-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+
+  @media (max-width: 720px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.bc-dialog-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  width: 100%;
+}
+
+.bc-dialog-mode-hint {
+  flex: 1;
+  min-width: 180px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}
+
+.bc-dialog-collapse {
+  border: none;
+
+  .el-collapse-item__header {
+    height: 40px;
+    line-height: 40px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--el-text-color-primary);
+    border-bottom: none;
+    background: transparent;
+  }
+
+  .el-collapse-item__wrap {
+    border-bottom: none;
+  }
+
+  .el-collapse-item__content {
+    padding: 4px 0 8px;
+  }
+}
+
+.bc-dialog-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 28px 12px 16px;
+  gap: 10px;
+
+  .bc-dialog-progress__icon {
+    font-size: 40px;
+    color: var(--el-color-primary);
+  }
+
+  .bc-dialog-progress__title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--el-text-color-primary);
+  }
+
+  .bc-dialog-progress__desc {
+    margin: 0;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
+}
+
+/* 套件选用例：紧凑提示条 */
+.bc-picker-tips {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.bc-picker-tip {
+  border-radius: 8px;
+
+  .el-alert__description {
+    margin-top: 2px;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  code {
+    padding: 0 3px;
+    font-size: 12px;
+  }
+}
+
+.bc-picker-tip--compact {
+  .el-alert__content {
+    width: 100%;
+  }
+
+  .bc-picker-tip__row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .bc-picker-tip__text {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .bc-picker-tip__more {
+    flex-shrink: 0;
+    padding: 0;
+    height: auto;
+  }
+}

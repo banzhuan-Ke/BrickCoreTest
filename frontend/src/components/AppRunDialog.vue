@@ -1,6 +1,16 @@
 <template>
-  <el-dialog :model-value="modelValue" title="App 运行配置" width="640px" destroy-on-close @close="emit('update:modelValue', false)">
-    <el-form label-width="96px">
+  <el-dialog
+    :model-value="modelValue"
+    title="App 运行配置"
+    width="640px"
+    destroy-on-close
+    class="bc-dialog"
+    @close="emit('update:modelValue', false)"
+  >
+    <div class="bc-dialog-body">
+      <section class="bc-dialog-section">
+        <div class="bc-dialog-section__title">执行配置</div>
+        <el-form label-width="96px" class="bc-dialog-form ui-run-config-form">
       <el-form-item label="运行环境" required>
         <UiRunEnvSelect v-model="form.env_id" />
       </el-form-item>
@@ -95,7 +105,10 @@
           </el-checkbox>
         </div>
       </el-form-item>
-    </el-form>
+      <IncludeQuarantineCheckbox v-if="showIncludeQuarantine" v-model="form.include_quarantine" />
+        </el-form>
+      </section>
+    </div>
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
       <el-button type="primary" :loading="loading" @click="submit">运行</el-button>
@@ -108,6 +121,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { QuestionFilled } from '@element-plus/icons-vue'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
+import IncludeQuarantineCheckbox from '@/components/IncludeQuarantineCheckbox.vue'
 import { deviceApi } from '@/api'
 import { aiConfigApi } from '@/api/modules/ai'
 import { UserStore } from '@/stores/module/UserStore'
@@ -118,6 +132,7 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
   defaultRecordVideo: { type: Boolean, default: true },
   parallel: { type: Boolean, default: false },
+  showIncludeQuarantine: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue', 'submit'])
@@ -139,6 +154,7 @@ const form = reactive({
   auto_grant_permissions: true,
   record_video: true,
   ai_heal_enabled: true,
+  include_quarantine: false,
 })
 
 const showHealToggle = computed(() => healRunOptions.value?.locator_heal_enabled === true)
@@ -202,6 +218,7 @@ watch(
     form.auto_grant_permissions = true
     form.record_video = props.defaultRecordVideo
     form.ai_heal_enabled = true
+    form.include_quarantine = false
     loadHealRunOptions()
     loadDevices()
   }
@@ -229,6 +246,9 @@ function submit() {
     delete payload.ai_heal_enabled
   } else if (!healOverrideAllowed.value) {
     delete payload.ai_heal_enabled
+  }
+  if (!props.showIncludeQuarantine) {
+    delete payload.include_quarantine
   }
   emit('submit', { ...payload, trigger_source: 'manual' })
 }

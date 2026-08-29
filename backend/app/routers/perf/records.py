@@ -760,7 +760,7 @@ async def compare_records(
     req: CompareRequest,
     user_info: dict = Depends(is_authenticated),
 ):
-    """选择 2–10 条执行记录：同场景对比矩阵，跨场景合订预览（不落库）。"""
+    """选择 2–20 条执行记录：同场景对比矩阵，跨场景合订预览（不落库）。"""
     from app.modules.perf.compare_report import (
         MAX_COMPARE_RECORDS,
         MIN_COMPARE_RECORDS,

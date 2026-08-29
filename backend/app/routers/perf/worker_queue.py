@@ -90,6 +90,76 @@ async def clear_task(worker_id: int) -> None:
         evt.set()
 
 
+_CLEAR_IF_MATCH_LUA = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return 0
+end
+local ok, task = pcall(cjson.decode, raw)
+if not ok or type(task) ~= 'table' then
+  return 0
+end
+if tostring(task['task_type'] or '') == tostring(ARGV[1] or '')
+   and tostring(task[ARGV[2]] or '') == tostring(ARGV[3] or '') then
+  redis.call('DEL', KEYS[1])
+  return 1
+end
+return 0
+"""
+
+
+async def clear_task_if_match(
+    worker_id: int,
+    *,
+    task_type: str,
+    id_field: str,
+    id_value: str,
+) -> bool:
+    """仅当待领取任务匹配 task_type + 指定字段时删除，避免误删压测任务。"""
+    tt = str(task_type or "").strip()
+    field = str(id_field or "").strip()
+    val = str(id_value or "").strip()
+    if not tt or not field or not val:
+        return False
+
+    def _is_ours(task: Optional[dict]) -> bool:
+        if not task:
+            return False
+        return (
+            str(task.get("task_type") or "") == tt
+            and str(task.get(field) or "") == val
+        )
+
+    r = await _redis()
+    if r is not None:
+        try:
+            deleted = await r.eval(_CLEAR_IF_MATCH_LUA, 1, _key(worker_id), tt, field, val)
+            if int(deleted or 0) == 1:
+                _memory_queue.pop(worker_id, None)
+                return True
+        except Exception as exc:
+            logger.warning("perf worker queue Lua 条件清理失败，回退内存队列: %s", exc)
+
+    mem = _memory_queue.get(worker_id)
+    if _is_ours(mem):
+        _memory_queue.pop(worker_id, None)
+        evt = _memory_events.get(worker_id)
+        if evt:
+            evt.set()
+        return True
+    return False
+
+
+async def clear_task_if_request(worker_id: int, request_id: str) -> bool:
+    """仅当待领取任务仍是该 api_debug request_id 时删除，避免误删压测任务。"""
+    return await clear_task_if_match(
+        worker_id,
+        task_type="api_debug",
+        id_field="request_id",
+        id_value=str(request_id or ""),
+    )
+
+
 async def take_task(worker_id: int) -> Optional[dict]:
     """取出并移除 Worker 的待领取任务。"""
     r = await _redis()

@@ -95,13 +95,29 @@ class PromptManager:
 {% else %}
    - 在 {{count}} 条以内合理分配，优先覆盖：正向、边界值、异常、鉴权（若需要 Token）等场景，不必每种都写满。
 {% endif %}
-2. 每个用例必须包含以下字段：
+2. **请求体类型（硬性约束）**：每条用例的 request_body_type **必须等于接口请求体类型「{{body_type}}」**，禁止擅自改成 json 或其他类型。
+{% if body_type == "form-data" %}
+   - 本接口为 **form-data**（常见于文件上传）：
+     * request_body_type 固定写 `"form-data"`
+     * request_body 必须是空对象 `{}`
+     * 字段一律写在 request_body_fields（数组），优先使用接口「请求体字段」中的 name / field_type
+     * field_type=file 时：value / file_key / file_bucket 均留空字符串，由用户在平台上传真实文件
+     * field_type=text 时：按场景填写合理 value（可为空字符串）
+     * **严禁**把表单字段塞进 request_body 的 JSON 对象里
+{% elif body_type == "x-www-form-urlencoded" %}
+   - 本接口为 **x-www-form-urlencoded**：request_body 为扁平键值对象（字符串值），request_body_fields 为空数组 []
+{% elif body_type in ["xml", "raw"] %}
+   - 本接口为 **{{body_type}}**：request_body 为字符串，request_body_fields 为空数组 []
+{% else %}
+   - 本接口为 **json**：request_body 为 JSON 对象/数组，request_body_fields 为空数组 []
+{% endif %}
+3. 每个用例必须包含以下字段：
    - name：用例名称（中文，必须包含接口名称或功能主语，如"获取场景知识库列表-正向场景-合法参数"）
    - request_headers：请求头（覆盖或新增）；引用环境或上游变量时使用 ${{变量名}} 语法
    - request_params：查询参数（覆盖或新增，必须是数组，每个元素为 {name, value, type, required, description}）；value 中引用变量使用 ${{变量名}}
    - request_body_type：请求体类型，必须与接口一致（json / form-data / x-www-form-urlencoded / xml / raw）
    - request_body：请求体（覆盖或新增）。注意：当 request_body_type 为 form-data 时，request_body 必须是 {}，字段信息放在 request_body_fields 中
-   - request_body_fields：form-data 字段数组（仅当 request_body_type 为 form-data 时必填），每个元素为 {name, value, field_type, file_name, mime_type, file_key, file_bucket, description}。field_type 可选 text 或 file；file 类型时 value 为空，file_key/file_bucket 由平台上传后填充，AI 生成用例时若无文件可留空并由用户上传
+   - request_body_fields：form-data 字段数组（仅当 request_body_type 为 form-data 时使用），每个元素为 {name, value, field_type, file_name, mime_type, file_key, file_bucket, description}。field_type 可选 text 或 file；file 类型时 value 为空，file_key/file_bucket 由平台上传后填充，AI 生成用例时若无文件可留空并由用户上传
    - assertions：断言规则数组，每条包含 {type, target, operator, expected, description}
      * type: status_code / json_path / header / response_time / contains / not_contains
      * target: 当 type=json_path 时为 JSONPath 表达式（如 $.code）；type=header 时为头字段名；其他可为 null
@@ -121,8 +137,8 @@ class PromptManager:
      * source: json / header（json_path 请写 json）
      * path: 提取路径（JSONPath 或 header 字段名）
      * description: 描述（可选）
-3. 输出格式：标准 JSON 数组，每个元素是一个用例对象。
-4. 不要输出任何解释性文字，只输出 JSON。""",
+4. 输出格式：标准 JSON 数组，每个元素是一个用例对象。
+5. 不要输出任何解释性文字，只输出 JSON。""",
             "examples": [],
         },
         "mock_data_generation": {
@@ -328,6 +344,7 @@ SSE 样例（每行一条，可能含 data: / event: / id: 前缀）：
 - desc: 步骤中文描述
 - params: 参数对象（参数名必须严格匹配）
 - children: 子步骤数组（通常为 []）
+- 每个需要 locator 的步骤只能填写**一个**主定位表达式；若有多个备选，请写入 meta.candidates 字符串数组，**禁止**用英文逗号拼接多个 CSS 选择器到 locator 字段
 
 【页面操作】
 - open_url: {url, wait_until:"domcontentloaded", timeout:30000}
@@ -454,6 +471,7 @@ SSE 样例（每行一条，可能含 data: / event: / id: 前缀）：
                 "每次只规划**下一步**操作。你必须严格输出 JSON 对象，不要 Markdown 代码块。"
                 "定位器必须来自 snapshot 中当前可见、可交互的元素，严禁编造或对 hidden 元素做 wait。"
                 "定位优先级与录制器一致：data-testid > #id > get_by_role > name/label/placeholder > get_by_text（末选）。"
+                "填表与搜索优先 fill_value/type_value 直接写入，禁止为聚焦输入框而多余 click。"
             ),
             "user_prompt_template": """用户目标：{{description}}
 当前页面 URL：{{current_url}}
@@ -462,6 +480,15 @@ Snapshot 类型：{{snapshot_type}}
 
 {% if has_stuck_hint %}
 【本轮必读】{{stuck_hint}}
+{% endif %}
+
+{% if strict_goal_mode %}
+【多步目标模式 — 必读】
+- 用户目标含多项子任务，须逐项在页面上真实完成并在 snapshot 中可确认后，才可 done=true
+- 涉及登录须先 fill_value/type_value 输入凭证，再 click_ele；禁止跳过输入直接点登录
+- 登录按钮优先 `get_by_role=button, 登录`；点击后等待离开登录页，禁止换 locator 再点一次登录
+- 历史参考/摘要/「已成功」不代表当前页面已完成，禁止只完成部分导航就 done
+- done=true 时 message 须说明完成了哪些子目标；任一项未做则 done 必须为 false
 {% endif %}
 
 {% if executed_steps %}
@@ -497,11 +524,64 @@ Snapshot 类型：{{snapshot_type}}
    - 否则 → `get_by_role=button, <按钮完整可见名称>`（名称与 snapshot 一致，含空格）
    - **仅当**无 id/role 且文本唯一时，才用 `get_by_text=`；禁止用「登录」「提交」等短词（易误点说明文字）
 5. **输入框**：`#id` > `get_by_label=` > `get_by_placeholder=`；禁止对 placeholder 用 get_by_text=
-6. **优先 click_ele / hover 完成导航**；同一按钮已成功点击且 snapshot 已换屏后，不得再次 click 同一 locator
-7. **禁止**与已执行步骤相同的 method+locator；若结构未变说明点错，必须换 #id 或 get_by_role
-8. **禁止**滥用 wait_for_element 等待 hidden 节点；应直接 click 可见父级
-9. 用户描述「点击 XX 按钮」时，locator 必须对应 snapshot 里该 button 的 id 或 role+name，不要编造
-10. 只输出 JSON 对象""",
+6. **填表/搜索输入**：必须用 fill_value 或 type_value 直接写入；**禁止**先 click_ele 聚焦输入框再 fill（多余 click 易点错且浪费步数）
+7. **列表/表格搜索**：fill_value 写入关键词后，下一步 click_ele 点「搜索」「查询」等按钮，或 press_key Enter；**禁止**重复 click 已填过的搜索框
+8. **侧栏/菜单**（Element Plus 等）：优先 `get_by_role=menuitem, <完整菜单名>` 或 `get_by_text=`；有层级时先点父菜单再点子项；勿用短词（如「用例」）误点
+9. **优先 click_ele / hover 完成导航**；同一按钮已成功点击且 snapshot 已换屏后，不得再次 click 同一 locator
+10. **登录/提交**：locator 用 `get_by_role=button, 登录`（不要 get_by_text=登录）；点击后不要立刻再规划另一次登录 click，hash 路由跳转需要等待
+11. **禁止**与已执行步骤相同的 method+locator；若结构未变说明点错，必须换 #id 或 get_by_role
+12. **禁止**滥用 wait_for_element 等待 hidden 节点；应直接 click 可见父级
+13. 用户描述「点击 XX 按钮」时，locator 必须对应 snapshot 里该 button 的 id 或 role+name，不要编造
+14. press_key 的 params.key 用 Enter / Tab 等标准键名；scroll_to_height 的 params.height 为像素整数
+15. 只输出 JSON 对象""",
+            "examples": [],
+        },
+        "ui_locator_assist": {
+            "name": "UI 定位助手",
+            "scene_type": "ui_case",
+            "description": "根据粘贴的元素信息与意图生成可选定位表达式",
+            "system_prompt": (
+                "你是 Playwright / BrickCore Web 定位专家。"
+                "根据元素原料与用户意图，补充或改写定位候选。"
+                "严格输出 JSON，不要 Markdown。"
+                "禁止编造原料中未出现的可见文案；禁止 page.get_by_*() 函数写法。"
+            ),
+            "user_prompt_template": """步骤方法：{{ step_method }}
+意图：{{ intent }}
+建议下标（从 1 开始）：{{ suggested_index }}
+
+元素摘要 JSON：
+{{ element_summary }}
+
+已有规则候选：
+{{ rule_candidates }}
+
+原始元素材料：
+{{ raw_element }}
+
+输出 JSON：
+{
+  "candidates": [
+    {
+      "locator": "平台定位字符串",
+      "index": 1,
+      "confidence": "high|medium|low",
+      "reason": "简要说明"
+    }
+  ]
+}
+
+定位器规则（必须是字符串）：
+- 正确：get_by_placeholder=密码、get_by_role=button, 提交、#loginBtn、header >> get_by_text=设置
+- 错误：get_by_placeholder("密码")、page.get_by_role(...)、get_by_role=button, name="登入"
+- 优先 data-testid、#id、get_by_role、get_by_placeholder、get_by_label；get_by_text 次之
+- 可用区域链式 scope >> get_by_*；iframe 用 iframe||locator
+- 最多返回 6 条，按推荐程度排序；index 按意图填写，默认 {{ suggested_index }}
+""",
+            "variables": [
+                "step_method", "intent", "suggested_index",
+                "element_summary", "rule_candidates", "raw_element",
+            ],
             "examples": [],
         },
         "ui_locator_heal": {
@@ -1041,6 +1121,9 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
 
 错误信息：{{error_msg}}
 执行日志：{{logs}}
+{% if request_id %}request_id：{{request_id}}{% endif %}
+{% if failure_code %}failure_code：{{failure_code}}{% endif %}
+{% if failure_bucket %}失败桶：{{failure_bucket}}{% endif %}
 
 请输出 JSON 格式：
 {
@@ -1088,13 +1171,27 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
             "system_prompt": (
                 "你是一位性能测试专家。只能基于提供的对比快照中的数字与 trust 警告做分析，"
                 "禁止编造未给出的 QPS、P95、错误率、阶段耗时或请求数。"
+                "必须先读快照 kind 与 analysis_mode / baseline_enabled，再决定叙述方式："
+                "① kind=merge，或 analysis_mode=chapter_portrait："
+                "这是汇总/合订报告。按章节（label/display_name）各自画像；"
+                "默认禁止把不同场景或不同接口的指标做相对基准对照"
+                "（禁止无依据地写「远低于」「高出 N 倍」「较某某改善/恶化」）；"
+                "overview_table 仅可写「并排观察」，不得据此做优劣排名式结论；"
+                "conclusion_points 写「分章要点」，每条对应一个章节的关键数字，tone 一律 flat。"
+                "例外：若 user_extra_prompt 明确要求对照，允许在同一份汇总里做「分组规格阶梯」："
+                "例如上传组 500KB/1MB/5MB/10MB 互比、解析组各档互比，问答等其它章节单独画像；"
+                "各组结论可写在同一份 summary / conclusion_points 中，标明组别与规格；"
+                "禁止把不同业务组硬比（如问答 vs 上传），除非补充提示也明确要求。"
+                "② kind=compare，或 kind=hybrid 且 baseline_enabled=true / analysis_mode=baseline_delta："
+                "相对参照轮做指标对照，可用 better/worse；必须分清参照轮与对比轮名称，严禁写反。"
+                "③ kind=hybrid 且 baseline_enabled=false：跨场景合并，同分章画像；"
+                "若 user_extra_prompt 要求规格阶梯对照，规则同①的例外。"
                 "对外汇报：只用场景名与接口名称，禁止输出 case_id、记录内部数字 ID。"
                 "提及压测模式时必须使用中文名（固定模式/循环模式/梯度模式/流式阶段压测/链路固定模式/链路循环模式），"
                 "禁止输出 fixed/loop/stepping/stream_burst 等英文枚举；若快照含 mode_label 优先用它。"
                 "禁止在结论/建议/瓶颈中输出 phase_mean_*、phase_p95_*、phase_key 或其它英文字段名，"
                 "一律使用 metric_compare 中的中文 label（如「检索开始均值」「回答耗时P95」）。"
-                "必须正确区分参照轮与对比轮的场景名与展示名，严禁写反。"
-                "输出中文、专业、可执行；结论须含具体数字对比，便于管理层只读结论段即可决策。"
+                "输出中文、专业、可执行。"
                 "流式(stream_burst)/链路(journey_*)/问答类场景通常并发与请求数本就不高，"
                 "除非 trust.workload_hint 明确且完成量远低于并发×预期轮次，否则不要把「少于50请求」当作主要风险反复强调。"
             ),
@@ -1105,33 +1202,40 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
 
 说明：
 - kind=compare：同场景多次执行对比，关注相对基准的变化与可信度
-- kind=merge：跨场景合订，按章节解读各场景表现，仅可对 overview 做简单并排观察，禁止假装用例可对齐对比
-- kind=hybrid：合并+对比，先按 label/章节解读各轮画像，再结合 metric_compare 做相对基准对照；配置差大时变化率仅参考
-- 记录请用 label / display_name（如「瞬间峰值」），禁止输出 case_id、内部数字 ID；写结论时必须分清参照轮与对比轮，勿把名称写反
-- metric_compare 中 key 以 phase_ 开头的为流式/链路阶段指标（单位秒，越低越好），如整体耗时、问答耗时、检索完成等；必须写入结论对照，但对外只用中文 label，禁止写出 phase_mean_* / phase_p95_* 等英文 key
-- 若快照含 stepping_stage_compare：两轮均为梯度模式时按「第 N 阶段」对齐；须对每一个对齐阶段写清两侧并发、有完成秒数、QPS/RT/P95 与变化率，判断容量拐点；禁止只写全程汇总或只挑 1 个阶段；若某阶段 completed_seconds=0 须标明无完成样本；RT/P95 仅基于有完成秒（勿被空闲秒误解）
-- 若 stepping_stage_compare.summary / stages[].summary 已有分阶段摘要句，须纳入 conclusion_points 并扩写
-- 若快照含 user_extra_prompt，须优先遵循用户补充说明（例如重点对比整体耗时与问答耗时）
+- kind=merge：跨场景（或跨记录）合订汇总，按章节解读；默认禁止无依据的跨章相对优劣句
+- kind=hybrid：合并+对比；仅当 baseline_enabled=true 时做相对基准对照；配置差大或跨场景时变化率仅参考或不要写
+- analysis_mode=chapter_portrait：默认分章画像；若快照含 user_extra_prompt 且要求分组规格对照，则按补充说明做组内对照
+- analysis_mode=baseline_delta：才允许「从 A 到 B（±x%）」式参照轮对照
+- 记录请用 label / display_name（如「瞬间峰值」），禁止输出 case_id、内部数字 ID
+- metric_compare 中 key 以 phase_ 开头的为流式/链路阶段指标（单位秒，越低越好）；仅 baseline_delta 时必须写入结论对照，对外只用中文 label
+- 若快照含 stepping_stage_compare：仅在 baseline_delta 时按「第 N 阶段」对齐写变化；chapter_portrait 默认只分章写各阶段事实
+- 若快照含 user_extra_prompt，须优先遵循：可在同一份汇总中要求「多组规格阶梯对照 + 其它章节单独画像」
+  （例如上传四档一组、textin 两组各四档、问答单独写）；仍不得编造数字；不同业务组之间不要硬比，除非补充提示也写明
 - trust_by_record / workload_hint=stream_or_journey：低并发少请求属常见设计，勿机械要求「每侧≥50」
 
 要求：
-1. 按 kind 选择合适叙述（对比趋势 / 合订分章 / 分章+对照）
-2. summary 写 4–8 句详细结论：必须点名关键指标的前后数值与变化百分比（含 HTTP 指标与 phase_* 阶段指标）；若有 stepping_stage_compare，须覆盖全部对齐阶段（不只 1–2 个）；若有 user_extra_prompt 指定的指标须优先写清；文中只用中文指标名
-3. overview 2–4 句写测试画像（模式、并发、请求量、整体走势），勿夸大样本不足；梯度场景 overview 也要点到阶段跨度（如 10→30）
-4. 指出最值得关注的 1–3 个问题（引用展示名、接口名与指标，勿写 case_id / record id / 英文字段名）
-5. compare/hybrid 时结合 trust_by_record；merge 时勿编造跨场景变化率
-6. 给出可执行优化或复测建议（流式/问答场景不要默认建议「加到50并发」；建议里禁止出现 phase_* 英文 key）
-7. 为主要指标写短评（metric_notes）；阶段指标用 phase_mean_<key> 等作键（与 metric_compare.key 一致），短评正文只用中文
-8. 为关键接口写短评（case_notes，按接口 name）
+1. 按 kind / analysis_mode 选择叙述（对比趋势 / 合订分章 / 分章+对照）
+2. summary：
+   - baseline_delta：4–8 句，含参照轮与对比轮前后数值与变化百分比（中文指标名）
+   - chapter_portrait / merge：先总览各章，再按 user_extra_prompt 的分组做规格对照（可写在同一段 summary 里分小节）；
+     无补充提示时默认只分章画像、禁止跨章相对句；有分组对照要求时，组内可写倍数/百分比并标明「规格对照」
+3. overview 2–4 句写测试画像（模式、并发、请求量）；勿夸大样本不足
+4. 指出最值得关注的 1–3 个问题（引用展示名、接口名与指标）
+5. compare/hybrid 且 baseline_enabled 时结合 trust_by_record；merge 默认勿编造跨场景变化率（分组规格对照例外见上）
+6. 给出可执行优化或复测建议（流式/问答不要默认「加到50并发」）
+7. 为主要指标写短评（metric_notes）；阶段指标键与 metric_compare.key 一致，正文用中文
+8. 为关键接口写短评（case_notes，按接口 name）；merge 时按章节分别写
 9. 结合 time_series_sample / rt_histogram_summary，为各轮写 chart_notes
-10. conclusion_points：列出 3–8 条「指标对照」要点，每条含 label、text（含具体数字与百分比）、tone（better=优化变好 / worse=恶化 / flat=接近）；label/text 均为中文；若有梯度阶段对照，应为「第 N 阶段 · …」各阶段尽量各有一条
+10. conclusion_points（3–8 条，必要时可到 8 条以覆盖多组）：
+   - baseline_delta：「指标对照」，含具体数字与百分比，tone=better|worse|flat
+   - chapter_portrait / merge：label 建议带组别，如「上传·500KB」「上传规格对照」「问答」；
+     有分组要求时既有各档画像也有组内对照摘要；tone 建议 flat
 11. 输出 JSON：
 {
-  "summary": "详细结论 4–8 句，含具体数字，指标名用中文",
+  "summary": "详细结论，可含多组规格对照，指标名用中文",
   "overview": "测试概览 2–4 句",
   "conclusion_points": [
-    {"label": "整体耗时均值", "text": "从 9.8s 升至 13.5s（+37.8%）", "tone": "worse"},
-    {"label": "问答耗时均值", "text": "从 4.2s 降至 3.1s（-26.2%）", "tone": "better"}
+    {"label": "组别或展示名", "text": "一句含数字", "tone": "flat"}
   ],
   "metric_notes": {
     "qps": "一句",
@@ -1153,6 +1257,39 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
 不要输出任何解释性文字，只输出 JSON。""",
             "examples": [],
         },
+        "tm_release_summary": {
+            "name": "测试管理版本总结",
+            "scene_type": "tm_release_summary",
+            "description": "基于版本质量、稳定性趋势与风险推荐生成测试总结",
+            "system_prompt": (
+                "你是企业级测试经理，负责撰写版本/迭代测试总结。"
+                "只能使用上下文中给出的数字、结论与列表，禁止编造未出现的缺陷、通过率或用例数量。"
+                "发版建议必须与 quality_preview.conclusion 及门禁检查一致。"
+                "若自动化稳定度数据为空，不要编造 flaky 用例；可说明自动化样本不足。"
+                "输出简洁、可执行的中文 JSON。"
+            ),
+            "user_prompt_template": """请为以下测试版本撰写测试总结。
+
+版本：{{ release_key }} · {{ release_name }}
+
+## 上下文（JSON）
+{{ release_context }}
+
+请输出 JSON：
+{
+  "conclusion": "建议发布 / 有条件发布 / 不建议发布（须与门禁 conclusion 对齐）",
+  "executive_summary": "2-4 句高管摘要",
+  "highlights": ["亮点或已完成项"],
+  "risks": ["主要遗留风险"],
+  "recommendations": ["可执行改进建议"],
+  "automation_note": "自动化与稳定性一句话（无数据则说明样本不足）"
+}
+要求：
+1. conclusion 与 quality_preview.conclusion 语义一致（pass→建议发布；conditional_pass→有条件发布；failed/blocked→不建议发布）
+2. risks 与 recommendations 应呼应 risk_recommendations 与 open_defects，但不要逐条照抄
+3. 只输出 JSON，不要 Markdown 代码块""",
+            "examples": [],
+        },
         "perf_report_analysis": {
             "name": "压测单报告分析",
             "scene_type": "perf_report_analysis",
@@ -1161,12 +1298,15 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
                 "你是一位性能测试专家，按汇报报告体例撰写分析："
                 "测试概览解读、瓶颈接口、错误与风险、结论与建议。"
                 "只能使用快照中的数字与字段，禁止编造未给出的 QPS、分位、错误率或失败原因。"
-                "性能是否达标必须以快照中的 target_evaluation 为唯一依据，禁止自行创造 SLA、"
+                "性能是否「达标」必须以快照中的 target_evaluation 为唯一依据，禁止自行创造 SLA、"
                 "目标 QPS、可接受响应时间、「预期基准值」「业务可接受范围」等说法。"
-                "若 target_evaluation.overall_status 为 unknown 或未启用目标，只能说明"
-                "「未配置性能目标，无法按业务 SLA 判定」，不得用经验值冒充判定。"
-                "metric_notes 须先引用系统判定（pass/warn/fail/message），再补充原因分析；"
+                "若未启用目标或 overall_status 为 unknown：不要写「未配置性能目标/指标，无法按业务 SLA 判定」一类套话，"
+                "改为基于实际数字做常规结果解读（量级、稳定性线索、瓶颈与复测方向），并明确这不是 SLA 验收结论。"
+                "metric_notes：某指标在 target_evaluation.items 中有对应项时，先引用系统判定（pass/warn/fail/message）再补一句观察；"
+                "该项未配置时直接写常规指标解读，禁止用「未配置…无法判定」敷衍。"
                 "不得改写或否定 target_evaluation 的 pass/fail。"
+                "样本很少（如总请求数个位数、时长很短）时：勿写「系统稳定性达标」「容量已充分验证」；"
+                "勿把低并发短时跑批说成「未充分利用系统资源」；P95 略高于均值可写「存在一定离散/长尾迹象」，勿夸大。"
                 "对外汇报：只用接口名称，禁止输出 case_id 或内部数字 ID。"
                 "提及压测模式时必须使用 config.mode_label 中文名"
                 "（如「固定模式」「循环模式」「梯度模式」「流式阶段压测」「链路固定模式」「链路循环模式」），"
@@ -1180,20 +1320,26 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
 {{report_snapshot}}
 
 要求：
-1. 用 2–4 句写 overview（测试概览：配置、时长、整体表现）；模式名只用 mode_label 中文；达标结论必须与 target_evaluation.overall_status 一致
-2. summary 再写一段总评
-3. 指出瓶颈接口或长尾（只引用接口 name 与指标，禁止 case_id）
+1. 用 2–4 句写 overview（测试概览：配置、时长、整体表现）；模式名只用 mode_label 中文。
+   - 已启用目标：达标表述须与 target_evaluation.overall_status 一致（可写「已配置目标均通过/未通过」），但不要只堆「目标通过」空话，须带关键数字。
+   - 未启用目标或 overall_status=unknown：做常规结果分析即可，不要写「未配置性能目标，无法按业务 SLA 判定」。
+2. summary 再写一段总评（样本少时点明「样本量有限，结论仅供参考」；建议应可执行）
+3. 指出瓶颈接口或长尾（只引用接口 name 与指标，禁止 case_id）；样本过少时瓶颈表述要克制
 4. 若有错误 breakdown / 失败采样，说明可能风险（勿臆造根因细节）
-5. 为主要指标写一句短评（metric_notes）：先引用 target_evaluation 中对应项的系统判定，再解释可能原因；未配置目标时写「未配置性能目标，无法按业务 SLA 判定」，禁止写「预期基准值/业务可接受范围」
+5. 为主要指标写一句短评（metric_notes）：
+   - 该指标在 target_evaluation 有对应项：先引用系统判定 message/status，再补一句观察（勿否定 pass/fail）
+   - 该指标未配置目标：直接解读数值含义（量级、与其它指标关系、对业务体验的可能影响），禁止「未配置性能目标/指标，无法按业务 SLA 判定」
+   - 全程禁止自造「预期基准值/业务可接受范围」
 6. 结合 time_series_sample / rt_histogram，写 trend_note 与 distribution_note（各 1–2 句）
-7. 给出可执行复测或优化建议
+7. 给出可执行复测或优化建议（低负载探测跑优先建议加并发/加时长验证容量，而非空泛「优化系统」）
 8. 若 config.mode 为 stepping（梯度模式）或存在 stepping_stages / steps：
    - overview 与 summary 必须「逐阶段」写清：各阶段并发、计划时长、观察秒数/有完成秒数、平均 QPS、平均 RT（同时给出 ms 与约合秒）、错误率
    - 若快照含 stepping_stages_summary，可直接采纳并扩写，禁止只写全程汇总而跳过中间阶段
    - 结合 stepping_stages 判断容量拐点（QPS 不再随并发上升、RT 或错误率陡升）；有 completed_seconds=0 的阶段须明确写「该阶段无完成样本」
    - 勿把 config.concurrent_users（常为起始并发）误写成全程固定并发；峰值用 peak_concurrent_users / steps
    - recommendations 应针对梯度探容量给出下一档复测建议（例如在拐点附近加密阶段）
-9. 输出 JSON：
+9. highlights / risks / recommendations / bottleneck_notes 避免口号化：少用「稳定性达标」「资源未充分利用」等空话，多用数字与下一步动作
+10. 输出 JSON：
 {
   "summary": "总体概述",
   "overview": "测试概览 2–4 句",
@@ -1202,7 +1348,12 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
     "avg_rt": "一句",
     "p95": "一句",
     "error_rate": "一句",
-    "total_requests": "一句"
+    "total_requests": "一句",
+    "success_qps": "一句（若有）",
+    "success_avg_rt": "一句（若有）",
+    "success_p95": "一句（若有）",
+    "p90": "一句（若有）",
+    "p99": "一句（若有）"
   },
   "case_notes": [{"name": "接口名", "note": "一句"}],
   "trend_note": "性能趋势解读 1–2 句",

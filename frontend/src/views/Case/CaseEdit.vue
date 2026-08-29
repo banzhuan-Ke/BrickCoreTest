@@ -8,6 +8,11 @@
         <!-- 标题 -->
         <div class="card-header">
           <h2>编辑测试用例</h2>
+          <LinkFunctionalCaseButton
+            v-if="caseId"
+            :asset-type="'ui_case'"
+            :asset-id="Number(caseId)"
+          />
         </div>
         
         <!-- 基本信息表单 -->
@@ -42,6 +47,17 @@
               <el-option label="P2 - 中" value="P2" />
               <el-option label="P3 - 低" value="P3" />
             </el-select>
+          </el-form-item>
+
+          <el-form-item v-if="caseId" label="执行隔离">
+            <el-switch
+              v-model="quarantineEnabled"
+              active-text="已隔离"
+              inactive-text="正常"
+              :loading="quarantineSaving"
+              @change="onQuarantineChange"
+            />
+            <div class="quarantine-hint">隔离后计划/定时默认跳过；单条调试仍可运行</div>
           </el-form-item>
 
           <el-form-item label="用例描述">
@@ -190,10 +206,12 @@
             :debug-selected-index="selectedStepIndex"
             :debug-selected-indices="debugHighlightIndices"
             :enable-run-selected="true"
+            :can-verify-locator="interactiveSession?.status === 'ready'"
             @debug-step="openDebugDialog"
             @debug-select-step="onDebugSelectStep"
             @debug-selected-steps="onDebugSelectedSteps"
             @record-from-step="openRecordFromStep"
+            @verify-locator="onVerifyLocatorFromAssist"
           />
         </div>
 
@@ -270,6 +288,7 @@ import CaseUsedVarsPanel from '@/components/CaseUsedVarsPanel.vue'
 import CaseExecutionFailureAi from '@/components/CaseExecutionFailureAi.vue'
 import UiCaseAuthoringTips from '@/components/UiCaseAuthoringTips.vue'
 import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.vue'
+import LinkFunctionalCaseButton from '@/views/TestManagement/components/LinkFunctionalCaseButton.vue'
 import { UserStore } from '@/stores/module/UserStore'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
@@ -282,6 +301,7 @@ import ActionGroup from '@/datas/ActionGroup.js'
 import { applyPickLocatorToSteps } from '@/utils/debugLocator.js'
 import { parseExecutionIdQuery, hasExecutionHintsPayload } from '@/utils/caseExecutionHints'
 import { formatFailureCode, failureCodeTagType } from '@/utils/uiFailureCode'
+import { stabilityApi } from '@/api/modules/stability.js'
 import { formatDebugStepRange } from '@/utils/debugSession.js'
 import { insertStepIntoList, resolveInsertAfterIndex } from '@/utils/stepHelper'
 import {
@@ -371,6 +391,8 @@ const debugExecutionHints = ref(null)
 const executionHints = ref(null)
 const hintsExpanded = ref([])
 const hasFailureAnalysis = ref(false)
+const quarantineEnabled = ref(false)
+const quarantineSaving = ref(false)
 
 const visibleRecoveries = computed(() =>
   (executionHints.value?.step_recoveries || []).filter((item) => item && !item.unresolved),
@@ -511,6 +533,24 @@ function onFailureAnalysisLoaded(data) {
   }
 }
 
+async function onQuarantineChange(enabled) {
+  quarantineSaving.value = true
+  try {
+    const res = await stabilityApi.setQuarantine(caseId, { enabled: !!enabled, domain: 'ui' })
+    if (res.data?.code === 200) {
+      ElMessage.success(enabled ? '已隔离' : '已解除隔离')
+    } else {
+      quarantineEnabled.value = !enabled
+      ElMessage.error('隔离状态更新失败')
+    }
+  } catch (e) {
+    quarantineEnabled.value = !enabled
+    ElMessage.error(e?.response?.data?.detail || '隔离状态更新失败')
+  } finally {
+    quarantineSaving.value = false
+  }
+}
+
 // 获取用例详情
 async function getCaseDetail() {
   try {
@@ -523,6 +563,8 @@ async function getCaseDetail() {
       caseInfo.description = res.data.description || ''
       // 确保 steps 是数组
       caseInfo.steps = Array.isArray(res.data.steps) ? res.data.steps : []
+      const tags = Array.isArray(res.data.tags) ? res.data.tags : []
+      quarantineEnabled.value = tags.some((t) => String(t || '').trim().toLowerCase() === 'quarantine')
       await nextTick()
       captureSavedSnapshot()
     }
@@ -883,6 +925,76 @@ function applyDebugLocator(payload) {
   ElNotification.success(msg)
 }
 
+/** 定位助手：临时写入当前步骤主定位后走调试验证，结束后还原，避免取消编辑仍污染用例 */
+async function onVerifyLocatorFromAssist({ locator, index, stepIndex, paramKey, draftStep, __done } = {}) {
+  const finish = () => {
+    try {
+      __done?.()
+    } catch {
+      /* ignore */
+    }
+  }
+  if (interactiveSession.value?.status !== 'ready') {
+    ElMessage.warning('请先打开交互调试并等待就绪')
+    finish()
+    return
+  }
+  const idx = Number(stepIndex)
+  if (!Number.isFinite(idx) || idx < 0 || !caseInfo.steps?.[idx]) {
+    ElMessage.warning('请先保存步骤到列表后再验证，或确认当前正在编辑已有步骤')
+    finish()
+    return
+  }
+  const loc = String(locator || '').trim()
+  if (!loc) {
+    ElMessage.warning('无定位器可验证')
+    finish()
+    return
+  }
+  const key = String(paramKey || 'locator').trim() || 'locator'
+  const prevStep = JSON.parse(JSON.stringify(caseInfo.steps[idx]))
+  const steps = JSON.parse(JSON.stringify(caseInfo.steps))
+  const step = steps[idx]
+  // 合并弹窗未保存草稿（method/其它参数），再覆盖待验证定位
+  if (draftStep && typeof draftStep === 'object') {
+    if (draftStep.method) step.method = draftStep.method
+    if (draftStep.keyword) step.keyword = draftStep.keyword
+    if (draftStep.params && typeof draftStep.params === 'object') {
+      step.params = { ...(step.params || {}), ...draftStep.params }
+    }
+    if (draftStep.config && typeof draftStep.config === 'object') {
+      step.config = { ...(step.config || {}), ...draftStep.config }
+    }
+  }
+  // Runner verify 按 LOCATOR_PARAM_KEYS 取「第一个非空」；临时只保留目标键，避免验到另一字段
+  const locatorKeys = ['locator', 'selector', 'start_selector', 'first_locator', 'second_locator']
+  step.params = { ...(step.params || {}) }
+  for (const k of locatorKeys) {
+    if (k !== key) delete step.params[k]
+  }
+  step.params[key] = loc
+  const n = Number(index)
+  if (Number.isFinite(n) && n >= 1) {
+    step.params.index = n
+  }
+  caseInfo.steps = steps
+  selectedStepIndex.value = idx
+  await nextTick()
+  try {
+    await debugPanelRef.value?.verifySelectedStep?.({ forceSync: true })
+  } finally {
+    const restored = JSON.parse(JSON.stringify(caseInfo.steps))
+    if (restored[idx]) {
+      restored[idx] = prevStep
+      caseInfo.steps = restored
+      await nextTick()
+      // 会话侧也还原，避免后续执行仍带着临时候选定位
+      await debugPanelRef.value?.syncStepsFromEditor?.({ quiet: true, silent: true })
+    }
+    finish()
+  }
+}
+
 function openInteractiveDebug() {
   if (!caseInfo.steps?.length) {
     ElNotification.warning('请先添加步骤')
@@ -989,5 +1101,25 @@ watch(
 .execution-hints-meta {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.quarantine-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.card-header h2 {
+  margin: 0;
 }
 </style>

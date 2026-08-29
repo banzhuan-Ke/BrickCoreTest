@@ -97,6 +97,7 @@
               <span class="success">成{{ row.success_cases }}</span>
               <span class="failed">败{{ row.failed_cases }}</span>
               <span v-if="row.skipped_cases !== null && row.skipped_cases !== undefined" class="skipped">跳{{ row.skipped_cases }}</span>
+              <span v-if="row.quarantine_skip" class="skipped">隔{{ row.quarantine_skip }}</span>
             </div>
           </template>
         </el-table-column>
@@ -343,7 +344,10 @@ const viewDetail = (row) => {
 const handleRerun = async (row) => {
   rerunLoadingId.value = row.id
   try {
-    const payload = { env_id: row.env_id || undefined }
+    const payload = {
+      env_id: row.env_id || undefined,
+      ...(row.worker_id ? { worker_id: row.worker_id } : {}),
+    }
     if (row.record_type === 'plan' && row.plan_id) {
       await http.apiModuleApi.runPlanAsync(row.plan_id, payload)
       ElMessage.success('计划已重新提交执行')

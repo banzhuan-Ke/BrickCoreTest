@@ -276,7 +276,7 @@ class BrickCoreApi:
         if self.user_token:
             headers["Authorization"] = f"Bearer {self.user_token}"
         if not headers:
-            raise ApiError("压测下线缺少认证：请先登录或保持 Runner 会话")
+            raise ApiError("执行机下线缺少认证：请先登录或保持 Runner 会话")
         resp = requests.post(
             self._url("/perf/workers/unregister"),
             params={"project_id": project_id},

@@ -50,6 +50,7 @@ async def _prepare_suite_execution(
     username: str,
     device_id: str,
     plan_record: UiPlanExecution,
+    include_quarantine: bool = False,
 ) -> tuple[UiSuiteExecution, list[dict[str, Any]], int]:
     from app.routers.ui.exec import ExecutionService
 
@@ -75,7 +76,11 @@ async def _prepare_suite_execution(
         )
         cases.append(
             await ExecutionService.build_case_item(
-                case_execution, case_, step, suite_.project_id
+                case_execution,
+                case_,
+                step,
+                suite_.project_id,
+                include_quarantine=include_quarantine,
             )
         )
     suite_record.case_count = len(cases)
@@ -104,6 +109,7 @@ async def execute_ui_plan(
     ui_timeout_scale: Optional[float] = None,
     trigger_source: Optional[str] = None,
     cronjob_id: Optional[str] = None,
+    include_quarantine: bool = False,
 ) -> dict[str, Any]:
     """
     执行 UI 测试计划。
@@ -211,6 +217,7 @@ async def execute_ui_plan(
                 username=username,
                 device_id=dev_id,
                 plan_record=plan_record,
+                include_quarantine=include_quarantine,
             )
             total_cases += case_count
 

@@ -28,6 +28,7 @@ def should_apply_case_status_update(
     用例终态保护：
     - 允许 fail/error → success（自动重试恢复）
     - 允许 error → fail
+    - 允许 error → no_run（手动停止后 Runner 回报未跑用例）
     - 禁止 success → fail/error 等「变差」覆盖，避免进度/乱序回报把已成功打回失败
     """
     cur = normalize_ui_case_status(current_status) or ""
@@ -39,6 +40,8 @@ def should_apply_case_status_update(
     if cur in ("fail", "error") and nxt == "success":
         return True
     if cur == "error" and nxt == "fail":
+        return True
+    if cur == "error" and nxt == "no_run":
         return True
     return False
 

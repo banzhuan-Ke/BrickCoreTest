@@ -156,6 +156,21 @@ KNOWLEDGE_VIEW = "knowledge:view"
 KNOWLEDGE_EDIT = "knowledge:edit"
 KNOWLEDGE_EXECUTE = "knowledge:execute"
 
+# 测试管理（版本交付闭环）
+TEST_RELEASE_VIEW = "test_release:view"
+TEST_RELEASE_EDIT = "test_release:edit"
+TEST_REVIEW_VIEW = "test_review:view"
+TEST_REVIEW_SUBMIT = "test_review:submit"
+TEST_REVIEW_MANAGE = "test_review:manage"
+TEST_PLAN_VIEW = "test_plan:view"
+TEST_PLAN_EDIT = "test_plan:edit"
+TEST_PLAN_RUN = "test_plan:run"
+TEST_MANUAL_EXECUTE = "test_manual:execute"
+TEST_DEFECT_VIEW = "test_defect:view"
+TEST_DEFECT_EDIT = "test_defect:edit"
+TEST_QUALITY_VIEW = "test_quality:view"
+TEST_QUALITY_APPROVE_EXCEPTION = "test_quality:approve_exception"
+
 
 # 按模块分组，供前端渲染权限树使用
 PERMISSIONS = [
@@ -265,6 +280,24 @@ PERMISSIONS = [
         ]
     },
     {
+        "label": "测试管理",
+        "children": [
+            {"label": "版本管理-查看", "value": TEST_RELEASE_VIEW},
+            {"label": "版本管理-编辑", "value": TEST_RELEASE_EDIT},
+            {"label": "用例评审-查看", "value": TEST_REVIEW_VIEW},
+            {"label": "用例评审-提交结论", "value": TEST_REVIEW_SUBMIT},
+            {"label": "用例评审-管理", "value": TEST_REVIEW_MANAGE},
+            {"label": "测试计划-查看", "value": TEST_PLAN_VIEW},
+            {"label": "测试计划-编辑", "value": TEST_PLAN_EDIT},
+            {"label": "测试计划-运行", "value": TEST_PLAN_RUN},
+            {"label": "手工执行", "value": TEST_MANUAL_EXECUTE},
+            {"label": "缺陷-查看", "value": TEST_DEFECT_VIEW},
+            {"label": "缺陷-编辑", "value": TEST_DEFECT_EDIT},
+            {"label": "质量门禁-查看", "value": TEST_QUALITY_VIEW},
+            {"label": "质量门禁-批准豁免", "value": TEST_QUALITY_APPROVE_EXCEPTION},
+        ]
+    },
+    {
         "label": "系统管理",
         "children": [
             {"label": "用户管理-查看", "value": USER_VIEW},
@@ -332,6 +365,12 @@ ALL_PERMISSIONS = [
     AI_TEST_VIEW, AI_TEST_EXECUTE,
     AI_CONFIG_VIEW, AI_CONFIG_EDIT,
     KNOWLEDGE_VIEW, KNOWLEDGE_EDIT, KNOWLEDGE_EXECUTE,
+    TEST_RELEASE_VIEW, TEST_RELEASE_EDIT,
+    TEST_REVIEW_VIEW, TEST_REVIEW_SUBMIT, TEST_REVIEW_MANAGE,
+    TEST_PLAN_VIEW, TEST_PLAN_EDIT, TEST_PLAN_RUN,
+    TEST_MANUAL_EXECUTE,
+    TEST_DEFECT_VIEW, TEST_DEFECT_EDIT,
+    TEST_QUALITY_VIEW, TEST_QUALITY_APPROVE_EXCEPTION,
 ]
 
 async def get_user_permissions(user) -> list:

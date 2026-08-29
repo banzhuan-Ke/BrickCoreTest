@@ -4,7 +4,7 @@
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from tortoise.expressions import Q, RawSQL
@@ -19,8 +19,11 @@ from app.modules.ai.functional_case_service import (
 from app.modules.ai.functional_case_to_ui import (
     MAX_UI_PREVIEW_BATCH,
     UiGenerationContext,
+    finalize_functional_case_agent_preview,
     import_functional_cases_to_ui,
     preview_functional_cases_to_ui,
+    start_functional_case_agent_job,
+    start_functional_case_explore_job,
 )
 from app.modules.ai.functional_case_to_app import (
     MAX_APP_PREVIEW_BATCH,
@@ -231,14 +234,37 @@ class ToUiPreviewBody(UiContextBody):
     case_ids: list[int] = Field(..., min_length=1, max_length=MAX_UI_PREVIEW_BATCH)
     generation_mode: str = Field(
         default="single",
-        description="single=单页面；explore=多轮探索；agent=Agent（MCP）",
+        description="single=单页面；explore=多轮探索；agent=Agent（MCP，请用 agent-job 接口）",
     )
     max_rounds: int = Field(default=3, ge=1, le=10)
     max_steps: int = Field(default=15, ge=3, le=30)
+    device_id: Optional[str] = Field(default=None, max_length=100, description="Runner 设备 ID（有 page_url 时必填）")
+    headless: bool = Field(default=True, description="无头模式（默认 true）")
     auto_explore: bool = Field(
         default=False,
         description="已废弃，请用 generation_mode=explore",
     )
+
+
+class ToUiAgentJobBody(UiContextBody):
+    functional_case_id: int = Field(..., ge=1)
+    max_steps: int = Field(default=15, ge=3, le=30)
+    run_mode: Optional[str] = Field(default=None, description="已忽略；固定 runner")
+    device_id: Optional[str] = Field(default=None, max_length=100)
+    headless: bool = Field(default=True, description="无头模式（默认 true）")
+
+
+class ToUiAgentFinalizeBody(UiContextBody):
+    job_id: int = Field(..., ge=1)
+    functional_case_id: int = Field(..., ge=1)
+
+
+class ToUiExploreJobBody(UiContextBody):
+    functional_case_id: int = Field(..., ge=1)
+    max_rounds: int = Field(default=3, ge=1, le=10)
+    run_mode: Optional[str] = Field(default=None, description="已忽略；固定 runner")
+    device_id: Optional[str] = Field(default=None, max_length=100)
+    headless: bool = Field(default=True, description="无头模式（默认 true）")
 
 
 class ImportUiCaseItem(BaseModel):
@@ -248,6 +274,7 @@ class ImportUiCaseItem(BaseModel):
     level: Optional[str] = Field(default=None, max_length=10)
     case_description: Optional[str] = Field(default=None, max_length=4000, description="Web 用例描述")
     record_id: Optional[int] = None
+    login_prefix_count: int = Field(default=0, ge=0, le=50)
 
 
 class ImportUiBody(UiContextBody):
@@ -515,9 +542,12 @@ async def delete_by_import_batch(
 )
 async def preview_to_ui(
     body: ToUiPreviewBody,
+    request: Request,
     project_id: Optional[int] = None,
     user_info: dict = Depends(is_authenticated),
 ):
+    from app.modules.browser_dispatch import request_base_url
+
     pid = _resolve_project_id(user_info, project_id)
     user_info = {**user_info, "project_id": pid, "current_project_id": pid}
     ctx = UiGenerationContext.from_dict(body.model_dump())
@@ -532,11 +562,116 @@ async def preview_to_ui(
         max_rounds=body.max_rounds,
         max_steps=body.max_steps,
         user_info=user_info,
+        device_id=body.device_id,
+        request_base_url=request_base_url(request),
+        headless=body.headless,
     )
     msg = f"预览完成：成功 {data['success_count']} 条"
     if data["failed_count"]:
         msg += f"，失败 {data['failed_count']} 条"
     return StandardResponse(data=data, message=msg)
+
+
+@router.post(
+    "/to-ui/agent-job",
+    summary="功能用例单条 Agent 探索（异步 job）",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def start_to_ui_agent_job(
+    body: ToUiAgentJobBody,
+    request: Request,
+    project_id: Optional[int] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.modules.browser_dispatch import request_base_url
+
+    pid = _resolve_project_id(user_info, project_id)
+    user_info = {**user_info, "project_id": pid, "current_project_id": pid}
+    ctx = UiGenerationContext.from_dict({**body.model_dump(), "ai_config_id": body.ai_config_id})
+    data = await start_functional_case_agent_job(
+        project_id=pid,
+        functional_case_id=body.functional_case_id,
+        ctx=ctx,
+        max_steps=body.max_steps,
+        run_mode=body.run_mode,
+        device_id=body.device_id,
+        user_info=user_info,
+        request_base_url=request_base_url(request),
+        headless=body.headless,
+    )
+    return StandardResponse(data=data, message="Agent 任务已创建")
+
+
+@router.post(
+    "/to-ui/agent-finalize",
+    summary="功能用例 Agent job 终态后生成预览行",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def finalize_to_ui_agent_job(
+    body: ToUiAgentFinalizeBody,
+    project_id: Optional[int] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    pid = _resolve_project_id(user_info, project_id)
+    ctx = UiGenerationContext.from_dict(body.model_dump())
+    item = await finalize_functional_case_agent_preview(
+        project_id=pid,
+        job_id=body.job_id,
+        functional_case_id=body.functional_case_id,
+        ctx=ctx,
+    )
+    return StandardResponse(data=item)
+
+
+@router.post(
+    "/to-ui/explore-job",
+    summary="功能用例单条多轮探索（异步 job）",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def start_to_ui_explore_job(
+    body: ToUiExploreJobBody,
+    request: Request,
+    project_id: Optional[int] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.modules.browser_dispatch import request_base_url
+
+    pid = _resolve_project_id(user_info, project_id)
+    user_info = {**user_info, "project_id": pid, "current_project_id": pid}
+    ctx = UiGenerationContext.from_dict({**body.model_dump(), "ai_config_id": body.ai_config_id})
+    data = await start_functional_case_explore_job(
+        project_id=pid,
+        functional_case_id=body.functional_case_id,
+        ctx=ctx,
+        max_rounds=body.max_rounds,
+        run_mode=body.run_mode,
+        device_id=body.device_id,
+        user_info=user_info,
+        request_base_url=request_base_url(request),
+        headless=body.headless,
+    )
+    return StandardResponse(data=data, message="探索任务已创建")
+
+
+@router.post(
+    "/to-ui/explore-finalize",
+    summary="功能用例探索 job 终态后生成预览行",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def finalize_to_ui_explore_job(
+    body: ToUiAgentFinalizeBody,
+    project_id: Optional[int] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    pid = _resolve_project_id(user_info, project_id)
+    ctx = UiGenerationContext.from_dict(body.model_dump())
+    item = await finalize_functional_case_agent_preview(
+        project_id=pid,
+        job_id=body.job_id,
+        functional_case_id=body.functional_case_id,
+        ctx=ctx,
+    )
+    return StandardResponse(data=item)
 
 
 @router.post(
@@ -802,6 +937,23 @@ async def delete_functional_cases(
     return StandardResponse(data={"deleted_count": updated}, message=f"已删除 {updated} 条")
 
 
+@router.get(
+    "/{case_id}/lifecycle",
+    summary="功能用例生命周期聚合（需求/缺陷/计划运行）",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def get_functional_case_lifecycle(
+    case_id: int,
+    project_id: Optional[int] = None,
+    user_info: dict = Depends(is_authenticated),
+):
+    from app.modules.test_management import case_lifecycle_service as life
+
+    pid = _resolve_project_id(user_info, project_id)
+    data = await life.build_functional_case_lifecycle(pid, case_id)
+    return StandardResponse(data=data)
+
+
 @router.get("/{case_id}", summary="用例详情", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
 async def get_functional_case(
     case_id: int,
@@ -828,6 +980,9 @@ async def import_requirement_cases_to_library_handler(
     req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
     if not req:
         raise HTTPException(status_code=404, detail="需求不存在")
+    from app.modules.test_management.requirement_review_service import assert_requirement_design_allowed
+
+    await assert_requirement_design_allowed(req)
     if len(case_ids) > MAX_COPY_PER_REQUEST:
         raise HTTPException(status_code=400, detail=f"单次最多复制 {MAX_COPY_PER_REQUEST} 条")
 

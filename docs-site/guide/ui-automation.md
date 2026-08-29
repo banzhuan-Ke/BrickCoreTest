@@ -322,8 +322,10 @@ UI 与接口独立模块；**环境变量池共用**（项目/环境 global_vars
 不想每次回放都跑登录 UI 时：
 
 1. **环境 → 编辑 →「Web 启动登录态注入」**：配置 `Authorization`、LocalStorage、Cookie，或填执行机上的 `storage_state` 路径。
-2. **用例步骤**：`设置鉴权Token` / `设置LocalStorage` / `设置SessionStorage` / `设置Cookie`（LocalStorage 类须先 `访问页面url` 打开目标域）。
-3. **导出复用**：登录成功后用「导出登录态」生成文件，再把路径填回环境启动注入。
+2. **用例步骤**：`设置鉴权Token` / `设置LocalStorage` / `设置SessionStorage` / `设置Cookie`（Storage 类须先 `访问页面url` 打开目标域）。
+3. **导出复用**：登录成功并进入业务页后用「导出登录态」生成文件，再把路径填回环境启动注入。
+
+「导出登录态」除 Cookie / LocalStorage 外，会附加 **`sessionStorageOrigins`**（当前页 Session Storage），注入时按 origin 写回。须使用支持该能力的执行器；会话过期后需重新导出。
 
 仍可用 **步骤片段** 做完整登录流；平台不破解验证码/SSO。
 

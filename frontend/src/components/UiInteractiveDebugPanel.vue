@@ -507,6 +507,7 @@ const localRunningEditorIndices = ref([])
 const closing = ref(false)
 
 const syncing = ref(false)
+const pendingResync = ref(false)
 
 const deviceList = ref([])
 
@@ -1020,10 +1021,11 @@ function syncIdleBaseline(data) {
 
 function scheduleCheckStepsStale() {
   if (staleCheckTimer.value) clearTimeout(staleCheckTimer.value)
+  // 拖拽改序会连续触发 deep watch；略拉长防抖，减少与 select_step 抢命令槽
   staleCheckTimer.value = setTimeout(() => {
     staleCheckTimer.value = null
     checkStepsStale()
-  }, 450)
+  }, 800)
 }
 
 async function checkStepsStale() {
@@ -1056,6 +1058,8 @@ async function checkStepsStale() {
         lastSyncedSelectKey.value = ''
         await syncSelectedStepToRunner(props.selectedStepIndex)
       }
+    } else if (stepsStale.value && syncing.value) {
+      pendingResync.value = true
     }
 
   } catch {
@@ -1118,30 +1122,67 @@ async function ensureStepsForRun() {
 
 async function syncStepsFromEditor({ quiet = false, silent = false } = {}) {
   if (!session.value?.id) return false
+  if (syncing.value) {
+    pendingResync.value = true
+    return false
+  }
   syncing.value = true
   try {
-    await uiDebugApi.syncSteps(session.value.id, { steps: props.steps })
-    const status = await waitUntilReady()
-    if (status === 'ready') {
-      stepsStale.value = false
-      // 静默自动同步很频繁，不能清空调试结果，否则工具条刚写入的「调试成功」会被抹掉
-      if (!silent) {
-        mergedLastResult.value = null
-        lastSeenRunFingerprint.value = ''
-      }
-      if (!silent) {
-        if (quiet) {
-          ElMessage.success('已自动同步最新步骤')
+    let ok = false
+    do {
+      pendingResync.value = false
+      try {
+        await uiDebugApi.syncSteps(
+          session.value.id,
+          { steps: props.steps },
+          (silent || quiet) ? { skipErrorHandler: true } : {},
+        )
+      } catch (e) {
+        const status = e?.status || e?.response?.status
+        const detail = e?.data?.detail || e?.response?.data?.detail || ''
+        // 命令槽被占用：等会话回到 ready 后静默再试一次（拖拽连点常见）
+        if ((silent || quiet) && status === 409) {
+          const ready = await waitUntilReady(45000)
+          if (ready !== 'ready') {
+            if (!silent) {
+              ElMessage.error(typeof detail === 'string' && detail ? detail : '同步步骤失败')
+            }
+            return false
+          }
+          await uiDebugApi.syncSteps(
+            session.value.id,
+            { steps: props.steps },
+            { skipErrorHandler: true },
+          )
         } else {
-          ElNotification.success('步骤已同步到 Runner')
+          throw e
         }
       }
-      return true
-    }
-    return false
+      const status = await waitUntilReady()
+      if (status === 'ready') {
+        stepsStale.value = false
+        // 静默自动同步很频繁，不能清空调试结果，否则工具条刚写入的「调试成功」会被抹掉
+        if (!silent) {
+          mergedLastResult.value = null
+          lastSeenRunFingerprint.value = ''
+        }
+        if (!silent) {
+          if (quiet) {
+            ElMessage.success('已自动同步最新步骤')
+          } else {
+            ElNotification.success('步骤已同步到 Runner')
+          }
+        }
+        ok = true
+      } else {
+        ok = false
+        break
+      }
+    } while (pendingResync.value)
+    return ok
   } catch (e) {
     if (!silent) {
-      ElMessage.error(e?.response?.data?.detail || e?.message || '同步步骤失败')
+      ElMessage.error(e?.response?.data?.detail || e?.data?.detail || e?.message || '同步步骤失败')
     }
     return false
   } finally {
@@ -1765,8 +1806,10 @@ function scheduleSyncSelectedStepToRunner(editorIndex = props.selectedStepIndex)
   }
   selectStepSyncTimer = setTimeout(() => {
     selectStepSyncTimer = null
+    // 同步步骤进行中不抢命令槽；结束后会再 syncSelectedStepToRunner
+    if (syncing.value) return
     syncSelectedStepToRunner(editorIndex)
-  }, 120)
+  }, 280)
 }
 
 async function syncSelectedStepToRunner(editorIndex = props.selectedStepIndex) {
@@ -1814,11 +1857,11 @@ async function highlightSelectedStep() {
   }
 }
 
-async function verifySelectedStep() {
+async function verifySelectedStep(opts = {}) {
   if (!session.value?.id || !canLocatorAction.value) return
   locatorBusy.value = true
   try {
-    if (stepsStale.value) {
+    if (opts.forceSync || stepsStale.value) {
       const synced = await syncStepsFromEditor({ quiet: true })
       if (!synced) {
         ElMessage.warning('请先同步步骤后再验证')
@@ -2192,6 +2235,10 @@ defineExpose({
   runSelectedSteps,
 
   syncSelectedStepToRunner,
+
+  syncStepsFromEditor,
+
+  verifySelectedStep,
 
   session,
 

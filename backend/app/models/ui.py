@@ -18,6 +18,7 @@ class Case(models.Model):
         max_length=500, null=True, description="来源功能用例标题快照"
     )
     description = fields.TextField(null=True, description="用例描述（功能背景/步骤预期，供 AI 优化）")
+    tags = fields.JSONField(default=list, description="用例标签（含 quarantine）")
     username = fields.CharField(max_length=50, description="创建人")
     update_by = fields.CharField(max_length=50, null=True, description="最后更新人")
     is_del = fields.BooleanField(description="是否删除", default=False)
@@ -120,6 +121,7 @@ class UiPlanExecution(models.Model):
     fail = fields.IntField(description="失败用例数", default=0)
     error = fields.IntField(description="错误用例数", default=0)
     skip = fields.IntField(description="跳过用例数", default=0)
+    quarantine_skip = fields.IntField(description="已隔离未跑数", default=0)
     username = fields.CharField(max_length=50, description="创建人")
     is_del = fields.BooleanField(description="是否删除", default=False)
 
@@ -145,6 +147,7 @@ class UiSuiteExecution(models.Model):
     fail = fields.IntField(description="失败用例数", default=0)
     error = fields.IntField(description="错误用例数", default=0)
     skip = fields.IntField(description="跳过用例数", default=0)
+    quarantine_skip = fields.IntField(description="已隔离未跑数", default=0)
     start_time = fields.DatetimeField(auto_now_add=True, description="开始执行时间")
     duration = fields.FloatField(description="执行时间", default=0)
     execution_log = fields.JSONField(description="套件执行日志", default=list)

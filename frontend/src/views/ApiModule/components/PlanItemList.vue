@@ -98,22 +98,28 @@
   >
     <div v-if="editingIndex !== null" class="dep-dialog-tip">
       <p>
-        当前 Item：<strong>#{{ editingIndex + 1 }} {{ displayName(localItems[editingIndex]) }}</strong>
+        当前项：<strong>#{{ editingIndex + 1 }} {{ displayName(localItems[editingIndex]) }}</strong>
       </p>
       <p>
-        前置依赖表示：在<strong>串行执行</strong>时，若所选前序 Item 执行失败，则<strong>跳过</strong>当前 Item（不执行）。
-        仅可选择序号小于当前项的前序 Item。
+        前置依赖表示：在<strong>串行执行</strong>时，若所选前序项执行失败，则<strong>跳过</strong>当前项（不执行）。
+        仅可选择序号小于当前项的前序项。
       </p>
       <p class="dep-dialog-tip-muted">
-        提示：这不会自动调整执行顺序；列表顺序仍决定实际执行先后。变量传递由前序 Item 向后续 Item 链式继承。
+        提示：这不会自动调整执行顺序；列表顺序仍决定实际执行先后。变量传递由前序项向后续项链式继承。
       </p>
     </div>
+    <el-empty
+      v-if="depCandidates.length === 0"
+      description="当前是第 1 项，没有可依赖的前序项。请先在左侧再添加套件/用例，再对后面的项设置依赖。"
+      :image-size="64"
+    />
     <el-select
+      v-else
       v-model="editingDeps"
       multiple
       collapse-tags
       collapse-tags-tooltip
-      placeholder="选择前置 Item（可多选，仅限前序项）"
+      placeholder="选择前置项（可多选，仅限前序项）"
       style="width:100%"
     >
       <el-option

@@ -565,6 +565,7 @@ const suiteStatFilters = computed(() => [
   { key: 'fail', label: '失败', value: runInfo.value.fail || 0, class: 'fail', filterable: true, filterStatus: 'fail' },
   { key: 'error', label: '错误', value: runInfo.value.error || 0, class: 'error', filterable: true, filterStatus: 'error' },
   { key: 'skip', label: '跳过', value: runInfo.value.skip || 0, class: 'skip', filterable: true, filterStatus: 'skip' },
+  { key: 'quarantine_skip', label: '已隔离未跑', value: runInfo.value.quarantine_skip || 0, class: 'skip', filterable: false },
   { key: 'no_run', label: '未执行', value: runInfo.value.no_run || 0, class: 'no-run', filterable: true, filterStatus: 'no_run' }
 ])
 

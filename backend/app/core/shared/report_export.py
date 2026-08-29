@@ -33,6 +33,29 @@ EMAIL_HTML_SOFT_LIMIT_BYTES = max(
 )
 
 
+def resolve_web_env_address(env: Any) -> str:
+    """报告「环境地址」展示值。
+
+    UI 执行落库字段为 target_host（及 env_default_start_url）；历史/接口侧可能写 host。
+    只读 host 会误显示「未知」。
+    """
+    if not isinstance(env, dict):
+        return "未知"
+    for key in (
+        "host",
+        "target_host",
+        "env_default_start_url",
+        "project_default_start_url",
+    ):
+        val = env.get(key)
+        if val is None:
+            continue
+        text = str(val).strip()
+        if text:
+            return text
+    return "未知"
+
+
 def build_email_html_report(
     record_data: Dict[str, Any],
     record_type: str = "task",
@@ -217,12 +240,13 @@ def generate_html_report(
         runtime_label = "浏览器"
         runtime_value = browser_map.get(browser_type, browser_type)
         env_label = "环境地址"
-        env_value = env.get('host', '未知') if isinstance(env, dict) else '未知'
+        env_value = resolve_web_env_address(env)
     pass_rate = record_data.get('pass_rate', 0)
     success = record_data.get('success', 0)
     fail = record_data.get('fail', 0)
     error = record_data.get('error', 0)
     skip = record_data.get('skip', 0)
+    quarantine_skip = record_data.get('quarantine_skip', 0) or 0
     no_run = record_data.get('no_run', 0)
     generate_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
@@ -366,6 +390,7 @@ def generate_html_report(
             <div class="card fail filterable" data-filter="fail" onclick="filterByStatus('fail')" title="仅看失败"><div class="number">{fail}</div><div class="label">失败</div></div>
             <div class="card warning filterable" data-filter="error" onclick="filterByStatus('error')" title="仅看错误"><div class="number">{error}</div><div class="label">错误</div></div>
             <div class="card info filterable" data-filter="skip" onclick="filterByStatus('skip')" title="仅看跳过"><div class="number">{skip}</div><div class="label">跳过</div></div>
+            <div class="card info"><div class="number">{quarantine_skip}</div><div class="label">已隔离未跑</div></div>
             <div class="card info filterable" data-filter="no_run" onclick="filterByStatus('no_run')" title="仅看未运行"><div class="number">{no_run}</div><div class="label">未运行</div></div>
         </div>
         <div id="status-filter-hint" class="filter-hint"></div>

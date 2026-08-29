@@ -676,6 +676,11 @@ async def run_test_case(case_id: int, request: ApiRunRequest, username: str = De
     from app.schemas.http import ApiDataDrivenRunResult
 
     case = await ApiTestCase.get_or_none(id=case_id, is_del=False)
+    if request.worker_id is not None:
+        if not case:
+            raise HTTPException(status_code=404, detail="用例不存在")
+        from app.modules.http.worker_http_proxy import require_api_proxy_worker_http
+        await require_api_proxy_worker_http(case.project_id, request.worker_id)
     if case and case.data_set:
         return await run_data_driven_case(
             case_id,
@@ -684,6 +689,7 @@ async def run_test_case(case_id: int, request: ApiRunRequest, username: str = De
             request.variables or {},
             request.auto_validate_schema,
             request.propagate_extracted,
+            worker_id=request.worker_id,
         )
 
     return await run_single_case(
@@ -693,4 +699,5 @@ async def run_test_case(case_id: int, request: ApiRunRequest, username: str = De
         username=username,
         variables=request.variables or {},
         auto_validate_schema=request.auto_validate_schema,
+        worker_id=request.worker_id,
     )

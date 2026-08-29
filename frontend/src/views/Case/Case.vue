@@ -116,7 +116,17 @@
             label="用例名称"
             show-overflow-tooltip
             :min-width="col.minWidth || 150"
-          />
+          >
+            <template #default="{ row }">
+              <CaseNameCell
+                :name="row.name"
+                :tags="row.tags"
+                :quarantine="!!row.quarantine"
+                :unstable="!!stabilityMap[row.id]?.unstable"
+                :stability="stabilityMap[row.id]"
+              />
+            </template>
+          </el-table-column>
           <el-table-column
             v-else-if="col.key === 'run_count'"
             prop="run_count"
@@ -252,10 +262,11 @@
   </PageCard>
   <!--运行测试用例-->
   <!-- 运行任务的弹框-->
-  <el-dialog v-model="showRunDlg" title="用例运行配置" width="560px" destroy-on-close>
-    <el-form label-width="88px" class="ui-run-config-form">
+  <el-dialog v-model="showRunDlg" title="用例运行配置" width="560px" destroy-on-close class="bc-dialog">
+    <el-form label-width="88px" class="ui-run-config-form bc-dialog-form">
       <el-form-item label="运行环境" required>
         <UiRunEnvSelect v-model="runParams.env_id" />
+        <UiRunAuthInjectHint :env-id="runParams.env_id" />
       </el-form-item>
       <el-form-item label="浏览器" required>
         <div class="ui-run-segment-group">
@@ -459,6 +470,7 @@ import CaseRecord from "@/views/Case/componets/CaseRecord.vue"
 import { filterWebRunnerDevices } from '@/utils/runnerDevice'
 import BatchCatalogDialog from '@/components/BatchCatalogDialog.vue'
 import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
+import UiRunAuthInjectHint from '@/components/UiRunAuthInjectHint.vue'
 import UiRunAiActDisabledTip from '@/components/UiRunAiActDisabledTip.vue'
 import UiRunFailureAnalysisField from '@/components/UiRunFailureAnalysisField.vue'
 import UiRunTimeoutScaleField from '@/components/UiRunTimeoutScaleField.vue'
@@ -466,6 +478,9 @@ import {UserStore} from "@/stores/module/UserStore.js"
 import CopyToProjectDialog from '@/components/CopyToProjectDialog.vue'
 import { useAssetFavorites } from '@/composables/useAssetFavorites'
 import { makeTableRowIndex } from '@/utils/tableIndex'
+import CaseNameCell from '@/components/CaseNameCell.vue'
+import { hasQuarantineTag } from '@/utils/caseStability.js'
+import { stabilityApi } from '@/api/modules/stability.js'
 
 const {
   activeColumns,
@@ -489,7 +504,31 @@ const goFunctionalCase = (id) => {
 // 获取用例列表数据
 const caseList = ref([])
 const selectedCases = ref([])
+const stabilityMap = ref({})
 const importResultDlg = reactive({ visible: false, result: null })
+
+async function loadStabilityMap(rows) {
+  const ids = (rows || []).map((r) => r.id).filter(Boolean)
+  if (!ids.length || !proStore.projectInfo?.id) {
+    stabilityMap.value = {}
+    return
+  }
+  try {
+    const res = await stabilityApi.listCases({
+      project_id: proStore.projectInfo.id,
+      domain: 'ui',
+      case_ids: ids.join(','),
+      size: Math.max(ids.length, 20),
+    })
+    const map = {}
+    for (const item of res.data?.data?.items || []) {
+      map[item.case_id] = item
+    }
+    stabilityMap.value = map
+  } catch (e) {
+    console.error(e)
+  }
+}
 const batchCatalogDialog = reactive({ visible: false })
 const copyDialog = reactive({ visible: false, row: null })
 const { loadFavorites, isFavorite, toggleFavorite, sortByFavorites } = useAssetFavorites('ui_case')
@@ -586,6 +625,7 @@ const getCasesList = async () => {
   }
   caseList.value = rows
   pageConfig.total = showFavoritesOnly.value ? rows.length : res.data.total
+  await loadStabilityMap(rows)
 }
 
 onMounted(() => {
@@ -699,6 +739,18 @@ watch(
 )
 
 const clickRun = async (case_id) => {
+  const row = caseList.value.find((c) => c.id === case_id)
+  if (row && hasQuarantineTag(row.tags)) {
+    try {
+      await ElMessageBox.confirm(
+        '该用例已隔离，单条调试仍会执行。确认继续？',
+        '已隔离用例',
+        { type: 'warning', confirmButtonText: '继续执行', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+  }
   // 重置运行参数
   runParams.env_id = ''
   runParams.browser_type = 'chromium'

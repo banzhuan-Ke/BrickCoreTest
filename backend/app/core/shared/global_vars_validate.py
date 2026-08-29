@@ -19,8 +19,11 @@ RESERVED_PROJECT_GLOBAL_VAR_KEYS = frozenset({"ai_settings", "zentao_export"})
 
 # 环境 global_vars 中的 UI 元数据键（非用例变量，执行时跳过）
 ENV_DEFAULT_START_URL_KEY = "__default_start_url"
+ENV_DEFAULT_PERF_WORKER_ID_KEY = "__default_perf_worker_id"
 RESERVED_ENV_GLOBAL_VAR_KEYS = (
-    frozenset({ENV_DEFAULT_START_URL_KEY}) | UI_EXEC_STRATEGY_KEYS | UI_AUTH_INJECT_KEYS
+    frozenset({ENV_DEFAULT_START_URL_KEY, ENV_DEFAULT_PERF_WORKER_ID_KEY})
+    | UI_EXEC_STRATEGY_KEYS
+    | UI_AUTH_INJECT_KEYS
 )
 _SECRET_KEY_PATTERN = re.compile(
     r"password|passwd|secret|token|api[_-]?key|authorization|credential|private",
@@ -96,6 +99,19 @@ def normalize_global_vars(raw: Any) -> Dict[str, Any]:
             )
             if url:
                 out[k] = url
+            continue
+        if k == ENV_DEFAULT_PERF_WORKER_ID_KEY:
+            raw = value
+            if isinstance(value, dict) and "value" in value:
+                raw = value.get("value")
+            if raw in (None, ""):
+                continue
+            try:
+                wid = int(raw)
+            except (TypeError, ValueError):
+                raise ValueError("默认接口执行机 ID 无效")
+            if wid > 0:
+                out[k] = wid
             continue
         if k in UI_EXEC_STRATEGY_KEYS:
             normalized = normalize_ui_exec_strategy_value(k, value)

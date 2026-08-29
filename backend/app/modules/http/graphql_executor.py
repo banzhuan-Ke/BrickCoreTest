@@ -9,6 +9,7 @@ import httpx
 
 from app.core.case.variable_resolver import VariableResolver
 from app.modules.http.http_utils import extract_variables, replace_variables_with_detail
+from app.modules.http.worker_http_proxy import WorkerProxyError, send_http_via_worker
 
 
 @dataclass
@@ -53,6 +54,8 @@ async def execute_graphql_request(
     timeout: int = 30,
     variables: Optional[dict] = None,
     var_resolver: Optional[VariableResolver] = None,
+    worker_id: Optional[int] = None,
+    project_id: Optional[int] = None,
 ) -> tuple[GraphqlResponseMock, Any, float, Optional[str]]:
     variables = variables or {}
     if var_resolver is None:
@@ -70,15 +73,36 @@ async def execute_graphql_request(
     response_body: Any = {}
     mock = GraphqlResponseMock()
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.post(url, headers=req_headers, json=resolved_payload)
-            mock.status_code = resp.status_code
-            mock.headers = dict(resp.headers)
-            mock.text = resp.text
+        if worker_id is not None:
+            proxied = await send_http_via_worker(
+                project_id=project_id,
+                worker_id=worker_id,
+                method="POST",
+                url=url,
+                headers=req_headers,
+                body=resolved_payload,
+                body_type="json",
+                timeout=timeout,
+            )
+            mock.status_code = proxied.status_code
+            mock.headers = dict(proxied.headers or {})
+            mock.text = proxied.text
             try:
-                response_body = resp.json()
+                response_body = proxied.json()
             except Exception:
-                response_body = resp.text
+                response_body = proxied.text
+        else:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                resp = await client.post(url, headers=req_headers, json=resolved_payload)
+                mock.status_code = resp.status_code
+                mock.headers = dict(resp.headers)
+                mock.text = resp.text
+                try:
+                    response_body = resp.json()
+                except Exception:
+                    response_body = resp.text
+    except WorkerProxyError as exc:
+        error = str(exc)
     except Exception as exc:
         error = str(exc)
     elapsed_ms = round((time.time() - _t0) * 1000, 2)
@@ -96,6 +120,7 @@ async def execute_graphql_case_attempt(
     auto_validate_schema: bool = False,
     env_id: Optional[int] = None,
     script_logs: Optional[list] = None,
+    worker_id: Optional[int] = None,
 ):
     from app.core.db.db_factory_service import evaluate_db_assertions
     from app.routers.http.utils import run_case_assertions, validate_response_schema
@@ -113,6 +138,8 @@ async def execute_graphql_case_attempt(
         timeout=timeout,
         variables=all_variables,
         var_resolver=var_resolver,
+        worker_id=worker_id,
+        project_id=getattr(case, "project_id", None),
     )
     if error:
         raise RuntimeError(error)

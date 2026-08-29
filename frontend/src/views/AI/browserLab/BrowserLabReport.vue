@@ -34,10 +34,26 @@
             <el-descriptions-item label="耗时">{{ report.duration_sec != null ? `${report.duration_sec}s` : '-' }}</el-descriptions-item>
             <el-descriptions-item label="Token 消耗">
               <span :class="{ 'token-zero': !report.tokens_used }">{{ formatTokens(report.tokens_used) }}</span>
+              <span v-if="report.token_saved_estimate" class="token-saved">
+                （约省 {{ Number(report.token_saved_estimate).toLocaleString() }}）
+              </span>
             </el-descriptions-item>
             <el-descriptions-item label="状态">
               <el-tag :type="statusTag(report.status)" size="small">{{ statusLabel(report.status) }}</el-tag>
             </el-descriptions-item>
+            <el-descriptions-item label="动作缓存">
+              <el-tag v-if="report.cache_status" :type="cacheTag(report.cache_status)" size="small">
+                {{ cacheLabel(report.cache_status) }}
+              </el-tag>
+              <span v-else>-</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="运行位置">
+              {{ runModeLabel }}
+            </el-descriptions-item>
+            <el-descriptions-item v-if="report.device_id" label="执行设备">
+              {{ report.device_id }}
+            </el-descriptions-item>
+            <el-descriptions-item label="执行引擎">{{ report.engine || 'browser_use' }}</el-descriptions-item>
           </el-descriptions>
 
           <el-card shadow="never" class="block">
@@ -56,16 +72,20 @@
           <el-card shadow="never" class="block">
             <template #header>步骤明细</template>
             <el-timeline>
-              <el-timeline-item v-for="(step, idx) in report.steps" :key="idx" :timestamp="`Step ${step.index}`">
+              <el-timeline-item
+                v-for="(step, idx) in reportSteps"
+                :key="idx"
+                :timestamp="stepLabel(step)"
+              >
                 <div class="step-url">{{ step.url }}</div>
                 <div v-if="step.next_goal" class="step-goal">{{ step.next_goal }}</div>
                 <div v-if="step.thinking" class="step-think">{{ step.thinking }}</div>
                 <img
-                  v-if="step.screenshot_file && screenshotSrc(step.screenshot_file)"
+                  v-if="step.screenshot_url || (step.screenshot_file && screenshotSrc(step))"
                   class="step-shot"
-                  :src="screenshotSrc(step.screenshot_file)"
+                  :src="step.screenshot_url || screenshotSrc(step)"
                   alt="步骤截图"
-                  @click="previewShot(step.screenshot_file)"
+                  @click="previewShot(step)"
                 />
                 <div
                   v-else-if="step.screenshot_file && screenshotsLoading"
@@ -75,7 +95,7 @@
                 </div>
               </el-timeline-item>
             </el-timeline>
-            <el-empty v-if="!report.steps?.length" description="暂无步骤" />
+            <el-empty v-if="!reportSteps.length" description="暂无步骤" />
           </el-card>
         </template>
       </div>
@@ -87,19 +107,30 @@
     :project-id="projectId"
     :default-case-name="report?.case_name || ''"
     :task-text="report?.task_text || ''"
+    :task-start-url="report?.start_url || ''"
+    :task-device-id="report?.device_id || report?.config_json?.device_id || ''"
   />
+  <BrowserLabExecConfirmDialog ref="execConfirmRef" />
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import BrowserLabImportDialog from './BrowserLabImportDialog.vue'
+import BrowserLabExecConfirmDialog from './BrowserLabExecConfirmDialog.vue'
 import { browserLabApi } from '@/api/modules/ai.js'
 import { browserLabGifPreviewHref } from './browserLabGif.js'
+import { cacheStatusLabel, cacheStatusTag } from './browserLabExecOptions.js'
+import { buildExecConfirmContext } from './browserLabExecConfirmHelpers.js'
+import { registerBrowserLabExecConfirmDialog, openBrowserLabExecConfirm } from '@/composables/useBrowserLabExecConfirm.js'
+import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
+import { browserLabStepLabel, normalizeBrowserLabSteps } from './browserLabStepLog.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+
+const execConfirmRef = ref(null)
 
 const route = useRoute()
 const router = useRouter()
@@ -113,9 +144,18 @@ const importableStatus = computed(() =>
   ['done', 'failed', 'stopped'].includes(report.value?.status)
 )
 const importVisible = ref(false)
+const { enabledConfigs, loadConfigs } = useAiConfigSelect({ scene: 'browser_lab' })
+
+const runModeLabel = computed(() => {
+  const mode = report.value?.run_mode || report.value?.config_json?.run_mode || 'local'
+  if (mode === 'runner') return 'Runner 执行机'
+  return '平台本机'
+})
 
 const loading = ref(false)
 const report = ref(null)
+const reportSteps = computed(() => normalizeBrowserLabSteps(report.value?.steps || []))
+const stepLabel = browserLabStepLabel
 const hasGif = ref(false)
 const gifPreviewHref = computed(() =>
   hasGif.value ? browserLabGifPreviewHref(taskId.value, projectId.value) : ''
@@ -130,18 +170,23 @@ function statusLabel(s) {
 function statusTag(s) {
   return { done: 'success', running: 'warning', failed: 'danger', stopped: 'info' }[s] || 'info'
 }
+const cacheLabel = cacheStatusLabel
+const cacheTag = cacheStatusTag
 function formatTime(t) {
   return t ? String(t).replace('T', ' ').slice(0, 19) : '-'
 }
 
 function formatTokens(n) {
   const v = Number(n || 0)
-  if (!v) return '未统计（旧记录或 API 未返回 usage）'
+  if (!v) {
+    if (report.value?.cache_hit || report.value?.engine === 'action_cache') return '0（缓存命中）'
+    return '未统计（旧记录或 API 未返回 usage）'
+  }
   return v.toLocaleString()
 }
 
-function screenshotSrc(filename) {
-  return screenshotUrls.value[filename] || ''
+function screenshotSrc(step) {
+  return step?.screenshot_url || screenshotUrls.value[step.screenshot_file] || ''
 }
 
 function revokeScreenshots() {
@@ -153,12 +198,13 @@ function revokeScreenshots() {
 async function loadStepScreenshots() {
   revokeScreenshots()
   const steps = report.value?.steps || []
-  const files = steps.map((s) => s.screenshot_file).filter(Boolean)
+  const files = steps.filter((s) => s.screenshot_file && !s.screenshot_url)
   if (!files.length || !projectId.value || !taskId.value) return
   screenshotsLoading.value = true
   try {
     await Promise.all(
-      files.map(async (filename) => {
+      files.map(async (step) => {
+        const filename = step.screenshot_file
         try {
           const blob = await browserLabApi.fetchScreenshotBlob(
             taskId.value,
@@ -178,8 +224,8 @@ async function loadStepScreenshots() {
   }
 }
 
-function previewShot(filename) {
-  const url = screenshotSrc(filename)
+function previewShot(step) {
+  const url = step?.screenshot_url || screenshotSrc(step)
   if (url) window.open(url, '_blank')
 }
 
@@ -203,14 +249,43 @@ function goBack() {
 }
 
 async function rerun() {
-  const res = await browserLabApi.rerunTask(taskId.value, projectId.value)
+  const r = report.value
+  if (!r) return
+  const ctx = buildExecConfirmContext({
+    title: '确认重跑',
+    name: r.case_name || `报告 #${taskId.value}`,
+    source: r,
+    aiConfigs: enabledConfigs.value,
+    taskId: taskId.value,
+  })
+  let confirmed
+  try {
+    confirmed = await openBrowserLabExecConfirm(ctx)
+  } catch {
+    return ElMessage.warning('执行确认弹窗未就绪，请刷新页面后重试')
+  }
+  if (!confirmed) return
+  const res = await browserLabApi.rerunTask(taskId.value, projectId.value, {
+    device_id: confirmed.device_id,
+    headless: confirmed.execForm?.headless,
+  })
   if (res.data?.code === 200) {
     ElMessage.success('已重新执行')
     router.push({ path: '/browser-lab/run', query: { taskId: res.data.data?.id } })
   }
 }
 
-onMounted(loadReport)
+watch(execConfirmRef, (v) => {
+  if (v) registerBrowserLabExecConfirmDialog(v)
+})
+
+onMounted(async () => {
+  await loadConfigs()
+  nextTick(() => {
+    if (execConfirmRef.value) registerBrowserLabExecConfirmDialog(execConfirmRef.value)
+  })
+  loadReport()
+})
 onBeforeUnmount(revokeScreenshots)
 </script>
 
@@ -228,4 +303,5 @@ onBeforeUnmount(revokeScreenshots)
 .step-shot { margin-top: 8px; max-width: 100%; max-height: 280px; border-radius: 6px; cursor: zoom-in; }
 .step-shot-loading { margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
 .token-zero { color: var(--el-text-color-secondary); }
+.token-saved { margin-left: 6px; font-size: 12px; color: var(--el-color-success); }
 </style>

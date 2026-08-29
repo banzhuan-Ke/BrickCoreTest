@@ -202,6 +202,11 @@ def resolve_dt_param_value(raw: str, lookup_var) -> str:
             if bare:
                 val = lookup_var(bare)
         if val is None:
+            if name.startswith("csv."):
+                raise ToolExecutionError(
+                    f"变量 {name} 未定义：请确认压测场景已绑定并保存 CSV，"
+                    f"且列名与 @{name} 一致（Body 写 ${{{{dt:md5|text=@{name}}}}}）"
+                )
             raise ToolExecutionError(f"变量 {name} 未定义")
         return str(val)
     return urllib.parse.unquote(s)

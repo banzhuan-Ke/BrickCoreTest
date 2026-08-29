@@ -73,6 +73,19 @@ export const UserStore = defineStore('uStore', {
         clearAllTabs() {
             this.tabs = []
         },
+        closeOtherTabs(keepPath) {
+            this.tabs = this.tabs.filter((item) => item.path === keepPath)
+        },
+        closeLeftTabs(path) {
+            const idx = this.tabs.findIndex((item) => item.path === path)
+            if (idx <= 0) return
+            this.tabs = this.tabs.slice(idx)
+        },
+        closeRightTabs(path) {
+            const idx = this.tabs.findIndex((item) => item.path === path)
+            if (idx < 0 || idx >= this.tabs.length - 1) return
+            this.tabs = this.tabs.slice(0, idx + 1)
+        },
         // 拖拽调整标签顺序
         reorderTabs(oldIndex, newIndex) {
             if (oldIndex === newIndex) return

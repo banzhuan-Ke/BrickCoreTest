@@ -13,7 +13,7 @@ import httpx
 
 from app.core.infra.redis_client import redis_cli
 from app.models.http import ApiAuthConfig, ApiDefinition
-from app.models.sys import Environment, Project
+from app.models.sys import Environment
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ DEFAULT_CUSTOM_CODE = '''def auth(context):
 
     context 可用字段：
       - environment_id / project_id / host
-      - variables: 项目 global_vars + 环境 global_vars 合并结果
+      - variables: 项目全局 < 环境全局 < 数据工厂标签 < extra 合并结果
 
     典型用法：从环境全局变量读取预置 token，或直接返回固定值。
     """
@@ -129,7 +129,12 @@ async def _acquire_refresh_lock(config_id: int) -> bool:
     try:
         return bool(await redis_cli.set(key, "1", nx=True, ex=REFRESH_LOCK_TTL))
     except Exception as e:
-        logger.warning("[api_auth] 获取刷新锁失败 config=%s: %s，改为直接刷新", config_id, e)
+        # Redis 故障时 fail-open：允许刷新，避免授权全部卡住；多进程可能并发刷同一 token
+        logger.warning(
+            "[api_auth] Redis 锁降级为直接刷新 config=%s: %s",
+            config_id,
+            e,
+        )
         return True
 
 
@@ -157,6 +162,8 @@ async def _execute_login_api(
     env: Environment,
     extractors: list[dict],
     base_variables: dict[str, Any],
+    *,
+    worker_id: Optional[int] = None,
 ) -> dict[str, Any]:
     from app.core.case.variable_resolver import VariableResolver
     from app.routers.http.utils import (
@@ -192,29 +199,56 @@ async def _execute_login_api(
     body, _ = replace_variables_with_detail(body, variables, "body", resolver=resolver)
     body_fields, _ = replace_body_fields_with_detail(body_fields, variables, resolver=resolver)
 
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        method = api.method.upper()
-        kwargs: dict[str, Any] = {"headers": prepare_httpx_headers(headers), "params": params}
-        if method in ("POST", "PUT", "PATCH"):
-            if body_type in ("json", "xml") and isinstance(body, (dict, list)):
-                kwargs["json"] = body
-            elif body_type == "form-data":
-                from app.core.infra.minio_client import API_FILE_BUCKET
-                kwargs["files"] = build_form_data_multipart(body_fields, API_FILE_BUCKET, use_bytes_io=True)
-            elif body is not None:
-                kwargs["data"] = body
-        response = await client.request(method, url, **kwargs)
+    method = api.method.upper()
+    timeout_sec = 30
+    if worker_id is not None:
+        from app.modules.http.worker_http_proxy import WorkerProxyError, send_http_via_worker
 
-    try:
-        response_body = response.json()
-    except Exception:
-        response_body = response.text
+        try:
+            proxied = await send_http_via_worker(
+                project_id=env.project_id,
+                worker_id=worker_id,
+                method=method,
+                url=url,
+                headers=headers if isinstance(headers, dict) else {},
+                params=params,
+                body=body,
+                body_type=body_type,
+                body_fields=body_fields,
+                timeout=timeout_sec,
+            )
+        except WorkerProxyError as exc:
+            raise RuntimeError(str(exc)) from exc
+        response_status = proxied.status_code
+        response_headers = proxied.headers or {}
+        try:
+            response_body = proxied.json()
+        except Exception:
+            response_body = proxied.text
+    else:
+        async with httpx.AsyncClient(timeout=timeout_sec, follow_redirects=True) as client:
+            kwargs: dict[str, Any] = {"headers": prepare_httpx_headers(headers), "params": params}
+            if method in ("POST", "PUT", "PATCH"):
+                if body_type in ("json", "xml") and isinstance(body, (dict, list)):
+                    kwargs["json"] = body
+                elif body_type == "form-data":
+                    from app.core.infra.minio_client import API_FILE_BUCKET
+                    kwargs["files"] = build_form_data_multipart(body_fields, API_FILE_BUCKET, use_bytes_io=True)
+                elif body is not None:
+                    kwargs["data"] = body
+            response = await client.request(method, url, **kwargs)
+        response_status = response.status_code
+        response_headers = response.headers
+        try:
+            response_body = response.json()
+        except Exception:
+            response_body = response.text
 
-    if response.status_code >= 400:
-        raise RuntimeError(f"登录接口 HTTP {response.status_code}: {str(response_body)[:500]}")
+    if response_status >= 400:
+        raise RuntimeError(f"登录接口 HTTP {response_status}: {str(response_body)[:500]}")
 
     extracted: dict[str, Any] = {}
-    extracted, _ = extract_variables(response_body, extractors or [], headers=response.headers)
+    extracted, _ = extract_variables(response_body, extractors or [], headers=response_headers)
     if not extracted:
         raise RuntimeError("登录接口未提取到任何授权变量，请检查提取规则")
 
@@ -265,14 +299,9 @@ async def preview_auth_config(
     if not env:
         raise RuntimeError("环境不存在")
 
-    from app.core.shared.global_vars_validate import flatten_global_vars
+    from app.modules.data_tools.tag_service import merge_execution_variables
 
-    variables = dict(base_variables or {})
-    project = await Project.get_or_none(id=project_id, is_del=False)
-    if project and project.global_vars:
-        variables = {**flatten_global_vars(project.global_vars), **variables}
-    if env.global_vars:
-        variables = {**flatten_global_vars(env.global_vars), **variables}
+    variables = await merge_execution_variables(project_id, environment_id, extra=base_variables)
 
     context = {
         "environment_id": environment_id,
@@ -296,25 +325,24 @@ async def preview_auth_config(
 async def refresh_auth_config(
     cfg: ApiAuthConfig,
     base_variables: Optional[dict[str, Any]] = None,
+    *,
+    worker_id: Optional[int] = None,
 ) -> dict[str, Any]:
     env = await Environment.get_or_none(id=cfg.environment_id, is_del=False)
     if not env:
         raise RuntimeError("环境不存在")
 
+    from app.modules.data_tools.tag_service import merge_execution_variables
+
+    variables = await merge_execution_variables(
+        cfg.project_id, cfg.environment_id, extra=base_variables
+    )
     context = {
         "environment_id": cfg.environment_id,
         "project_id": cfg.project_id,
         "host": env.host or "",
-        "variables": dict(base_variables or {}),
+        "variables": variables,
     }
-    from app.core.shared.global_vars_validate import flatten_global_vars
-
-    variables = dict(base_variables or {})
-    project = await Project.get_or_none(id=cfg.project_id, is_del=False)
-    if project and project.global_vars:
-        variables = {**flatten_global_vars(project.global_vars), **variables}
-    if env.global_vars:
-        variables = {**flatten_global_vars(env.global_vars), **variables}
 
     if cfg.auth_type == "custom_code":
         code = (cfg.custom_code or "").strip() or DEFAULT_CUSTOM_CODE
@@ -325,7 +353,9 @@ async def refresh_auth_config(
         api = await ApiDefinition.get_or_none(id=cfg.login_api_id, is_del=False)
         if not api:
             raise RuntimeError("登录接口不存在")
-        cache_data = await _execute_login_api(api, env, cfg.extractors or [], variables)
+        cache_data = await _execute_login_api(
+            api, env, cfg.extractors or [], variables, worker_id=worker_id
+        )
 
     now = _now_naive()
     cfg.cache_data = cache_data
@@ -341,6 +371,8 @@ async def refresh_auth_config(
 async def ensure_auth_cache(
     cfg: ApiAuthConfig,
     base_variables: Optional[dict[str, Any]] = None,
+    *,
+    worker_id: Optional[int] = None,
 ) -> dict[str, Any]:
     if not _cache_needs_refresh(cfg):
         return dict(cfg.cache_data or {})
@@ -351,7 +383,7 @@ async def ensure_auth_cache(
             await cfg.refresh_from_db()
             if not _cache_needs_refresh(cfg):
                 return dict(cfg.cache_data or {})
-            return await refresh_auth_config(cfg, base_variables)
+            return await refresh_auth_config(cfg, base_variables, worker_id=worker_id)
         finally:
             await _release_refresh_lock(cfg.id)
 
@@ -365,7 +397,7 @@ async def ensure_auth_cache(
         cfg.id,
         waited,
     )
-    return await refresh_auth_config(cfg, base_variables)
+    return await refresh_auth_config(cfg, base_variables, worker_id=worker_id)
 
 
 async def get_enabled_auth_config(project_id: int, environment_id: int) -> Optional[ApiAuthConfig]:
@@ -388,6 +420,7 @@ async def inject_auth_variables(
     variables: dict[str, Any],
     *,
     allow_refresh: bool = True,
+    worker_id: Optional[int] = None,
 ) -> tuple[dict[str, Any], Optional[str]]:
     """注入授权变量，返回 (auth_vars, error)。
 
@@ -418,13 +451,19 @@ async def inject_auth_variables(
         return cleaned, None
 
     try:
-        cache = await ensure_auth_cache(cfg, variables)
+        cache = await ensure_auth_cache(cfg, variables, worker_id=worker_id)
         if not isinstance(cache, dict):
             cache = {}
         # 接口登录：缓存缺提取器变量名时再刷一次，避免旧 key（如 token）挡住 token1
         expected = expected_auth_variable_names(cfg)
         if expected and any(k not in cache or cache.get(k) in (None, "") for k in expected):
-            cache = await refresh_auth_config(cfg, variables)
+            logger.warning(
+                "[api_auth] 缓存缺少提取键 config=%s expected=%s have=%s，再次刷新",
+                cfg.id,
+                expected,
+                list(cache.keys()),
+            )
+            cache = await refresh_auth_config(cfg, variables, worker_id=worker_id)
         if not cache:
             return {}, f"授权「{cfg.name}」缓存为空，请检查提取规则或点击「刷新」"
         return cache, None
@@ -462,6 +501,7 @@ async def prepare_api_runtime_variables(
     *,
     inject_auth: bool = True,
     allow_auth_refresh: bool = True,
+    worker_id: Optional[int] = None,
 ) -> tuple[dict[str, Any], Optional[str], list[str]]:
     """合并项目/环境/数据工厂变量，并按需注入 Token 授权缓存。
 
@@ -479,6 +519,7 @@ async def prepare_api_runtime_variables(
             environment_id,
             variables,
             allow_refresh=allow_auth_refresh,
+            worker_id=worker_id,
         )
         if auth_vars:
             auth_keys = list(auth_vars.keys())

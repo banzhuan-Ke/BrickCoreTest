@@ -313,17 +313,32 @@
               </div>
             </template>
             <template v-else-if="isLocatorKey(key)">
-              <div class="locator-heal-row">
-                <LocatorSelector
-                  v-model="form.params[key]"
-                  :meta="props.step?.meta || {}"
+              <div class="locator-field-block">
+                <div class="locator-heal-row">
+                  <LocatorSelector
+                    v-model="form.params[key]"
+                    :meta="locatorSelectorMeta"
+                  />
+                  <el-button
+                    v-if="!isAppStep"
+                    type="primary"
+                    link
+                    @click="openLocatorAssist(key)"
+                  >定位助手</el-button>
+                  <el-button
+                    type="primary"
+                    link
+                    :loading="healingLocator"
+                    @click="handleHealLocator"
+                  >AI 自愈</el-button>
+                </div>
+                <LocatorCandidatesEditor
+                  v-if="!isAppStep && key === 'locator'"
+                  v-model="editCandidates"
+                  :primary="form.params.locator || ''"
+                  :primary-changed-hint="primaryLocatorDirty"
+                  @promote="onPromoteCandidate"
                 />
-                <el-button
-                  type="primary"
-                  link
-                  :loading="healingLocator"
-                  @click="handleHealLocator"
-                >AI 自愈</el-button>
               </div>
             </template>
             <template v-else-if="isFillValueParam(key)">
@@ -591,6 +606,14 @@
       <el-button type="primary" :loading="healingLocator" @click="confirmHeal">开始自愈</el-button>
     </template>
   </el-dialog>
+
+  <LocatorAssistDialog
+    v-model="assistVisible"
+    :step-method="form.method"
+    :can-verify="canVerifyLocator"
+    @apply="onAssistApply"
+    @verify="onAssistVerify"
+  />
 </template>
 
 <script setup>
@@ -602,6 +625,13 @@ import FillValueInput from '@/components/StepEditor/FillValueInput.vue'
 import ConditionEdit from '@/components/StepEditor/ConditionEdit.vue'
 import { FILL_VALUE_INPUT_METHODS, isFillValueFixedMode } from '@/utils/fillValueMode.js'
 import LocatorSelector from '@/components/LocatorSelector.vue'
+import LocatorCandidatesEditor from '@/components/LocatorCandidatesEditor.vue'
+import LocatorAssistDialog from '@/components/LocatorAssistDialog.vue'
+import {
+  normalizeCandidates,
+  normalizeLocatorValue,
+  mergeAssistIntoStep,
+} from '@/utils/locatorCandidates.js'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
 import DataFactoryTagPicker from '@/views/ApiModule/components/DataFactoryTagPicker.vue'
@@ -680,9 +710,14 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  /** 交互调试就绪时可验证定位助手结果 */
+  canVerifyLocator: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['update:visible', 'save', 'save-multiple', 'cancel'])
+const emit = defineEmits(['update:visible', 'save', 'save-multiple', 'cancel', 'verify-locator'])
 
 const formRef = ref()
 const form = ref({
@@ -700,6 +735,11 @@ const healPageUrl = ref('')
 const healDialogVisible = ref(false)
 const healMode = ref('replay')
 const healReplayThrough = ref(1)
+const editCandidates = ref([])
+const baselinePrimaryLocator = ref('')
+const primaryLocatorDirty = ref(false)
+const assistVisible = ref(false)
+const assistTargetKey = ref('locator')
 
 const canReplay = computed(() => props.stepIndex > 0 && (props.allSteps?.length || 0) > 0)
 
@@ -714,6 +754,15 @@ const isEdit = computed(() => !!props.step?.id)
 
 // 是否是 App 步骤（仅按编辑器 module 区分；Web/App 存在同名 method 如 extract_text、open_url）
 const isAppStep = computed(() => props.module === 'app')
+
+const locatorSelectorMeta = computed(() => {
+  const base = { ...(props.step?.meta || {}) }
+  // App 走对象定位 UI，不注入 Web 备用列表，避免语义混用
+  if (!isAppStep.value) {
+    base.candidates = editCandidates.value
+  }
+  return base
+})
 
 const H5_CONTEXT_METHODS = new Set(['switch_webview', 'switch_chrome', 'switch_native', 'open_url'])
 
@@ -1215,6 +1264,13 @@ watch(() => props.step, (newStep) => {
       // 必须用 stepData.branches（可能刚补了默认值），不能回读 newStep.branches
       branches: stepData.branches ? JSON.parse(JSON.stringify(stepData.branches)) : undefined,
     }
+    const primaryLoc = normalizeLocatorValue(form.value.params?.locator || '')
+    baselinePrimaryLocator.value = primaryLoc
+    primaryLocatorDirty.value = false
+    editCandidates.value = normalizeCandidates(
+      newStep.meta?.candidates || newStep.params?.candidates || [],
+      { excludePrimary: primaryLoc },
+    )
     // 历史 params.timeout：同步到 config.timeout；非模板默认值视为用户手工超时
     if (!isAppStep.value) {
       const pt = form.value.params?.timeout
@@ -1280,6 +1336,68 @@ watch(() => props.visible, (open) => {
     }
   }
 })
+
+watch(
+  () => form.value.params?.locator,
+  (val) => {
+    const cur = normalizeLocatorValue(val || '')
+    primaryLocatorDirty.value = !!(
+      baselinePrimaryLocator.value
+      && cur
+      && cur !== baselinePrimaryLocator.value
+    )
+  },
+)
+
+function openLocatorAssist(key) {
+  assistTargetKey.value = key || 'locator'
+  assistVisible.value = true
+}
+
+function onPromoteCandidate({ primary, candidates }) {
+  form.value.params.locator = primary
+  editCandidates.value = candidates || []
+  primaryLocatorDirty.value = false
+  baselinePrimaryLocator.value = normalizeLocatorValue(primary)
+}
+
+function onAssistApply(payload) {
+  const key = assistTargetKey.value || 'locator'
+  const { primary, candidates } = mergeAssistIntoStep(
+    form.value.params?.[key],
+    key === 'locator' ? editCandidates.value : [],
+    payload.candidates || [{ locator: payload.locator }],
+    { applyAll: payload.applyAll !== false && key === 'locator' },
+  )
+  form.value.params[key] = primary
+  if (key === 'locator') {
+    editCandidates.value = candidates
+    baselinePrimaryLocator.value = normalizeLocatorValue(primary)
+    primaryLocatorDirty.value = false
+    const idx = Number(payload.index)
+    if (Number.isFinite(idx) && idx >= 1) {
+      form.value.params.index = idx
+    }
+  }
+  ElMessage.success('已写入定位')
+}
+
+function onAssistVerify(payload) {
+  emit('verify-locator', {
+    locator: payload.locator,
+    index: payload.index,
+    stepIndex: props.stepIndex,
+    paramKey: assistTargetKey.value || 'locator',
+    // 带上弹窗未保存草稿，避免仍按列表里旧 method/params 验证
+    draftStep: {
+      method: form.value.method,
+      keyword: form.value.keyword || form.value.method,
+      params: JSON.parse(JSON.stringify(form.value.params || {})),
+      config: form.value.config ? JSON.parse(JSON.stringify(form.value.config)) : undefined,
+    },
+    __done: payload.__done,
+  })
+}
 
 // 监听 visible 变化
 const visible = computed({
@@ -1853,11 +1971,22 @@ async function handleSave() {
     }
     delete saveParams.timeout
   }
-  const savedStep = { 
+  const savedMeta = {
+    ...(props.step?.meta || {}),
+    ...(form.value.meta || {}),
+  }
+  // Web 才维护备用定位；App 另有 meta.candidates 语义，勿用空列表覆盖
+  if (!isAppStep.value) {
+    savedMeta.candidates = normalizeCandidates(editCandidates.value, {
+      excludePrimary: saveParams.locator || form.value.params?.locator || '',
+    })
+  }
+  const savedStep = {
     ...form.value,
     keyword: form.value.keyword,
     method: form.value.method || form.value.keyword,
     params: saveParams,
+    meta: savedMeta,
   }
   delete savedStep.pre_wait_ms
   if (savedStep.config && typeof savedStep.config === 'object') {
@@ -2319,6 +2448,10 @@ function handleClose() {
   :deep(.locator-selector) {
     flex: 1;
   }
+}
+
+.locator-field-block {
+  width: 100%;
 }
 
 .param-input-row {

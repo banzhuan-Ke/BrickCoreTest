@@ -568,6 +568,7 @@ const taskStats = computed(() => [
   { key: 'fail', label: '失败', value: taskRunDetail.value?.fail || 0, color: '#f56c6c', class: 'danger', filterable: true, filterStatus: 'fail' },
   { key: 'error', label: '错误', value: taskRunDetail.value?.error || 0, color: '#e6a23c', class: 'warning', filterable: true, filterStatus: 'error' },
   { key: 'skip', label: '跳过', value: taskRunDetail.value?.skip || 0, color: '#909399', class: 'info', filterable: true, filterStatus: 'skip' },
+  { key: 'quarantine_skip', label: '已隔离未跑', value: taskRunDetail.value?.quarantine_skip || 0, color: '#909399', class: 'info', filterable: false },
   { key: 'no_run', label: '未运行', value: taskRunDetail.value?.no_run || 0, color: '#909399', class: 'no-run', filterable: true, filterStatus: 'no_run' }
 ])
 

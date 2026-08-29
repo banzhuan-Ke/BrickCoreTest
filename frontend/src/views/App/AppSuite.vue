@@ -35,7 +35,7 @@
       <el-pagination v-model:current-page="page.page" v-model:page-size="page.size" :total="page.total" layout="total, prev, pager, next" @current-change="loadList" @size-change="loadList" />
     </template>
   </PageCard>
-  <AppRunDialog v-model="runDlg" :loading="running" @submit="runSuite" />
+  <AppRunDialog v-model="runDlg" :loading="running" show-include-quarantine @submit="runSuite" />
 
   <el-dialog v-model="recordDlg" width="90%" destroy-on-close title="套件执行报告">
     <AppSuiteRecord v-if="recordSuite.id" :suite-id="recordSuite.id" :project-id="proStore.projectInfo.id" />
@@ -44,7 +44,7 @@
 
 <script setup>
 import { computed, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import CatalogListLayout from '@/components/CatalogListLayout.vue'
@@ -55,6 +55,7 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
 
 const router = useRouter()
+const route = useRoute()
 const proStore = ProjectStore()
 const uStore = UserStore()
 const canEdit = computed(() => uStore.hasPermission('app_suite:edit'))
@@ -68,6 +69,10 @@ const running = ref(false)
 const runSuiteId = ref(null)
 const recordDlg = ref(false)
 const recordSuite = ref({ id: null })
+
+if (typeof route.query.name === 'string' && route.query.name) {
+  searchForm.name = route.query.name
+}
 
 async function loadList() {
   const catalogId = searchForm.catalog_id && searchForm.catalog_id !== 'all' ? searchForm.catalog_id : undefined

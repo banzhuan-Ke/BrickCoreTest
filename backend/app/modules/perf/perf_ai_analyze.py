@@ -215,6 +215,27 @@ def scrub_ai_payload(payload: dict[str, Any], label_map: Optional[dict[str, str]
     return cleaned if isinstance(cleaned, dict) else payload
 
 
+# 模型偶发仍输出的「未配置目标」套话；写入前剥离，避免卡片被空判定文案占满
+_SLA_UNCONFIGURED_PHRASES = (
+    "未配置性能目标，无法按业务 SLA 判定",
+    "未配置性能指标，无法按业务 SLA 判定",
+    "未配置性能目标，无法判定是否达标",
+    "未配置性能指标，无法判定是否达标",
+)
+
+
+def scrub_unconfigured_sla_boilerplate(text: Any) -> str:
+    """去掉「未配置…无法按业务 SLA 判定」套话，保留其余常规解读。"""
+    s = str(text or "")
+    if not s.strip():
+        return ""
+    for phrase in _SLA_UNCONFIGURED_PHRASES:
+        s = s.replace(phrase, "")
+    s = re.sub(r"[，,；;]\s*[，,；;]+", "，", s)
+    s = re.sub(r"\s{2,}", " ", s)
+    return s.strip(" ，,;；。.\n\t")
+
+
 def done_payload(parsed: dict[str, Any], *, label_map: Optional[dict[str, str]] = None) -> dict[str, Any]:
     metric_notes = parsed.get("metric_notes") or {}
     if not isinstance(metric_notes, dict):
@@ -227,9 +248,9 @@ def done_payload(parsed: dict[str, Any], *, label_map: Optional[dict[str, str]] 
         if not isinstance(item, dict):
             continue
         name = str(item.get("name") or "").strip()
-        note = str(item.get("note") or "").strip()
+        note = scrub_unconfigured_sla_boilerplate(item.get("note") or "")[:500]
         if name and note:
-            cleaned_cases.append({"name": name[:120], "note": note[:500]})
+            cleaned_cases.append({"name": name[:120], "note": note})
     chart_notes = parsed.get("chart_notes") or []
     if not isinstance(chart_notes, list):
         chart_notes = []
@@ -238,18 +259,25 @@ def done_payload(parsed: dict[str, Any], *, label_map: Optional[dict[str, str]] 
         if not isinstance(item, dict):
             continue
         label = str(item.get("label") or item.get("name") or "").strip()
-        trend = str(item.get("trend") or item.get("trend_note") or "").strip()
-        dist = str(item.get("distribution") or item.get("distribution_note") or "").strip()
+        trend = scrub_unconfigured_sla_boilerplate(
+            item.get("trend") or item.get("trend_note") or ""
+        )[:500]
+        dist = scrub_unconfigured_sla_boilerplate(
+            item.get("distribution") or item.get("distribution_note") or ""
+        )[:500]
         if label and (trend or dist):
             cleaned_charts.append({
                 "label": label[:120],
-                "trend": trend[:500],
-                "distribution": dist[:500],
+                "trend": trend,
+                "distribution": dist,
             })
-    trend_note = str(parsed.get("trend_note") or "").strip()[:500]
-    distribution_note = str(parsed.get("distribution_note") or "").strip()[:500]
+    trend_note = scrub_unconfigured_sla_boilerplate(parsed.get("trend_note") or "")[:500]
+    distribution_note = scrub_unconfigured_sla_boilerplate(
+        parsed.get("distribution_note") or ""
+    )[:500]
     allowed_metric_note_keys = {
         "qps", "avg_rt", "p95", "error_rate", "total_requests", "success_qps",
+        "success_avg_rt", "success_p95", "p90", "p99",
     }
     cleaned_metric_notes = {}
     for k, v in metric_notes.items():
@@ -257,7 +285,9 @@ def done_payload(parsed: dict[str, Any], *, label_map: Optional[dict[str, str]] 
             continue
         key = str(k)
         if key in allowed_metric_note_keys or key.startswith("phase_"):
-            cleaned_metric_notes[key] = str(v)[:500]
+            note = scrub_unconfigured_sla_boilerplate(v)[:500]
+            if note:
+                cleaned_metric_notes[key] = note
 
     conclusion_points = parsed.get("conclusion_points") or parsed.get("metric_deltas") or []
     cleaned_points = []
@@ -276,20 +306,34 @@ def done_payload(parsed: dict[str, Any], *, label_map: Optional[dict[str, str]] 
             if text or label:
                 cleaned_points.append({"label": label, "text": text or label, "tone": tone})
 
+    def _scrub_str_list(items: Any, *, limit: int = 20) -> list[str]:
+        out_list: list[str] = []
+        if not isinstance(items, list):
+            return out_list
+        for x in items[:limit]:
+            t = scrub_unconfigured_sla_boilerplate(x)[:500]
+            if t:
+                out_list.append(t)
+        return out_list
+
+    summary = scrub_unconfigured_sla_boilerplate(parsed.get("summary") or "") or None
+    overview_raw = parsed.get("overview") or parsed.get("summary")
+    overview = scrub_unconfigured_sla_boilerplate(overview_raw or "") or summary
+
     out = {
         "status": "done",
-        "summary": parsed.get("summary"),
-        "overview": parsed.get("overview") or parsed.get("summary"),
+        "summary": summary,
+        "overview": overview,
         "metric_notes": cleaned_metric_notes,
         "conclusion_points": cleaned_points,
         "case_notes": cleaned_cases,
         "chart_notes": cleaned_charts,
         "trend_note": trend_note or None,
         "distribution_note": distribution_note or None,
-        "highlights": parsed.get("highlights") or [],
-        "risks": parsed.get("risks") or [],
-        "recommendations": parsed.get("recommendations") or [],
-        "bottleneck_notes": parsed.get("bottleneck_notes") or [],
+        "highlights": _scrub_str_list(parsed.get("highlights") or []),
+        "risks": _scrub_str_list(parsed.get("risks") or []),
+        "recommendations": _scrub_str_list(parsed.get("recommendations") or []),
+        "bottleneck_notes": _scrub_str_list(parsed.get("bottleneck_notes") or []),
         "error": None,
         "generated_at": _now_str(),
     }
@@ -640,7 +684,10 @@ async def _run_perf_compare_analysis_locked(
 
     snap = await hydrate_snapshot_chart_fields(report.snapshot or {})
     ctx = trim_snapshot_for_ai(snap)
-    prompt_ctx = {"compare_snapshot": json.dumps(ctx, ensure_ascii=False, indent=2)[:14000]}
+    # 多章节汇总时放宽快照长度；用户补充提示在下方单独追加，不受此截断影响
+    snap_json = json.dumps(ctx, ensure_ascii=False, indent=2)
+    max_snap = 32000 if len(snap_json) > 14000 else 14000
+    prompt_ctx = {"compare_snapshot": snap_json[:max_snap]}
     try:
         system_prompt, user_prompt = await PromptManager.render("perf_compare_analysis", prompt_ctx)
     except ValueError as e:
@@ -651,7 +698,11 @@ async def _run_perf_compare_analysis_locked(
     extra = ((report.snapshot or {}).get("user_extra_prompt") or "").strip()
     if extra:
         user_prompt = (
-            f"{user_prompt}\n\n## 用户补充说明（请优先遵循，但仍不得编造未给出的数字）\n{extra[:2000]}"
+            f"{user_prompt}\n\n"
+            "## 用户补充说明（最高优先级，须严格遵循；仍不得编造未给出的数字）\n"
+            "若补充说明要求「分组规格对照 / 组内互比 / 组间不硬比」，"
+            "即使 analysis_mode=chapter_portrait，也必须按补充说明在同一份结论里完成分组对照。\n"
+            f"{extra[:2000]}"
         )
 
     text_config = await _get_ai_config(ai_config_id, scene=PERF_COMPARE_AI_SCENE)

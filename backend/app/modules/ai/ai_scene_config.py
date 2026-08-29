@@ -17,6 +17,7 @@ AI_SCENE_DEFINITIONS: dict[str, tuple[str, str]] = {
     "ui_case_agent": ("UI Agent 探索", "MCP 式逐步规划执行"),
     "app_case_generate": ("App 步骤生成", "功能用例 / 自然语言生成 App 自动化步骤"),
     "locator_heal": ("定位器自愈", "步骤失败时 AI 修复选择器"),
+    "locator_assist": ("定位助手", "编辑态根据元素信息生成定位候选"),
     "ai_act": ("AI Act 兜底", "自愈失败后 AI 按意图重新规划并执行一步"),
     "api_case_generate": ("API 用例生成", "基于接口定义生成用例"),
     "perf_scene_generate": ("一句话生成压测场景", "自然语言匹配项目内用例/套件生成 PerfScene 草稿"),
@@ -44,10 +45,13 @@ AI_SCENE_DEFINITIONS: dict[str, tuple[str, str]] = {
     "case_steps_optimize": ("用例步骤优化", "用例编辑页 AI 优化步骤并追加断言"),
     "browser_lab": ("智能浏览器", "browser-use 自然语言驱动浏览器演示/探索"),
     "browser_lab_task_optimize": ("智能浏览器 · 任务描述优化", "将自然语言任务改写为 browser-use 可执行描述"),
+    "ui_case_description_optimize": ("UI 用例生成 · 测试描述优化", "将自然语言改写为适合 AI 生成 Playwright 步骤的描述"),
+    "ui_agent_solidify_optimize": ("Browser Lab · Agent 固化目标优化", "将任务描述改写为逐步 Agent 固化可执行目标"),
     "requirement_doc_understand": ("需求文档读图", "需求用例生成前 Vision 解析文档内图片"),
     "knowledge_doc_image_vision": ("资料库文档读图", "资料库文档内图片 Vision 解析与 OCR"),
     "prompt_test": ("Prompt 模板测试", "Prompt 管理页调试模板效果"),
     "config_test": ("模型连通性测试", "AI 配置页测试 API Key 与模型可用性"),
+    "tm_release_summary": ("测试管理版本总结", "版本质量预览、风险与自动化稳定度 AI 总结"),
 }
 
 
@@ -302,6 +306,13 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "temperature_hint": "0.2～0.4",
         "tip": "定位器修复需精确输出",
     },
+    "locator_assist": {
+        "group": "other",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-chat",
+        "temperature_hint": "0.2～0.4",
+        "tip": "编辑态定位助手；无绑定也可仅用规则生成",
+    },
     "ai_act": {
         "group": "other",
         "recommended_provider": "deepseek",
@@ -323,6 +334,22 @@ AI_SCENE_RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         "recommended_model": "deepseek-v4-flash",
         "temperature_hint": "0.2～0.4",
         "tip": "纯文本改写，推荐 deepseek-v4-flash 或 deepseek-chat；须关闭思考模式；未绑定时回退「智能浏览器」场景模型",
+        "default_overrides": {"max_tokens": 4096, "temperature": 0.3, "timeout": 120},
+    },
+    "ui_case_description_optimize": {
+        "group": "generate",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-v4-flash",
+        "temperature_hint": "0.2～0.4",
+        "tip": "纯文本改写，推荐 deepseek-v4-flash；须关闭思考模式；未绑定时回退「UI 用例生成」场景模型",
+        "default_overrides": {"max_tokens": 4096, "temperature": 0.3, "timeout": 120},
+    },
+    "ui_agent_solidify_optimize": {
+        "group": "generate",
+        "recommended_provider": "deepseek",
+        "recommended_model": "deepseek-v4-flash",
+        "temperature_hint": "0.2～0.4",
+        "tip": "Browser Lab 导入 Agent 固化目标改写；须关闭思考模式；未绑定时回退 ui_case_agent",
         "default_overrides": {"max_tokens": 4096, "temperature": 0.3, "timeout": 120},
     },
 }

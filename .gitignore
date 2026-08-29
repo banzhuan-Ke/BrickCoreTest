@@ -1,8 +1,8 @@
 # ============================================================
-# FastAPI 自动化测试平�?- Git 忽略文件
+# FastAPI �?��?��??�?�?平�?- Git 忽�?��??件
 # ============================================================
 
-# 环境变量文件（包含敏感信息）
+# �?��?�?�?��??件�?�??含�?��??信息�?
 .env
 .env.local
 .env.*.local
@@ -31,24 +31,24 @@ ENV/
 *~
 .DS_Store
 
-# 日志文件
+# �?��?�??件
 logs/
 *.log
 
-# 数据�?
+# �?�据�?
 *.sqlite3
 *.db
 
-# Runner 本地运行配置（勿提交真实密码；开发可�?profiles/local.env + RUNNER_LEGACY=1�?
+# Runner �?��?�运�?�?�置�?�?�提交�??�?�?码�?�?�?可�??profiles/local.env + RUNNER_LEGACY=1�?
 runner/.env
 runner/profiles/local.env
 runner/profiles/online.env
 runner/logs/
 runner/venv/
 runner/work/
-# Playwright 本地下载的浏览器（体积大，各环境自行 playwright install�?
+# Playwright �?��?��?载�??浏�?�?��?�?积大�?�?�?��?�?��? playwright install�?
 runner/browsers/
-# 本地启动标记（start-local 等生成的状态文件）
+# �?��?�启�?��?记�?start-local �?�??�?��??�?��?��??件�?
 runner/LOCAL
 video/
 *.png
@@ -58,52 +58,57 @@ video/
 *.webm
 *.mp4
 
-# 例外：前端静态资源需要提�?
+# �?�?�?�?�端�?�?��?源�??要提�?
 !frontend/src/assets/**/*
 !frontend/public/**/*
 
-# 例外：CE README 功能演示截图/GIF（assets/readme/，已迁移�?docs-site/public/demo/�?
+# �?�?�?CE README �??�?��?示�?��?�/GIF�?assets/readme/�?已迁移�??docs-site/public/demo/�?
 !assets/readme/**
 
-# 例外：文档站功能演示高清截图
+# �?�?�?�??档�?�??�?��?示�?�?�?��?�
 !docs-site/public/demo/**
 
-# 临时文件
+# �?�?�?Pro �??�?��?示�? showcase �?��?�/�?��?屏�?�? docs-site/public/demo �?源�?
+!showcase/demo/screenshots/
+!showcase/demo/screenshots/**
+!showcase/demo/flow-app-fanqie.mp4
+
+# 临�?��??件
 tmp/
 temp/
 *.tmp
-# 根目录临时调试产物（�?tmp_bug.xlsx�?
+# 根�?��?临�?��?�?产�?��?�?tmp_bug.xlsx�?
 /tmp_*
 
-# 本地质量报告调试输出（平台生成物勿提交）
+# �?��?�质�?��?��??�?�?�?�?��?平台�??�?��?��?�提交�?
 output/
 
-# Docker 镜像离线包（用于无网络环境部署）
+# Docker �??�?�离线�??�?�?��?�?��?�?�?��?�?�署�?
 *.tar
 
-# 系统文件
+# 系�?�??件
 .DS_Store
 Thumbs.db
 
-# 构建产物
+# �??建产�?�
 dist/
 build/
 scripts/.cache/
 *.egg-info/
 
-# Runner 客户端本地打包产物（build_runner_client.ps1 输出，勿提交�?
+# Runner 客�?�端�?��?��??�??产�?��?build_runner_client.ps1 �?�?��?�?�提交�?
 runner_client/dist/
 runner_client/dist_staging/
 
-# 前端
+# �?�端
 frontend/node_modules/
 frontend/dist/
 frontend/.env
 
-# 后端迁移文件（可选，根据团队规范�?
+# �?端迁移�??件�?可�??�?根据�?��??�?�??�?
 # backend/migrations/
 
-# 后端本地运行时上传（已改�?MinIO 时使用本地回退目录�?
+# �?端�?��?�运�?�?��?传�?已�?��??MinIO �?�使�?��?��?��??�??�?��?�?
 backend/static/ai_knowledge/
 backend/static/ai_requirements/
 backend/static/avatars/
@@ -114,10 +119,10 @@ backend/static/browser_lab/
 backend/scripts/
 docs-site/demo/
 docs-site/reference/
-# 兼容旧路径（若仍存在�?
+# �?�容�?�路�?�?�?�仍�?�?��?
 backend/app/static/ai_requirements/
 
-# 其他敏感文件
+# �?��?�?��??�??件
 *.pem
 *.key
 *.cert

@@ -109,16 +109,17 @@
               </div>
             </div>
 
+            <div v-if="liveHint" class="live-hint">{{ liveHint }}</div>
             <div class="log-wrap">
-              <div v-for="(item, idx) in stepLogs" :key="idx" class="log-item">
+              <div v-for="(item, idx) in displaySteps" :key="`${item.index}-${idx}`" class="log-item">
                 <div class="log-head">
-                  <span class="log-step">Step {{ item.index }}</span>
+                  <span class="log-step">{{ stepLabel(item) }}</span>
                   <span class="log-url">{{ item.url }}</span>
                 </div>
                 <div v-if="item.next_goal" class="log-goal">{{ item.next_goal }}</div>
-                <div v-if="item.thinking" class="log-think">{{ item.thinking }}</div>
+                <div v-if="item.thinking && item.step_status !== 'ok'" class="log-think">{{ item.thinking }}</div>
               </div>
-              <el-empty v-if="!stepLogs.length && !running" description="暂无执行日志" :image-size="48" />
+              <el-empty v-if="!displaySteps.length && !running" description="暂无执行日志" :image-size="48" />
             </div>
           </el-card>
         </el-col>
@@ -128,13 +129,19 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import { browserLabApi } from '@/api/modules/ai.js'
 import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
+import { useBrowserLabTaskPoll } from '@/composables/useBrowserLabTaskPoll.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+import {
+  browserLabLiveHint,
+  browserLabStepLabel,
+  normalizeBrowserLabSteps,
+} from './browserLab/browserLabStepLog.js'
 
 const pStore = ProjectStore()
 const uStore = UserStore()
@@ -160,6 +167,12 @@ const liveStatus = ref('pending')
 const liveSummary = ref('')
 const gifUrl = ref('')
 const stepLogs = ref([])
+const displaySteps = computed(() => normalizeBrowserLabSteps(stepLogs.value))
+const liveHint = computed(() =>
+  browserLabLiveHint(stepLogs.value, { running: running.value, status: liveStatus.value })
+)
+const stepLabel = browserLabStepLabel
+const taskPoll = useBrowserLabTaskPoll()
 const currentScreenshotUrl = ref('')
 const screenshotObjectUrls = ref([])
 
@@ -192,7 +205,11 @@ function revokeScreenshots() {
   screenshotObjectUrls.value = []
 }
 
-async function loadScreenshot(taskId, filename) {
+async function loadScreenshot(taskId, filename, directUrl) {
+  if (directUrl) {
+    currentScreenshotUrl.value = directUrl
+    return
+  }
   if (!filename || !projectId.value) return
   try {
     const blob = await browserLabApi.fetchScreenshotBlob(taskId, filename, projectId.value)
@@ -207,7 +224,9 @@ async function loadScreenshot(taskId, filename) {
 function handleStreamEvent(data) {
   if (data.type === 'step') {
     stepLogs.value.push(data)
-    if (data.screenshot_file && activeTaskId.value) {
+    if (data.screenshot_url) {
+      currentScreenshotUrl.value = data.screenshot_url
+    } else if (data.screenshot_file && activeTaskId.value) {
       loadScreenshot(activeTaskId.value, data.screenshot_file)
     }
   } else if (data.type === 'done') {
@@ -225,12 +244,34 @@ function handleStreamEvent(data) {
 }
 
 function subscribeTask(taskId) {
-  browserLabApi.streamTask(taskId, projectId.value, {
-    onEvent: handleStreamEvent,
+  taskPoll.start(taskId, projectId.value, {
     onDone: (data) => handleStreamEvent({ ...data, type: 'done' }),
-    onError: (msg) => handleStreamEvent({ type: 'error', message: msg })
+    onFail: (payload) => handleStreamEvent({ type: 'error', message: payload.error_message }),
   })
 }
+
+watch(taskPoll.displayedSteps, (steps) => {
+  stepLogs.value = steps
+  if (activeTaskId.value) {
+    const last = [...steps].reverse().find((s) => s.screenshot_url || s.screenshot_file)
+    if (last?.screenshot_url) {
+      currentScreenshotUrl.value = last.screenshot_url
+    } else if (last?.screenshot_file) loadScreenshot(activeTaskId.value, last.screenshot_file)
+  }
+}, { deep: true })
+
+watch(
+  () => taskPoll.taskData.value,
+  (task) => {
+    if (!task) return
+    liveStatus.value = task.status || liveStatus.value
+    if (task.result_summary && ['done', 'failed', 'stopped'].includes(task.status)) {
+      liveSummary.value = task.error_message || task.result_summary || liveSummary.value
+      running.value = false
+    }
+  },
+  { deep: true }
+)
 
 async function startTask() {
   if (!projectId.value) {
@@ -317,10 +358,13 @@ async function viewHistory(row) {
   const res = await browserLabApi.getTask(row.id, projectId.value)
   if (res.data?.code === 200) {
     const task = res.data.data
-    stepLogs.value = (task.step_log || []).filter((e) => e.type === 'step')
-    const lastShot = [...stepLogs.value].reverse().find((s) => s.screenshot_file)
-    if (lastShot) await loadScreenshot(row.id, lastShot.screenshot_file)
-    if (running.value) subscribeTask(row.id)
+    if (running.value) {
+      subscribeTask(row.id)
+    } else {
+      stepLogs.value = (task.step_log || []).filter((e) => e.type === 'step')
+      const lastShot = [...stepLogs.value].reverse().find((s) => s.screenshot_file)
+      if (lastShot) await loadScreenshot(row.id, lastShot.screenshot_file)
+    }
   }
 }
 
@@ -330,6 +374,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  taskPoll.stop()
   revokeScreenshots()
 })
 </script>

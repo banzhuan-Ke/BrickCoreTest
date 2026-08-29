@@ -95,7 +95,7 @@
                 active-text="并行执行"
                 inactive-text="串行执行"
               />
-              <span class="hint-text" style="margin-left:12px">并行模式下各 Item 同时执行，忽略失败停止设置</span>
+              <span class="hint-text" style="margin-left:12px">并行模式下各项同时执行，忽略失败停止设置</span>
             </el-form-item>
 
             <!-- 全局变量 -->
@@ -170,20 +170,20 @@
           </template>
           <el-alert
             type="info"
-            :closable="false"
+            closable
             show-icon
             class="plan-items-help"
           >
-            <template #title>执行顺序与依赖说明</template>
+            <template #title>执行顺序与依赖说明（可关闭）</template>
             <ul class="plan-help-list">
-              <li>列表从上到下即为<strong>串行执行顺序</strong>；并行模式下各 Item 同时执行，依赖设置不生效。</li>
+              <li>列表从上到下即为<strong>串行执行顺序</strong>；并行模式下各项同时执行，依赖设置不生效。</li>
               <li>
-                <strong>前置依赖</strong>（链接图标）：仅串行模式有效。若所依赖的前序 Item 执行失败，当前 Item 将被<strong>跳过</strong>，不再执行。
-                请只选择序号小于当前项的前序 Item。
+                <strong>前置依赖</strong>（链接图标）：仅串行模式有效。若所依赖的前序项执行失败，当前项将被<strong>跳过</strong>，不再执行。
+                请只选择序号小于当前项的前序项（第 1 项没有可依赖对象）。
               </li>
               <li>
                 <strong>条件分支</strong>属于<strong>用例断言</strong>能力（编辑用例 → 断言 → 条件分支），按响应内容选择不同断言组；
-                与计划 Item 依赖无关，计划层面暂不支持 If/Else 流程编排。
+                与计划项依赖无关，计划层面暂不支持 If/Else 流程编排。
               </li>
             </ul>
           </el-alert>
@@ -196,7 +196,7 @@
   </div>
 
   <!-- 执行配置弹窗 -->
-  <el-dialog v-model="runDialogVisible" title="执行测试计划" width="480px" :close-on-click-modal="false">
+  <el-dialog v-model="runDialogVisible" title="执行测试计划" width="560px" :close-on-click-modal="false" destroy-on-close>
     <el-form label-width="100px">
       <el-form-item label="执行环境">
         <el-select v-model="runForm.env_id" placeholder="使用计划默认环境" clearable style="width: 100%">
@@ -208,6 +208,13 @@
           />
         </el-select>
         <div class="hint-text">不选则使用计划配置的默认环境</div>
+      </el-form-item>
+      <el-form-item label="执行机">
+        <ViaWorkerSelect
+          v-model="runForm.worker_id"
+          :env-id="runForm.env_id || form.env_id"
+          force-serial-hint
+        />
       </el-form-item>
       <el-form-item label="失败停止">
         <el-switch v-model="runForm.stop_on_failure" />
@@ -316,6 +323,7 @@ import PlanItemList from './components/PlanItemList.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
 import VariablePreviewPanel from '@/components/VariablePreviewPanel.vue'
+import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -472,7 +480,7 @@ const handleSave = async () => {
         }),
     }))
     if (hadInvalidDeps) {
-      ElMessage.warning('部分依赖指向了序号不小于当前项的 Item，已自动忽略。依赖只能选择前序 Item。')
+      ElMessage.warning('部分依赖指向了序号不小于当前项的前序项，已自动忽略。依赖只能选择前序项。')
     }
 
     if (isNew.value) {
@@ -528,6 +536,7 @@ const runResult = ref(null)
 
 const runForm = ref({
   env_id: null,
+  worker_id: null,
   stop_on_failure: false,
   auto_validate_schema: false,
 })
@@ -535,6 +544,7 @@ const runForm = ref({
 const handleRun = () => {
   // 预填默认环境
   runForm.value.env_id = form.value.env_id || null
+  runForm.value.worker_id = null
   runDialogVisible.value = true
 }
 
@@ -546,6 +556,7 @@ const doRun = async () => {
       auto_validate_schema: runForm.value.auto_validate_schema,
     }
     if (runForm.value.env_id) payload.env_id = runForm.value.env_id
+    if (runForm.value.worker_id) payload.worker_id = runForm.value.worker_id
 
     const res = await httpPlanApi.runPlan(planId, payload)
     runResult.value = res.data
@@ -588,7 +599,11 @@ onMounted(() => {
 .plan-edit-page {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /* 顶栏 56 + 页签约 44 + 底栏 40 + main 内边距 ≈ 140，锁定视口高度以便右侧内部滚动 */
+  height: calc(100vh - 140px);
+  max-height: calc(100vh - 140px);
+  min-height: 0;
+  overflow: hidden;
   background: var(--el-bg-color-page, #f5f7fa);
 }
 
@@ -621,6 +636,7 @@ onMounted(() => {
 .edit-body {
   display: flex;
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   padding: 16px;
   gap: 16px;
@@ -637,6 +653,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
+  height: 100%;
 }
 .panel-title {
   font-size: 14px;
@@ -645,25 +663,40 @@ onMounted(() => {
   margin-bottom: 10px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--el-border-color-lighter);
+  flex-shrink: 0;
 }
 
-/* 右侧主区域 */
+/* 右侧主区域：内部滚动 */
 .main-panel {
   flex: 1;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-x: hidden;
   overflow-y: auto;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overscroll-behavior: contain;
+}
+
+.form-card {
+  flex-shrink: 0;
 }
 
 .form-card :deep(.el-card__header) {
   padding: 10px 16px;
   background: var(--el-fill-color-lighter);
 }
+.items-card {
+  flex: 0 0 auto;
+}
 .items-card :deep(.el-card__header) {
   padding: 10px 16px;
   background: var(--el-fill-color-lighter);
+}
+.items-card :deep(.el-card__body) {
+  padding-bottom: 16px;
 }
 
 .card-title {

@@ -39,11 +39,14 @@ class ApiSuiteRunRecordOut(BaseModel):
     success_cases: int
     failed_cases: int
     skipped_cases: int
+    quarantine_skip: int = 0
     start_time: datetime
     end_time: Optional[datetime]
     duration: float
     env_id: Optional[int]
     env_name: Optional[str]
+    worker_id: Optional[int] = None
+    worker_name: Optional[str] = None
     run_by: str
     
     class Config:
@@ -72,12 +75,15 @@ class ApiRunRecordUnifiedOut(BaseModel):
     success_cases: int
     failed_cases: int
     skipped_cases: Optional[int] = None   # 套件有，计划无
+    quarantine_skip: int = 0
     start_time: datetime
     end_time: Optional[datetime]
     duration: Optional[float] = None
     http_duration: Optional[float] = Field(None, description="接口总耗时(ms)，各用例纯HTTP之和")
     env_id: Optional[int]
     env_name: Optional[str]
+    worker_id: Optional[int] = None
+    worker_name: Optional[str] = None
     run_by: str
 
 
@@ -145,11 +151,14 @@ async def get_run_records(
             "success_cases": record.success_cases,
             "failed_cases": record.failed_cases,
             "skipped_cases": record.skipped_cases,
+            "quarantine_skip": getattr(record, "quarantine_skip", 0) or 0,
             "start_time": record.start_time,
             "end_time": record.end_time,
             "duration": record.duration,
             "env_id": record.env_id,
             "env_name": record.env_name,
+            "worker_id": getattr(record, "worker_id", None),
+            "worker_name": getattr(record, "worker_name", None),
             "run_by": record.run_by
         })
     
@@ -217,6 +226,7 @@ async def get_all_run_records(
             success_cases=record.success_cases,
             failed_cases=record.failed_cases,
             skipped_cases=record.skipped_cases,
+            quarantine_skip=getattr(record, "quarantine_skip", 0) or 0,
             start_time=record.start_time,
             end_time=record.end_time,
             duration=record.duration,
@@ -227,6 +237,8 @@ async def get_all_run_records(
             ),
             env_id=record.env_id,
             env_name=record.env_name,
+            worker_id=getattr(record, "worker_id", None),
+            worker_name=getattr(record, "worker_name", None),
             run_by=record.run_by,
         ))
 
@@ -248,6 +260,7 @@ async def get_all_run_records(
             success_cases=record.success_cases,
             failed_cases=record.failed_cases,
             skipped_cases=None,
+            quarantine_skip=getattr(record, "quarantine_skip", 0) or 0,
             start_time=record.start_time,
             end_time=record.end_time,
             duration=record.duration,
@@ -256,6 +269,8 @@ async def get_all_run_records(
             ),
             env_id=record.env_id,
             env_name=record.env_name,
+            worker_id=getattr(record, "worker_id", None),
+            worker_name=getattr(record, "worker_name", None),
             run_by=record.run_by,
         ))
 
@@ -371,11 +386,14 @@ async def get_run_record_detail(record_id: int):
         "success_cases": record.success_cases,
         "failed_cases": record.failed_cases,
         "skipped_cases": record.skipped_cases,
+        "quarantine_skip": getattr(record, "quarantine_skip", 0) or 0,
         "start_time": record.start_time,
         "end_time": record.end_time,
         "duration": record.duration,
         "http_duration": sum_http_response_time_ms(case_results) or None,
         "env_name": record.env_name,
+        "worker_id": getattr(record, "worker_id", None),
+        "worker_name": getattr(record, "worker_name", None),
         "run_by": record.run_by,
         "case_results": case_results
     }
@@ -506,12 +524,15 @@ async def export_suite_report(record_id: int):
         "success_cases": record.success_cases,
         "failed_cases": record.failed_cases,
         "skipped_cases": record.skipped_cases,
+        "quarantine_skip": getattr(record, "quarantine_skip", 0) or 0,
         "error_cases": 0,
         "start_time": record.start_time,
         "end_time": record.end_time,
         "duration": record.duration,
         "http_duration": sum_http_response_time_ms(case_results) or None,
         "env_name": record.env_name,
+        "worker_id": getattr(record, "worker_id", None),
+        "worker_name": getattr(record, "worker_name", None),
         "run_by": record.run_by,
         "hooks_result": record.hooks_result or {},
     }

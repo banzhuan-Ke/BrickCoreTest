@@ -230,12 +230,18 @@ export const aiGenerateApi = {
         return await http.post('/ai/generate/stream-parser-rules', data, { timeout: 300000 })
     },
     // 生成 UI 测试用例步骤
-    async generateUiCase(data) {
-        return await http.post('/ai/generate/ui-case', data, { timeout: 300000 })
+    async generateUiCase(data, projectId) {
+        return await http.post('/ai/generate/ui-case', data, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 300000,
+        })
     },
     // MCP 式 Agent 探索生成 UI 步骤
-    async generateUiCaseAgent(data) {
-        return await http.post('/ai/generate/ui-case/agent', data, { timeout: 600000 })
+    async generateUiCaseAgent(data, projectId) {
+        return await http.post('/ai/generate/ui-case/agent', data, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 120000,
+        })
     },
     async generateAppCase(data) {
         return await http.post('/ai/generate/app-case', data, { timeout: 300000 })
@@ -256,10 +262,29 @@ export const aiGenerateApi = {
     async applyAiActToCase(data) {
         return await http.post('/ai/generate/ai-act/apply-to-case', data, { timeout: 30000 })
     },
-    // 预抓取页面元素
-    async fetchPage(url) {
-        return await http.post('/ai/generate/fetch-page', { url }, { timeout: 30000 })
-    }
+    // 预抓取页面元素（经 Runner）
+    async fetchPage(payload, projectId) {
+        const data = typeof payload === 'string' ? { url: payload } : payload
+        return await http.post('/ai/generate/fetch-page', data, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 60000,
+        })
+    },
+    async getUiAgentJob(jobId, projectId) {
+        return await http.get(`/ai/ui-agent-jobs/${jobId}`, {
+            params: projectId != null ? { project_id: projectId } : undefined,
+        })
+    },
+    async optimizeDescription(data, projectId) {
+        return await http.post('/ai/generate/optimize-description', data, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 120000,
+        })
+    },
+    async stopUiAgentJob(jobId, projectId) {
+        const q = projectId != null ? `?project_id=${projectId}` : ''
+        return await http.post(`/ai/ui-agent-jobs/${jobId}/stop${q}`)
+    },
 }
 
 // ========== AI 需求用例 ==========
@@ -396,6 +421,20 @@ export const aiRequirementApi = {
         return http.post(`/ai/requirements/${reqId}/reparse-document`, null, {
             params: { project_id: projectId },
             timeout: 120000
+        })
+    },
+    replaceDocument(reqId, file, projectId) {
+        const form = new FormData()
+        form.append('file', file)
+        form.append('project_id', String(projectId))
+        return http.post(`/ai/requirements/${reqId}/upload-document`, form, {
+            params: { project_id: projectId },
+            timeout: 120000
+        })
+    },
+    replaceContent(reqId, content, projectId) {
+        return http.put(`/ai/requirements/${reqId}/content`, { content }, {
+            params: { project_id: projectId }
         })
     },
     getCaseNaming(projectId, requirementId) {
@@ -603,6 +642,11 @@ export const aiFunctionalCaseApi = {
     async getDetail(id, projectId) {
         return await http.get(`/ai/functional-cases/${id}`, { params: { project_id: projectId } })
     },
+    async lifecycle(id, projectId) {
+        return await http.get(`/ai/functional-cases/${id}/lifecycle`, {
+            params: { project_id: projectId }
+        })
+    },
     async create(data, projectId) {
         return await http.post('/ai/functional-cases', data, { params: { project_id: projectId } })
     },
@@ -670,6 +714,30 @@ export const aiFunctionalCaseApi = {
         return await http.post('/ai/functional-cases/to-ui/preview', data, {
             params: { project_id: projectId },
             timeout: 600000
+        })
+    },
+    async startToUiAgentJob(data, projectId) {
+        return await http.post('/ai/functional-cases/to-ui/agent-job', data, {
+            params: { project_id: projectId },
+            timeout: 120000
+        })
+    },
+    async finalizeToUiAgentJob(data, projectId) {
+        return await http.post('/ai/functional-cases/to-ui/agent-finalize', data, {
+            params: { project_id: projectId },
+            timeout: 60000
+        })
+    },
+    async startToUiExploreJob(data, projectId) {
+        return await http.post('/ai/functional-cases/to-ui/explore-job', data, {
+            params: { project_id: projectId },
+            timeout: 120000
+        })
+    },
+    async finalizeToUiExploreJob(data, projectId) {
+        return await http.post('/ai/functional-cases/to-ui/explore-finalize', data, {
+            params: { project_id: projectId },
+            timeout: 60000
         })
     },
     async importUi(data, projectId) {
@@ -800,6 +868,9 @@ export const aiRecordApi = {
 
 // ========== 智能浏览器（browser-use） ==========
 export const browserLabApi = {
+    async getRunDefaults() {
+        return await http.get('/ai/browser-lab/run-defaults')
+    },
     async listCases(projectId, params = {}) {
         return await http.get('/ai/browser-lab/cases', {
             params: { project_id: projectId, ...params }
@@ -859,8 +930,8 @@ export const browserLabApi = {
             params: projectId != null ? { project_id: projectId } : {}
         })
     },
-    async rerunTask(taskId, projectId) {
-        return await http.post(`/ai/browser-lab/tasks/${taskId}/rerun`, null, {
+    async rerunTask(taskId, projectId, body = null) {
+        return await http.post(`/ai/browser-lab/tasks/${taskId}/rerun`, body || null, {
             params: projectId != null ? { project_id: projectId } : {},
             timeout: 60000
         })
@@ -868,6 +939,12 @@ export const browserLabApi = {
     async getTaskReport(taskId, projectId) {
         return await http.get(`/ai/browser-lab/tasks/${taskId}/report`, {
             params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async solidifyUiCase(taskId, data, projectId) {
+        return await http.post(`/ai/browser-lab/tasks/${taskId}/solidify-ui-case`, data, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 120000,
         })
     },
     async previewUiSteps(taskId, projectId, params = {}) {
@@ -879,6 +956,32 @@ export const browserLabApi = {
         return await http.post(`/ai/browser-lab/tasks/${taskId}/import-ui-case`, data, {
             params: projectId != null ? { project_id: projectId } : {},
             timeout: 120000
+        })
+    },
+    async promoteCache(taskId, data, projectId) {
+        return await http.post(`/ai/browser-lab/tasks/${taskId}/promote-cache`, data, {
+            params: projectId != null ? { project_id: projectId } : {},
+            timeout: 120000
+        })
+    },
+    async getCaseActionCache(caseId, projectId) {
+        return await http.get(`/ai/browser-lab/cases/${caseId}/action-cache`, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async clearCaseActionCache(caseId, projectId) {
+        return await http.delete(`/ai/browser-lab/cases/${caseId}/action-cache`, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async getActionCacheStats(projectId) {
+        return await http.get('/ai/browser-lab/action-cache/stats', {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async patchActionCacheAction(cacheId, data, projectId) {
+        return await http.patch(`/ai/browser-lab/action-cache/${cacheId}/actions`, data, {
+            params: projectId != null ? { project_id: projectId } : {}
         })
     },
     async deleteTask(taskId, projectId) {
@@ -923,6 +1026,7 @@ export const browserLabApi = {
         return await res.blob()
     },
     streamTask(taskId, projectId, callbacks = {}) {
+        // 已废弃：请用 getTask + useBrowserLabTaskPoll 轮询
         const { onEvent, onDone, onError } = callbacks
         import('@/stores/module/UserStore.js').then(({ UserStore }) => {
             const token = UserStore().token

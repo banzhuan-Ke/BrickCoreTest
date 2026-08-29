@@ -93,20 +93,31 @@ def _resolve_page_tab_index(payload: dict | None) -> int:
     return 0
 
 
-def _guess_locator(goal: str, action_payload: dict | None = None) -> str:
+def _resolve_locator(goal: str, action_payload: dict | None = None) -> tuple[str, str]:
+    """复用 BL-1 缓存同源规则，返回 (locator, strength)。"""
+    from app.modules.browser_lab.browser_lab_action_cache_core import _resolve_selector
+
     payload = action_payload or {}
-    for key in ("xpath", "selector", "css_selector", "locator", "element"):
-        val = payload.get(key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
+    locator, strength = _resolve_selector(goal, payload)
+    if locator:
+        return locator, strength
     label = _extract_label(goal)
     if label:
         safe = label.replace('"', "")
-        return f'get_by_text={safe}'
-    if goal:
-        short = goal.strip()[:30].replace('"', "")
-        return f'get_by_text={short}'
-    return "body"
+        return f"get_by_text={safe}", "heuristic"
+    return "body", "weak"
+
+
+def _locator_import_meta(strength: str, payload: dict | None) -> dict[str, Any]:
+    meta: dict[str, Any] = {"source": "browser_lab", "locator_strength": strength}
+    payload = payload or {}
+    has_direct = any(
+        isinstance(payload.get(k), str) and str(payload.get(k)).strip()
+        for k in ("xpath", "selector", "css_selector", "locator", "element")
+    )
+    if strength == "weak" or (not has_direct and _parse_element_index(payload) is not None):
+        meta["needs_manual_locator"] = True
+    return meta
 
 
 def _browser_lab_playwright_index(element_index: int) -> int:
@@ -114,8 +125,13 @@ def _browser_lab_playwright_index(element_index: int) -> int:
     return max(1, int(element_index))
 
 
-def _build_element_meta(action_key: str, payload: dict | None) -> dict[str, Any]:
-    meta: dict[str, Any] = {"source": "browser_lab"}
+def _build_element_meta(
+    action_key: str,
+    payload: dict | None,
+    *,
+    locator_strength: str = "",
+) -> dict[str, Any]:
+    meta = _locator_import_meta(locator_strength, payload)
     element_index = _parse_element_index(payload)
     if element_index is not None and action_key.lower() in _CLICK_KEYS | _INPUT_KEYS:
         meta["browser_lab_element_index"] = element_index
@@ -190,45 +206,59 @@ def _convert_single_action(
         ], last_url
 
     if key in _CLICK_KEYS:
-        locator = _guess_locator(goal, payload)
+        locator, strength = _resolve_locator(goal, payload)
         label = _extract_label(goal) or "点击元素"
         element_index = _parse_element_index(payload)
         if element_index is not None and key == "click_element_by_index":
             label = f"{label}（Browser Lab 元素 #{element_index}）"[:200]
-        meta = _build_element_meta(key, payload)
+        meta = _build_element_meta(key, payload, locator_strength=strength)
         click_params: dict[str, Any] = {"locator": locator}
         if element_index is not None:
             click_params["index"] = _browser_lab_playwright_index(element_index)
+        from app.modules.browser_lab.browser_lab_import_candidates import apply_locator_bundle_to_step
+
         return [
-            _build_step(
-                "click_ele",
-                label,
-                click_params,
-                step_index,
-                intent=goal or label,
-                meta=meta,
+            apply_locator_bundle_to_step(
+                _build_step(
+                    "click_ele",
+                    label,
+                    click_params,
+                    step_index,
+                    intent=goal or label,
+                    meta=meta,
+                ),
+                goal=goal,
+                payload=payload,
+                action_key=key,
             )
         ], last_url
 
     if key in _INPUT_KEYS:
         text = payload.get("text") or payload.get("value") or payload.get("content") or ""
-        locator = _guess_locator(goal, payload)
+        locator, strength = _resolve_locator(goal, payload)
         label = _extract_label(goal) or "输入内容"
         element_index = _parse_element_index(payload)
         if element_index is not None:
             label = f"{label}（Browser Lab 元素 #{element_index}）"[:200]
-        meta = _build_element_meta(key, payload)
+        meta = _build_element_meta(key, payload, locator_strength=strength)
         fill_params: dict[str, Any] = {"locator": locator, "value": str(text)}
         if element_index is not None:
             fill_params["index"] = _browser_lab_playwright_index(element_index)
+        from app.modules.browser_lab.browser_lab_import_candidates import apply_locator_bundle_to_step
+
         return [
-            _build_step(
-                "fill_value",
-                label,
-                fill_params,
-                step_index,
-                intent=goal or label,
-                meta=meta,
+            apply_locator_bundle_to_step(
+                _build_step(
+                    "fill_value",
+                    label,
+                    fill_params,
+                    step_index,
+                    intent=goal or label,
+                    meta=meta,
+                ),
+                goal=goal,
+                payload=payload,
+                action_key=key,
             )
         ], last_url
 
@@ -291,6 +321,20 @@ def _import_element_index(step: dict) -> int | None:
     return None
 
 
+def _dedup_import_steps(steps: list[dict]) -> list[dict]:
+    """相邻相同 method + 语义参数指纹去重（保留翻页等有意重复）。"""
+    out: list[dict] = []
+    prev_key: tuple[str, str] | None = None
+    for step in steps:
+        method = str(step.get("method") or "")
+        fp_key = (method, str(sorted(_import_params_fingerprint(step.get("params")).items())))
+        if fp_key == prev_key:
+            continue
+        prev_key = fp_key
+        out.append(step)
+    return out
+
+
 def steps_match_browser_lab_import(client_steps: list | None, server_steps: list) -> bool:
     """
     校验客户端提交的步骤是否基于本任务服务端转换结果。
@@ -349,6 +393,8 @@ def convert_browser_lab_to_ui_steps(
         last_url = normalized_start
 
     for event in events:
+        if event.get("cache_replay"):
+            continue
         idx = event.get("index")
         if idx in (0, None):
             continue
@@ -370,5 +416,123 @@ def convert_browser_lab_to_ui_steps(
             for converted in converted_list:
                 steps.append(converted)
                 step_index += 1
+
+    return _dedup_import_steps(steps)
+
+
+def convert_cache_actions_to_ui_steps(
+    *,
+    start_url: str,
+    task_text: str,
+    actions: list | None,
+    include_open_browser: bool = True,
+) -> list[dict]:
+    """将 BL-1 缓存动作转为 Web UI 步骤（缓存命中任务导入用）。"""
+    steps: list[dict] = []
+    step_index = 0
+    last_url = ""
+
+    if include_open_browser:
+        steps.append(_build_step("open_browser", "打开浏览器", {"browser_type": "chromium"}, step_index))
+        step_index += 1
+
+    normalized_start = (start_url or "").strip()
+    if normalized_start:
+        steps.append(
+            _build_step(
+                "open_url",
+                f"访问 {normalized_start[:60]}",
+                {"url": normalized_start},
+                step_index,
+                intent=(task_text or "")[:500],
+            )
+        )
+        step_index += 1
+        last_url = normalized_start
+
+    for action in actions or []:
+        if not isinstance(action, dict):
+            continue
+        op = (action.get("op") or "").lower()
+        selector = (action.get("selector") or "").strip() or "body"
+        if op == "navigate":
+            url = (action.get("url") or "").strip()
+            if not url or url == last_url:
+                continue
+            if action.get("new_tab"):
+                steps.append(_build_step("open_new_page", "新建标签页", {}, step_index))
+                step_index += 1
+            steps.append(_build_step("open_url", f"访问 {url[:60]}", {"url": url}, step_index))
+            step_index += 1
+            last_url = url
+            continue
+        if op == "click":
+            fallbacks = [f for f in (action.get("fallbacks") or []) if isinstance(f, str) and f.strip()]
+            meta = {
+                "source": "browser_lab_cache",
+                "locator_strength": (action.get("strength") or "strong"),
+            }
+            if fallbacks:
+                meta["candidates"] = fallbacks[:12]
+            steps.append(
+                _build_step(
+                    "click_ele",
+                    "点击元素",
+                    {"locator": selector},
+                    step_index,
+                    meta=meta,
+                )
+            )
+            step_index += 1
+            continue
+        if op in ("fill", "select"):
+            vf = action.get("value_from")
+            if isinstance(vf, str) and vf.startswith("var:"):
+                value = "${{" + vf[4:] + "}}"
+            else:
+                value = "" if vf else (action.get("value") or "")
+            fallbacks = [f for f in (action.get("fallbacks") or []) if isinstance(f, str) and f.strip()]
+            meta = {
+                "source": "browser_lab_cache",
+                "locator_strength": (action.get("strength") or "strong"),
+            }
+            if fallbacks:
+                meta["candidates"] = fallbacks[:12]
+            steps.append(
+                _build_step(
+                    "fill_value",
+                    "输入内容" if op == "fill" else "选择选项",
+                    {"locator": selector, "value": str(value)},
+                    step_index,
+                    meta=meta,
+                )
+            )
+            step_index += 1
+            continue
+        if op == "wait":
+            ms = int(action.get("timeout_ms") or 1000)
+            steps.append(
+                _build_step("wait_for_time", "等待", {"timeout": max(500, min(ms, 60000))}, step_index)
+            )
+            step_index += 1
+            continue
+        if op == "scroll":
+            y = int(action.get("y") or 400)
+            steps.append(
+                _build_step(
+                    "execute_script",
+                    "滚动页面",
+                    {"script": f"window.scrollBy(0, {y});"},
+                    step_index,
+                )
+            )
+            step_index += 1
+            continue
+        if op == "press":
+            key_name = str(action.get("key") or "Enter")
+            steps.append(
+                _build_step("press_key", f"按键 {key_name}", {"key": key_name}, step_index)
+            )
+            step_index += 1
 
     return steps

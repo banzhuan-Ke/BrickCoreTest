@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.core.platform.auth import is_authenticated, require_permissions
 from app.core.platform.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW
 from app.models.ai import AiRequirementGenerateJob
+from app.modules.test_management.requirement_review_service import assert_requirement_design_allowed
 from app.modules.ai.test_point_batch import (
     GenerateTestPointsBatchRequest,
     PlanTestPointsBatchRequest,
@@ -676,6 +677,8 @@ async def create_requirement_from_xmind(
             "xmind_source": file.filename or "",
         },
         parse_status="parsed",
+        # 新建需求：手工 XMind 作为设计入口，review_status 默认 pending；
+        # 后续 AI 提取/生成仍受可测性评审闸门约束。向已有需求导入见 import-xmind。
         create_by=username,
     )
     created = await _import_xmind_points_for_requirement(
@@ -715,7 +718,8 @@ async def import_test_points_xmind(
     user_info: dict = Depends(is_authenticated),
 ):
     project_id = _resolve_project_id(user_info, project_id)
-    await _get_requirement(req_id, project_id)
+    req = await _get_requirement(req_id, project_id)
+    await assert_requirement_design_allowed(req)
     file_name = (file.filename or "").lower()
     if not file_name.endswith(".xmind"):
         raise HTTPException(status_code=400, detail="请上传 .xmind 文件")
@@ -772,6 +776,7 @@ async def _create_test_points_generate_job(
     user_info: dict,
 ) -> StandardResponse:
     req = await _get_requirement(req_id, project_id)
+    await assert_requirement_design_allowed(req)
     running = await AiRequirementGenerateJob.filter(
         requirement_id=req_id,
         project_id=project_id,
@@ -823,6 +828,7 @@ async def generate_test_points(
 ):
     project_id = _resolve_project_id(user_info, project_id)
     req = await _get_requirement(req_id, project_id)
+    await assert_requirement_design_allowed(req)
 
     running = await AiRequirementGenerateJob.filter(
         requirement_id=req_id,
@@ -917,6 +923,7 @@ async def generate_cases_from_test_points(
 ):
     project_id = _resolve_project_id(user_info, project_id)
     req = await _get_requirement(req_id, project_id)
+    await assert_requirement_design_allowed(req)
     start_time = time.time()
 
     from app.modules.ai.ai_project_settings import load_requirement_case_settings
@@ -1276,6 +1283,7 @@ async def generate_scheme(
 ):
     project_id = _resolve_project_id(user_info, project_id)
     req = await _get_requirement(req_id, project_id)
+    await assert_requirement_design_allowed(req)
     start_time = time.time()
 
     qs = AiRequirementTestPoint.filter(requirement_id=req_id, is_del=False)

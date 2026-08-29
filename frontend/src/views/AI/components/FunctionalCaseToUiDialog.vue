@@ -76,6 +76,10 @@
             : '轮次过多易重复探索，建议 2～3 轮' }}
         </div>
       </el-form-item>
+      <BrowserRunModeFields
+        v-if="uiContext.page_url?.trim()"
+        :form="form"
+      />
       <el-form-item label="已选用例">
         <ul class="case-title-list">
           <li v-for="c in selectedCases" :key="c.id">{{ c.title }}</li>
@@ -85,13 +89,25 @@
 
     <!-- 生成中 -->
     <div v-else-if="phase === 'generating'" class="generating-box">
-      <el-icon class="is-loading" :size="36"><Loading /></el-icon>
-      <p>{{ form.generation_mode === 'agent' ? 'Agent 正在逐步探索页面…' : 'AI 正在生成 UI 步骤，请稍候…' }}</p>
-      <p class="hint">
-        {{ form.generation_mode === 'agent'
-          ? '每步调用 LLM，单条约 1～3 分钟；批量按条串行执行'
-          : '批量生成按条串行执行，条数较多时可能需数分钟' }}
-      </p>
+      <template v-if="(form.generation_mode === 'agent' || form.generation_mode === 'explore') && agentJobId">
+        <p class="batch-progress">
+          第 {{ agentBatchIndex + 1 }} / {{ caseIds.length }} 条：{{ currentCaseTitle }}
+        </p>
+        <UiAgentProgressPanel
+          :visible="true"
+          :job-id="agentJobId"
+          :project-id="projectId"
+          :title="form.generation_mode === 'explore' ? '探索进度' : 'Agent 进度'"
+          :waiting-hint="form.generation_mode === 'explore' ? '正在多轮探索页面…' : 'Agent 正在探索页面…'"
+          @done="onAgentBatchDone"
+          @fail="onAgentBatchFail"
+        />
+      </template>
+      <template v-else>
+        <el-icon class="is-loading" :size="36"><Loading /></el-icon>
+        <p>AI 正在生成 UI 步骤，请稍候…</p>
+        <p class="hint">批量生成按条串行执行，条数较多时可能需数分钟</p>
+      </template>
     </div>
 
     <!-- 预览结果 -->
@@ -186,6 +202,8 @@ import { ElMessage } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import { aiFunctionalCaseApi } from '@/api/modules/ai.js'
 import FunctionalCaseUiContext from '@/views/AI/components/FunctionalCaseUiContext.vue'
+import UiAgentProgressPanel from '@/views/AI/components/UiAgentProgressPanel.vue'
+import BrowserRunModeFields from '@/components/BrowserRunModeFields.vue'
 import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
 
 const { aiConfigId, enabledConfigs, loadingConfigs, loadConfigs } = useAiConfigSelect()
@@ -220,25 +238,39 @@ const importSelected = ref([])
 const form = reactive({
   generation_mode: 'single',
   max_rounds: 3,
-  max_steps: 15
+  max_steps: 15,
+  run_mode: 'runner',
+  device_id: null,
+  headless: true,
 })
 const uiContext = reactive(defaultUiContext())
 
 const previewItems = ref([])
+const agentJobId = ref(null)
+const agentBatchIndex = ref(0)
+const currentCaseTitle = ref('')
+let agentBatchResolve = null
+let agentBatchReject = null
 
-const buildPreviewPayload = () => ({
-  case_ids: props.caseIds,
-  ai_config_id: aiConfigId.value || undefined,
-  generation_mode: form.generation_mode,
-  max_rounds: form.max_rounds,
-  max_steps: form.max_steps,
-  source_method: 'ai',
+const buildContextPayload = () => ({
   page_url: uiContext.page_url?.trim() || undefined,
+  ai_config_id: aiConfigId.value || undefined,
   test_username: uiContext.test_username?.trim() || undefined,
   test_password: uiContext.test_password || undefined,
   login_ui_case_id: uiContext.login_ui_case_id || undefined,
   login_strategy: uiContext.login_strategy || 'none',
-  extra_context: uiContext.extra_context?.trim() || undefined
+  extra_context: uiContext.extra_context?.trim() || undefined,
+  source_method: 'ai',
+})
+
+const buildPreviewPayload = () => ({
+  case_ids: props.caseIds,
+  ...buildContextPayload(),
+  generation_mode: form.generation_mode,
+  max_rounds: form.max_rounds,
+  max_steps: form.max_steps,
+  device_id: form.device_id || undefined,
+  headless: form.headless,
 })
 
 const buildImportPayload = (rows) => ({
@@ -248,7 +280,8 @@ const buildImportPayload = (rows) => ({
     steps: row.steps,
     case_name: row.suggested_case_name,
     level: row.suggested_level,
-    record_id: row.record_id
+    record_id: row.record_id,
+    login_prefix_count: row.login_prefix_count || 0,
   }))
 })
 
@@ -262,12 +295,106 @@ watch(() => props.modelValue, async (val) => {
     phase.value = 'config'
     previewItems.value = []
     importSelected.value = []
+    agentJobId.value = null
+    agentBatchIndex.value = 0
+    currentCaseTitle.value = ''
+    form.run_mode = 'runner'
+    form.device_id = null
+    form.headless = true
     Object.assign(uiContext, defaultUiContext())
     await loadConfigs()
   }
 })
 
 watch(visible, (val) => emit('update:modelValue', val))
+
+function onAgentBatchDone(job) {
+  agentBatchResolve?.(job)
+  agentBatchResolve = null
+  agentBatchReject = null
+}
+
+function onAgentBatchFail(payload) {
+  agentBatchReject?.(new Error(payload?.error_message || 'Agent 失败'))
+  agentBatchResolve = null
+  agentBatchReject = null
+}
+
+function waitAgentJobDone() {
+  return new Promise((resolve, reject) => {
+    agentBatchResolve = resolve
+    agentBatchReject = reject
+  })
+}
+
+async function handlePreviewAsyncSerial() {
+  const isExplore = form.generation_mode === 'explore'
+  const items = []
+  let totalTokens = 0
+  let successCount = 0
+  let failedCount = 0
+  const ctxPayload = buildContextPayload()
+
+  for (let i = 0; i < props.caseIds.length; i += 1) {
+    const caseId = props.caseIds[i]
+    agentBatchIndex.value = i
+    currentCaseTitle.value = selectedCases.value.find((c) => c.id === caseId)?.title || `#${caseId}`
+
+    const startApi = isExplore
+      ? aiFunctionalCaseApi.startToUiExploreJob
+      : aiFunctionalCaseApi.startToUiAgentJob
+    const startRes = await startApi({
+      functional_case_id: caseId,
+      ...(isExplore ? { max_rounds: form.max_rounds } : { max_steps: form.max_steps }),
+      run_mode: form.run_mode,
+      device_id: form.device_id || undefined,
+      headless: form.headless,
+      ...ctxPayload,
+    }, props.projectId)
+
+    if (startRes.data?.code !== 200) {
+      throw new Error(startRes.data?.message || '创建任务失败')
+    }
+    const startData = startRes.data.data || {}
+    agentJobId.value = startData.job_id
+
+    await waitAgentJobDone()
+
+    const finApi = isExplore
+      ? aiFunctionalCaseApi.finalizeToUiExploreJob
+      : aiFunctionalCaseApi.finalizeToUiAgentJob
+    const finRes = await finApi({
+      job_id: startData.job_id,
+      functional_case_id: caseId,
+      ...ctxPayload,
+    }, props.projectId)
+
+    if (finRes.data?.code !== 200) {
+      throw new Error(finRes.data?.message || '汇总预览失败')
+    }
+    const item = finRes.data.data || {}
+    items.push(item)
+    totalTokens += Number(item.tokens_used || 0)
+    if (item.status === 'success') successCount += 1
+    else failedCount += 1
+    agentJobId.value = null
+  }
+
+  previewItems.value = items
+  previewResult.success_count = successCount
+  previewResult.failed_count = failedCount
+  previewResult.total_tokens = totalTokens
+  phase.value = 'preview'
+  const successRows = previewItems.value.filter((i) => i.status === 'success')
+  importSelected.value = successRows
+  await nextTick()
+  successRows.forEach((row) => previewTableRef.value?.toggleRowSelection(row, true))
+  ElMessage.success(`预览完成：成功 ${successCount} 条${failedCount ? `，失败 ${failedCount} 条` : ''}`)
+}
+
+async function handlePreviewAgentSerial() {
+  return handlePreviewAsyncSerial()
+}
 
 const handlePreview = async () => {
   if (!enabledConfigs.value.length) {
@@ -311,9 +438,25 @@ const handlePreview = async () => {
     return
   }
 
+  if (
+    (form.generation_mode === 'agent' || form.generation_mode === 'explore') &&
+    !form.device_id
+  ) {
+    ElMessage.warning('请选择在线 Runner 执行设备')
+    return
+  }
+  if (form.generation_mode === 'single' && uiContext.page_url?.trim() && !form.device_id) {
+    ElMessage.warning('填写页面 URL 时请选择在线 Runner 执行设备')
+    return
+  }
+
   generating.value = true
   phase.value = 'generating'
   try {
+    if (form.generation_mode === 'agent' || form.generation_mode === 'explore') {
+      await handlePreviewAsyncSerial()
+      return
+    }
     const res = await aiFunctionalCaseApi.previewToUi(
       buildPreviewPayload(),
       props.projectId
@@ -333,7 +476,8 @@ const handlePreview = async () => {
     }
   } catch (e) {
     phase.value = 'config'
-    ElMessage.error(e.response?.data?.detail || '生成预览失败')
+    agentJobId.value = null
+    ElMessage.error(e.response?.data?.detail || e.message || '生成预览失败')
   } finally {
     generating.value = false
   }
@@ -374,6 +518,8 @@ const handleClosed = () => {
   phase.value = 'config'
   previewItems.value = []
   importSelected.value = []
+  agentJobId.value = null
+  agentBatchIndex.value = 0
 }
 </script>
 
@@ -389,7 +535,12 @@ const handleClosed = () => {
 }
 .generating-box {
   text-align: center;
-  padding: 48px 0;
+  padding: 24px 0;
+  .batch-progress {
+    margin-bottom: 12px;
+    font-size: 14px;
+    color: var(--el-text-color-regular);
+  }
   .hint { font-size: 13px; color: var(--el-text-color-secondary); margin-top: 8px; }
 }
 .preview-summary {

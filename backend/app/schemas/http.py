@@ -63,6 +63,7 @@ class ApiDefinitionCreate(ApiDefinitionBase):
 class ApiDefinitionUpdate(ApiDefinitionBase):
     """更新接口"""
     catalog_id: Optional[int] = Field(None, description="目录ID")
+    protocol: Optional[str] = Field(None, description="协议 http/websocket/graphql/grpc")
 
 
 class ApiDefinitionOut(ApiDefinitionBase):
@@ -362,6 +363,10 @@ class ApiRunRequest(BaseModel):
     variables: Optional[Dict[str, Any]] = Field(default={}, description="变量")
     auto_validate_schema: bool = Field(default=False, description="是否自动校验响应 Schema")
     propagate_extracted: bool = Field(default=True, description="数据驱动时行间传递提取变量")
+    worker_id: Optional[int] = Field(
+        None,
+        description="经在线压测执行机代发时指定 Worker ID；不传则由平台本机发送",
+    )
 
 
 class VariablePreviewRequest(BaseModel):
@@ -489,6 +494,11 @@ class ApiBatchRunRequest(BaseModel):
     env_id: int = Field(..., description="环境ID")
     suite_id: Optional[int] = Field(None, description="所属套件ID")
     auto_validate_schema: bool = Field(default=False, description="是否自动校验响应 Schema")
+    worker_id: Optional[int] = Field(
+        None,
+        description="经在线压测执行机代发时指定 Worker ID；不传则由平台本机发送",
+    )
+    include_quarantine: bool = Field(default=False, description="是否包含已隔离用例；默认跳过")
 
 
 class ApiSuiteRunRequest(BaseModel):
@@ -496,6 +506,11 @@ class ApiSuiteRunRequest(BaseModel):
     env_id: Optional[int] = Field(None, description="环境ID，不传则使用套件默认环境")
     auto_validate_schema: bool = Field(default=False, description="是否自动校验响应 Schema")
     trigger_type: str = Field(default="manual", description="触发方式: manual/cron/assistant 等")
+    worker_id: Optional[int] = Field(
+        None,
+        description="经在线压测执行机代发时指定 Worker ID；不传则由平台本机发送",
+    )
+    include_quarantine: bool = Field(default=False, description="是否包含已隔离用例；默认跳过")
 
 
 class ApiBatchRunResult(BaseModel):
@@ -520,11 +535,14 @@ class ApiSuiteRunRecordOut(BaseModel):
     success_cases: int
     failed_cases: int
     skipped_cases: int
+    quarantine_skip: int = 0
     start_time: datetime
     end_time: Optional[datetime]
     duration: float
     env_id: Optional[int]
     env_name: Optional[str]
+    worker_id: Optional[int] = None
+    worker_name: Optional[str] = None
     run_by: str
     
     class Config:
@@ -549,6 +567,10 @@ class ApiCronJobBase(BaseModel):
     run_date: Optional[str] = Field(None, description="固定执行时间(格式: 2026-01-01 12:00:00)")
     crontab: Dict[str, str] = Field(default={"minute": "0", "hour": "*", "day": "*", "month": "*", "day_of_week": "*"})
     env_id: int = Field(..., description="执行环境ID")
+    worker_id: Optional[int] = Field(
+        None,
+        description="经在线压测执行机代发时指定 Worker ID；不传则由平台本机发送",
+    )
     state: bool = Field(default=False, description="是否启用")
     # 执行记录
     last_run_record_id: Optional[int] = Field(None, description="最后一次执行记录ID")
@@ -747,6 +769,11 @@ class ApiPlanRunRequest(BaseModel):
     stop_on_failure: bool = Field(default=False, description="遇到失败是否停止")
     auto_validate_schema: bool = Field(default=False, description="是否自动校验响应 Schema")
     trigger_type: str = Field(default="manual", description="触发方式: manual/cron/assistant 等")
+    worker_id: Optional[int] = Field(
+        None,
+        description="经在线压测执行机代发时指定 Worker ID；不传则由平台本机发送",
+    )
+    include_quarantine: bool = Field(default=False, description="是否包含已隔离用例；默认跳过")
 
 
 class ApiPlanItemRunResult(BaseModel):
@@ -758,9 +785,11 @@ class ApiPlanItemRunResult(BaseModel):
     total: int = 0
     success: int = 0
     failed: int = 0
+    quarantine_skip: int = 0
     duration: float = 0.0
     case_results: List[Any] = []
     error: Optional[str] = None
+    skip_reason: Optional[str] = None
 
 
 class ApiPlanRunResult(BaseModel):
@@ -773,6 +802,7 @@ class ApiPlanRunResult(BaseModel):
     total: int
     success: int
     failed: int
+    quarantine_skip: int = 0
     duration: float
     item_results: List[ApiPlanItemRunResult] = []
     run_by: str = "admin"
@@ -789,8 +819,11 @@ class ApiPlanRunRecordOut(BaseModel):
     total_cases: int
     success_cases: int
     failed_cases: int
+    quarantine_skip: int = 0
     env_id: Optional[int] = None
     env_name: Optional[str] = None
+    worker_id: Optional[int] = None
+    worker_name: Optional[str] = None
     duration: Optional[float] = None
     http_duration: Optional[float] = Field(None, description="接口总耗时(ms)")
     run_by: str

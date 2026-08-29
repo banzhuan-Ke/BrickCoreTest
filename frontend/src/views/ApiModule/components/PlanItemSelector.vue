@@ -280,8 +280,8 @@ onMounted(() => {
 }
 .item-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  max-height: 420px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 4px;
 }

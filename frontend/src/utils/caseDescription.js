@@ -24,6 +24,7 @@ export function extractOpenUrlFromSteps(steps) {
 
 /** 环境 global_vars 中 Web 默认起始 URL 的保留键 */
 export const ENV_DEFAULT_START_URL_KEY = '__default_start_url'
+export const ENV_DEFAULT_PERF_WORKER_ID_KEY = '__default_perf_worker_id'
 export const UI_TIMEOUT_SCALE_KEY = '__ui_timeout_scale'
 export const UI_NAV_WAIT_UNTIL_KEY = '__ui_nav_wait_until'
 export const UI_BUSY_SELECTORS_KEY = '__ui_busy_selectors'
@@ -34,8 +35,12 @@ export const UI_ACTION_SETTLE_MS_KEY = '__ui_action_settle_ms'
 export const UI_ACTION_SETTLE_QUIET_MS_KEY = '__ui_action_settle_quiet_ms'
 export const UI_AUTH_INJECT_KEY = '__ui_auth_inject'
 export const UI_STORAGE_STATE_KEY = '__ui_storage_state'
+export const UI_AUTH_PROFILES_KEY = '__ui_auth_profiles'
+/** 总开关：false 时保留配置但不下发注入 */
+export const UI_AUTH_ENABLED_KEY = '__ui_auth_enabled'
 
 const UI_EXEC_RESERVED_KEYS = [
+  ENV_DEFAULT_PERF_WORKER_ID_KEY,
   UI_TIMEOUT_SCALE_KEY,
   UI_NAV_WAIT_UNTIL_KEY,
   UI_BUSY_SELECTORS_KEY,
@@ -46,6 +51,8 @@ const UI_EXEC_RESERVED_KEYS = [
   UI_ACTION_SETTLE_QUIET_MS_KEY,
   UI_AUTH_INJECT_KEY,
   UI_STORAGE_STATE_KEY,
+  UI_AUTH_PROFILES_KEY,
+  UI_AUTH_ENABLED_KEY,
 ]
 
 export const DEFAULT_UI_TIMEOUT_SCALE = 1
@@ -63,6 +70,25 @@ export function getEnvDefaultStartUrl(globalVars) {
     return String(raw.value || '').trim()
   }
   return String(raw || '').trim()
+}
+
+export function getEnvDefaultPerfWorkerId(globalVars) {
+  const gv = globalVars && typeof globalVars === 'object' ? globalVars : {}
+  const raw = gv[ENV_DEFAULT_PERF_WORKER_ID_KEY]
+  const val = raw && typeof raw === 'object' && 'value' in raw ? raw.value : raw
+  const n = Number(val)
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
+export function mergeEnvDefaultPerfWorkerId(globalVars, workerId) {
+  const gv = globalVars && typeof globalVars === 'object' ? { ...globalVars } : {}
+  const n = Number(workerId)
+  if (Number.isInteger(n) && n > 0) {
+    gv[ENV_DEFAULT_PERF_WORKER_ID_KEY] = n
+  } else {
+    delete gv[ENV_DEFAULT_PERF_WORKER_ID_KEY]
+  }
+  return gv
 }
 
 export function getProjectDefaultStartUrl(projectInfo) {
@@ -436,21 +462,62 @@ export function getEnvUiAuthInjectForm(globalVars) {
   const inject = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null
   const storageRaw = gv[UI_STORAGE_STATE_KEY]
   let storageStateText = ''
+  let legacyStorageDoc = null
+  let legacyPath = ''
   if (storageRaw != null && storageRaw !== '') {
     if (typeof storageRaw === 'object') {
+      legacyStorageDoc = storageRaw
       try {
         storageStateText = JSON.stringify(storageRaw, null, 2)
       } catch {
         storageStateText = ''
       }
     } else {
-      storageStateText = String(storageRaw)
+      legacyPath = String(storageRaw).trim()
+      storageStateText = legacyPath
     }
   }
+
+  let profiles = []
+  const profilesRaw = gv[UI_AUTH_PROFILES_KEY]
+  if (Array.isArray(profilesRaw)) {
+    profiles = profilesRaw.map((p, idx) => ({
+      id: String(p?.id || `p-${idx}`),
+      name: String(p?.name || `站点${idx + 1}`),
+      enabled: p?.enabled !== false,
+      host_hint: String(p?.host_hint || p?.match_host || ''),
+      note: String(p?.note || ''),
+      storage_state:
+        p?.storage_state && typeof p.storage_state === 'object'
+          ? p.storage_state
+          : { cookies: [], origins: [] },
+    }))
+  }
+
+  // 兼容：旧版单份 storage_state 对象升迁为一条「默认」配置展示
+  if (!profiles.length && legacyStorageDoc && typeof legacyStorageDoc === 'object') {
+    profiles = [
+      {
+        id: 'legacy-default',
+        name: '默认登录态',
+        enabled: true,
+        host_hint: '',
+        note: '由旧版 storage_state 自动迁移，可改名',
+        storage_state: legacyStorageDoc,
+      },
+    ]
+  }
+
   const headers = inject?.headers && typeof inject.headers === 'object' ? inject.headers : {}
   const authHeader = String(headers.Authorization || headers.authorization || '')
   const localStorage = Array.isArray(inject?.local_storage)
     ? inject.local_storage.map((r) => ({
+        key: String(r?.key || ''),
+        value: String(r?.value ?? ''),
+      }))
+    : []
+  const sessionStorage = Array.isArray(inject?.session_storage)
+    ? inject.session_storage.map((r) => ({
         key: String(r?.key || ''),
         value: String(r?.value ?? ''),
       }))
@@ -464,19 +531,45 @@ export function getEnvUiAuthInjectForm(globalVars) {
         url: String(r?.url || ''),
       }))
     : []
-  const enabled = Boolean(
+  const hasConfig = Boolean(
     authHeader
     || localStorage.some((r) => r.key)
+    || sessionStorage.some((r) => r.key)
     || cookies.some((r) => r.name)
-    || storageStateText.trim()
+    || profiles.length
+    || legacyPath
   )
+
+  const flagRaw = gv[UI_AUTH_ENABLED_KEY]
+  let enabled
+  if (flagRaw === false || flagRaw === 0 || flagRaw === 'false' || flagRaw === '0') {
+    enabled = false
+  } else if (flagRaw === true || flagRaw === 1 || flagRaw === 'true' || flagRaw === '1') {
+    enabled = true
+  } else {
+    // 兼容旧数据：有配置即视为启用
+    enabled = hasConfig
+  }
+
   return {
     enabled,
+    hasConfig,
     authorization: authHeader,
     localStorage: localStorage.length ? localStorage : [{ key: '', value: '' }],
+    sessionStorage: sessionStorage.length ? sessionStorage : [{ key: '', value: '' }],
     cookies: cookies.length ? cookies : [{ name: '', value: '', domain: '', path: '/', url: '' }],
     storageStateText,
+    legacyPath,
+    profiles,
   }
+}
+
+/**
+ * 当前环境是否已配置且总开关开启（运行弹窗提示用）
+ */
+export function envHasUiAuthInject(globalVars) {
+  const form = getEnvUiAuthInjectForm(globalVars)
+  return Boolean(form.enabled && form.hasConfig)
 }
 
 /**
@@ -489,18 +582,20 @@ export function mergeEnvUiAuthInject(
     enabled = false,
     authorization = '',
     localStorage = [],
+    sessionStorage = [],
     cookies = [],
     storageStateText = '',
+    profiles = [],
+    legacyPath = '',
   } = {}
 ) {
   const gv = globalVars && typeof globalVars === 'object' ? { ...globalVars } : {}
   delete gv[UI_AUTH_INJECT_KEY]
   delete gv[UI_STORAGE_STATE_KEY]
+  delete gv[UI_AUTH_PROFILES_KEY]
+  delete gv[UI_AUTH_ENABLED_KEY]
 
-  if (!enabled) {
-    return { ok: true, globalVars: gv }
-  }
-
+  // 停用时仍写回配置（不清数据），仅用 __ui_auth_enabled=false 控制下发
   const headers = {}
   const auth = String(authorization || '').trim()
   if (auth) {
@@ -515,6 +610,16 @@ export function mergeEnvUiAuthInject(
       return { ok: false, error: 'LocalStorage 键名过长' }
     }
     ls.push({ key, value: String(row?.value ?? '') })
+  }
+
+  const ss = []
+  for (const row of sessionStorage || []) {
+    const key = String(row?.key || '').trim()
+    if (!key) continue
+    if (key.length > 200) {
+      return { ok: false, error: 'SessionStorage 键名过长' }
+    }
+    ss.push({ key, value: String(row?.value ?? '') })
   }
 
   const ck = []
@@ -537,36 +642,91 @@ export function mergeEnvUiAuthInject(
     ck.push(item)
   }
 
-  if (Object.keys(headers).length || ls.length || ck.length) {
+  if (Object.keys(headers).length || ls.length || ss.length || ck.length) {
     gv[UI_AUTH_INJECT_KEY] = {
       headers,
       local_storage: ls,
-      session_storage: [],
+      session_storage: ss,
       cookies: ck,
     }
   }
 
-  const stateText = String(storageStateText || '').trim()
-  if (stateText) {
-    if (stateText.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(stateText)
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          return { ok: false, error: 'storage_state JSON 须为对象' }
-        }
-        if (!('cookies' in parsed) && !('origins' in parsed)) {
-          return { ok: false, error: 'storage_state 须包含 cookies 或 origins' }
-        }
-        gv[UI_STORAGE_STATE_KEY] = parsed
-      } catch {
-        return { ok: false, error: 'storage_state JSON 无效' }
-      }
-    } else {
-      if (/\r|\n/.test(stateText)) {
+  const profileList = []
+  for (const p of profiles || []) {
+    const name = String(p?.name || '').trim() || '未命名'
+    if (name.length > 80) {
+      return { ok: false, error: '登录态名称过长' }
+    }
+    const state = p?.storage_state
+    if (!state || typeof state !== 'object') {
+      return { ok: false, error: `登录态「${name}」缺少 storage_state` }
+    }
+    if (
+      !('cookies' in state)
+      && !('origins' in state)
+      && !('sessionStorageOrigins' in state)
+    ) {
+      return { ok: false, error: `登录态「${name}」须包含 cookies / origins / sessionStorageOrigins` }
+    }
+    const entry = {
+      name,
+      enabled: p?.enabled !== false,
+      storage_state: state,
+    }
+    const hostHint = String(p?.host_hint || '').trim()
+    if (hostHint) entry.host_hint = hostHint
+    const note = String(p?.note || '').trim()
+    if (note) entry.note = note
+    profileList.push(entry)
+  }
+  if (profileList.length) {
+    gv[UI_AUTH_PROFILES_KEY] = profileList
+  }
+
+  // 兼容：无 profiles 时仍可保存旧路径 / 粘贴 JSON
+  if (!profileList.length) {
+    const pathOnly = String(legacyPath || '').trim()
+    const stateText = String(storageStateText || '').trim()
+    if (pathOnly && !pathOnly.startsWith('{')) {
+      if (/\r|\n/.test(pathOnly)) {
         return { ok: false, error: 'storage_state 路径不能包含换行' }
       }
-      gv[UI_STORAGE_STATE_KEY] = stateText
+      gv[UI_STORAGE_STATE_KEY] = pathOnly
+    } else if (stateText) {
+      if (stateText.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(stateText)
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return { ok: false, error: 'storage_state JSON 须为对象' }
+          }
+          if (
+            !('cookies' in parsed)
+            && !('origins' in parsed)
+            && !('sessionStorageOrigins' in parsed)
+          ) {
+            return { ok: false, error: 'storage_state 须包含 cookies、origins 或 sessionStorageOrigins' }
+          }
+          gv[UI_STORAGE_STATE_KEY] = parsed
+        } catch {
+          return { ok: false, error: 'storage_state JSON 无效' }
+        }
+      } else {
+        if (/\r|\n/.test(stateText)) {
+          return { ok: false, error: 'storage_state 路径不能包含换行' }
+        }
+        gv[UI_STORAGE_STATE_KEY] = stateText
+      }
     }
+  }
+
+  const hasAny =
+    Boolean(gv[UI_AUTH_INJECT_KEY])
+    || Boolean(gv[UI_AUTH_PROFILES_KEY])
+    || Boolean(gv[UI_STORAGE_STATE_KEY])
+
+  // 有配置时始终写入总开关；无配置则不留空键
+  if (hasAny) {
+    gv[UI_AUTH_ENABLED_KEY] = Boolean(enabled)
   }
 
   return { ok: true, globalVars: gv }

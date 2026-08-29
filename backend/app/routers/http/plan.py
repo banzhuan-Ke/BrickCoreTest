@@ -770,6 +770,13 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
     if not env:
         raise HTTPException(status_code=404, detail="执行环境不存在")
 
+    from app.modules.http.worker_http_proxy import require_api_proxy_worker_http, worker_record_fields
+
+    proxy_worker = None
+    if req.worker_id is not None:
+        proxy_worker = await require_api_proxy_worker_http(project_id, req.worker_id)
+    worker_kw = worker_record_fields(proxy_worker)
+
     # 加载项目全局变量（优先级最低）
     project_obj = await ProjectModel.get_or_none(id=project_id)
     project_global_vars = (project_obj.global_vars or {}) if project_obj else {}
@@ -794,7 +801,17 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
     total_count = 0
     success_count = 0
     failed_count = 0
+    quarantine_count = 0
     item_results: List[ApiPlanItemRunResult] = []
+
+    def _accumulate_item(r: ApiPlanItemRunResult) -> None:
+        nonlocal total_count, success_count, failed_count, quarantine_count
+        # total 与套件级一致：含隔离用例；报告/前端用 total - quarantine_skip 作分母
+        qs = int(getattr(r, "quarantine_skip", 0) or 0)
+        total_count += r.total or 0
+        success_count += r.success or 0
+        failed_count += r.failed or 0
+        quarantine_count += qs
 
     # ============ 内部辅助：执行单个 item ============
 
@@ -825,6 +842,7 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
             status="running", trigger_type="plan",
             total_cases=len(case_ids),
             env_id=env_id, env_name=env.name, run_by=username,
+            **worker_kw,
         )
 
         run_result = await execute_api_suite_cases(
@@ -837,11 +855,14 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
             project_global_vars=project_global_vars,
             auto_validate_schema=req.auto_validate_schema,
             stop_on_failure=suite.stop_on_failure or req.stop_on_failure,
+            worker_id=req.worker_id,
+            include_quarantine=bool(getattr(req, "include_quarantine", False)),
         )
         case_results = run_result["case_results"]
         suite_success = run_result["success_count"]
         suite_failed = run_result["failed_count"]
         suite_total = len(case_results)
+        suite_qs = int(run_result.get("quarantine_skip") or 0)
         hooks_result = run_result["hooks_result"]
 
         suite_record.status = "success" if suite_failed == 0 and hooks_result.get("success", True) else "failed"
@@ -856,6 +877,7 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
             item_id=item.id, item_type="suite", name=suite.name,
             status="success" if suite_failed == 0 and hooks_result.get("success", True) else "failed",
             total=suite_total, success=suite_success, failed=suite_failed,
+            quarantine_skip=suite_qs,
             duration=round((time.time() - item_start) * 1000, 2),
             case_results=[api_run_result_to_case_display(r) for r in case_results],
         )
@@ -863,12 +885,39 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
     async def _execute_case_item(item, variables: dict) -> ApiPlanItemRunResult:
         """执行单用例类型的 item"""
         item_start = time.time()
+        from app.modules.stability.quarantine import split_quarantined_ids, write_api_quarantine_skips
+
+        _runnable, quarantined = await split_quarantined_ids(
+            "api",
+            [item.case_id],
+            include_quarantine=bool(getattr(req, "include_quarantine", False)),
+        )
+        if quarantined:
+            skip_results = await write_api_quarantine_skips(
+                case_ids=quarantined,
+                project_id=project_id,
+                username=username,
+                suite_record_id=None,
+            )
+            result = skip_results[0]
+            return ApiPlanItemRunResult(
+                item_id=item.id, item_type="case",
+                name=result.case_name or f"用例#{item.case_id}",
+                status="skipped",
+                total=1, success=0, failed=0,
+                quarantine_skip=1,
+                skip_reason="quarantine",
+                duration=round((time.time() - item_start) * 1000, 2),
+                case_results=[api_run_result_to_case_display(result)],
+                error="已隔离未跑",
+            )
         result = await run_single_case(
             case_id=item.case_id, env_id=env_id,
             suite_record_id=None, username=username,
             variables=variables,
             auto_validate_schema=req.auto_validate_schema,
             project_global_vars=project_global_vars,
+            worker_id=req.worker_id,
         )
         case_name = result.case_name or f"用例#{item.case_id}"
         return ApiPlanItemRunResult(
@@ -881,8 +930,8 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
             case_results=[api_run_result_to_case_display(result)],
         )
 
-    # ============ 并行执行分支（Phase 3.6.2）============
-    if plan.parallel:
+    # ============ 并行执行分支（Phase 3.6.2）；经执行机时强制串行 ============
+    if plan.parallel and req.worker_id is None:
         initial_vars = dict(accumulated_vars)  # 每个 item 独立使用，不累积
 
         async def _run_item_parallel(item) -> ApiPlanItemRunResult:
@@ -903,9 +952,7 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
         )
         item_results = list(parallel_results)
         for r in item_results:
-            total_count += r.total
-            success_count += r.success
-            failed_count += r.failed
+            _accumulate_item(r)
 
     # ============ 串行执行分支（Phase 3.6.1 依赖校验）============
     else:
@@ -932,14 +979,14 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
             if item.item_type == "suite" and item.suite_id:
                 r = await _execute_suite_item(item, accumulated_vars)
                 item_results.append(r)
-                total_count += r.total
-                success_count += r.success
-                failed_count += r.failed
+                _accumulate_item(r)
                 # 从 case_results 中累积提取变量
                 for cr in (r.case_results or []):
                     if isinstance(cr, dict):
                         accumulated_vars.update(cr.get("extracted_vars") or {})
-                if r.status != "success":
+                if r.status in ("skipped", "skip"):
+                    pass
+                elif r.status != "success":
                     failed_item_ids.add(item.id)
                     if req.stop_on_failure:
                         should_stop = True
@@ -947,18 +994,18 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
             elif item.item_type == "case" and item.case_id:
                 r = await _execute_case_item(item, accumulated_vars)
                 item_results.append(r)
-                total_count += 1
-                if r.status == "success":
-                    success_count += 1
-                else:
-                    failed_count += 1
-                    failed_item_ids.add(item.id)
-                    if req.stop_on_failure:
-                        should_stop = True
+                _accumulate_item(r)
                 # 累积提取变量
                 for cr in (r.case_results or []):
                     if isinstance(cr, dict):
                         accumulated_vars.update(cr.get("extracted_vars") or {})
+                if r.status in ("skipped", "skip"):
+                    # 隔离/依赖跳过：不计入失败，也不触发 stop_on_failure
+                    pass
+                elif r.status != "success":
+                    failed_item_ids.add(item.id)
+                    if req.stop_on_failure:
+                        should_stop = True
 
             else:
                 item_results.append(ApiPlanItemRunResult(
@@ -983,12 +1030,14 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
         total_cases=total_count,
         success_cases=success_count,
         failed_cases=failed_count,
+        quarantine_skip=quarantine_count,
         env_id=env_id,
         env_name=env.name,
         duration=plan_duration,
         item_results=item_results_snapshot,
         run_by=username,
         end_time=datetime.now(),
+        **worker_kw,
     )
 
     return ApiPlanRunResult(
@@ -1000,6 +1049,7 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
         total=total_count,
         success=success_count,
         failed=failed_count,
+        quarantine_skip=quarantine_count,
         duration=plan_duration,
         item_results=item_results,
         run_by=username,
@@ -1035,6 +1085,13 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
     if _detect_cycle(items):
         raise HTTPException(status_code=422, detail="计划 Item 存在循环依赖，无法执行")
 
+    from app.modules.http.worker_http_proxy import require_api_proxy_worker_http, worker_record_fields
+
+    proxy_worker = None
+    if req.worker_id is not None:
+        proxy_worker = await require_api_proxy_worker_http(project_id, req.worker_id)
+    worker_kw = worker_record_fields(proxy_worker)
+
     # 立即创建执行记录（status=running），返回 record_id
     run_record = await ApiPlanRunRecord.create(
         plan_id=plan_id,
@@ -1048,6 +1105,7 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
         env_name=env.name,
         run_by=username,
         item_results=[],
+        **worker_kw,
     )
 
     async def _run_in_background():
@@ -1064,7 +1122,17 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
         total_count = 0
         success_count = 0
         failed_count = 0
+        quarantine_count = 0
         bg_item_results: List[ApiPlanItemRunResult] = []
+
+        def _accumulate_item(r: ApiPlanItemRunResult) -> None:
+            nonlocal total_count, success_count, failed_count, quarantine_count
+            # total 与套件级一致：含隔离用例；报告/前端用 total - quarantine_skip 作分母
+            qs = int(getattr(r, "quarantine_skip", 0) or 0)
+            total_count += r.total or 0
+            success_count += r.success or 0
+            failed_count += r.failed or 0
+            quarantine_count += qs
 
         async def _execute_suite_item(item, variables: dict) -> ApiPlanItemRunResult:
             from app.modules.http.api_suite_runner import execute_api_suite_cases
@@ -1089,6 +1157,7 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
                 status="running", trigger_type="plan",
                 total_cases=len(case_ids),
                 env_id=env_id, env_name=env.name, run_by=username,
+                **worker_kw,
             )
 
             run_result = await execute_api_suite_cases(
@@ -1101,11 +1170,14 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
                 project_global_vars=project_global_vars,
                 auto_validate_schema=req.auto_validate_schema,
                 stop_on_failure=suite.stop_on_failure or req.stop_on_failure,
+                worker_id=req.worker_id,
+                include_quarantine=bool(getattr(req, "include_quarantine", False)),
             )
             case_results = run_result["case_results"]
             suite_success = run_result["success_count"]
             suite_failed = run_result["failed_count"]
             suite_total = len(case_results)
+            suite_qs = int(run_result.get("quarantine_skip") or 0)
             hooks_result = run_result["hooks_result"]
 
             suite_record.status = "success" if suite_failed == 0 and hooks_result.get("success", True) else "failed"
@@ -1119,18 +1191,46 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
                 item_id=item.id, item_type="suite", name=suite.name,
                 status="success" if suite_failed == 0 and hooks_result.get("success", True) else "failed",
                 total=suite_total, success=suite_success, failed=suite_failed,
+                quarantine_skip=suite_qs,
                 duration=round((time.time() - item_start) * 1000, 2),
                 case_results=[api_run_result_to_case_display(r) for r in case_results],
             )
 
         async def _execute_case_item(item, variables: dict) -> ApiPlanItemRunResult:
             item_start = time.time()
+            from app.modules.stability.quarantine import split_quarantined_ids, write_api_quarantine_skips
+
+            _runnable, quarantined = await split_quarantined_ids(
+                "api",
+                [item.case_id],
+                include_quarantine=bool(getattr(req, "include_quarantine", False)),
+            )
+            if quarantined:
+                skip_results = await write_api_quarantine_skips(
+                    case_ids=quarantined,
+                    project_id=project_id,
+                    username=username,
+                    suite_record_id=None,
+                )
+                result = skip_results[0]
+                return ApiPlanItemRunResult(
+                    item_id=item.id, item_type="case",
+                    name=result.case_name or f"用例#{item.case_id}",
+                    status="skipped",
+                    total=1, success=0, failed=0,
+                    quarantine_skip=1,
+                    skip_reason="quarantine",
+                    duration=round((time.time() - item_start) * 1000, 2),
+                    case_results=[api_run_result_to_case_display(result)],
+                    error="已隔离未跑",
+                )
             result = await run_single_case(
                 case_id=item.case_id, env_id=env_id,
                 suite_record_id=None, username=username,
                 variables=variables,
                 auto_validate_schema=req.auto_validate_schema,
                 project_global_vars=project_global_vars,
+                worker_id=req.worker_id,
             )
             case_name = result.case_name or f"用例#{item.case_id}"
             return ApiPlanItemRunResult(
@@ -1143,7 +1243,7 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
             )
 
         try:
-            if plan.parallel:
+            if plan.parallel and req.worker_id is None:
                 initial_vars = dict(accumulated_vars)
 
                 async def _run_item_parallel(item) -> ApiPlanItemRunResult:
@@ -1163,9 +1263,7 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
                 )
                 bg_item_results = list(parallel_results)
                 for r in bg_item_results:
-                    total_count += r.total
-                    success_count += r.success
-                    failed_count += r.failed
+                    _accumulate_item(r)
             else:
                 should_stop = False
                 failed_item_ids: set = set()
@@ -1185,30 +1283,29 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
                     if item.item_type == "suite" and item.suite_id:
                         r = await _execute_suite_item(item, accumulated_vars)
                         bg_item_results.append(r)
-                        total_count += r.total
-                        success_count += r.success
-                        failed_count += r.failed
+                        _accumulate_item(r)
                         for cr in (r.case_results or []):
                             if isinstance(cr, dict):
                                 accumulated_vars.update(cr.get("extracted_vars") or {})
-                        if r.status != "success":
+                        if r.status in ("skipped", "skip"):
+                            pass
+                        elif r.status != "success":
                             failed_item_ids.add(item.id)
                             if req.stop_on_failure:
                                 should_stop = True
                     elif item.item_type == "case" and item.case_id:
                         r = await _execute_case_item(item, accumulated_vars)
                         bg_item_results.append(r)
-                        total_count += 1
-                        if r.status == "success":
-                            success_count += 1
-                        else:
-                            failed_count += 1
-                            failed_item_ids.add(item.id)
-                            if req.stop_on_failure:
-                                should_stop = True
+                        _accumulate_item(r)
                         for cr in (r.case_results or []):
                             if isinstance(cr, dict):
                                 accumulated_vars.update(cr.get("extracted_vars") or {})
+                        if r.status in ("skipped", "skip"):
+                            pass
+                        elif r.status != "success":
+                            failed_item_ids.add(item.id)
+                            if req.stop_on_failure:
+                                should_stop = True
                     else:
                         bg_item_results.append(ApiPlanItemRunResult(
                             item_id=item.id, item_type=item.item_type,
@@ -1222,6 +1319,7 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
             run_record.total_cases = total_count
             run_record.success_cases = success_count
             run_record.failed_cases = failed_count
+            run_record.quarantine_skip = quarantine_count
             run_record.duration = plan_duration
             run_record.end_time = datetime.now()
             run_record.item_results = [
@@ -1229,8 +1327,18 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
             ]
             await run_record.save()
         except Exception as e:
+            # 异常中断时尽量落已累计统计，避免记录全 0
             run_record.status = "failed"
+            run_record.total_cases = total_count
+            run_record.success_cases = success_count
+            run_record.failed_cases = failed_count
+            run_record.quarantine_skip = quarantine_count
+            run_record.duration = round((time.time() - plan_start) * 1000, 2) if plan_start else None
             run_record.end_time = datetime.now()
+            if bg_item_results:
+                run_record.item_results = [
+                    r.model_dump() if hasattr(r, "model_dump") else r for r in bg_item_results
+                ]
             await run_record.save()
             print(f"[PlanAsyncRun] 计划 {plan_id} 后台执行异常: {e}")
 
@@ -1264,8 +1372,11 @@ async def list_plan_records(
             total_cases=r.total_cases,
             success_cases=r.success_cases,
             failed_cases=r.failed_cases,
+            quarantine_skip=getattr(r, "quarantine_skip", 0) or 0,
             env_id=r.env_id,
             env_name=r.env_name,
+            worker_id=getattr(r, "worker_id", None),
+            worker_name=getattr(r, "worker_name", None),
             duration=r.duration,
             http_duration=sum_plan_item_results_http_ms(r.item_results) or None,
             run_by=r.run_by,
@@ -1296,8 +1407,11 @@ async def get_plan_record_detail(plan_id: int, record_id: int):
         total_cases=record.total_cases,
         success_cases=record.success_cases,
         failed_cases=record.failed_cases,
+        quarantine_skip=getattr(record, "quarantine_skip", 0) or 0,
         env_id=record.env_id,
         env_name=record.env_name,
+        worker_id=getattr(record, "worker_id", None),
+        worker_name=getattr(record, "worker_name", None),
         duration=record.duration,
         http_duration=sum_plan_item_results_http_ms(normalized_items) or None,
         run_by=record.run_by,
@@ -1325,8 +1439,11 @@ async def get_plan_record_by_id(record_id: int):
         total_cases=record.total_cases,
         success_cases=record.success_cases,
         failed_cases=record.failed_cases,
+        quarantine_skip=getattr(record, "quarantine_skip", 0) or 0,
         env_id=record.env_id,
         env_name=record.env_name,
+        worker_id=getattr(record, "worker_id", None),
+        worker_name=getattr(record, "worker_name", None),
         duration=record.duration,
         http_duration=sum_plan_item_results_http_ms(normalized_items) or None,
         run_by=record.run_by,
@@ -1373,12 +1490,15 @@ async def export_plan_report(record_id: int):
         "success_cases": record.success_cases,
         "failed_cases": record.failed_cases,
         "skipped_cases": 0,
+        "quarantine_skip": getattr(record, "quarantine_skip", 0) or 0,
         "error_cases": 0,
         "start_time": record.start_time,
         "end_time": record.end_time,
         "duration": record.duration or 0,
         "http_duration": sum_plan_item_results_http_ms(normalized_items) or None,
         "env_name": record.env_name,
+        "worker_id": getattr(record, "worker_id", None),
+        "worker_name": getattr(record, "worker_name", None),
         "run_by": record.run_by
     }
     html_content = generate_api_html_report(plan_record, all_case_results, plan_items=normalized_items, report_type="plan")

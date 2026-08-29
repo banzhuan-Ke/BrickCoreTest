@@ -1,9 +1,26 @@
 <template>
   <PageCard>
     <template #title>
-      <el-button size="small" type="primary" icon="Plus" @click="ClickAdd">环境</el-button>
+      <div class="env-page-title">
+        <el-tabs v-model="mainTab" class="env-main-tabs" @tab-change="onMainTabChange">
+          <el-tab-pane label="环境列表" name="envs" />
+          <el-tab-pane label="项目共享变量" name="project" />
+        </el-tabs>
+        <div v-if="mainTab === 'envs'" class="env-page-actions">
+          <el-button size="small" @click="batchDialogVisible = true">同步变量</el-button>
+          <el-button size="small" @click="openUsages()">查看引用</el-button>
+          <el-button size="small" type="primary" icon="Plus" @click="ClickAdd">环境</el-button>
+        </div>
+        <div v-else class="env-page-actions">
+          <el-button size="small" @click="openUsages()">查看引用</el-button>
+          <el-button size="small" type="primary" :loading="projectVarsSaving" @click="saveProjectVars">
+            保存项目变量
+          </el-button>
+        </div>
+      </div>
     </template>
     <template #main>
+      <div v-show="mainTab === 'envs'">
       <el-table :data="proStore.envList" :header-cell-style="{'text-align':'center'}"
                 :cell-style="{'text-align':'center'}" stripe>
         <template #empty>
@@ -46,11 +63,39 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
+
+      <div v-show="mainTab === 'project'" class="project-vars-pane">
+        <el-alert type="info" :closable="false" show-icon class="project-vars-alert">
+          各环境共用的默认值；与环境变量同名时以环境为准。账号密码等差异项请写在各环境。
+          AI / 禅道 / 用例命名 / 知识库等系统配置不在此编辑（已自动隐藏），保存时不会被冲掉。
+        </el-alert>
+        <GlobalVarsEditor
+          ref="projectVarsEditorRef"
+          v-model="projectGlobalVars"
+          json-height="360px"
+          show-usages
+          @view-usages="openUsages"
+        />
+      </div>
     </template>
   </PageCard>
 
-  <el-dialog v-model="dialogVisible" :title="title" width="800px" center destroy-on-close @closed="onDialogClosed">
-    <el-form :model="addEnvForm" label-width="108px" :rules="formDataRules" ref="formDataRef" class="env-form">
+  <EnvVarsBatchDialog
+    v-model="batchDialogVisible"
+    :project-id="proStore.projectInfo?.id"
+    :env-list="proStore.envList"
+    @done="proStore.getEnvironmentList()"
+  />
+  <VarUsagesDialog
+    v-model="usagesDialogVisible"
+    :project-id="proStore.projectInfo?.id"
+    :var-name="usagesVarName"
+    :quick-var-names="usagesQuickNames"
+  />
+
+  <el-dialog v-model="dialogVisible" :title="title" width="960px" center destroy-on-close @closed="onDialogClosed">
+    <el-form :model="addEnvForm" label-width="130px" :rules="formDataRules" ref="formDataRef" class="env-form">
       <el-form-item label="环境名称" prop="name">
         <el-input v-model="addEnvForm.name" placeholder="如：测试环境、预发环境"/>
       </el-form-item>
@@ -69,11 +114,17 @@
         />
         <div class="field-hint">Web 录制 / 交互调试预填；优先于项目默认，低于用例步骤中的 open_url</div>
       </el-form-item>
+      <el-form-item label="默认接口执行机">
+        <ViaWorkerSelect v-model="addEnvForm.default_perf_worker_id" variant="env" />
+      </el-form-item>
 
       <el-collapse v-model="uiStrategyActive" class="ui-strategy-collapse">
         <el-collapse-item name="strategy">
           <template #title>
-            <span class="ui-strategy-panel__title">Web 慢站执行策略</span>
+            <div class="ui-strategy-panel__title-row">
+              <span class="ui-strategy-panel__title">Web 慢站执行策略</span>
+              <el-tag size="small" type="info" effect="plain">可选</el-tag>
+            </div>
           </template>
           <div class="ui-strategy-panel">
             <div class="ui-strategy-panel__desc">
@@ -199,102 +250,173 @@
         </el-collapse-item>
       </el-collapse>
 
-      <el-collapse v-model="uiAuthActive" class="ui-strategy-collapse">
+      <el-collapse v-model="uiAuthActive" class="ui-strategy-collapse ui-auth-collapse">
         <el-collapse-item name="auth">
           <template #title>
-            <span class="ui-strategy-panel__title">Web 启动登录态注入</span>
-          </template>
-          <div class="ui-strategy-panel">
-            <div class="ui-strategy-panel__desc">
-              打开 / 重置浏览器上下文时自动注入 Cookie、请求头或 LocalStorage（免重复登录 UI）。
-              值支持 <code v-pre>${{token}}</code>。与「登录步骤片段」、接口 Token 授权可配合；不替代测试环境免登录运维方案。
+            <div class="ui-strategy-panel__title-row">
+              <span class="ui-strategy-panel__title">Web 启动登录态注入</span>
+              <el-tag
+                v-if="addEnvForm.ui_auth_enabled && authConfigCount > 0"
+                size="small"
+                type="success"
+                effect="plain"
+              >已启用 · {{ authConfigCount }} 项</el-tag>
+              <el-tag
+                v-else-if="!addEnvForm.ui_auth_enabled && authConfigCount > 0"
+                size="small"
+                type="info"
+                effect="plain"
+              >已停用 · 配置保留</el-tag>
+              <el-tag v-else size="small" type="info" effect="plain">未配置</el-tag>
             </div>
-            <el-form-item label="启用注入">
-              <el-switch v-model="addEnvForm.ui_auth_enabled" />
-            </el-form-item>
-            <template v-if="addEnvForm.ui_auth_enabled">
-              <el-form-item label="Authorization">
-                <el-input
-                  v-model="addEnvForm.ui_auth_authorization"
-                  placeholder="Bearer ${{token}}"
-                  clearable
-                />
-                <div class="field-hint">写入浏览器请求头 Authorization；也可填完整头值</div>
-              </el-form-item>
+          </template>
+          <div class="ui-strategy-panel ui-auth-panel">
+            <div class="ui-auth-panel__head">
+              <div class="ui-auth-panel__switch">
+                <span class="ui-auth-panel__switch-label">启用注入</span>
+                <el-switch v-model="addEnvForm.ui_auth_enabled" />
+                <span class="ui-auth-panel__switch-hint">
+                  {{ addEnvForm.ui_auth_enabled ? '打开浏览器时自动注入' : '停用后仍保留下方配置，可随时再开' }}
+                </span>
+              </div>
+              <p class="ui-auth-panel__desc">
+                站点登录态可建多条：导入导出 json、解析后可改字段，启用项合并注入（换执行机无需本机路径）。
+                与接口 Token 授权不同：不过期自动重登，也不会自动跳「登录后地址」。
+              </p>
+            </div>
 
-              <el-form-item label="LocalStorage">
-                <div class="auth-kv-list">
-                  <div
-                    v-for="(row, idx) in addEnvForm.ui_auth_local_storage"
-                    :key="'ls-' + idx"
-                    class="auth-kv-row"
-                  >
-                    <el-input v-model="row.key" placeholder="键名，如 token" />
-                    <el-input v-model="row.value" placeholder="值，如 ${{token}}" />
-                    <el-button
-                      type="danger"
-                      link
-                      :disabled="addEnvForm.ui_auth_local_storage.length <= 1"
-                      @click="removeAuthLocalRow(idx)"
-                    >删</el-button>
+            <el-alert
+              v-if="!addEnvForm.ui_auth_enabled && authConfigCount > 0"
+              type="info"
+              :closable="false"
+              show-icon
+              class="ui-auth-panel__alert"
+              title="当前已停用：保存后不会注入，配置不会清空"
+            />
+
+            <div class="ui-auth-section">
+              <div class="ui-auth-section__title">站点登录态</div>
+              <UiAuthProfilesEditor
+                v-model="addEnvForm.ui_auth_profiles"
+                v-model:legacy-path="addEnvForm.ui_auth_legacy_path"
+              />
+              <div class="field-hint">
+                推荐：执行机「导出登录态」→ 此处导入 → 可改 Cookie / Storage。多站点各建一条并启用。
+              </div>
+            </div>
+
+            <el-collapse class="ui-auth-extra">
+              <el-collapse-item name="common">
+                <template #title>
+                  <span class="ui-auth-extra__title">公共注入（可选）</span>
+                  <span class="ui-auth-extra__sub">Authorization / LocalStorage / SessionStorage / Cookie</span>
+                </template>
+                <el-form-item label="Authorization">
+                  <el-input
+                    v-model="addEnvForm.ui_auth_authorization"
+                    placeholder="Bearer ${{token}}"
+                    clearable
+                  />
+                  <div class="field-hint">写入浏览器请求头 Authorization</div>
+                </el-form-item>
+
+                <el-form-item label="LocalStorage">
+                  <div class="auth-kv-list">
+                    <div
+                      v-for="(row, idx) in addEnvForm.ui_auth_local_storage"
+                      :key="'ls-' + idx"
+                      class="auth-kv-row"
+                    >
+                      <el-input v-model="row.key" placeholder="键名，如 token" />
+                      <el-input v-model="row.value" placeholder="值，如 ${{token}}" />
+                      <el-button
+                        type="danger"
+                        link
+                        :disabled="addEnvForm.ui_auth_local_storage.length <= 1"
+                        @click="removeAuthLocalRow(idx)"
+                      >删</el-button>
+                    </div>
+                    <el-button type="primary" link @click="addAuthLocalRow">添加一行</el-button>
                   </div>
-                  <el-button type="primary" link @click="addAuthLocalRow">添加一行</el-button>
-                </div>
-                <div class="field-hint">通过 init_script 在每次导航前写入；须与业务页同源</div>
-              </el-form-item>
+                </el-form-item>
 
-              <el-form-item label="Cookie">
-                <div class="auth-kv-list">
-                  <div
-                    v-for="(row, idx) in addEnvForm.ui_auth_cookies"
-                    :key="'ck-' + idx"
-                    class="auth-cookie-row"
-                  >
-                    <el-input v-model="row.name" placeholder="name" />
-                    <el-input v-model="row.value" placeholder="value / ${{sid}}" />
-                    <el-input v-model="row.domain" placeholder="domain，如 .example.com" />
-                    <el-input v-model="row.url" placeholder="或 url，如 https://app.example.com/" />
-                    <el-button
-                      type="danger"
-                      link
-                      :disabled="addEnvForm.ui_auth_cookies.length <= 1"
-                      @click="removeAuthCookieRow(idx)"
-                    >删</el-button>
+                <el-form-item label="SessionStorage">
+                  <div class="auth-kv-list">
+                    <div
+                      v-for="(row, idx) in addEnvForm.ui_auth_session_storage"
+                      :key="'ss-' + idx"
+                      class="auth-kv-row"
+                    >
+                      <el-input v-model="row.key" placeholder="键名" />
+                      <el-input v-model="row.value" placeholder="值 / ${{var}}" />
+                      <el-button
+                        type="danger"
+                        link
+                        :disabled="addEnvForm.ui_auth_session_storage.length <= 1"
+                        @click="removeAuthSessionRow(idx)"
+                      >删</el-button>
+                    </div>
+                    <el-button type="primary" link @click="addAuthSessionRow">添加一行</el-button>
                   </div>
-                  <el-button type="primary" link @click="addAuthCookieRow">添加 Cookie</el-button>
-                </div>
-                <div class="field-hint">每条须填 domain 或 url 之一</div>
-              </el-form-item>
+                </el-form-item>
 
-              <el-form-item label="storage_state">
-                <el-input
-                  v-model="addEnvForm.ui_storage_state_text"
-                  type="textarea"
-                  :rows="3"
-                  placeholder="执行机本机路径，如 D:\auth\state.json；或粘贴 Playwright storage_state JSON"
-                />
-                <div class="field-hint">可用用例步骤「导出登录态」生成文件后再填路径</div>
-              </el-form-item>
-            </template>
+                <el-form-item label="Cookie">
+                  <div class="auth-kv-list">
+                    <div
+                      v-for="(row, idx) in addEnvForm.ui_auth_cookies"
+                      :key="'ck-' + idx"
+                      class="auth-cookie-row"
+                    >
+                      <el-input v-model="row.name" placeholder="name" />
+                      <el-input v-model="row.value" placeholder="value" />
+                      <el-input v-model="row.domain" placeholder="domain" />
+                      <el-input v-model="row.url" placeholder="或 url" />
+                      <el-button
+                        type="danger"
+                        link
+                        :disabled="addEnvForm.ui_auth_cookies.length <= 1"
+                        @click="removeAuthCookieRow(idx)"
+                      >删</el-button>
+                    </div>
+                    <el-button type="primary" link @click="addAuthCookieRow">添加 Cookie</el-button>
+                  </div>
+                  <div class="field-hint">每条须填 domain 或 url 之一</div>
+                </el-form-item>
+              </el-collapse-item>
+            </el-collapse>
           </div>
         </el-collapse-item>
       </el-collapse>
 
-      <el-form-item label="环境变量">
-        <GlobalVarsEditor ref="globalVarsEditorRef" v-model="addEnvForm.global_vars" json-height="260px"/>
-        <el-collapse class="env-tips-collapse">
-          <el-collapse-item title="使用说明（变量引用、Faker、优先级）" name="tips">
-            <div class="tip-content">
-              <p><strong>引用：</strong>UI / 接口用例中写 <code v-pre>${{token}}</code>、<code v-pre>${{username}}</code></p>
-              <p><strong>Faker：</strong>变量值可写 <code>faker.random_int(min=100,max=100000)</code>，或引用内置 <code v-pre>${{random_int}}</code></p>
-              <p><strong>嵌套：</strong><code>{"tag_name": "标签_${{random_int}}"}</code>，用例里用 <code v-pre>${{tag_name}}</code></p>
-              <p><strong>描述：</strong>填写用途说明，在用例/接口中「插入变量」与变量预览时可查看</p>
-              <p><strong>敏感项：</strong>名称含 token/password 等会自动按密码框显示，可手动开关「敏感」列</p>
-              <p><strong>优先级：</strong>用例提取/脚本变量 &gt; 动态缓存 &gt; 本页全局变量</p>
-            </div>
-          </el-collapse-item>
-        </el-collapse>
-      </el-form-item>
+      <div class="env-vars-panel">
+        <div class="env-vars-panel__head">
+          <span class="ui-strategy-panel__title">环境变量</span>
+        </div>
+        <div class="env-vars-panel__body">
+          <GlobalVarsEditor
+            ref="globalVarsEditorRef"
+            v-model="addEnvForm.global_vars"
+            json-height="260px"
+            show-usages
+            @view-usages="openUsages"
+          />
+          <el-collapse class="env-tips-collapse">
+            <el-collapse-item name="tips">
+              <template #title>
+                <span class="env-tips-collapse__title">使用说明（变量引用、Faker、优先级）</span>
+              </template>
+              <div class="tip-content">
+                <p><strong>引用：</strong>UI / 接口用例中写 <code v-pre>${{token}}</code>、<code v-pre>${{username}}</code></p>
+                <p><strong>Faker：</strong>变量值可写 <code>faker.random_int(min=100,max=100000)</code>，或引用内置 <code v-pre>${{random_int}}</code></p>
+                <p><strong>嵌套：</strong><code>{"tag_name": "标签_${{random_int}}"}</code>，用例里用 <code v-pre>${{tag_name}}</code></p>
+                <p><strong>描述：</strong>填写用途说明，在用例/接口中「插入变量」与变量预览时可查看</p>
+                <p><strong>敏感项：</strong>名称含 token/password 等会自动按密码框显示，可手动开关「敏感」列</p>
+                <p><strong>优先级：</strong>用例提取/脚本变量 &gt; 动态缓存 &gt; 本页全局变量</p>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+        </div>
+      </div>
     </el-form>
     <template #footer>
       <el-button @click="dialogVisible = false" plain>取消</el-button>
@@ -305,7 +427,7 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { OfficeBuilding } from '@element-plus/icons-vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import http from '@/api/index'
@@ -313,9 +435,14 @@ import dateTools from '@/tools/dateTools'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import GlobalVarsEditor from '@/components/GlobalVarsEditor.vue'
+import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
+import UiAuthProfilesEditor from '@/components/UiAuthProfilesEditor.vue'
+import EnvVarsBatchDialog from '@/components/EnvVarsBatchDialog.vue'
+import VarUsagesDialog from '@/components/VarUsagesDialog.vue'
 import { UserStore } from '@/stores/module/UserStore.js'
-import { formatVarsPreview, validateVarsObject, countUserVars, userVarRows } from '@/utils/globalVars.js'
+import { formatVarsPreview, validateVarsObject, countUserVars, userVarRows, mergeUserVarsWithSystem } from '@/utils/globalVars.js'
 import {
+  getEnvDefaultPerfWorkerId,
   getEnvDefaultStartUrl,
   getEnvUiActionSettleMs,
   getEnvUiActionSettleQuietMs,
@@ -327,6 +454,7 @@ import {
   getEnvUiReadinessRetry,
   getEnvUiTimeoutScale,
   globalVarsForEditor,
+  mergeEnvDefaultPerfWorkerId,
   mergeEnvDefaultStartUrl,
   mergeEnvUiAuthInject,
   mergeEnvUiExecStrategy,
@@ -342,6 +470,78 @@ import {
 const uStore = UserStore()
 const proStore = ProjectStore()
 proStore.getEnvironmentList()
+
+const mainTab = ref('envs')
+const batchDialogVisible = ref(false)
+const usagesDialogVisible = ref(false)
+const usagesVarName = ref('')
+const projectGlobalVars = ref({})
+const projectVarsEditorRef = ref(null)
+const projectVarsSaving = ref(false)
+
+const usagesQuickNames = computed(() => {
+  const names = []
+  for (const r of userVarRows(projectGlobalVars.value)) names.push(r.key)
+  for (const env of proStore.envList || []) {
+    for (const r of userVarRows(env.global_vars)) names.push(r.key)
+  }
+  for (const r of userVarRows(addEnvForm.global_vars)) names.push(r.key)
+  return [...new Set(names.filter(Boolean))]
+})
+
+async function loadProjectVars() {
+  await proStore.refreshProjectGlobals()
+  const gv = proStore.projectInfo?.global_vars
+  projectGlobalVars.value =
+    gv && typeof gv === 'object' && !Array.isArray(gv) ? { ...gv } : {}
+}
+
+async function onMainTabChange(name) {
+  if (name === 'project') {
+    await loadProjectVars()
+  }
+}
+
+function openUsages(name = '') {
+  usagesVarName.value = name || ''
+  usagesDialogVisible.value = true
+}
+
+async function saveProjectVars() {
+  const projectId = proStore.projectInfo?.id
+  if (!projectId) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  if (!uStore.hasPermission?.('project:edit')) {
+    ElMessage.warning('保存项目共享变量需要「项目编辑」权限，且一般为项目经理及以上角色')
+    return
+  }
+  const edited = projectVarsEditorRef.value?.validateAndGet?.()
+  if (edited === null) return
+  // validateAndGet 已合并系统配置；再兜底一次防冲掉
+  const merged = mergeUserVarsWithSystem(edited, proStore.projectInfo?.global_vars || {})
+  projectVarsSaving.value = true
+  try {
+    const res = await http.projectApi.updateProject(projectId, { global_vars: merged })
+    if (res.status === 200) {
+      ElNotification({ title: '项目共享变量已保存', type: 'success', duration: 1500 })
+      await proStore.refreshProjectGlobals()
+      await loadProjectVars()
+    } else {
+      ElNotification({
+        type: 'error',
+        title: '保存失败',
+        message: res.data?.detail || '请稍后重试',
+        duration: 2000,
+      })
+    }
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '保存失败')
+  } finally {
+    projectVarsSaving.value = false
+  }
+}
 
 const globalVarsEditorRef = ref(null)
 
@@ -394,6 +594,9 @@ const uiAuthActive = ref([])
 function emptyAuthLocalRows() {
   return [{ key: '', value: '' }]
 }
+function emptyAuthSessionRows() {
+  return [{ key: '', value: '' }]
+}
 function emptyAuthCookieRows() {
   return [{ name: '', value: '', domain: '', path: '/', url: '' }]
 }
@@ -401,16 +604,22 @@ function resetAuthFormFields() {
   addEnvForm.ui_auth_enabled = false
   addEnvForm.ui_auth_authorization = ''
   addEnvForm.ui_auth_local_storage = emptyAuthLocalRows()
+  addEnvForm.ui_auth_session_storage = emptyAuthSessionRows()
   addEnvForm.ui_auth_cookies = emptyAuthCookieRows()
   addEnvForm.ui_storage_state_text = ''
+  addEnvForm.ui_auth_profiles = []
+  addEnvForm.ui_auth_legacy_path = ''
 }
 function applyAuthFormFromEnv(globalVars) {
   const form = getEnvUiAuthInjectForm(globalVars)
   addEnvForm.ui_auth_enabled = form.enabled
   addEnvForm.ui_auth_authorization = form.authorization
   addEnvForm.ui_auth_local_storage = form.localStorage
+  addEnvForm.ui_auth_session_storage = form.sessionStorage
   addEnvForm.ui_auth_cookies = form.cookies
   addEnvForm.ui_storage_state_text = form.storageStateText
+  addEnvForm.ui_auth_profiles = form.profiles || []
+  addEnvForm.ui_auth_legacy_path = form.legacyPath || ''
 }
 function addAuthLocalRow() {
   addEnvForm.ui_auth_local_storage.push({ key: '', value: '' })
@@ -418,6 +627,13 @@ function addAuthLocalRow() {
 function removeAuthLocalRow(idx) {
   if (addEnvForm.ui_auth_local_storage.length <= 1) return
   addEnvForm.ui_auth_local_storage.splice(idx, 1)
+}
+function addAuthSessionRow() {
+  addEnvForm.ui_auth_session_storage.push({ key: '', value: '' })
+}
+function removeAuthSessionRow(idx) {
+  if (addEnvForm.ui_auth_session_storage.length <= 1) return
+  addEnvForm.ui_auth_session_storage.splice(idx, 1)
 }
 function addAuthCookieRow() {
   addEnvForm.ui_auth_cookies.push({ name: '', value: '', domain: '', path: '/', url: '' })
@@ -433,6 +649,7 @@ const addEnvForm = reactive({
   username: uStore.userInfo.username,
   host: 'http://',
   default_start_url: '',
+  default_perf_worker_id: null,
   ui_timeout_scale: DEFAULT_UI_TIMEOUT_SCALE,
   ui_nav_wait_until: DEFAULT_UI_NAV_WAIT_UNTIL,
   ui_action_settle_ms: DEFAULT_UI_ACTION_SETTLE_MS,
@@ -444,10 +661,24 @@ const addEnvForm = reactive({
   ui_auth_enabled: false,
   ui_auth_authorization: '',
   ui_auth_local_storage: emptyAuthLocalRows(),
+  ui_auth_session_storage: emptyAuthSessionRows(),
   ui_auth_cookies: emptyAuthCookieRows(),
   ui_storage_state_text: '',
+  ui_auth_profiles: [],
+  ui_auth_legacy_path: '',
   global_vars: {},
   default_headers: [],
+})
+
+const authConfigCount = computed(() => {
+  const profiles = addEnvForm.ui_auth_profiles || []
+  let n = profiles.length
+  if (String(addEnvForm.ui_auth_authorization || '').trim()) n += 1
+  if ((addEnvForm.ui_auth_local_storage || []).some((r) => r.key)) n += 1
+  if ((addEnvForm.ui_auth_session_storage || []).some((r) => r.key)) n += 1
+  if ((addEnvForm.ui_auth_cookies || []).some((r) => r.name)) n += 1
+  if (String(addEnvForm.ui_auth_legacy_path || '').trim()) n += 1
+  return n
 })
 
 const ClickAdd = () => {
@@ -455,11 +686,13 @@ const ClickAdd = () => {
   dialogVisible.value = true
   uiStrategyActive.value = []
   uiAuthActive.value = []
+  delete addEnvForm.id
   addEnvForm.project_id = proStore.projectInfo?.id
   addEnvForm.name = '测试环境'
   addEnvForm.username = uStore.userInfo.username
   addEnvForm.host = 'http://'
   addEnvForm.default_start_url = ''
+  addEnvForm.default_perf_worker_id = null
   addEnvForm.ui_timeout_scale = DEFAULT_UI_TIMEOUT_SCALE
   addEnvForm.ui_nav_wait_until = DEFAULT_UI_NAV_WAIT_UNTIL
   addEnvForm.ui_action_settle_ms = DEFAULT_UI_ACTION_SETTLE_MS
@@ -490,6 +723,7 @@ function preparePayload() {
   }
   const {
     default_start_url,
+    default_perf_worker_id,
     ui_timeout_scale,
     ui_nav_wait_until,
     ui_action_settle_ms,
@@ -501,8 +735,11 @@ function preparePayload() {
     ui_auth_enabled,
     ui_auth_authorization,
     ui_auth_local_storage,
+    ui_auth_session_storage,
     ui_auth_cookies,
     ui_storage_state_text,
+    ui_auth_profiles,
+    ui_auth_legacy_path,
     ...rest
   } = addEnvForm
   const urlCheck = validateDefaultStartUrl(default_start_url)
@@ -513,6 +750,7 @@ function preparePayload() {
   let globalVars
   try {
     globalVars = mergeEnvDefaultStartUrl(vars ?? addEnvForm.global_vars ?? {}, default_start_url)
+    globalVars = mergeEnvDefaultPerfWorkerId(globalVars, default_perf_worker_id)
   } catch (e) {
     ElMessage.error(e.message || '默认起始 URL 无效')
     return null
@@ -535,8 +773,11 @@ function preparePayload() {
     enabled: ui_auth_enabled,
     authorization: ui_auth_authorization,
     localStorage: ui_auth_local_storage,
+    sessionStorage: ui_auth_session_storage,
     cookies: ui_auth_cookies,
     storageStateText: ui_storage_state_text,
+    profiles: ui_auth_profiles,
+    legacyPath: ui_auth_legacy_path,
   })
   if (!auth.ok) {
     ElMessage.error(auth.error)
@@ -586,6 +827,7 @@ const clickEdit = (env) => {
   addEnvForm.username = env.username
   addEnvForm.host = env.host
   addEnvForm.default_start_url = getEnvDefaultStartUrl(env.global_vars)
+  addEnvForm.default_perf_worker_id = getEnvDefaultPerfWorkerId(env.global_vars)
   addEnvForm.ui_timeout_scale = getEnvUiTimeoutScale(env.global_vars)
   addEnvForm.ui_nav_wait_until = getEnvUiNavWaitUntil(env.global_vars)
   addEnvForm.ui_action_settle_ms = getEnvUiActionSettleMs(env.global_vars)
@@ -612,6 +854,7 @@ const clickCopy = (env) => {
   addEnvForm.username = uStore.userInfo.username
   addEnvForm.host = env.host
   addEnvForm.default_start_url = getEnvDefaultStartUrl(env.global_vars)
+  addEnvForm.default_perf_worker_id = getEnvDefaultPerfWorkerId(env.global_vars)
   addEnvForm.ui_timeout_scale = getEnvUiTimeoutScale(env.global_vars)
   addEnvForm.ui_nav_wait_until = getEnvUiNavWaitUntil(env.global_vars)
   addEnvForm.ui_action_settle_ms = getEnvUiActionSettleMs(env.global_vars)
@@ -646,7 +889,9 @@ async function UpdateEnv(elForm) {
 }
 
 function onDialogClosed() {
+  delete addEnvForm.id
   addEnvForm.default_start_url = ''
+  addEnvForm.default_perf_worker_id = null
   addEnvForm.ui_timeout_scale = DEFAULT_UI_TIMEOUT_SCALE
   addEnvForm.ui_nav_wait_until = DEFAULT_UI_NAV_WAIT_UNTIL
   addEnvForm.ui_action_settle_ms = DEFAULT_UI_ACTION_SETTLE_MS
@@ -684,6 +929,14 @@ function onDialogClosed() {
 
 .env-form :deep(.el-form-item) {
   margin-bottom: 16px;
+}
+
+.env-form :deep(.el-form-item__label) {
+  white-space: nowrap;
+}
+
+.env-form {
+  padding: 0 4px;
 }
 
 .ui-strategy-collapse {
@@ -724,6 +977,101 @@ function onDialogClosed() {
   font-weight: 600;
   color: var(--el-text-color-primary);
   line-height: 1.4;
+}
+
+.ui-strategy-panel__title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  padding-right: 8px;
+}
+
+.ui-auth-collapse :deep(.el-collapse-item__header) {
+  background: linear-gradient(180deg, var(--el-fill-color-blank) 0%, var(--el-fill-color-lighter) 100%);
+}
+
+.ui-auth-panel__head {
+  margin-bottom: 12px;
+}
+
+.ui-auth-panel__switch {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.ui-auth-panel__switch-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.ui-auth-panel__switch-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.ui-auth-panel__desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+}
+
+.ui-auth-panel__alert {
+  margin-bottom: 12px;
+}
+
+.ui-auth-section {
+  padding: 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+}
+
+.ui-auth-section__title {
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.ui-auth-extra {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ui-auth-extra :deep(.el-collapse-item__header) {
+  height: auto;
+  min-height: 40px;
+  padding: 8px 12px;
+  background: var(--el-fill-color-lighter);
+}
+
+.ui-auth-extra :deep(.el-collapse-item__wrap) {
+  border-top: 1px solid var(--el-border-color-extra-light);
+}
+
+.ui-auth-extra :deep(.el-collapse-item__content) {
+  padding: 12px 12px 4px;
+}
+
+.ui-auth-extra__title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.ui-auth-extra__sub {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-weight: 400;
 }
 
 .ui-strategy-panel__desc {
@@ -798,9 +1146,69 @@ function onDialogClosed() {
   color: var(--el-text-color-regular);
 }
 
+.env-vars-panel {
+  margin: 4px 0 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-blank);
+  overflow: hidden;
+}
+
+.env-vars-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+  background: linear-gradient(180deg, var(--el-fill-color-blank) 0%, var(--el-fill-color-lighter) 100%);
+}
+
+.env-vars-panel__body {
+  padding: 14px 16px 12px;
+}
+
+.env-vars-panel__body :deep(.el-table) {
+  width: 100%;
+}
+
+.env-vars-panel__body :deep(.el-table .el-table__cell) {
+  padding: 8px 12px;
+}
+
+.env-vars-panel__body :deep(.el-table th.el-table__cell) {
+  background: var(--el-fill-color-lighter);
+  font-weight: 600;
+}
+
 .env-tips-collapse {
   margin-top: 12px;
   width: 100%;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.env-tips-collapse :deep(.el-collapse-item__header) {
+  height: auto;
+  min-height: 40px;
+  line-height: 1.4;
+  padding: 8px 14px;
+  border-bottom: none;
+  background: var(--el-fill-color-lighter);
+}
+
+.env-tips-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+}
+
+.env-tips-collapse :deep(.el-collapse-item__content) {
+  padding: 8px 14px 12px;
+}
+
+.env-tips-collapse__title {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
 }
 
 .tip-content {
@@ -827,5 +1235,42 @@ function onDialogClosed() {
   justify-content: center;
   gap: 6px;
   white-space: nowrap;
+}
+
+.env-page-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.env-main-tabs {
+  flex: 1;
+  min-width: 240px;
+}
+
+.env-main-tabs :deep(.el-tabs__header) {
+  margin: 0;
+}
+
+.env-main-tabs :deep(.el-tabs__nav-wrap::after) {
+  display: none;
+}
+
+.env-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.project-vars-pane {
+  max-width: 960px;
+}
+
+.project-vars-alert {
+  margin-bottom: 14px;
 }
 </style>

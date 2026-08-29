@@ -9,7 +9,7 @@
         :closable="false"
         show-icon
         title="客户端配置说明"
-        description="HTTP 类 AI 客户端（如 Kimi Code）请在 headers 中填写 Authorization: Bearer <API Key>，不要写在环境变量里。接入地址与 JSON 见：数据看板 → 首页看板 → BrickCore MCP Server；详细步骤见文档中心 → MCP 外部接入。"
+        description="HTTP 类 AI 客户端（如 Kimi Code）请在 headers 中填写 Authorization: Bearer <API Key>。本页「平台对外地址」同时用于 Runner 任务回调、通知外链等；留空则按当前浏览器访问地址自动推导。接入 JSON 见：数据看板 → BrickCore MCP Server。"
         style="margin-bottom: 16px; max-width: 720px;"
       />
       <el-alert
@@ -28,7 +28,7 @@
         <el-form-item label="平台对外地址：">
           <el-input
             v-model="form.base_url"
-            placeholder="如：https://test.company.com（用于生成客户端接入 URL）"
+            placeholder="如：https://test.company.com（Runner 回调 / MCP / 通知外链；留空则自动推导）"
           />
         </el-form-item>
         <el-form-item label="接入路径：">

@@ -15,9 +15,14 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "autostart": False,
     "engine_web_enabled": True,
     "engine_app_enabled": False,
+    "enable_api_proxy": False,
+    "enable_perf": False,
     "runner_viewport_width": 1920,
     "runner_viewport_height": 1080,
     "runner_case_error_retries": 1,
+    "browser_lab_step_max_width": 1280,
+    "browser_lab_gif_max_width": 960,
+    "browser_lab_gif_frame_skip": 1,
     "ui_debug_hotkeys": {},
 }
 

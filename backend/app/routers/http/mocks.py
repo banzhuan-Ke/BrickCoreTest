@@ -178,6 +178,86 @@ async def toggle_mock(mock_id: int):
 # Mock 调用端点：接收真实请求，按 method + path + match_rules 匹配后返回响应
 # ---------------------------------------------------------------------------
 
+def _normalize_mock_path(path: str) -> str:
+    return path if path.startswith("/") else "/" + path
+
+
+def _match_rules_specificity(match_rules: Optional[dict]) -> int:
+    """规则越具体（header/query/body 条件越多）优先级越高，便于同路径多场景分流。"""
+    rules = match_rules if isinstance(match_rules, dict) else {}
+    score = 0
+    for dim in ("header", "query", "body"):
+        part = rules.get(dim)
+        if isinstance(part, dict):
+            score += len(part)
+    return score
+
+
+def match_rules_satisfied(
+    match_rules: Optional[dict],
+    *,
+    method: str,
+    headers: dict,
+    query_params: dict,
+    body_json: Optional[dict],
+) -> bool:
+    """校验请求是否满足 match_rules；无规则视为默认兜底（恒为 True）。"""
+    rules = match_rules if isinstance(match_rules, dict) else {}
+    if not rules:
+        return True
+
+    header_rules = rules.get("header") or {}
+    if isinstance(header_rules, dict):
+        for key, expected_val in header_rules.items():
+            # Starlette headers 大小写不敏感；dict 传入时兼容常见写法
+            actual_val = None
+            if hasattr(headers, "get"):
+                actual_val = headers.get(key)
+            if actual_val is None and isinstance(headers, dict):
+                actual_val = headers.get(key) or headers.get(str(key).lower())
+            if actual_val != expected_val:
+                return False
+
+    query_rules = rules.get("query") or {}
+    if isinstance(query_rules, dict):
+        for key, expected_val in query_rules.items():
+            actual_val = query_params.get(key)
+            if actual_val != str(expected_val):
+                return False
+
+    body_rules = rules.get("body") or {}
+    if isinstance(body_rules, dict) and body_rules and method not in ("GET", "HEAD", "OPTIONS"):
+        payload = body_json if isinstance(body_json, dict) else {}
+        for key, expected_val in body_rules.items():
+            if payload.get(key) != expected_val:
+                return False
+
+    return True
+
+
+def select_mock_candidate(candidates: list, *, method: str, headers, query_params: dict, body_json) -> Optional[object]:
+    """
+    同 method+path 多条候选：先按 match_rules 条件数降序，再按 id 升序；
+    返回第一条规则全部满足的候选。无规则的可作为兜底。
+    """
+    if not candidates:
+        return None
+    ordered = sorted(
+        candidates,
+        key=lambda m: (-_match_rules_specificity(getattr(m, "match_rules", None)), getattr(m, "id", 0) or 0),
+    )
+    for mock in ordered:
+        if match_rules_satisfied(
+            getattr(mock, "match_rules", None),
+            method=method,
+            headers=headers,
+            query_params=query_params,
+            body_json=body_json,
+        ):
+            return mock
+    return None
+
+
 @router.api_route(
     "/mock-call/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
@@ -187,19 +267,22 @@ async def toggle_mock(mock_id: int):
 async def mock_call(request: Request, path: str):
     """
     根据已配置的 Mock 规则返回预设响应。
-    
+
+    鉴权：调用路径由 project_access 白名单放行，不要求平台 JWT；
+    Mock CRUD（/api-module/mock）仍需登录。
+
     匹配逻辑：
-    1. 按 request.method + path 精确匹配
-    2. 校验 match_rules（header / query / body）
+    1. 按 request.method + path 精确匹配（可多条）
+    2. 在候选中按 match_rules（header / query / body）筛选；规则更具体的优先
     3. 如有 response_delay 则延迟响应
     4. 更新 call_count + last_call_time
     5. 返回配置的 response_status + response_headers + response_body
-    
+
     调用示例：
         GET  /api-module/mock-call/api/users
         POST /api-module/mock-call/api/login
     """
-    request_path = path if path.startswith("/") else "/" + path
+    request_path = _normalize_mock_path(path)
     method = request.method.upper()
 
     # 支持通过 query param 传入 project_id 缩小匹配范围
@@ -216,58 +299,33 @@ async def mock_call(request: Request, path: str):
 
     mocks = await MockApi.filter(**filters).all()
 
-    # 精确匹配 path（兼容用户配置时带或不带前导 /）
-    matched_mock = None
-    for mock in mocks:
-        mock_path = mock.path if mock.path.startswith("/") else "/" + mock.path
-        if mock_path == request_path:
-            matched_mock = mock
-            break
+    candidates = [
+        mock for mock in mocks
+        if _normalize_mock_path(mock.path or "") == request_path
+    ]
 
-    if not matched_mock:
-        raise HTTPException(status_code=404, detail="Mock 接口未找到或未启用")
-
-    # ---------- 高级匹配规则校验 ----------
-    match_rules = matched_mock.match_rules or {}
-
-    # 1. Header 匹配
-    if "header" in match_rules:
-        for key, expected_val in match_rules["header"].items():
-            actual_val = request.headers.get(key)
-            if actual_val != expected_val:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Mock header 匹配失败: {key}={actual_val} (期望 {expected_val})"
-                )
-
-    # 2. Query 参数匹配（排除内部参数 _project_id）
-    if "query" in match_rules:
-        for key, expected_val in match_rules["query"].items():
-            actual_val = query_params.get(key)
-            if actual_val != str(expected_val):
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Mock query 匹配失败: {key}={actual_val} (期望 {expected_val})"
-                )
-
-    # 3. Body 匹配（仅对非 GET/HEAD/OPTIONS 请求做简单 JSON 顶层字段匹配）
-    if "body" in match_rules and method not in ("GET", "HEAD", "OPTIONS"):
+    body_json = None
+    if method not in ("GET", "HEAD", "OPTIONS"):
         try:
             body_bytes = await request.body()
             if body_bytes:
-                body_json = json.loads(body_bytes)
+                parsed = json.loads(body_bytes)
+                body_json = parsed if isinstance(parsed, dict) else {}
             else:
                 body_json = {}
         except Exception:
             body_json = {}
 
-        for key, expected_val in match_rules["body"].items():
-            actual_val = body_json.get(key)
-            if actual_val != expected_val:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Mock body 匹配失败: {key}={actual_val} (期望 {expected_val})"
-                )
+    matched_mock = select_mock_candidate(
+        candidates,
+        method=method,
+        headers=request.headers,
+        query_params=query_params,
+        body_json=body_json,
+    )
+
+    if not matched_mock:
+        raise HTTPException(status_code=404, detail="Mock 接口未找到或未启用（路径/方法/匹配规则均未命中）")
 
     # ---------- 延迟响应 ----------
     if matched_mock.response_delay and matched_mock.response_delay > 0:

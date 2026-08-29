@@ -363,22 +363,22 @@ def evaluate_assertion(response, response_body, assertion):
     elif operator == "gt":
         try:
             return float(actual) > float(expected), actual
-        except:
+        except (TypeError, ValueError):
             return False, actual
     elif operator == "lt":
         try:
             return float(actual) < float(expected), actual
-        except:
+        except (TypeError, ValueError):
             return False, actual
     elif operator == "gte":
         try:
             return float(actual) >= float(expected), actual
-        except:
+        except (TypeError, ValueError):
             return False, actual
     elif operator == "lte":
         try:
             return float(actual) <= float(expected), actual
-        except:
+        except (TypeError, ValueError):
             return False, actual
     elif operator == "in":
         return actual in expected if isinstance(expected, (list, tuple, set, dict)) else str(actual) in str(expected), actual
@@ -386,9 +386,8 @@ def evaluate_assertion(response, response_body, assertion):
         return actual not in expected if isinstance(expected, (list, tuple, set, dict)) else str(actual) not in str(expected), actual
     elif operator == "regex":
         try:
-            import re
             return bool(re.search(str(expected), str(actual))), actual
-        except:
+        except re.error:
             return False, actual
     
     return False, actual

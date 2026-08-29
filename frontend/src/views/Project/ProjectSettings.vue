@@ -16,8 +16,11 @@
         <el-tab-pane v-if="canExecution" label="自愈与 AI Act" name="heal" />
         <el-tab-pane v-if="canExecution" label="录制与调试" name="recording" />
         <el-tab-pane v-if="canExecution" label="失败分析" name="failure" />
+        <el-tab-pane v-if="canExecution" label="执行可信度" name="stability" />
         <el-tab-pane v-if="canExecution" label="压测 AI" name="perf" />
         <el-tab-pane v-if="canExecution" label="功能用例" name="cases" />
+        <el-tab-pane v-if="canExecution || canNotify" label="测试通知" name="test-notify" />
+        <el-tab-pane v-if="canExecution" label="质量门禁" name="quality-gate" />
         <el-tab-pane v-if="canNotify" label="通知渠道" name="notify" />
       </el-tabs>
       <div v-if="hasAnyTab" class="project-settings-body">
@@ -26,6 +29,14 @@
           v-show="isExecTab"
           :section="execSection"
           compact-hint
+          :can-edit="canExecutionEdit"
+        />
+        <TestNotifySettings
+          v-if="(canExecution || canNotify) && activeTab === 'test-notify'"
+          :can-edit="canExecutionEdit || canNotifyEdit"
+        />
+        <QualityGateSettings
+          v-if="canExecution && activeTab === 'quality-gate'"
           :can-edit="canExecutionEdit"
         />
         <NotificationConfig
@@ -47,6 +58,8 @@ import { UserStore } from '@/stores/module/UserStore'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import AiExecutionSettings from '@/views/AI/AiExecutionSettings.vue'
 import NotificationConfig from '@/views/Project/NotificationConfig.vue'
+import TestNotifySettings from '@/views/Project/TestNotifySettings.vue'
+import QualityGateSettings from '@/views/Project/QualityGateSettings.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -63,7 +76,7 @@ const canNotify = computed(() => uStore.hasPermission('notification_config:view'
 const canNotifyEdit = computed(() => uStore.hasPermission('notification_config:edit'))
 const hasAnyTab = computed(() => canExecution.value || canNotify.value)
 
-const EXEC_TABS = new Set(['heal', 'recording', 'failure', 'perf', 'cases'])
+const EXEC_TABS = new Set(['heal', 'recording', 'failure', 'stability', 'perf', 'cases'])
 const activeTab = ref('heal')
 const execSection = ref('heal')
 const isExecTab = computed(() => EXEC_TABS.has(activeTab.value))
@@ -87,7 +100,14 @@ const resolveTab = (raw) => {
   if (['execution', 'exec', 'heal', 'ai-act', 'act'].includes(key) && canExecution.value) return 'heal'
   if (['recording', 'record', 'debug', 'locator'].includes(key) && canExecution.value) return 'recording'
   if (['failure', 'analyze', 'analysis'].includes(key) && canExecution.value) return 'failure'
+  if (['stability', 'stab', 'trust'].includes(key) && canExecution.value) return 'stability'
   if (['cases', 'case', 'requirement', 'soft-range'].includes(key) && canExecution.value) return 'cases'
+  if (['test-notify', 'tm-notify', 'assignment'].includes(key) && (canExecution.value || canNotify.value)) {
+    return 'test-notify'
+  }
+  if (['quality-gate', 'gate', 'quality'].includes(key) && canExecution.value) {
+    return 'quality-gate'
+  }
   if (['notify', 'notification', 'channels', 'notification-config'].includes(key) && canNotify.value) {
     return 'notify'
   }

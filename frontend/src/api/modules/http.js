@@ -49,13 +49,21 @@ export const httpApi = {
     async getLinkedCases(api_id, params = {}) {
         return await http.get(`/api-module/definition/${api_id}/linked-cases`, { params })
     },
-    // 调试接口（后端默认 30s；经执行机时后端再等 timeout+15s，axios 需覆盖完整等待）
+    // 调试接口（后端默认 30s；经执行机时后端再等 timeout+15s，带文件再加长；axios 需覆盖完整等待）
     async debug(data) {
         const payload = { timeout: 30, ...data }
         const sec = Number(payload.timeout) || 30
         const viaWorker = payload.worker_id != null && payload.worker_id !== ''
+        const fields = Array.isArray(payload.body_fields) ? payload.body_fields : []
+        const hasFormFile = payload.body_type === 'form-data' && fields.some(
+            (f) => String(f?.field_type || f?.type || '').toLowerCase() === 'file'
+        )
+        let extraMs = 5000
+        if (viaWorker) {
+            extraMs = hasFormFile ? 90000 : 20000
+        }
         return await http.post('/api-module/debug', payload, {
-            timeout: sec * 1000 + (viaWorker ? 20000 : 5000)
+            timeout: sec * 1000 + extraMs
         })
     },
     async debugWs(data) {
@@ -208,6 +216,9 @@ export const httpExecApi = {
     // 批量执行用例（超时 120s）
     async runBatch(data) {
         return await http.post('/api-module/exec/batch-run', data, { timeout: 120000 })
+    },
+    async listIdleWorkers(params) {
+        return await http.get('/api-module/exec/idle-workers', { params })
     }
 }
 

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import logging.handlers
+import os
 import click
 from fastapi import FastAPI, Request, status, Depends, HTTPException
 import uvicorn
@@ -19,6 +20,7 @@ from app.routers.sys.asset_favorites import router as asset_favorites_router
 from app.routers.sys.search import router as search_router
 from app.routers.sys.operation_logs import router as operation_log_router
 from app.routers.sys.notifications import router as notification_router, internal_router as notification_internal_router
+from app.routers.sys.inbox import router as inbox_router
 from app.routers.sys.docs import router as docs_router
 from app.routers.sys.mcp_info import router as mcp_info_router
 from app.routers.sys.runner_release_config import router as runner_release_config_router
@@ -28,6 +30,7 @@ from app.routers.sys.stream_parser_config import router as stream_parser_config_
 from app.routers.sys.invite_codes import router as invite_code_router
 from app.routers.sys.project_members import router as project_member_router
 from app.routers.sys.project_settings import router as project_settings_router
+from app.routers.stability import router as stability_router
 from app.core.platform.project_access_deps import optional_project_access_check
 from app.routers.ui.cases import router as case_router
 from app.routers.ui.fragments import router as ui_fragment_router
@@ -38,6 +41,7 @@ from app.routers.ui.exec import router as ui_exec_router
 from app.routers.ui.files import router as ui_files_router
 from app.routers.ui.folders import router as ui_folders_router
 from app.routers.ui.debug import router as ui_debug_router
+from app.routers.ui.locator_assist import router as ui_locator_assist_router
 from app.routers.app import (
     app_case_router,
     app_suite_router,
@@ -69,11 +73,13 @@ from app.routers.perf import perf_router, workers_public_router
 from app.routers.perf.cron import scheduler as perf_scheduler
 from app.routers.ai import ai_router
 from app.routers.ai.assistant import router as ai_assistant_router
+from app.routers.test_management import test_management_router
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from tortoise.exceptions import DoesNotExist, IntegrityError, OperationalError
 from contextlib import asynccontextmanager, AsyncExitStack
 from app.routers.schedule.jobs import scheduler
 from app.core.ops.operation_log import OperationLogMiddleware
@@ -187,11 +193,15 @@ async def _core_lifespan(app: FastAPI):
     register_app_stale_cleanup_job(scheduler)
     from app.modules.runner.runner_offline_cleanup import register_runner_heartbeat_stale_job
     register_runner_heartbeat_stale_job(scheduler)
+    from app.modules.test_management.tm_automation_sync import register_tm_automation_sync_job
+    register_tm_automation_sync_job(scheduler)
     api_cron_scheduler.start()
     app_cron_scheduler.start()
     perf_scheduler.start()
     _install_access_log_quiet_filter()
     logger = logging.getLogger("uvicorn.access")
+    # 仓库不提交 logs/；首次 clone / 解压后目录不存在时 RotatingFileHandler 会启动失败
+    os.makedirs("logs", exist_ok=True)
     handler = logging.handlers.RotatingFileHandler("logs/py.log", mode="a", maxBytes=100 * 1024)
     handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logger.addHandler(handler)
@@ -228,6 +238,12 @@ async def _core_lifespan(app: FastAPI):
             await reconcile_ui_cron_jobs()
         except Exception as exc:
             logging.getLogger(__name__).warning("Web 定时任务启动校准失败: %s", exc)
+        try:
+            from app.modules.ui.ui_agent_job_stale import recover_stale_ui_agent_jobs_on_startup
+
+            await recover_stale_ui_agent_jobs_on_startup()
+        except Exception as exc:
+            logging.getLogger(__name__).warning("UI Agent 本地任务恢复失败: %s", exc)
         yield
     finally:
         scheduler.shutdown()
@@ -339,7 +355,60 @@ async def global_validation_handler(request: Request, exc: RequestValidationErro
         return obj
     serializable_errors = _convert(errors)
     logging.error(f"Validation error for {request.url}: {serializable_errors}")
-    return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": "请求参数错误！", "errors": serializable_errors})
+    # 拼一条可读摘要，避免前端只能看到泛化「检查参数」
+    hints = []
+    for err in serializable_errors[:3]:
+        if isinstance(err, dict):
+            loc = ".".join(str(x) for x in (err.get("loc") or []) if x != "body")
+            msg = err.get("msg") or ""
+            hints.append(f"{loc}: {msg}" if loc else msg)
+    detail = "请求参数错误：" + "；".join(h for h in hints if h) if hints else "请求参数错误！"
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": detail, "errors": serializable_errors},
+    )
+
+
+@app.exception_handler(DoesNotExist)
+async def global_does_not_exist_handler(request: Request, exc: DoesNotExist):
+    return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "资源不存在"})
+
+
+@app.exception_handler(IntegrityError)
+async def global_integrity_error_handler(request: Request, exc: IntegrityError):
+    """覆盖 Tortoise 默认 422+数组 detail，给出可读中文提示"""
+    import logging
+
+    raw = str(exc) or ""
+    logging.error("IntegrityError for %s: %s", request.url, raw)
+    lower = raw.lower()
+    if "foreign key" in lower or "cannot add or update a child row" in lower:
+        detail = "关联数据不存在（如项目/版本已删除），请刷新后重选项目再试"
+    elif "duplicate" in lower or "unique" in lower:
+        detail = "数据唯一约束冲突（编号或键已存在），请更换后重试"
+    elif "delete_seq" in lower or "unknown column" in lower:
+        detail = "数据库结构未升级，请执行 aerich upgrade 后重启后端"
+    else:
+        detail = f"数据写入冲突：{raw[:200]}" if raw else "数据写入冲突，请检查后重试"
+    return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": detail})
+
+
+@app.exception_handler(OperationalError)
+async def global_operational_error_handler(request: Request, exc: OperationalError):
+    """表结构缺失等 OperationalError（不含已被 IntegrityError 处理的冲突）"""
+    import logging
+
+    # IntegrityError 是 OperationalError 子类；若走到这里说明未匹配更具体的 handler
+    if isinstance(exc, IntegrityError):
+        return await global_integrity_error_handler(request, exc)
+
+    raw = str(exc) or ""
+    logging.error("OperationalError for %s: %s", request.url, raw)
+    if "unknown column" in raw.lower() or "doesn't exist" in raw.lower() or "no such table" in raw.lower():
+        detail = "数据库结构与代码不一致，请在服务器执行 aerich upgrade 后重启后端"
+    else:
+        detail = f"数据库操作失败：{raw[:200]}" if raw else "数据库操作失败，请稍后重试"
+    return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": detail})
 
 
 # CORS跨域问题
@@ -351,9 +420,14 @@ app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_credenti
 # 注册操作日志中间件
 app.add_middleware(OperationLogMiddleware)
 
-# 注册ORM模型
-register_tortoise(app, config=settings.TORTOISE_ORM, modules={"models": ["models"]}, add_exception_handlers=True,
-                  generate_schemas=False)
+# 注册ORM模型（异常处理改由上方自定义 handler，避免 Tortoise 默认 422 数组 detail）
+register_tortoise(
+    app,
+    config=settings.TORTOISE_ORM,
+    modules={"models": ["models"]},
+    add_exception_handlers=False,
+    generate_schemas=False,
+)
 
 # 注册路由
 _project_access_dep = [Depends(optional_project_access_check)]
@@ -363,6 +437,7 @@ app.include_router(role_router, prefix="/sys")
 app.include_router(project_router, prefix="/sys")
 app.include_router(project_member_router, prefix="/sys")
 app.include_router(project_settings_router, prefix="/sys", dependencies=_project_access_dep)
+app.include_router(stability_router, dependencies=_project_access_dep)
 app.include_router(environment_router, prefix="/sys", dependencies=_project_access_dep)
 app.include_router(catalog_router, prefix="/sys", dependencies=_project_access_dep)
 app.include_router(files_router, prefix="/sys")
@@ -373,6 +448,7 @@ app.include_router(asset_favorites_router, prefix="/sys")
 app.include_router(search_router, prefix="/sys")
 app.include_router(operation_log_router, prefix="/sys")
 app.include_router(notification_router, prefix="/sys", dependencies=_project_access_dep)
+app.include_router(inbox_router, prefix="/sys")
 app.include_router(notification_internal_router, prefix="/sys")
 app.include_router(docs_router, prefix="/sys")
 app.include_router(mcp_info_router, prefix="/sys")
@@ -397,6 +473,7 @@ app.include_router(ui_exec_router, prefix="/ui", dependencies=_project_access_de
 app.include_router(ui_files_router, prefix="/ui", dependencies=_project_access_dep)
 app.include_router(ui_folders_router, prefix="/ui", dependencies=_project_access_dep)
 app.include_router(ui_debug_router, prefix="/ui", dependencies=_project_access_dep)
+app.include_router(ui_locator_assist_router, prefix="/ui", dependencies=_project_access_dep)
 
 app.include_router(app_case_router, prefix="/app-module", dependencies=_project_access_dep)
 app.include_router(app_suite_router, prefix="/app-module", dependencies=_project_access_dep)
@@ -426,6 +503,7 @@ app.include_router(perf_router, dependencies=_project_access_dep)
 app.include_router(workers_public_router, prefix="/perf")
 ai_router.include_router(ai_assistant_router)
 app.include_router(ai_router, dependencies=_project_access_dep)
+app.include_router(test_management_router, dependencies=_project_access_dep)
 
 if __name__ == '__main__':
     uvicorn.run(app="app.main:app", host="0.0.0.0", port=8000, reload=False)

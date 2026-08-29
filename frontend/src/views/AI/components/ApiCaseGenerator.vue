@@ -19,6 +19,10 @@
           <el-tag type="warning" size="small">已有 {{ apiData.case_count }} 条用例</el-tag>
           <span>AI 将参考已有用例的断言风格，并避免生成重复场景</span>
         </div>
+        <div v-if="apiData?.body_type" class="existing-cases-hint">
+          <el-tag size="small">请求体：{{ apiData.body_type }}</el-tag>
+          <span>生成用例将按该类型输出（form-data 含字段表，不会误写成 JSON）</span>
+        </div>
       </el-card>
 
       <!-- 响应结构信息 -->
@@ -118,6 +122,7 @@
           <div class="case-header">
             <div class="case-title">
               <el-tag size="small" type="info">#{{ index + 1 }}</el-tag>
+              <el-tag v-if="item.request_body_type" size="small" type="warning">{{ item.request_body_type }}</el-tag>
               <el-input v-model="item.name" size="small" class="name-input" placeholder="用例名称" />
             </div>
             <el-button type="danger" link size="small" @click="handleDeleteCase(index)" icon="Delete">删除</el-button>
@@ -133,8 +138,22 @@
                 <div class="json-label">Params</div>
                 <el-input v-model="item._request_params_str" type="textarea" :rows="2" size="small" />
               </div>
-              <div class="json-block">
-                <div class="json-label">Body</div>
+              <div v-if="item.request_body_type === 'form-data'" class="json-block">
+                <div class="json-label">Form Data 字段</div>
+                <el-table :data="item.request_body_fields || []" size="small" border max-height="220">
+                  <el-table-column label="字段名" prop="name" min-width="100" />
+                  <el-table-column label="类型" prop="field_type" width="80" />
+                  <el-table-column label="值" min-width="140" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span v-if="row.field_type === 'file'" class="file-hint">（文件，导入后请上传）</span>
+                      <span v-else>{{ row.value }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="说明" prop="description" show-overflow-tooltip />
+                </el-table>
+              </div>
+              <div v-else class="json-block">
+                <div class="json-label">Body（{{ item.request_body_type || 'json' }}）</div>
                 <el-input v-model="item._request_body_str" type="textarea" :rows="3" size="small" />
               </div>
             </el-collapse-item>
@@ -290,6 +309,8 @@ const handleGenerate = async () => {
     if (res.status === 200 && res.data?.data?.cases) {
       generatedCases.value = res.data.data.cases.map(item => ({
         ...item,
+        request_body_type: item.request_body_type || props.apiData?.body_type || 'json',
+        request_body_fields: Array.isArray(item.request_body_fields) ? item.request_body_fields : [],
         _request_headers_str: objToStr(item.request_headers),
         _request_params_str: objToStr(item.request_params),
         _request_body_str: objToStr(item.request_body)
@@ -331,7 +352,11 @@ const handleImport = async () => {
     name: item.name,
     request_headers: strToObj(item._request_headers_str),
     request_params: strToObj(item._request_params_str),
-    request_body: strToObj(item._request_body_str),
+    request_body: item.request_body_type === 'form-data' ? {} : strToObj(item._request_body_str),
+    request_body_type: item.request_body_type || props.apiData?.body_type || 'json',
+    request_body_fields: item.request_body_type === 'form-data'
+      ? (item.request_body_fields || [])
+      : [],
     assertions: item.assertions || [],
     extractors: item.extractors || [],
     priority: item.priority || 'P2',
@@ -513,6 +538,11 @@ const handleImport = async () => {
             font-size: 12px;
             color: var(--el-text-color-secondary);
             margin-bottom: 4px;
+          }
+
+          .file-hint {
+            color: var(--el-text-color-secondary);
+            font-size: 12px;
           }
         }
       }
