@@ -1,5 +1,12 @@
 <template>
   <div class="bl-exec-options">
+    <BrowserRunModeFields :form="form" />
+
+    <el-form-item label="参考环境">
+      <UiRunEnvSelect v-model="form.env_id" />
+      <div class="field-hint">{{ tips.env }}</div>
+    </el-form-item>
+
     <el-form-item label="最大步数">
       <el-slider v-model="form.max_steps" :min="5" :max="50" show-input />
       <div class="field-hint">{{ tips.maxSteps }}</div>
@@ -10,7 +17,18 @@
         <el-checkbox v-model="form.use_vision">Vision 截图理解</el-checkbox>
         <el-checkbox v-model="form.generate_gif">生成回放 GIF</el-checkbox>
         <el-checkbox v-model="form.enable_browser_restart">CDP 异常自动续跑</el-checkbox>
+        <el-checkbox v-model="form.use_action_cache">启用动作缓存</el-checkbox>
+        <el-checkbox v-model="form.force_refresh_cache" :disabled="!form.use_action_cache">强制刷新缓存</el-checkbox>
       </div>
+      <div class="field-hint">{{ tips.actionCache }}</div>
+    </el-form-item>
+
+    <el-form-item v-if="form.use_action_cache" label="回放失败">
+      <el-select v-model="form.on_replay_fail" style="width: 100%;">
+        <el-option label="降级 Agent（推荐，每任务最多 1 次）" value="fallback_agent" />
+        <el-option label="直接失败" value="fail" />
+      </el-select>
+      <div class="field-hint">{{ tips.forceRefresh }}</div>
     </el-form-item>
 
     <el-form-item label="重复上限">
@@ -34,6 +52,8 @@
 
 <script setup>
 import { BROWSER_LAB_EXEC_TIPS } from './browserLabExecOptions.js'
+import UiRunEnvSelect from '@/components/UiRunEnvSelect.vue'
+import BrowserRunModeFields from '@/components/BrowserRunModeFields.vue'
 
 defineProps({
   form: { type: Object, required: true }

@@ -16,7 +16,7 @@ class ApiDefinition(models.Model):
     
     # 请求配置
     base_url = fields.CharField(max_length=500, null=True, description="基础URL")
-    headers = fields.JSONField(default=dict, description="请求头")
+    headers = fields.JSONField(default=list, description="请求头")
     global_header_policy = fields.JSONField(default=dict, description="全局Header使用策略")
     params = fields.JSONField(default=list, description="查询参数列表")
     body = fields.JSONField(default=dict, description="请求体")
@@ -248,6 +248,7 @@ class ApiSuiteRunRecord(models.Model):
     success_cases = fields.IntField(default=0, description="成功数")
     failed_cases = fields.IntField(default=0, description="失败数")
     skipped_cases = fields.IntField(default=0, description="跳过数")
+    quarantine_skip = fields.IntField(default=0, description="已隔离未跑数")
     
     # 时间
     start_time = fields.DatetimeField(auto_now_add=True)
@@ -257,6 +258,8 @@ class ApiSuiteRunRecord(models.Model):
     # 环境
     env_id = fields.IntField(null=True, description="执行环境ID")
     env_name = fields.CharField(max_length=100, null=True, description="环境名称")
+    worker_id = fields.IntField(null=True, description="经执行机代发时的 Worker ID")
+    worker_name = fields.CharField(max_length=100, null=True, description="执行机名称")
     
     # 报告
     report_url = fields.CharField(max_length=500, null=True, description="报告链接")
@@ -286,6 +289,7 @@ class ApiCronJob(models.Model):
 
     # 环境
     env_id = fields.IntField(description="执行环境ID")
+    worker_id = fields.IntField(null=True, description="经执行机代发时的 Worker ID")
 
     # 执行记录关联
     last_run_record_id = fields.IntField(null=True, description="最后一次执行记录ID")
@@ -353,8 +357,11 @@ class ApiPlanRunRecord(models.Model):
     total_cases = fields.IntField(default=0, description="总用例数")
     success_cases = fields.IntField(default=0, description="成功用例数")
     failed_cases = fields.IntField(default=0, description="失败用例数")
+    quarantine_skip = fields.IntField(default=0, description="已隔离未跑数")
     env_id = fields.IntField(null=True, description="执行环境ID")
     env_name = fields.CharField(max_length=100, null=True, description="执行环境名称")
+    worker_id = fields.IntField(null=True, description="经执行机代发时的 Worker ID")
+    worker_name = fields.CharField(max_length=100, null=True, description="执行机名称")
     duration = fields.FloatField(null=True, description="总耗时(ms)")
     item_results = fields.JSONField(default=list, description="各 Item 执行结果快照")
     run_by = fields.CharField(max_length=50, default="admin", description="执行人")

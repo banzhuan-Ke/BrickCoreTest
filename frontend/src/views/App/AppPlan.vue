@@ -28,8 +28,8 @@
     </template>
   </PageCard>
 
-  <el-dialog v-model="showAdd" title="创建 App 计划" width="420px">
-    <el-form :model="addForm" label-width="88px">
+  <el-dialog v-model="showAdd" title="创建 App 计划" width="420px" class="bc-dialog">
+    <el-form :model="addForm" label-width="88px" class="bc-dialog-form">
       <el-form-item label="计划名称"><el-input v-model="addForm.name" /></el-form-item>
     </el-form>
     <template #footer>
@@ -43,6 +43,7 @@
     :loading="running"
     :default-record-video="runPlanRecordVideo"
     :parallel="runPlanParallel"
+    show-include-quarantine
     @submit="runPlan"
   />
 

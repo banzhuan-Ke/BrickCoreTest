@@ -15,20 +15,35 @@
     </template>
     <template #main>
       <router-view />
+      <BrowserLabExecConfirmDialog ref="execConfirmRef" />
     </template>
   </PageCard>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import PageCard from '@/components/PageCard.vue'
+import BrowserLabExecConfirmDialog from './BrowserLabExecConfirmDialog.vue'
+import { registerBrowserLabExecConfirmDialog } from '@/composables/useBrowserLabExecConfirm.js'
+
+const execConfirmRef = ref(null)
 
 const route = useRoute()
 const activePath = computed(() => {
   if (route.path.startsWith('/browser-lab/cases')) return '/browser-lab/cases'
   if (route.path.startsWith('/browser-lab/records')) return '/browser-lab/records'
   return '/browser-lab/run'
+})
+
+onMounted(() => {
+  nextTick(() => {
+    if (execConfirmRef.value) registerBrowserLabExecConfirmDialog(execConfirmRef.value)
+  })
+})
+
+watch(execConfirmRef, (v) => {
+  if (v) registerBrowserLabExecConfirmDialog(v)
 })
 </script>
 

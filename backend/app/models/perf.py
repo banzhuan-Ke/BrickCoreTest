@@ -187,7 +187,7 @@ class PerfJourneyTemplate(models.Model):
 
 
 class PerfComparisonReport(models.Model):
-    """性能测试增强报告（对比 / 汇总，2–10 条）"""
+    """性能测试增强报告（对比 / 汇总，2–20 条）"""
     id = fields.IntField(pk=True, description="增强报告ID")
     project = fields.ForeignKeyField(
         "models.Project", related_name="perf_comparison_reports", description="所属项目"

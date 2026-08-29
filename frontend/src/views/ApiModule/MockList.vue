@@ -5,7 +5,23 @@
     </template>
     <template #main>
       <div class="mock-list">
-        <!-- 搜索栏 -->
+        <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
+          <template #title>
+            <span>
+              调用：<code>{平台}/api-module/mock-call/{匹配路径}</code>。
+              同路径不同返回 → 用「复制为新场景」改匹配规则/Body（方法+路径保留）。
+            </span>
+            <el-button
+              link
+              type="primary"
+              style="margin-left:8px;padding:0;height:auto;vertical-align:baseline"
+              @click="openMockDocs"
+            >
+              帮助手册
+            </el-button>
+          </template>
+        </el-alert>
+
         <div class="search-bar">
           <el-input
             v-model="keyword"
@@ -18,7 +34,6 @@
           <el-button icon="RefreshRight" @click="resetSearch">重置</el-button>
         </div>
 
-        <!-- 列表 -->
         <el-table :data="mockList" stripe v-loading="loading">
           <el-table-column type="index" label="序号" :index="tableRowIndex" width="60" />
           <el-table-column label="名称" min-width="160" show-overflow-tooltip>
@@ -32,7 +47,7 @@
               <el-tag :type="getMethodType(row.method)" size="small">{{ row.method }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="匹配路径" min-width="200" show-overflow-tooltip>
+          <el-table-column label="匹配路径" min-width="180" show-overflow-tooltip>
             <template #default="{ row }">
               <code style="font-size:12px">{{ row.path }}</code>
             </template>
@@ -57,10 +72,17 @@
               />
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="130" fixed="right">
+          <el-table-column label="操作" width="210" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" type="primary" icon="Edit" @click="handleEdit(row)" />
-              <el-button size="small" type="danger" icon="Delete" @click="handleDelete(row)" />
+              <el-tooltip content="编辑" placement="top">
+                <el-button size="small" type="primary" icon="Edit" @click="handleEdit(row)" />
+              </el-tooltip>
+              <el-tooltip content="复制为新场景（保留方法/路径）" placement="top">
+                <el-button size="small" icon="CopyDocument" @click="handleCopyScene(row)" />
+              </el-tooltip>
+              <el-tooltip content="删除" placement="top">
+                <el-button size="small" type="danger" icon="Delete" @click="handleDelete(row)" />
+              </el-tooltip>
             </template>
           </el-table-column>
         </el-table>
@@ -82,6 +104,7 @@
   <MockDialog
     v-model="dialog.visible"
     :data="dialog.data"
+    :mode="dialog.mode"
     :project-id="proStore.projectInfo.id"
     @success="getMockList"
   />
@@ -89,6 +112,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { httpMockApi } from '@/api/modules/http'
@@ -98,11 +122,17 @@ import MockDialog from './components/MockDialog.vue'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 
 const proStore = ProjectStore()
+const router = useRouter()
+
+const openMockDocs = () => {
+  const route = router.resolve({ path: '/docs', query: { doc: 'api-mock' } })
+  window.open(route.href, '_blank')
+}
 
 const keyword = ref('')
 const loading = ref(false)
 const mockList = ref([])
-const dialog = reactive({ visible: false, data: null })
+const dialog = reactive({ visible: false, data: null, mode: 'create' })
 const pagination = reactive({ page: 1, size: 20, total: 0 })
 const tableRowIndex = makeTableRowIndex(pagination)
 
@@ -135,11 +165,20 @@ const resetSearch = () => {
 
 const handleAdd = () => {
   dialog.data = null
+  dialog.mode = 'create'
   dialog.visible = true
 }
 
 const handleEdit = (row) => {
   dialog.data = row
+  dialog.mode = 'edit'
+  dialog.visible = true
+}
+
+/** 复制为新场景：打开新建弹窗并预填，保存时走 create */
+const handleCopyScene = (row) => {
+  dialog.data = { ...row }
+  dialog.mode = 'copy'
   dialog.visible = true
 }
 

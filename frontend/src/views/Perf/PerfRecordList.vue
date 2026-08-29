@@ -40,16 +40,16 @@
           :icon="Delete"
         >批量删除({{ selectedRecords.length }})</el-button>
         <el-button
-          v-if="selectedRecords.length >= 2 && selectedRecords.length <= 10"
+          v-if="selectedRecords.length >= 2 && selectedRecords.length <= 20"
           type="warning"
           @click="openCreateReportDialog"
           :icon="TrendCharts"
         >{{ selectedReportActionLabel }}</el-button>
         <el-button
-          v-else-if="selectedRecords.length > 10"
+          v-else-if="selectedRecords.length > 20"
           type="info"
           disabled
-        >最多对比 10 条</el-button>
+        >最多对比 20 条</el-button>
         <el-button link type="primary" @click="router.push('/perf-comparisons')">增强报告列表</el-button>
       </div>
 
@@ -243,7 +243,7 @@
           :rows="3"
           maxlength="2000"
           show-word-limit
-          placeholder="可选。生成后跑 AI 时会追加到分析提示，例如：重点对比峰值与持续的 P95 差异"
+          placeholder="可选。整份汇总一份报告即可。例：上传四档(500KB/1MB/5MB/10MB)组内对照；textin 四档组内对照；问答与状态查询单独画像；组间不要硬比。请在同一结论里写清各组数字与规格退化"
         />
         <div class="form-hint">
           是否自动分析取决于项目「压测 AI」开关；所用模型在
@@ -489,7 +489,7 @@ const handleViewReport = (row) => {
   router.push(`/perf-report/${row.id}`)
 }
 
-// 生成持久化增强报告（2–10 条）
+// 生成持久化增强报告（2–20 条）
 const compareDialogVisible = ref(false)
 const compareData = ref(null)
 const compareLoading = ref(false)
@@ -504,8 +504,8 @@ const createForm = ref({
 
 const openCreateReportDialog = () => {
   const n = selectedRecords.value.length
-  if (n < 2 || n > 10) {
-    ElMessage.warning('请选择 2–10 条记录生成增强报告')
+  if (n < 2 || n > 20) {
+    ElMessage.warning('请选择 2–20 条记录生成增强报告')
     return
   }
   if (!proStore.projectInfo?.id) {

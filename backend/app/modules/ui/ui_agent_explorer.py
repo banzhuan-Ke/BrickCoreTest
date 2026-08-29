@@ -4,9 +4,12 @@ MCP 式 UI Agent 探索器
 """
 import asyncio
 import logging
+import time
 from typing import Any, Awaitable, Callable, Optional
 
 from app.core.shared.agent_locator import (
+    CLICK_PROGRESS_POLL_S,
+    CLICK_PROGRESS_WAIT_S,
     action_made_progress,
     refine_agent_step_locator,
     structural_fingerprint,
@@ -19,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 PlanFunc = Callable[..., Awaitable[dict]]
 HealFunc = Callable[..., Awaitable[dict]]
+ProgressHook = Callable[[str, dict[str, Any]], Awaitable[None]]
+ShouldStopFunc = Callable[[], Awaitable[bool]]
 
 _MAX_REPLAN_PER_INDEX = 3
 _DUPLICATE_STUCK_HINT = (
@@ -27,8 +32,9 @@ _DUPLICATE_STUCK_HINT = (
     "#id、[data-testid]、get_by_role=button,<完整名称>，勿用 get_by_text 短词。"
 )
 _NO_PROGRESS_STUCK_HINT = (
-    "上一步操作后页面结构未变化（URL/主导航未变），说明定位可能点错或前置条件未满足。"
-    "请换用 snapshot 中该控件的 #id 或 get_by_role，勿重复相同 click。"
+    "上一步点击已执行，但页面尚未换页（登录/提交后路由可能仍在跳转）。"
+    "禁止用另一个 locator 再点一次登录/提交；请等待跳转，或检查账号密码框是否仍为空并 fill_value。"
+    "其他控件请改用 snapshot 中的 #id 或 get_by_role。"
 )
 
 
@@ -59,12 +65,23 @@ class UiMcpAgentExplorer(SmartPageExplorer):
         llm_plan_func: PlanFunc,
         max_steps: int = 15,
         heal_func: Optional[HealFunc] = None,
+        progress_hook: Optional[ProgressHook] = None,
+        should_stop: Optional[ShouldStopFunc] = None,
     ) -> dict[str, Any]:
         """
         :param llm_plan_func: async fn(accessibility_snapshot, snapshot_type, description,
             executed_steps, current_url, step_index) -> {done, message?, step?}
         :param heal_func: 可选，步骤失败时调用一次定位器自愈并重试
+        :param progress_hook: 可选，async fn(phase, payload) phase=log|step
         """
+
+        async def _emit(phase: str, payload: dict[str, Any]) -> None:
+            if progress_hook:
+                try:
+                    await progress_hook(phase, payload)
+                except Exception as exc:
+                    logger.debug("[UiMcpAgent] progress_hook error: %s", exc)
+
         agent_log: list[dict[str, Any]] = []
         await self._init_browser()
 
@@ -89,6 +106,17 @@ class UiMcpAgentExplorer(SmartPageExplorer):
 
             executed_count = 0
             for step_idx in range(1, max_steps + 1):
+                if should_stop and await should_stop():
+                    agent_log.append({
+                        "step": step_idx,
+                        "done": True,
+                        "message": "用户已停止",
+                        "url": self.page.url if self.page else self.start_url,
+                    })
+                    await _emit("log", agent_log[-1])
+                    task_done = True
+                    break
+
                 snap_text, snap_type = await capture_accessibility_snapshot(self.page)
                 current_url = self.page.url
 
@@ -116,6 +144,7 @@ class UiMcpAgentExplorer(SmartPageExplorer):
                             "url": current_url,
                             "snapshot_type": snap_type,
                         })
+                        await _emit("log", agent_log[-1])
                         logger.info(f"[UiMcpAgent] 第 {step_idx} 步标记完成: {plan.get('message')}")
                         step_committed = True
                         task_done = True
@@ -207,17 +236,39 @@ class UiMcpAgentExplorer(SmartPageExplorer):
                         break
 
                     await asyncio.sleep(0.5)
-                    snap_text, snap_type = await capture_accessibility_snapshot(self.page)
                     current_url = self.page.url
-                    struct_after = structural_fingerprint(current_url, snap_text)
-
+                    method = (step.get("method") or "")
                     progressed = action_made_progress(
-                        method=(step.get("method") or ""),
+                        method=method,
                         url_before=url_before,
                         url_after=current_url,
                         struct_before=struct_before,
-                        struct_after=struct_after,
+                        struct_after=struct_before,
                     )
+                    if not progressed and method == "click_ele":
+                        deadline = time.monotonic() + CLICK_PROGRESS_WAIT_S
+                        while time.monotonic() < deadline and not progressed:
+                            await asyncio.sleep(CLICK_PROGRESS_POLL_S)
+                            current_url = self.page.url
+                            progressed = action_made_progress(
+                                method=method,
+                                url_before=url_before,
+                                url_after=current_url,
+                                struct_before=struct_before,
+                                struct_after=struct_before,
+                            )
+                    snap_text, snap_type = await capture_accessibility_snapshot(self.page)
+                    current_url = self.page.url
+                    struct_after = structural_fingerprint(current_url, snap_text)
+                    if not progressed:
+                        progressed = action_made_progress(
+                            method=method,
+                            url_before=url_before,
+                            url_after=current_url,
+                            struct_before=struct_before,
+                            struct_after=struct_after,
+                        )
+
                     no_progress = not progressed
 
                     if no_progress and replan < _MAX_REPLAN_PER_INDEX - 1:
@@ -250,6 +301,8 @@ class UiMcpAgentExplorer(SmartPageExplorer):
                     self.all_steps.append(step)
                     executed_count += 1
                     agent_log.append(log_entry)
+                    await _emit("log", log_entry)
+                    await _emit("step", {"step_index": step_idx, "step": step})
                     step_committed = True
 
                     if current_url not in self.urls_visited:

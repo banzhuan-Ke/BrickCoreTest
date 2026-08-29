@@ -82,6 +82,18 @@
             <div class="value value--env">{{ record.env_name || '-' }}</div>
           </div>
         </el-col>
+        <el-col :span="overviewColSpan" v-if="(record.quarantine_skip || record.skipped_cases)">
+          <div class="stat-card">
+            <div class="label">已隔离未跑</div>
+            <div class="value">{{ record.quarantine_skip || record.skipped_cases || 0 }}</div>
+          </div>
+        </el-col>
+        <el-col :span="overviewColSpan" v-if="record.worker_id">
+          <div class="stat-card">
+            <div class="label">执行机</div>
+            <div class="value value--env">#{{ record.worker_id }} {{ record.worker_name || '' }}</div>
+          </div>
+        </el-col>
       </el-row>
       <div v-if="record && !isPlanRecord && caseResults.length > 0" style="margin-top:10px; font-size:12px; color:#909399; text-align:right">
         <span>💡 套件总耗时包含用例执行及额外开销（加载、切换、数据库写入等），</span>
@@ -108,8 +120,8 @@
               {{ planItem.item_type === 'suite' ? '套件' : '用例' }}
             </el-tag>
             <span class="case-name">{{ planItem.name }}</span>
-            <el-tag :type="planItem.status === 'success' ? 'success' : 'danger'" size="small">
-              {{ planItem.status === 'success' ? '通过' : '失败' }}
+            <el-tag :type="planItemStatusType(planItem.status)" size="small">
+              {{ planItemStatusText(planItem.status) }}
             </el-tag>
             <span class="case-meta">
               共{{ planItem.total }}个用例, 成功{{ planItem.success }}, 失败{{ planItem.failed }}
@@ -125,8 +137,8 @@
         <div v-for="(caseItem, cidx) in (planItem.case_results || [])" :key="caseItem.record_id || cidx" class="plan-case-item">
           <div class="plan-case-header">
             <span class="exec-order-tag" style="background:#67c23a">#{{ cidx + 1 }}</span>
-            <el-tag :type="caseItem.status === 'success' ? 'success' : 'danger'" size="small">
-              {{ caseItem.status === 'success' ? '通过' : '失败' }}
+            <el-tag :type="caseItemStatusType(caseItem)" size="small">
+              {{ caseItemStatusText(caseItem) }}
             </el-tag>
             <span class="case-name">{{ caseItem.case_name }}</span>
             <span class="case-meta case-meta--http" v-if="getHttpResponseMs(caseItem) != null">
@@ -159,8 +171,8 @@
         <template #title>
           <div class="case-title">
             <span class="exec-order-tag">#{{ index + 1 }}</span>
-            <el-tag :type="item.status === 'success' ? 'success' : 'danger'" size="small">
-              {{ item.status === 'success' ? '通过' : '失败' }}
+            <el-tag :type="caseItemStatusType(item)" size="small">
+              {{ caseItemStatusText(item) }}
             </el-tag>
             <span class="case-name">{{ item.case_name }}</span>
             <span class="case-meta case-meta--http" v-if="getHttpResponseMs(item) != null">
@@ -250,7 +262,9 @@ const getStatusType = (status) => {
     success: 'success',
     failed: 'danger',
     running: 'info',
-    partial: 'warning'
+    partial: 'warning',
+    skipped: 'info',
+    skip: 'info',
   }
   return types[status] || 'info'
 }
@@ -260,14 +274,48 @@ const getStatusText = (status) => {
     success: '成功',
     failed: '失败',
     running: '执行中',
-    partial: '部分失败'
+    partial: '部分失败',
+    skipped: '已跳过',
+    skip: '已跳过',
   }
   return texts[status] || status
 }
 
+function isQuarantineLike(item) {
+  if (!item) return false
+  const status = String(item.status || '').toLowerCase()
+  if (status !== 'skip' && status !== 'skipped') return false
+  const err = String(item.error || item.error_msg || '')
+  return err.includes('隔离') || String(item.skip_reason || '').toLowerCase() === 'quarantine'
+}
+
+function planItemStatusType(status) {
+  return getStatusType(status)
+}
+
+function planItemStatusText(status) {
+  if (status === 'skipped' || status === 'skip') return '已隔离/跳过'
+  return getStatusText(status)
+}
+
+function caseItemStatusType(item) {
+  if (isQuarantineLike(item)) return 'info'
+  return item?.status === 'success' ? 'success' : (item?.status === 'skip' || item?.status === 'skipped' ? 'info' : 'danger')
+}
+
+function caseItemStatusText(item) {
+  if (isQuarantineLike(item)) return '已隔离未跑'
+  if (item?.status === 'success') return '通过'
+  if (item?.status === 'skip' || item?.status === 'skipped') return '跳过'
+  return '失败'
+}
+
 const getSuccessRate = () => {
   if (!record.value || !record.value.total_cases) return 0
-  return ((record.value.success_cases / record.value.total_cases) * 100).toFixed(1)
+  const qs = Number(record.value.quarantine_skip || 0)
+  const denom = Math.max(0, Number(record.value.total_cases) - qs)
+  if (denom <= 0) return 0
+  return ((Number(record.value.success_cases || 0) / denom) * 100).toFixed(1)
 }
 
 const getSuccessRateColor = () => {
@@ -311,6 +359,8 @@ const fetchDetail = async () => {
         duration: data.duration,
         http_duration: data.http_duration,
         env_name: data.env_name,
+        worker_id: data.worker_id,
+        worker_name: data.worker_name,
         trigger_type: data.trigger_type,
         run_by: data.run_by,
         start_time: data.start_time,
@@ -332,7 +382,9 @@ const fetchDetail = async () => {
         failed_cases: data.failed_cases,
         duration: data.duration,
         http_duration: data.http_duration,
-        env_name: data.env_name
+        env_name: data.env_name,
+        worker_id: data.worker_id,
+        worker_name: data.worker_name
       }
       caseResults.value = data.case_results || []
       return
@@ -351,7 +403,9 @@ const fetchDetail = async () => {
         failed_cases: data.failed_cases,
         duration: data.duration,
         http_duration: data.http_duration,
-        env_name: data.env_name
+        env_name: data.env_name,
+        worker_id: data.worker_id,
+        worker_name: data.worker_name
       }
       caseResults.value = data.case_results || []
       return
@@ -371,6 +425,8 @@ const fetchDetail = async () => {
             duration: data.duration,
             http_duration: data.http_duration,
             env_name: data.env_name,
+            worker_id: data.worker_id,
+            worker_name: data.worker_name,
             trigger_type: data.trigger_type,
             run_by: data.run_by,
             start_time: data.start_time,
@@ -392,7 +448,9 @@ const fetchDetail = async () => {
               failed_cases: data.status !== 'success' ? 1 : 0,
               duration: data.response_time || 0,
               http_duration: data.http_response_time,
-              env_name: data.env_name
+              env_name: data.env_name,
+              worker_id: data.worker_id,
+              worker_name: data.worker_name
             }
             caseResults.value = [{
               record_id: data.id,

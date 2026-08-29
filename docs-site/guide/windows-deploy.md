@@ -43,7 +43,8 @@
 克隆代码：
 
 ```powershell
-git clone https://gitee.com/BanZhuanKeOrz/BrickCore.git
+git clone https://github.com/banzhuan-Ke/BrickCoreTest.git
+# 镜像：git clone https://gitee.com/BanZhuanKeOrz/BrickCore.git
 cd BrickCore
 ```
 
@@ -142,15 +143,15 @@ python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 必装：Backend 本机 Chromium（AI「Agent(MCP) / 多轮探索 / 抓取页面」在 Backend 起浏览器，不走 Runner）
-python -m playwright install chromium
+# 可选：定位器自愈等仍可能在 Backend 本机起 Playwright（AI 浏览器任务已迁 Runner）
+# python -m playwright install chromium
 
 copy .env.example .env
 notepad .env
 ```
 
-> **易漏点**：只给 Runner 装 Playwright **不够**。Agent（MCP）报错  
-> `Executable doesn't exist ... ms-playwright\chromium_...` 时，请在 **Backend 的 venv** 内执行上面这条，然后重启 Backend。
+> **易漏点**：智能浏览器与 AI 生成用例的浏览器操作建议在 **在线 Web 执行机** 上跑（减轻平台压力、支持有头调试），请配置 **平台对外地址** 并保持 Runner 在线。仅在使用 **定位器自愈** 等 Backend 本机 Playwright 能力且报  
+> `Executable doesn't exist ... ms-playwright\chromium_...` 时，再在 **Backend 的 venv** 内执行 `python -m playwright install chromium` 并重启 Backend。
 
 将 `backend\.env` 调成与上面中间件一致（**必须保存**；无 Docker 方式一端口见下）。至少确认这几行：
 
@@ -191,10 +192,10 @@ AI_REQUIREMENT_BUCKET=ai-requirements
 DOC_USERNAME=admin
 DOC_PASSWORD=BrickCore123456
 INTERNAL_API_KEY=brickcore-internal-demo
-PLATFORM_VERSION=1.6.0
-RUNNER_CLIENT_VERSION_LATEST=1.6.1
+PLATFORM_VERSION=1.7.0
+RUNNER_CLIENT_VERSION_LATEST=1.7.0
 RUNNER_CLIENT_VERSION_MIN=1.3.8
-RUNNER_ENGINE_VERSION=1.6.1
+RUNNER_ENGINE_VERSION=1.7.0
 RUNNER_ENGINE_VERSION_MIN=1.0.0
 ```
 
@@ -331,7 +332,8 @@ npm run dev
 ### 1. 克隆并准备 `.env`
 
 ```powershell
-git clone https://gitee.com/BanZhuanKeOrz/BrickCore.git
+git clone https://github.com/banzhuan-Ke/BrickCoreTest.git
+# 镜像：git clone https://gitee.com/BanZhuanKeOrz/BrickCore.git
 cd BrickCore
 copy .env.example .env
 notepad .env

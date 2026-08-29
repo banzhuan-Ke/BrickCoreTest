@@ -641,7 +641,7 @@ async def upload_csv(
 
     content = await file.read()
     try:
-        text = content.decode('utf-8')
+        text = content.decode('utf-8-sig')  # 自动去掉 UTF-8 BOM
     except UnicodeDecodeError:
         try:
             text = content.decode('gbk')
@@ -654,10 +654,15 @@ async def upload_csv(
         rows = []
         columns = []
         for i, row in enumerate(reader):
+            # 清理列名空白 / BOM，避免 ${{csv.xxx}} / @csv.xxx 对不上
+            cleaned = {}
+            for k, v in row.items():
+                key = str(k or "").strip().lstrip("\ufeff")
+                if not key:
+                    continue
+                cleaned[key] = v.strip() if v else ""
             if i == 0:
-                columns = list(row.keys())
-            # 清理空值
-            cleaned = {k: v.strip() if v else "" for k, v in row.items()}
+                columns = list(cleaned.keys())
             rows.append(cleaned)
             if i >= 9999:  # 最多 10000 行
                 break

@@ -151,8 +151,8 @@
       </CatalogListLayout>
 
       <!-- 执行对话框 -->
-      <el-dialog v-model="runDialogVisible" title="启动性能测试" width="760px">
-        <el-form :model="runForm" label-width="90px">
+      <el-dialog v-model="runDialogVisible" title="启动性能测试" width="760px" class="bc-dialog bc-dialog--wide" destroy-on-close>
+        <el-form :model="runForm" label-width="90px" class="bc-dialog-form">
           <el-form-item label="场景">
             <el-input v-model="runForm.sceneName" disabled />
           </el-form-item>
@@ -669,8 +669,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted, computed, nextTick, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Search, Plus, Edit, Delete, VideoPlay, QuestionFilled, CopyDocument } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
@@ -684,10 +684,12 @@ import { UserStore } from '@/stores/module/UserStore'
 import {
   defaultPerfTargets,
   normalizePerfTargetsLocal,
+  ensureGlobalTargetItems,
   perfTargetsSummaryLines,
 } from '@/views/Perf/perfTargets'
 
 const router = useRouter()
+const route = useRoute()
 const proStore = ProjectStore()
 const uStore = UserStore()
 
@@ -727,6 +729,13 @@ const runForm = ref({
 })
 const runOverridePerfTargets = ref(false)
 const runPerfTargets = ref(defaultPerfTargets())
+ensureGlobalTargetItems(runPerfTargets.value)
+watch(
+  () => [runPerfTargets.value?.enabled, (runPerfTargets.value?.items || []).map((i) => i && i.key).join(',')],
+  () => {
+    if (runPerfTargets.value?.enabled) ensureGlobalTargetItems(runPerfTargets.value)
+  },
+)
 const runPerfTargetSummary = computed(() =>
   perfTargetsSummaryLines(runForm.value?.config?.perf_targets)
 )
@@ -1301,6 +1310,7 @@ const handleRun = async (row) => {
   }
   runOverridePerfTargets.value = false
   runPerfTargets.value = normalizePerfTargetsLocal(row.config?.perf_targets)
+  ensureGlobalTargetItems(runPerfTargets.value)
   // 加载环境列表
   try {
     const res = await envApi.getEnvList({ project_id: proStore.projectInfo.id })
@@ -1398,6 +1408,11 @@ const confirmRun = async () => {
 }
 
 onMounted(() => {
+  if (typeof route.query.keyword === 'string' && route.query.keyword) {
+    searchKeyword.value = route.query.keyword
+  } else if (typeof route.query.name === 'string' && route.query.name) {
+    searchKeyword.value = route.query.name
+  }
   fetchData()
 })
 </script>

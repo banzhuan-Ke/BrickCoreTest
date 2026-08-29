@@ -280,7 +280,11 @@ const buildImportPayload = (cases) => cases.map(item => ({
   name: item.name,
   request_headers: item.request_headers || {},
   request_params: item.request_params || {},
-  request_body: item.request_body || {},
+  request_body: item.request_body_type === 'form-data' ? {} : (item.request_body || {}),
+  request_body_type: item.request_body_type || 'json',
+  request_body_fields: item.request_body_type === 'form-data'
+    ? (item.request_body_fields || [])
+    : [],
   assertions: item.assertions || [],
   extractors: item.extractors || [],
   priority: item.priority || 'P2',

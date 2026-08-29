@@ -136,6 +136,7 @@
         :fail="detail.fail"
         :error="detail.error"
         :skip="detail.skip"
+        :quarantine-skip="detail.quarantine_skip"
         :case-count="detail.case_count"
         :duration="detail.duration"
         :username="detail.username"

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.core.platform.auth import is_authenticated, require_permissions
 from app.core.platform.permissions import AI_TEST_EXECUTE, AI_TEST_VIEW, PROJECT_EDIT
+from app.modules.test_management.requirement_review_service import assert_requirement_design_allowed
 from app.modules.ai.vision_image_cache import lookup_vision_result, store_vision_result
 from app.core.case.case_naming import (
     BUILTIN_TEMPLATE_CATALOG,
@@ -209,6 +210,7 @@ def _requirement_to_dict(req: AiRequirement) -> dict:
         "name": req.name,
         "source_type": req.source_type,
         "parse_status": req.parse_status,
+        "review_status": req.review_status,
         "parse_error": req.parse_error,
         "text_length": len(req.original_content or ""),
         "page_count": meta.get("page_count", 0),
@@ -981,6 +983,10 @@ class UpdateRequirementBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200, description="需求名称")
 
 
+class ReplaceRequirementContentBody(BaseModel):
+    content: str = Field(..., min_length=1, max_length=500000, description="粘贴替换的正文")
+
+
 class RecalcTitlesRequest(BaseModel):
     case_ids: Optional[list[int]] = Field(default=None, description="指定用例ID，空则全部草稿")
 
@@ -1242,6 +1248,129 @@ async def reparse_requirement_document(
         message=f"重新解析成功：{len(loaded.sections or [])} 个章节，{len(loaded.images)} 张图片",
         data=data,
     )
+
+
+@router.post(
+    "/{req_id}/upload-document",
+    summary="替换需求文档",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def replace_requirement_document(
+    req_id: int,
+    file: UploadFile = File(...),
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    """上传新文档替换已有需求正文；若此前已通过可测性评审，将重置为需修改。"""
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+
+    file_name = file.filename or "requirement.pdf"
+    ext = os.path.splitext(file_name)[1].lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件格式，支持: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="文件内容为空")
+
+    try:
+        loaded = load_document(content, file_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[requirements] 文档替换解析失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"文档解析失败: {str(e)}")
+
+    try:
+        storage_meta = save_requirement_source(req.id, file_name, content)
+    except RuntimeError as e:
+        logger.error(f"[requirements] 文档存储失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    was_approved = req.review_status == "approved"
+    _apply_parsed_document(req, loaded, file_name, storage_meta)
+    review_status_reset = False
+    if was_approved:
+        req.review_status = "changes_requested"
+        review_status_reset = True
+    await req.save()
+
+    data = _requirement_to_dict(req)
+    data["review_status"] = req.review_status
+    data["review_status_reset"] = review_status_reset
+    data["zentao_effective"] = await _effective_zentao_bindings(project_id, req)
+    msg = "文档已更新"
+    if review_status_reset:
+        msg += "；原评审已通过，已标记为需修改，建议发起新一轮需求评审"
+    return StandardResponse(message=msg, data=data)
+
+
+@router.put(
+    "/{req_id}/content",
+    summary="粘贴替换需求正文",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def replace_requirement_content(
+    req_id: int,
+    body: ReplaceRequirementContentBody,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    """以纯文本/Markdown 替换需求正文；若此前评审已通过，将重置为需修改。"""
+    project_id = _resolve_project_id(user_info, project_id)
+    req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
+    if not req:
+        raise HTTPException(status_code=404, detail="需求不存在")
+
+    content = (body.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="正文不能为空")
+
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    preserved = {
+        k: meta[k]
+        for k in (
+            "export_defaults",
+            "zentao_effective",
+            "last_generate",
+            "requirement_type",
+            "naming_template_id",
+        )
+        if k in meta
+    }
+    was_approved = req.review_status == "approved"
+    req.source_type = "text"
+    req.original_content = content
+    req.parse_status = "parsed"
+    req.parse_error = None
+    req.parsed_content = {
+        **preserved,
+        "file_name": meta.get("file_name") or "",
+        "sections": [],
+        "blocks": [],
+        "source_type": "text",
+        "text_length": len(content),
+    }
+    review_status_reset = False
+    if was_approved:
+        req.review_status = "changes_requested"
+        review_status_reset = True
+    await req.save()
+
+    data = _requirement_to_dict(req)
+    data["review_status"] = req.review_status
+    data["review_status_reset"] = review_status_reset
+    data["zentao_effective"] = await _effective_zentao_bindings(project_id, req)
+    msg = "正文已更新"
+    if review_status_reset:
+        msg += "；原评审已通过，已标记为需修改，建议发起新一轮需求评审"
+    return StandardResponse(message=msg, data=data)
 
 
 @router.get("", summary="需求列表", dependencies=[Depends(require_permissions(AI_TEST_VIEW))])
@@ -1627,6 +1756,8 @@ async def get_requirement(
         raise HTTPException(status_code=404, detail="需求不存在")
     data = _requirement_to_dict(req)
     data["zentao_effective"] = await _effective_zentao_bindings(project_id, req)
+    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    data["sections"] = (meta.get("sections") or [])[:80]
     data["original_content"] = req.original_content[:5000] + (
         "..." if len(req.original_content or "") > 5000 else ""
     )
@@ -2680,6 +2811,7 @@ async def _create_generate_job(
     req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
     if not req:
         raise HTTPException(status_code=404, detail="需求不存在")
+    await assert_requirement_design_allowed(req)
 
     effective = await _effective_zentao_bindings(project_id, req)
     missing = validate_bindings(effective)
@@ -2730,6 +2862,7 @@ async def generate_cases(
     req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
     if not req:
         raise HTTPException(status_code=404, detail="需求不存在")
+    await assert_requirement_design_allowed(req)
     data = await _execute_generate_cases(
         req,
         project_id,

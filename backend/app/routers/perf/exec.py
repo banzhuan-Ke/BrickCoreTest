@@ -124,6 +124,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
     """压测执行主函数：施压一律派发 Runner Worker（不再本机直跑）。
     use_workers 保留签名兼容，实际始终为 True。
     """
+    from app.routers.perf.perf_state import _running_records
     from app.routers.perf.workers import (
         get_active_workers,
         distribute_concurrent,
@@ -133,14 +134,19 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
     )
     from app.routers.perf import worker_queue
 
+    stop_event = asyncio.Event()
+    _running_records[record_id] = stop_event
+
     record = await PerfRecord.get_or_none(id=record_id)
     if not record:
+        _running_records.pop(record_id, None)
         return
 
     scene = await record.scene
     if not scene:
         record.status = "failed"
         await record.save()
+        _running_records.pop(record_id, None)
         return
 
     config = record.config_snapshot
@@ -155,6 +161,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
     if not env:
         record.status = "failed"
         await record.save()
+        _running_records.pop(record_id, None)
         return
 
     from app.modules.data_tools.tag_service import merge_execution_variables
@@ -179,6 +186,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
     if not scene_items:
         record.status = "failed"
         await record.save()
+        _running_records.pop(record_id, None)
         return
 
     target_host = config.get("target_host")
@@ -254,6 +262,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
             "stop_reason": "压测 Worker 不支持 journey 阶段 sync_before 屏障，请关闭阶段同步后重试",
         }
         await record.save()
+        _running_records.pop(record_id, None)
         return
 
     active_workers = await get_active_workers(scene.project_id, exclude_busy=True)
@@ -267,6 +276,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
             ),
         }
         await record.save()
+        _running_records.pop(record_id, None)
         return
 
     selection = (config.get("_worker_selection") or {}) if isinstance(config, dict) else {}
@@ -289,6 +299,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
         record.ended_at = datetime.now()
         record.error_breakdown = {"stop_reason": str(e)}
         await record.save()
+        _running_records.pop(record_id, None)
         return
 
     if len(workers) < 1:
@@ -298,6 +309,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
             "stop_reason": "无可用压测 Worker（所选执行器均不可用）",
         }
         await record.save()
+        _running_records.pop(record_id, None)
         return
 
     total_concurrent = config.get("concurrent_users", 1)
@@ -316,6 +328,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
             ),
         }
         await record.save()
+        _running_records.pop(record_id, None)
         return
 
     assignments = distribute_concurrent(total_concurrent, workers, worker_weights)
@@ -389,6 +402,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
             "stop_reason": "下发压测任务到 Worker 失败（无空闲 Worker 或任务队列占用），请检查执行器在线状态后重试",
         }
         await record.save()
+        _running_records.pop(record_id, None)
         return
 
     # 部分下发成功但未达到请求并发：回滚已派发任务，避免低负载误跑并污染基线对比
@@ -413,6 +427,7 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
             ),
         }
         await record.save()
+        _running_records.pop(record_id, None)
         return
 
     record.distribution_info = distribution_info
@@ -427,6 +442,16 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
     # 手动/错误率停止后，再等一段时间收齐各 Worker 最终报告，避免过早 finalize
     stop_grace_seconds = 90
     while waited < max_duration:
+        if stop_event.is_set():
+            fresh = await PerfRecord.get_or_none(id=record_id)
+            if fresh and fresh.status not in ("completed", "failed", "stopped"):
+                fresh.status = "stopped"
+                fresh.ended_at = datetime.now()
+                await fresh.save()
+            if stop_seen_at is None:
+                stop_seen_at = waited
+            if waited - stop_seen_at >= stop_grace_seconds:
+                break
         await asyncio.sleep(1)
         waited += 1
         fresh = await PerfRecord.get_or_none(id=record_id)

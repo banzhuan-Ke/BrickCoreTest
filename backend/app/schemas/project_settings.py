@@ -42,6 +42,23 @@ class AiExecutionSettingsBody(BaseModel):
         default=None,
         description="功能用例生成策略（条数模式软上下限等）",
     )
+    stability_n: Optional[int] = Field(None, ge=5, le=50, description="稳定度窗口：最近 N 次已结束执行")
+    stability_recent_k: Optional[int] = Field(None, ge=1, le=20, description="近况通过率条数")
+    stability_unstable_min_n: Optional[int] = Field(None, ge=5, le=50, description="不稳定判定最少样本")
+    stability_unstable_pass_below: Optional[float] = Field(
+        None, ge=0.5, le=1.0, description="窗口通过率低于此值视为不稳定"
+    )
+    stability_unstable_first_pass_below: Optional[float] = Field(
+        None, ge=0.5, le=1.0, description="首跑通过率低于此值视为不稳定"
+    )
+    stability_unstable_salvage_min: Optional[int] = Field(None, ge=0, le=20, description="重试挽回次数阈值，0 关闭")
+    stability_unstable_switch_min_n: Optional[int] = Field(None, ge=3, le=50, description="成败切换规则最少样本")
+    stability_unstable_switch_min: Optional[int] = Field(None, ge=0, le=20, description="成败切换次数阈值，0 关闭")
+    apm_trace_base_url: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="可选 APM 外链前缀（须 http/https；可用 {rid} 占位），与 request_id 拼接；空则仅可复制",
+    )
 
 
 def payload_from_execution_settings_body(body: AiExecutionSettingsBody) -> dict:

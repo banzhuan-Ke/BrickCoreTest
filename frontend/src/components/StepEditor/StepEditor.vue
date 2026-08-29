@@ -116,9 +116,11 @@
       :step-path="editingPath"
       :module="module"
       :driver-mode="driverMode"
+      :can-verify-locator="canVerifyLocator"
       @save="handleStepSave"
       @save-multiple="handleStepSaveMultiple"
       @cancel="handleStepCancel"
+      @verify-locator="(p) => emit('verify-locator', p)"
     />
 
     <FragmentRefEditDialog
@@ -213,6 +215,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  canVerifyLocator: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 provide('stepEditorModule', computed(() => props.module))
@@ -242,7 +248,14 @@ function onDebugSelectStep(index) {
   emit('debug-select-step', index)
 }
 
-const emit = defineEmits(['update:steps', 'debug-step', 'debug-select-step', 'debug-selected-steps', 'record-from-step'])
+const emit = defineEmits([
+  'update:steps',
+  'debug-step',
+  'debug-select-step',
+  'debug-selected-steps',
+  'record-from-step',
+  'verify-locator',
+])
 
 // 本地步骤数据
 const localSteps = computed({

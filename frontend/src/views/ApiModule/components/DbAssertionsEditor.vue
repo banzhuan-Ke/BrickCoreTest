@@ -448,10 +448,31 @@ function removeRow(index) {
 
 .config-table {
   width: 100%;
+
+  :deep(.el-table__body .el-table__cell) {
+    vertical-align: top;
+  }
+
+  /* 防止 Monaco 撑破单元格盖住右侧「字段」列 */
+  :deep(.el-table .cell) {
+    overflow: hidden;
+  }
 }
 
 .sql-cell {
   position: relative;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.sql-cell :deep(.monaco-editor-host),
+.sql-cell :deep(.monaco-editor) {
+  width: 100% !important;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .sql-expand-btn {

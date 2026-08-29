@@ -17,10 +17,18 @@ _COMMON_SHORT_TEXTS = frozenset({
 })
 
 
+CLICK_PROGRESS_WAIT_S = 15.0
+CLICK_PROGRESS_POLL_S = 0.4
+
+
 def _normalize_url(url: str) -> str:
+    """含 path / query / hash，避免 Vue hash 路由（#/login → #/dashboard）被判成未跳转。"""
     try:
         p = urlparse(url or "")
-        return f"{p.scheme}://{p.netloc}{p.path}".rstrip("/").lower()
+        path = (p.path or "").rstrip("/") or "/"
+        query = f"?{p.query}" if p.query else ""
+        fragment = f"#{p.fragment}" if p.fragment else ""
+        return f"{p.scheme}://{p.netloc}{path}{query}{fragment}".lower()
     except Exception:
         return (url or "").strip().lower()
 
@@ -62,9 +70,9 @@ def action_made_progress(
         return True
     if method in ("open_url", "refresh", "go_back", "wait_for_load"):
         return True
-    if method == "click_ele" and struct_before != struct_after:
+    if method in ("fill_value", "select_option", "type_value", "clear_value", "press_key"):
         return True
-    if method in ("fill_value", "select_option", "type_value") and struct_before != struct_after:
+    if method == "click_ele" and struct_before != struct_after:
         return True
     return False
 

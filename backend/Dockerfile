@@ -54,6 +54,10 @@ RUN playwright install chromium
 COPY backend/ .
 COPY docs-site ./docs-site
 
+# Pro / 官方镜像：backend/brickcore_tm 已随 COPY 进入镜像（测试管理高级能力零安装）
+# CE 源码树不含 brickcore_tm；可运行时:
+#   python tools/install_brickcore_tm.py /path/to/brickcore_tm-*.bcpack && 重启
+
 # 创建日志目录
 RUN mkdir -p logs
 

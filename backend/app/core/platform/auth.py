@@ -52,6 +52,28 @@ async def is_authenticated(token: str = Depends(oauth2_scheme)) -> dict:
     return await _authenticate_user_from_token(token)
 
 
+INBOX_STREAM_TOKEN_TIMEOUT = 900  # 15 分钟，仅用于 SSE 连接
+
+
+def create_inbox_stream_token(user_id: int) -> str:
+    """签发站内信 SSE 专用短效 token（避免主会话 JWT 出现在 URL）。"""
+    expire = int(time.time()) + INBOX_STREAM_TOKEN_TIMEOUT
+    payload = {"typ": "inbox_stream", "id": user_id, "exp": expire}
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+async def is_authenticated_inbox_stream(
+    access_token: Optional[str] = Query(None, description="站内信 SSE 短效 token"),
+) -> dict:
+    token = (access_token or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="未登录或 token 缺失")
+    data = verify_token(token)
+    if data.get("typ") != "inbox_stream":
+        raise HTTPException(status_code=401, detail="无效的站内信流 token")
+    return await _authenticate_user_from_token(token)
+
+
 async def is_authenticated_from_header_or_query(
     header_token: Optional[str] = Depends(oauth2_scheme_optional),
     access_token: Optional[str] = Query(None, description="浏览器原生下载时在 URL 携带 token"),

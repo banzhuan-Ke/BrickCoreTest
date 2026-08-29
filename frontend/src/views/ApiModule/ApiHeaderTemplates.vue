@@ -77,7 +77,7 @@
   <el-dialog
     v-model="dialogVisible"
     :title="dialogTitle"
-    width="760px"
+    width="860px"
     destroy-on-close
     @closed="resetForm"
   >

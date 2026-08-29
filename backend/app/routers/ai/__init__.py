@@ -35,6 +35,9 @@ ai_router.include_router(workbench_router)
 ai_router.include_router(analyze_router)
 ai_router.include_router(usage_logs_router)
 ai_router.include_router(browser_lab_router)
+from app.routers.ai.ui_agent_job import router as ui_agent_job_router
+
+ai_router.include_router(ui_agent_job_router)
 
 if knowledge_feature_enabled():
     from app.routers.ai.knowledge import router as knowledge_router

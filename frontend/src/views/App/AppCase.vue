@@ -16,7 +16,17 @@
         </div>
         <el-table :data="caseList" stripe :header-cell-style="{ 'text-align': 'center' }" :cell-style="{ 'text-align': 'center' }">
           <el-table-column label="序号" type="index" width="70" />
-          <el-table-column prop="name" label="用例名称" show-overflow-tooltip min-width="160" />
+          <el-table-column prop="name" label="用例名称" show-overflow-tooltip min-width="160">
+            <template #default="{ row }">
+              <CaseNameCell
+                :name="row.name"
+                :tags="row.tags"
+                :quarantine="!!row.quarantine"
+                :unstable="!!stabilityMap[row.id]?.unstable"
+                :stability="stabilityMap[row.id]"
+              />
+            </template>
+          </el-table-column>
           <el-table-column prop="level" label="优先级" width="90" />
           <el-table-column prop="driver_mode" label="驱动模式" width="120">
             <template #default="{ row }">{{ driverModeLabel(row.driver_mode) }}</template>
@@ -55,12 +65,15 @@
 
 <script setup>
 import { computed, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import AppRunDialog from '@/components/AppRunDialog.vue'
 import AppCaseRecord from '@/views/App/components/AppCaseRecord.vue'
+import CaseNameCell from '@/components/CaseNameCell.vue'
+import { hasQuarantineTag } from '@/utils/caseStability.js'
+import { stabilityApi } from '@/api/modules/stability.js'
 import { appCaseApi, appExecApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
@@ -69,6 +82,7 @@ import { appDriverModeLabel } from '@/utils/appStepMeta.js'
 
 const driverModeLabel = appDriverModeLabel
 const router = useRouter()
+const route = useRoute()
 const proStore = ProjectStore()
 const uStore = UserStore()
 
@@ -76,8 +90,35 @@ const canEdit = computed(() => uStore.hasPermission('app_case:edit'))
 const canExecute = computed(() => uStore.hasPermission('app_case:execute'))
 
 const caseList = ref([])
+const stabilityMap = ref({})
 const page = reactive({ page: 1, size: 10, total: 0 })
+
+async function loadStabilityMap(rows) {
+  const ids = (rows || []).map((r) => r.id).filter(Boolean)
+  if (!ids.length || !proStore.projectInfo?.id) {
+    stabilityMap.value = {}
+    return
+  }
+  try {
+    const res = await stabilityApi.listCases({
+      project_id: proStore.projectInfo.id,
+      domain: 'app',
+      case_ids: ids.join(','),
+      size: Math.max(ids.length, 20),
+    })
+    const map = {}
+    for (const item of res.data?.data?.items || []) {
+      map[item.case_id] = item
+    }
+    stabilityMap.value = map
+  } catch (e) {
+    console.error(e)
+  }
+}
 const searchForm = reactive({ name: '', catalog_id: null })
+if (typeof route.query.name === 'string' && route.query.name) {
+  searchForm.name = route.query.name
+}
 const runDlg = ref(false)
 const running = ref(false)
 const runCaseId = ref(null)
@@ -94,9 +135,22 @@ async function loadList() {
   })
   caseList.value = res.data?.data || []
   page.total = res.data?.total || 0
+  await loadStabilityMap(caseList.value)
 }
 
 function openRun(id) {
+  const row = caseList.value.find((c) => c.id === id)
+  if (row && hasQuarantineTag(row.tags)) {
+    ElMessageBox.confirm(
+      '该用例已隔离，单条调试仍会执行。确认继续？',
+      '已隔离用例',
+      { type: 'warning', confirmButtonText: '继续执行', cancelButtonText: '取消' }
+    ).then(() => {
+      runCaseId.value = id
+      runDlg.value = true
+    }).catch(() => {})
+    return
+  }
   runCaseId.value = id
   runDlg.value = true
 }

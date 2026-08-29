@@ -320,6 +320,7 @@ async def get_workers(
     """获取 Worker 节点列表（必须指定项目，并校验成员权限）"""
     await assert_project_access(user_info, project_id, min_role=PROJECT_ROLE_VIEWER)
     await reclaim_stale_busy_workers(project_id)
+    await reclaim_finished_proxy_busy_workers(project_id)
     query = PerfWorker.filter(project_id=project_id)
     if status:
         query = query.filter(status=status)
@@ -408,10 +409,68 @@ def _normalize_heartbeat(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.replace(tzinfo=None) if dt.tzinfo else dt
 
 
+_LIVE_RECORD_STATUSES = frozenset({"running", "pending"})
+
+
 def _worker_is_busy(w: PerfWorker) -> bool:
     if w.current_record_id:
         return True
     return (w.status or "").lower() == "busy"
+
+
+async def release_worker_after_proxy_task(
+    worker_id: int,
+    record_id: Optional[int] = None,
+) -> None:
+    """接口代发 / 套件整包结束后释放执行机占槽。
+
+    ``get_worker_task`` 会把 ``api_suite`` 的套件记录 id 写入 ``current_record_id``，
+    但 idle 心跳故意不带该字段（避免压测重连被误 finalize）。
+    若不在此显式清掉，执行机管理会一直显示「执行中 #id」，计划选机也会当成忙碌。
+    """
+    worker = await PerfWorker.get_or_none(id=worker_id)
+    if not worker:
+        return
+    if record_id is not None and worker.current_record_id not in (None, record_id):
+        return
+    worker.current_record_id = None
+    worker.status = "idle"
+    await worker.save()
+
+
+async def reclaim_finished_proxy_busy_workers(project_id: Optional[int] = None) -> int:
+    """套件/压测记录已结束但仍占着 current_record_id 时回收，避免选机列表被卡死。"""
+    from app.models.http import ApiSuiteRunRecord
+
+    query = PerfWorker.filter()
+    if project_id is not None:
+        query = query.filter(project_id=project_id)
+    reclaimed = 0
+    for w in await query.all():
+        rid = w.current_record_id
+        if not rid:
+            continue
+        perf = await PerfRecord.get_or_none(id=rid)
+        suite = await ApiSuiteRunRecord.get_or_none(id=rid)
+        perf_live = bool(perf) and (perf.status or "").lower() in _LIVE_RECORD_STATUSES
+        suite_live = bool(suite) and (suite.status or "").lower() in _LIVE_RECORD_STATUSES
+        # 两张表自增 ID 可能撞号：任一侧仍在跑就不要回收。
+        # 两侧都不存在（孤儿占槽）或均已结束则回收。
+        if perf_live or suite_live:
+            continue
+        prev = w.current_record_id
+        w.current_record_id = None
+        w.status = "idle"
+        await w.save()
+        reclaimed += 1
+        logger.info(
+            "回收已结束任务占用的 Worker id=%s prev_record_id=%s perf=%s suite=%s",
+            w.id,
+            prev,
+            getattr(perf, "status", None),
+            getattr(suite, "status", None),
+        )
+    return reclaimed
 
 
 _HEARTBEAT_TIMEOUT = timedelta(minutes=2)
@@ -464,6 +523,7 @@ async def get_active_workers(
 ) -> List[PerfWorker]:
     """获取活跃的 Worker 节点（2分钟内有心跳，按项目+token+主机去重）"""
     await reclaim_stale_busy_workers(project_id)
+    await reclaim_finished_proxy_busy_workers(project_id)
     cutoff = datetime.now() - _HEARTBEAT_TIMEOUT
     query = PerfWorker.filter()
     if project_id is not None:
@@ -535,6 +595,60 @@ async def receive_api_debug_result(data: WorkerApiDebugResult):
         await worker.save()
     if not ok:
         raise HTTPException(status_code=404, detail="调试请求已过期或不存在")
+    return {"message": "ok"}
+
+
+class WorkerApiSuiteBatchItem(BaseModel):
+    index: int
+    status_code: Optional[int] = None
+    headers: dict = {}
+    body: Any = None
+    time: float = 0
+    size: int = 0
+    error: Optional[str] = None
+    extracted_vars: dict = {}
+    final_url: Optional[str] = None
+    final_headers: Optional[dict] = None
+    final_body: Any = None
+    final_body_fields: Optional[list] = None
+
+
+class WorkerApiSuiteBatch(BaseModel):
+    worker_id: int
+    token: str
+    suite_run_id: str
+    batch_id: str
+    total: int = 0
+    items: List[WorkerApiSuiteBatchItem] = []
+    done: bool = False
+    stopped_at: Optional[int] = None
+    finished_count: Optional[int] = None
+    error: Optional[str] = None
+
+
+@public_router.post("/suite-batch", summary="接收执行机套件整包分批结果")
+async def receive_api_suite_batch(data: WorkerApiSuiteBatch):
+    from app.routers.perf import api_suite_bridge
+
+    worker = await PerfWorker.get_or_none(id=data.worker_id)
+    if not worker or worker.token != data.token:
+        raise HTTPException(status_code=403, detail="Token 无效")
+
+    items = [item.model_dump() if hasattr(item, "model_dump") else dict(item) for item in (data.items or [])]
+    ok = await api_suite_bridge.ingest_batch(
+        data.suite_run_id,
+        batch_id=data.batch_id,
+        total=data.total,
+        items=items,
+        done=bool(data.done),
+        stopped_at=data.stopped_at,
+        finished_count=data.finished_count,
+        error=data.error,
+    )
+    if data.done and ok:
+        await release_worker_after_proxy_task(worker.id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="套件整包请求已过期或不存在")
     return {"message": "ok"}
 
 

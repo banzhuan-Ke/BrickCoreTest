@@ -4,12 +4,12 @@ from datetime import datetime
 from typing import List, Optional
 
 import httpx
+from tortoise.functions import Count
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Query, status
 from uuid import uuid4
 from pydantic import BaseModel, ValidationError
 
-from app.models.http import ApiDefinition, ApiTestCase, ApiTestFile
-from app.models.sys import TestCatalog
+from app.models.http import ApiDefinition, ApiTestCase, ApiTestFile, ApiRunRecord
 from app.schemas.http import (
     ApiDefinitionCreate, ApiDefinitionUpdate, ApiDefinitionOut,
     ApiLinkedCaseBrief,
@@ -21,7 +21,6 @@ from app.schemas.http import (
     ApiBodyFileUploadResponse
 )
 from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog, load_active_catalog_names
-from app.models.http import ApiTestCase, ApiRunRecord
 from app.core.platform.auth import is_authenticated, require_permissions, get_current_username
 from app.core.platform.permissions import API_MANAGE_VIEW, API_MANAGE_EDIT
 from app.core.infra.minio_client import minio_client
@@ -144,9 +143,13 @@ async def get_apis(
     api_ids = [a.id for a in apis]
     case_count_map: dict[int, int] = {}
     if api_ids:
-        for row in await ApiTestCase.filter(api_id__in=api_ids, is_del=False).values("api_id"):
-            aid = row["api_id"]
-            case_count_map[aid] = case_count_map.get(aid, 0) + 1
+        rows = (
+            await ApiTestCase.filter(api_id__in=api_ids, is_del=False)
+            .annotate(cnt=Count("id"))
+            .group_by("api_id")
+            .values("api_id", "cnt")
+        )
+        case_count_map = {int(row["api_id"]): int(row["cnt"]) for row in rows}
 
     # 补充分类名称（已软删目录不展示名称）
     catalog_name_map = await load_active_catalog_names(
@@ -249,10 +252,9 @@ async def get_api_detail(api_id: int):
     }
 
     if api.catalog_id:
-        catalog = await TestCatalog.get_or_none(id=api.catalog_id, is_del=False)
-        if catalog:
-            result["catalog_name"] = catalog.name
-    
+        catalog_name_map = await load_active_catalog_names([api.catalog_id])
+        result["catalog_name"] = catalog_name_map.get(api.catalog_id)
+
     return result
 
 
@@ -273,7 +275,7 @@ async def update_api(api_id: int, item: ApiDefinitionUpdate, username: str = Dep
     })
     
     # 更新字段
-    proto, method = _normalize_api_protocol(item.protocol, item.method)
+    proto, method = _normalize_api_protocol(item.protocol or getattr(api, "protocol", None), item.method)
     api.name = item.name
     api.protocol = proto
     api.method = method
@@ -290,7 +292,11 @@ async def update_api(api_id: int, item: ApiDefinitionUpdate, username: str = Dep
     api.ws_config = item.ws_config if item.ws_config else {}
     api.grpc_config = item.grpc_config if getattr(item, "grpc_config", None) else {}
     api.response_schema = item.response_schema
-    api.catalog_id = item.catalog_id
+    if item.catalog_id:
+        await resolve_catalog(api.project_id, item.catalog_id)
+        api.catalog_id = item.catalog_id
+    else:
+        api.catalog_id = None
     api.version = api.version + 1
     api.version_history = version_history[-10:]  # 只保留最近10条
     api.update_by = username
@@ -396,10 +402,10 @@ async def delete_api(
     api_id: int,
     cascade: bool = Query(False, description="为 true 时连带删除关联用例，并清理套件/压测场景引用"),
 ):
-    """删除接口（逻辑删除）。
+    """删除接口（接口与用例为逻辑删除）。
 
     默认：若仍有关联用例则 409，需先删用例或传 cascade=true 连带删除。
-    cascade=true：清理套件关联与压测场景引用后，软删用例再软删接口。
+    cascade=true：物理删除套件-用例关联、从压测场景引用中移除后，再软删用例与接口。
     """
     from tortoise.transactions import in_transaction
 
@@ -426,13 +432,13 @@ async def delete_api(
             },
         )
 
-    async with in_transaction():
+    async with in_transaction() as conn:
         if cases:
             case_ids = [c.id for c in cases]
-            await purge_case_references(project_id=api.project_id, case_ids=case_ids)
-            await soft_delete_cases(cases)
+            await purge_case_references(project_id=api.project_id, case_ids=case_ids, using_db=conn)
+            await soft_delete_cases(cases, using_db=conn)
         api.is_del = True
-        await api.save()
+        await api.save(using_db=conn)
 
 
 @router.post("/definition/batch-delete", summary="批量删除接口", status_code=status.HTTP_204_NO_CONTENT,
@@ -487,14 +493,14 @@ async def batch_delete_apis(
             },
         )
 
-    async with in_transaction():
+    async with in_transaction() as conn:
         for api, cases in to_delete:
             if cases:
                 case_ids = [c.id for c in cases]
-                await purge_case_references(project_id=api.project_id, case_ids=case_ids)
-                await soft_delete_cases(cases)
+                await purge_case_references(project_id=api.project_id, case_ids=case_ids, using_db=conn)
+                await soft_delete_cases(cases, using_db=conn)
             api.is_del = True
-            await api.save()
+            await api.save(using_db=conn)
     return None
 
 
@@ -998,8 +1004,12 @@ async def debug_api(item: ApiDebugRequest):
             collect_unresolved_placeholders,
             format_unresolved_variables_error,
         )
+        if item.worker_id is not None:
+            from app.modules.http.worker_http_proxy import require_api_proxy_worker_http
+            await require_api_proxy_worker_http(int(project_id or 0), item.worker_id)
         variables, auth_err, auth_injected_keys = await prepare_api_runtime_variables(
-            project_id, item.env_id, variables, inject_auth=True
+            project_id, item.env_id, variables, inject_auth=True,
+            worker_id=item.worker_id,
         )
         if auth_err:
             raise HTTPException(status_code=400, detail=f"授权刷新失败: {auth_err}")
@@ -1124,112 +1134,45 @@ async def debug_api(item: ApiDebugRequest):
 
         # -------- 经在线压测执行机代发 --------
         if item.worker_id is not None:
-            from app.models.perf import PerfWorker
-            from app.routers.perf.workers import get_active_workers, send_task_to_worker
-            from app.routers.perf import api_debug_bridge, worker_queue
+            from app.modules.http.worker_http_proxy import (
+                WorkerProxyError,
+                send_http_via_worker,
+                to_http_exception,
+            )
 
-            if (item.body_type or "").strip().lower() == "form-data":
-                def _field_type(f) -> str:
-                    if isinstance(f, dict):
-                        return str(f.get("field_type") or f.get("type") or "text").strip().lower()
-                    return str(
-                        getattr(f, "field_type", None) or getattr(f, "type", None) or "text"
-                    ).strip().lower()
-
-                has_file = any(_field_type(f) == "file" for f in (body_fields or []))
-                if has_file:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="经执行机调试暂不支持带文件字段的 form-data，请改用 JSON/raw 或去掉文件字段后重试",
-                    )
-
-            if not project_id:
-                raise HTTPException(status_code=400, detail="经执行机调试需要指定项目")
-
-            active = await get_active_workers(project_id, exclude_busy=True)
-            worker = next((w for w in active if w.id == item.worker_id), None)
-            if not worker:
-                # 再查一次：区分「不存在」与「忙/离线」
-                w_raw = await PerfWorker.get_or_none(id=item.worker_id)
-                if not w_raw or w_raw.project_id != project_id:
-                    raise HTTPException(status_code=400, detail="指定的执行机不存在或不属于当前项目")
-                raise HTTPException(
-                    status_code=503,
-                    detail="指定的执行机当前不可用（离线或忙碌），请选择空闲在线 Worker，勿回退为本机发送",
+            try:
+                proxied = await send_http_via_worker(
+                    project_id=project_id,
+                    worker_id=item.worker_id,
+                    method=item.method.upper(),
+                    url=url,
+                    headers=headers,
+                    body=body,
+                    body_type=item.body_type or "json",
+                    body_fields=body_fields,
+                    timeout=int(item.timeout or 30),
                 )
-
-            from app.core.runner.runner_version import compare_version
-
-            min_engine = "1.0.0"
-            engine_ver = (getattr(worker, "engine_version", None) or "").strip()
-            if not engine_ver or compare_version(engine_ver, min_engine) < 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"经执行机调试需要引擎 ≥ {min_engine}（当前 "
-                        f"{engine_ver or '未知'}），请升级 BrickCorePerf / Runner 压测包"
-                    ),
-                )
-
-            request_id = api_debug_bridge.new_request_id()
-            await api_debug_bridge.register_wait(request_id)
-            wait_timeout = max(5, int(item.timeout or 30) + 15)
-            task = {
-                "task_type": "api_debug",
-                "request_id": request_id,
-                "method": item.method.upper(),
-                "url": url,
-                "headers": headers,
-                "body": body,
-                "body_type": item.body_type or "json",
-                "body_fields": body_fields,
-                "timeout": int(item.timeout or 30),
-            }
-            ok = await send_task_to_worker(worker, task)
-            if not ok:
-                await api_debug_bridge.cancel(request_id)
-                raise HTTPException(
-                    status_code=503,
-                    detail="下发调试任务失败（执行机任务队列占用），请稍后重试或换一台空闲执行机",
-                )
-
-            result = await api_debug_bridge.wait_result(request_id, timeout=float(wait_timeout))
-            # 无论成败，尽量清队列残留并恢复 idle（Worker 侧也会心跳 idle）
-            await worker_queue.clear_task(worker.id)
-            fresh = await PerfWorker.get_or_none(id=worker.id)
-            if fresh and not fresh.current_record_id:
-                fresh.status = "idle"
-                await fresh.save()
-
-            if result is None:
-                raise HTTPException(
-                    status_code=408,
-                    detail="等待执行机调试结果超时，请确认执行机在线且版本支持接口代发调试",
-                )
-            if result.get("error"):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"执行机发送失败: {result.get('error')}",
-                )
+            except WorkerProxyError as exc:
+                raise to_http_exception(exc) from exc
 
             response_detail = {
-                "status_code": result.get("status_code"),
-                "headers": result.get("headers") or {},
-                "body": result.get("body"),
-                "time": result.get("time") or 0,
-                "size": result.get("size") or 0,
+                "status_code": proxied.status_code,
+                "headers": proxied.headers or {},
+                "body": proxied._json if proxied._json is not None else proxied.text,
+                "time": proxied.elapsed_ms,
+                "size": proxied.size,
             }
             return {
-                "status_code": result.get("status_code"),
-                "headers": result.get("headers") or {},
-                "body": result.get("body"),
-                "time": result.get("time") or 0,
-                "size": result.get("size") or 0,
+                "status_code": proxied.status_code,
+                "headers": proxied.headers or {},
+                "body": proxied._json if proxied._json is not None else proxied.text,
+                "time": proxied.elapsed_ms,
+                "size": proxied.size,
                 "request": resolved_request,
                 "request_detail": request_detail,
                 "response_detail": response_detail,
                 "via_worker": True,
-                "worker_id": worker.id,
+                "worker_id": proxied.worker_id,
             }
 
         # -------- 平台本机发送 --------
@@ -1246,7 +1189,7 @@ async def debug_api(item: ApiDebugRequest):
                     try:
                         request_kwargs = {
                             "files": build_form_data_multipart(
-                                body_fields, API_FILE_BUCKET, use_bytes_io=False
+                                body_fields, API_FILE_BUCKET, use_bytes_io=True
                             )
                         }
                     except ValueError as e:
@@ -1405,6 +1348,8 @@ async def import_jmeter_commit(
         raise HTTPException(status_code=422, detail=str(e)) from e
 
     catalog_id = item.catalog_id if item.catalog_id is not None else stored.get("catalog_id")
+    if catalog_id:
+        await resolve_catalog(item.project_id, catalog_id)
     req = JmeterCommitRequest(
         preview_token=item.preview_token,
         project_id=item.project_id,

@@ -426,15 +426,35 @@ class SmartPageExplorer:
             self.screenshots_dir = os.path.join(base_dir, "static", "screenshots", "explore")
         os.makedirs(self.screenshots_dir, exist_ok=True)
 
-    async def explore(self, llm_generate_func) -> dict:
+    async def explore(
+        self,
+        llm_generate_func,
+        *,
+        progress_hook=None,
+        should_stop=None,
+    ) -> dict:
         """
         执行多轮探索
         :param llm_generate_func: 回调函数，签名：
             async fn(dom_text: str, description: str, executed_steps: list,
                      current_url: str, round_index: int) -> list[dict]
+        :param progress_hook: 可选 async fn(phase, payload) phase=log|step
+        :param should_stop: 可选 async fn() -> bool
         :return: {"steps": [...], "rounds": int, "page_changes": int,
                   "urls_visited": [...], "errors": [...]}
         """
+        async def _hook(phase: str, payload: dict) -> None:
+            if progress_hook:
+                await progress_hook(phase, payload)
+
+        async def _stopped() -> bool:
+            if should_stop:
+                try:
+                    return bool(await should_stop())
+                except Exception:
+                    return False
+            return False
+
         await self._init_browser()
 
         try:
@@ -446,7 +466,10 @@ class SmartPageExplorer:
             await asyncio.sleep(1)
 
             for round_idx in range(1, self.max_rounds + 1):
+                if await _stopped():
+                    break
                 logger.info(f"[SmartPageExplorer] 开始第 {round_idx}/{self.max_rounds} 轮探索")
+                await _hook("log", {"phase": "round", "round": round_idx, "message": f"第 {round_idx} 轮探索"})
 
                 # 1. 抓取当前页面 DOM
                 snapshot = await self._extract_current_snapshot()
@@ -476,6 +499,8 @@ class SmartPageExplorer:
                 page_changed_in_round = False
                 step_executed_count = 0
                 for step in steps:
+                    if await _stopped():
+                        return self._build_result(round_idx)
                     success, error = await self._execute_step(step)
                     step_executed_count += 1
                     if not success:
@@ -490,8 +515,11 @@ class SmartPageExplorer:
                         if screenshot_url:
                             self.errors.append(f"截图已保存: {screenshot_url}")
                         # 保留该轮所有步骤（包括执行失败的和未执行的）
+                        start_idx = len(self.all_steps)
                         self.all_steps.extend(steps)
                         logger.info(f"[SmartPageExplorer] 保留该轮全部 {len(steps)} 个步骤（含未执行部分），终止探索")
+                        for i, committed in enumerate(steps):
+                            await _hook("step", {"step": committed, "step_index": start_idx + i + 1})
                         return self._build_result(round_idx)
 
                     # 每步执行后检测页面是否变化
@@ -508,13 +536,19 @@ class SmartPageExplorer:
                         )
                         # 将已执行的步骤加入 all_steps，剩余步骤也保留但标记为未执行
                         executed_count = steps.index(step) + 1
-                        self.all_steps.extend(steps[:executed_count])
+                        start_idx = len(self.all_steps)
+                        batch = steps[:executed_count]
+                        self.all_steps.extend(batch)
+                        for i, committed in enumerate(batch):
+                            await _hook("step", {"step": committed, "step_index": start_idx + i + 1})
                         if executed_count < len(steps):
                             logger.info(f"[SmartPageExplorer] 已执行 {executed_count} 步，剩余 {len(steps) - executed_count} 步将在下一轮重新生成")
                         break
 
                 if not page_changed_in_round:
-                    self.all_steps.extend(steps)
+                    for committed in steps:
+                        self.all_steps.append(committed)
+                        await _hook("step", {"step": committed, "step_index": len(self.all_steps)})
 
                 # 4. 判断是否需要继续
                 if not page_changed_in_round:

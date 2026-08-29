@@ -50,6 +50,7 @@
               v-model="loginForm.username" 
               autocomplete="off" 
               placeholder="请输入账号"
+              data-testid="login-username"
               clearable/>
           </el-form-item>
           <el-form-item prop="password" @keyup.enter="loginSubmit(loginFormRef)">
@@ -58,7 +59,8 @@
               :type="showPassword ? 'text' : 'password'" 
               v-model="loginForm.password"
               autocomplete="off" 
-              placeholder="请输入密码" 
+              placeholder="请输入密码"
+              data-testid="login-password"
               clearable>
               <template #suffix>
                 <el-icon @click="showPassword = !showPassword" style="cursor: pointer;">
@@ -72,7 +74,14 @@
           </div>
           <div class="action-buttons">
             <el-button @click='resetForm(loginFormRef)' icon="CircleClose">重置</el-button>
-            <el-button :disabled='isClick' type="primary" @click="loginSubmit(loginFormRef)" icon="Avatar">
+            <el-button
+              id="btn-login"
+              data-testid="login-submit"
+              :disabled='isClick'
+              type="primary"
+              @click="loginSubmit(loginFormRef)"
+              icon="Avatar"
+            >
               登录
             </el-button>
           </div>

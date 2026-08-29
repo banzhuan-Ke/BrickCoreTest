@@ -67,10 +67,33 @@
           >
             此工具用于数据工厂内调试/比对，输出不适合直接写入请求参数；加密、随机、摘要等单值结果请保存为标签后在用例中引用。
           </el-alert>
-          <el-form label-width="100px" size="default">
+
+          <template v-if="isJsonPathWorkbenchTool">
+            <JsonPathWorkbench
+              v-model:json-text="toolInputs.text"
+              v-model:path="toolInputs.path"
+              compact
+              @preview="onJsonPathPreview"
+            />
+            <p class="tag-hint jsonpath-hint">
+              点选字段即可预览。过滤 / 递归表达式（如 <code>$..name</code>、<code>$[?(@.id==1)]</code>）请点执行，走服务端 jsonpath-ng。
+            </p>
+            <div class="tool-actions">
+              <el-button type="primary" :loading="executing" @click="runTool">执行</el-button>
+              <el-button :disabled="!outputText" @click="copyOutput">复制结果</el-button>
+            </div>
+          </template>
+          <el-form v-else label-width="100px" size="default">
             <el-form-item v-for="field in currentTool.inputs" :key="field.key" :label="field.label">
+              <JsonTextarea
+                v-if="field.type === 'textarea' && currentTool.category === 'json'"
+                v-model="toolInputs[field.key]"
+                :rows="6"
+                :placeholder="field.placeholder || ''"
+                :show-compact="currentTool.id === 'json_compress'"
+              />
               <el-input
-                v-if="field.type === 'textarea'"
+                v-else-if="field.type === 'textarea'"
                 v-model="toolInputs[field.key]"
                 type="textarea"
                 :rows="4"
@@ -90,7 +113,7 @@
             </el-form-item>
           </el-form>
 
-          <div v-if="outputText" class="output-box">
+          <div v-if="outputText && selectedToolId !== 'json_path'" class="output-box">
             <div class="output-title">
               <span>输出结果</span>
               <span class="output-resize-hint">拖拽右下角可调整高度</span>
@@ -134,6 +157,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { dataFactoryApi } from '@/api/modules/dataFactory'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import DfEnvScopeSelect from '@/components/DfEnvScopeSelect.vue'
+import JsonPathWorkbench from '@/components/JsonPathWorkbench.vue'
+import JsonTextarea from '@/components/JsonTextarea.vue'
+import { copyToClipboard } from '@/utils/clipboard.js'
 
 const props = defineProps({
   projectId: { type: Number, required: true }
@@ -166,6 +192,9 @@ const favoriteTools = computed(() => {
 })
 const currentTool = computed(() => tools.value.find(t => t.id === selectedToolId.value))
 const isLiveTimeTool = computed(() => liveTimeToolIds.has(selectedToolId.value))
+const isJsonPathWorkbenchTool = computed(() => (
+  selectedToolId.value === 'json_path' || selectedToolId.value === 'json_get_type'
+))
 const qrcodePreviewSrc = computed(() => {
   if (selectedToolId.value !== 'qrcode_base64') return ''
   const text = outputText.value || ''
@@ -254,8 +283,10 @@ async function loadCatalog() {
 async function runTool() {
   if (!selectedToolId.value) return
   executing.value = true
-  outputText.value = ''
-  outputData.value = null
+  if (selectedToolId.value !== 'json_path') {
+    outputText.value = ''
+    outputData.value = null
+  }
   try {
     const res = await dataFactoryApi.executeTool({
       tool_id: selectedToolId.value,
@@ -274,13 +305,29 @@ async function runTool() {
   }
 }
 
-async function copyOutput() {
-  try {
-    await navigator.clipboard.writeText(outputText.value)
-    ElMessage.success('已复制')
-  } catch {
-    ElMessage.error('复制失败')
+function onJsonPathPreview(preview) {
+  if (selectedToolId.value !== 'json_path') return
+  if (!preview?.live) return
+  if (preview.empty) {
+    outputText.value = ''
+    outputData.value = null
+    return
   }
+  outputText.value = preview.text
+  try {
+    outputData.value = JSON.parse(preview.text)
+  } catch {
+    outputData.value = preview.text
+  }
+  if (!saveTag.value && currentTool.value) {
+    saveTag.value = `${currentTool.value.id}_${Date.now().toString().slice(-6)}`
+  }
+}
+
+async function copyOutput() {
+  const ok = await copyToClipboard(outputText.value || '')
+  if (ok) ElMessage.success('已复制结果')
+  else ElMessage.error('复制失败')
 }
 
 async function saveRecord() {
@@ -387,6 +434,16 @@ onMounted(async () => {
   font-weight: 500;
 }
 .toolbox-main { flex: 1; min-width: 0; }
+.tool-desc { font-size: 13px; color: #909399; margin: 0 0 12px; }
+.toolbox-main { flex: 1; min-width: 0; }
+.tool-actions {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+.jsonpath-hint {
+  margin: 8px 0 0;
+}
 .tool-desc { font-size: 13px; color: #909399; margin: 0 0 12px; }
 .output-box {
   background: #f5f7fa;

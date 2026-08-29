@@ -312,9 +312,10 @@
           placement="top"
           content="仅成功请求的平均响应时间（不含失败）"
         >
-          <div class="metric-card success">
+          <div class="metric-card" :class="metricCardClass('success_avg_response_time', 'success')">
             <div class="metric-value">{{ formatNum(successLatency.avg_response_time) }}<span class="unit">ms</span></div>
             <div class="metric-label">成功 Avg RT</div>
+            <div v-if="metricCardNotes.success_avg_response_time" class="metric-sys-note">{{ metricCardNotes.success_avg_response_time }}</div>
           </div>
         </el-tooltip>
         <el-tooltip
@@ -322,9 +323,10 @@
           placement="top"
           content="仅成功请求的 P95 响应时间"
         >
-          <div class="metric-card warning">
+          <div class="metric-card" :class="metricCardClass('success_p95_response_time', 'warning')">
             <div class="metric-value">{{ formatNum(successLatency.p95_response_time) }}<span class="unit">ms</span></div>
             <div class="metric-label">成功 P95 RT</div>
+            <div v-if="metricCardNotes.success_p95_response_time" class="metric-sys-note">{{ metricCardNotes.success_p95_response_time }}</div>
           </div>
         </el-tooltip>
         <el-tooltip placement="top" content="失败请求占总请求的百分比">
@@ -885,7 +887,11 @@ const METRIC_NOTE_LABELS = {
   p95: 'P95',
   error_rate: '错误率',
   total_requests: '总请求数',
-  success_qps: '成功 QPS'
+  success_qps: '成功 QPS',
+  success_avg_rt: '成功平均响应时间',
+  success_p95: '成功 P95',
+  p90: 'P90',
+  p99: 'P99',
 }
 
 const targetEvaluation = computed(() => reportData.value?.target_evaluation || {})
@@ -931,7 +937,7 @@ const targetItemMap = computed(() => {
 
 const metricCardClass = (targetKey, fallback) => {
   const it = targetItemMap.value[targetKey]
-  if (!it || !hasPerfTargetsConfigured.value) return fallback
+  if (!it || !hasPerfTargetsConfigured.value || it.status === 'skipped') return fallback
   if (it.status === 'pass') return 'success'
   if (it.status === 'warn') return 'warning'
   if (it.status === 'fail') return 'danger'
@@ -942,8 +948,8 @@ const metricCardClass = (targetKey, fallback) => {
 const buildMetricCardNote = (targetKey, aiNoteKey) => {
   const parts = []
   if (hasPerfTargetsConfigured.value) {
-    const sys = targetItemMap.value[targetKey]?.message
-    if (sys) parts.push(sys)
+    const it = targetItemMap.value[targetKey]
+    if (it && it.status !== 'skipped' && it.message) parts.push(it.message)
   }
   const notes = liveAi.value?.metric_notes
   if (notes && typeof notes === 'object') {
@@ -958,7 +964,9 @@ const metricCardNotes = computed(() => ({
   success_qps: buildMetricCardNote('success_qps', 'success_qps'),
   total_requests: buildMetricCardNote('total_requests', 'total_requests'),
   avg_response_time: buildMetricCardNote('avg_response_time', 'avg_rt'),
+  success_avg_response_time: buildMetricCardNote('success_avg_response_time', 'success_avg_rt'),
   p95_response_time: buildMetricCardNote('p95_response_time', 'p95'),
+  success_p95_response_time: buildMetricCardNote('success_p95_response_time', 'success_p95'),
   error_rate: buildMetricCardNote('error_rate', 'error_rate'),
 }))
 
@@ -987,7 +995,6 @@ const caseTargetStatus = (row) => {
   return caseTargetBest.value[String(id)] || ''
 }
 
-const CARD_AI_NOTE_KEYS = new Set(['qps', 'success_qps', 'avg_rt', 'p95', 'error_rate', 'total_requests'])
 const metricNoteRows = computed(() => {
   const notes = liveAi.value?.metric_notes
   if (!notes || typeof notes !== 'object') return []
@@ -995,9 +1002,9 @@ const metricNoteRows = computed(() => {
     .filter(([, v]) => v)
     .map(([k, v]) => ({ key: k, label: METRIC_NOTE_LABELS[k] || k, note: v }))
 })
-/** 已贴到核心卡片的 AI 解读不再重复条带展示 */
+/** 已贴到核心卡片的 AI 解读不再重复条带展示（定义见 successLatency 之后的 cardAiNoteKeys） */
 const orphanMetricNoteRows = computed(() =>
-  metricNoteRows.value.filter((row) => !CARD_AI_NOTE_KEYS.has(row.key))
+  metricNoteRows.value.filter((row) => !cardAiNoteKeys.value.has(row.key))
 )
 
 const rtPercentileColumns = [
@@ -1063,6 +1070,14 @@ const distributedWorkers = computed(() => {
 const previousComparison = computed(() => reportData.value.previous_comparison || null)
 const baselineComparison = computed(() => reportData.value.baseline_comparison || null)
 const successLatency = computed(() => reportData.value.success_latency || {})
+
+/** 已贴到可见核心卡片的 AI 解读不再重复条带展示；无对应卡片的键（如 p90/p99）走 orphan */
+const cardAiNoteKeys = computed(() => {
+  const keys = new Set(['qps', 'success_qps', 'avg_rt', 'p95', 'error_rate', 'total_requests'])
+  if (successLatency.value?.avg_response_time != null) keys.add('success_avg_rt')
+  if (successLatency.value?.p95_response_time != null) keys.add('success_p95')
+  return keys
+})
 const isCurrentBaseline = computed(() => !!reportData.value.scene_baseline?.is_current_baseline)
 const canPinBaseline = computed(() => {
   const st = reportData.value.status

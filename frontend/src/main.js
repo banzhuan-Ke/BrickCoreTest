@@ -11,6 +11,7 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 import '@/style/main.css'
 import '@/style/theme-pro.css'
 import '@/style/theme-compact.css'
+import '@/style/bc-dialog.scss'
 import pinia from '@/stores/index'
 // 引入nprogress样式
 import 'nprogress/nprogress.css'

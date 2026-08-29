@@ -1,31 +1,43 @@
 <template>
   <el-collapse v-model="activeNames" class="var-preview-panel">
-    <el-collapse-item title="变量预览（执行前）" name="preview">
+    <el-collapse-item name="preview">
+      <template #title>
+        <span class="preview-collapse-title">变量预览（执行前）</span>
+      </template>
       <div v-loading="loading" class="preview-body">
         <p v-if="!envId && !projectId" class="preview-hint">请选择执行环境后查看可用变量</p>
         <template v-else>
-          <p class="preview-hint">优先级：项目变量 &lt; 环境变量 &lt; 数据工厂 &lt; 传入 &lt; Token 授权</p>
-          <p class="preview-hint sample-note">预览仅读取已有授权缓存，不会自动登录；缓存为空请到「Token 授权」刷新。</p>
-          <el-table v-if="variableRows.length" :data="variableRows" size="small" border max-height="240">
+          <div class="preview-meta">
+            <span>优先级：项目 &lt; 环境 &lt; 数据工厂 &lt; 传入 &lt; Token 授权</span>
+            <span class="preview-meta-sep">·</span>
+            <span>仅读已有授权缓存，不会自动登录</span>
+          </div>
+          <el-table
+            v-if="variableRows.length"
+            :data="variableRows"
+            size="small"
+            class="preview-table"
+            max-height="220"
+          >
             <el-table-column label="变量名" prop="key" width="120" show-overflow-tooltip />
             <el-table-column label="描述" prop="description" min-width="120" show-overflow-tooltip />
             <el-table-column label="解析值" prop="value" min-width="140" show-overflow-tooltip />
             <el-table-column label="来源" prop="source" width="72" />
           </el-table>
-          <el-empty v-else description="暂无可用变量" :image-size="48" />
+          <el-empty v-else description="暂无可用变量" :image-size="40" />
           <p v-if="previewData.auth_error" class="preview-hint sample-note">
             Token 授权：{{ previewData.auth_error }}
           </p>
 
           <div v-if="sampleRows.length" class="sample-block">
-            <div class="sample-title">示例替换（基于当前环境变量自动生成）</div>
-            <el-table :data="sampleRows" size="small" border>
+            <div class="sample-title">示例替换</div>
+            <el-table :data="sampleRows" size="small" class="preview-table">
               <el-table-column label="原始" prop="original" min-width="140" show-overflow-tooltip />
               <el-table-column label="替换后" prop="replaced" min-width="160" show-overflow-tooltip />
-              <el-table-column label="说明" width="100" align="center">
+              <el-table-column label="说明" width="88" align="center">
                 <template #default="{ row }">
-                  <el-tag v-if="row.unchanged" type="info" size="small">未匹配</el-tag>
-                  <el-tag v-else type="success" size="small">已替换</el-tag>
+                  <el-tag v-if="row.unchanged" type="info" size="small" effect="plain">未匹配</el-tag>
+                  <el-tag v-else type="success" size="small" effect="plain">已替换</el-tag>
                 </template>
               </el-table-column>
             </el-table>
@@ -149,11 +161,51 @@ defineExpose({ reload: loadPreview })
 
 <style scoped lang="scss">
 .var-preview-panel {
-  margin-top: 8px;
+  margin-top: 0;
+  border: none;
+
+  :deep(.el-collapse-item__header) {
+    height: 36px;
+    line-height: 36px;
+    font-weight: 600;
+    font-size: 13px;
+    border-bottom: none;
+    background: transparent;
+  }
+
+  :deep(.el-collapse-item__wrap) {
+    border-bottom: none;
+  }
+
+  :deep(.el-collapse-item__content) {
+    padding-bottom: 4px;
+  }
+}
+
+.preview-collapse-title {
+  color: var(--el-text-color-primary);
 }
 
 .preview-body {
   min-height: 40px;
+}
+
+.preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--el-text-color-secondary);
+}
+
+.preview-meta-sep {
+  opacity: 0.5;
 }
 
 .preview-hint {
@@ -162,18 +214,35 @@ defineExpose({ reload: loadPreview })
   color: var(--el-text-color-secondary);
 }
 
+.preview-table {
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+
+  :deep(.el-table__header th) {
+    background: var(--el-fill-color-light);
+    color: var(--el-text-color-regular);
+    font-weight: 600;
+  }
+
+  :deep(.el-table__cell) {
+    padding: 6px 0;
+  }
+}
+
 .sample-block {
   margin-top: 12px;
 }
 
 .sample-title {
   font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 6px;
+  font-weight: 600;
+  color: var(--el-text-color-regular);
+  margin-bottom: 8px;
 }
 
 .sample-note {
-  margin-top: 6px;
+  margin-top: 8px;
   margin-bottom: 0;
 }
 </style>

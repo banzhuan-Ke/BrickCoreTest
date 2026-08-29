@@ -24,6 +24,7 @@ class CaseSchemas(BaseModel):
     update_by: Optional[str] = Field(default=None, description="最后更新人")
     is_del: bool = Field(description="是否删除", default=False)
     catalog_id: Optional[int] = Field(default=None, description="所属目录id")
+    tags: list = Field(default_factory=list, description="用例标签（含 quarantine）")
 
 
 class AddCaseForm(BaseModel):
@@ -38,6 +39,7 @@ class AddCaseForm(BaseModel):
     username: str = Field(description="创建人")
     is_del: bool = Field(description="是否删除", default=False)
     catalog_id: Optional[int] = Field(default=None, description="所属目录id")
+    tags: Optional[list] = Field(default=None, description="用例标签")
 
 
 class UpdateCaseForm(BaseModel):
@@ -48,6 +50,7 @@ class UpdateCaseForm(BaseModel):
     catalog_id: int | None = Field(default=None, description="所属目录id")
     description: str | None = Field(default=None, max_length=4000, description="用例描述")
     is_del: bool = Field(description="是否删除", default=False)
+    tags: Optional[list] = Field(default=None, description="用例标签")
 
 
 # ==================== Suite Schemas ====================
@@ -253,6 +256,10 @@ class RunForm(BaseModel):
         default=None,
         description="触发来源：manual / assistant / cron 等，写入执行 env",
     )
+    include_quarantine: bool = Field(
+        default=False,
+        description="是否包含已隔离用例；默认跳过",
+    )
 
 
 class CaseDebugForm(RunForm):
@@ -330,6 +337,7 @@ class SuiteResultSchemas(BaseModel):
     success: int = Field(description="成功用例数")
     error: int = Field(description="错误用例数")
     skip: int = Field(description="跳过用例数")
+    quarantine_skip: int = Field(default=0, description="已隔离未跑数")
     duration: float = Field(description="执行时间")
     pass_rate: float = Field(description="通过率")
     run_all: int = Field(description="执行用例数")
@@ -358,6 +366,7 @@ class TaskResultSchemas(BaseModel):
     success: int = Field(description="成功用例数")
     error: int = Field(description="错误用例数")
     skip: int = Field(description="跳过用例数")
+    quarantine_skip: int = Field(default=0, description="已隔离未跑数")
     case_count: int = Field(description="总用例数")
     fail: int = Field(description="失败用例数")
     run_all: int = Field(description="执行用例数")

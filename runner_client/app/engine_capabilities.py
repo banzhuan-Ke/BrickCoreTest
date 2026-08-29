@@ -140,6 +140,32 @@ def probe_app_toolchain(*, force: bool = False) -> dict[str, Any]:
     return dict(result)
 
 
+def _probe_browser_use() -> str:
+    """探测 Runner venv 是否已安装 browser-use（Browser Lab / browser-use Agent）。"""
+    runner_dir = repo_runner_dir()
+    venv_py = runner_venv_python(runner_dir)
+    if venv_py.is_file():
+        try:
+            proc = subprocess.run(
+                [str(venv_py), "-c", "import browser_use"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+                env=runner_subprocess_env(runner_dir),
+                **_HIDDEN_SUBPROCESS_KW,
+            )
+            return "ok" if proc.returncode == 0 else "missing"
+        except Exception:
+            return "missing"
+    try:
+        import browser_use  # noqa: F401
+
+        return "ok"
+    except Exception:
+        return "missing"
+
+
 def build_capabilities_from_toolchain(
     toolchain: dict[str, Any],
     *,
@@ -156,6 +182,7 @@ def build_capabilities_from_toolchain(
     if enable_web:
         engine_types.append("web")
         toolchain_status["web"] = "ok"
+        toolchain_status["browser_use"] = _probe_browser_use()
 
     adb_ok = toolchain["adb_ok"]
     u2_ok = toolchain["u2_ok"]

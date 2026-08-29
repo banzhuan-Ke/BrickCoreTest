@@ -51,6 +51,7 @@ def _extract_target_from_step_desc(step_desc: str) -> Optional[str]:
         r"点击['「]([^'」]+)['」]",
         r"悬停到\s*['「]([^'」]+)['」]",
         r"双击['「]([^'」]+)['」]",
+        r"点击(.+?)(?:按钮|链接)",
         r"点击\s+(.+?)(?:\s*按钮|\s*链接|$)",
         r"点击\s*(\S+)",
     ):
@@ -60,6 +61,19 @@ def _extract_target_from_step_desc(step_desc: str) -> Optional[str]:
             if target:
                 return target
     return None
+
+
+def _canonical_target_text(text: str) -> str:
+    """去掉步骤描述里的「按钮/完成登录」等修饰，避免把「登录」误判成缩写。"""
+    s = (text or "").strip()
+    s = re.sub(r"^(?:点击|双击|悬停到)\s*", "", s)
+    for _ in range(3):
+        nxt = re.sub(r"(?:按钮|链接|控件)$", "", s).strip()
+        nxt = re.sub(r"完成\S*$", "", nxt).strip()
+        if nxt == s:
+            break
+        s = nxt
+    return s
 
 
 def _reject_shortened_text_match(
@@ -75,15 +89,18 @@ def _reject_shortened_text_match(
         return None
 
     desc_target = _extract_target_from_step_desc(step_desc or "")
+    new_canon = _canonical_target_text(new_text)
     for expected in (desc_target, failed_text):
-        if not expected or expected == new_text:
+        if not expected:
             continue
-        if expected in new_text or new_text in expected:
-            if len(new_text) < len(expected) and new_text != expected:
-                return (
-                    f"新定位器「{new_locator}」比步骤意图「{expected}」匹配范围更小，"
-                    "可能点到页面上其他相似按钮"
-                )
+        exp_canon = _canonical_target_text(expected)
+        if not exp_canon or exp_canon == new_canon:
+            continue
+        if new_canon in exp_canon and len(new_canon) < len(exp_canon):
+            return (
+                f"新定位器「{new_locator}」比步骤意图「{expected}」匹配范围更小，"
+                "可能点到页面上其他相似按钮"
+            )
     return None
 
 

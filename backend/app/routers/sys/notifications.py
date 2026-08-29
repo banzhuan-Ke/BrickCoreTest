@@ -35,6 +35,7 @@ class NotificationConfigItem(BaseModel):
     ui_auto_push_report: bool = False
     perf_auto_push_report: bool = False
     app_auto_push_report: bool = False
+    tm_assignment_notify: bool = True
 
 
 class NotificationConfigOut(BaseModel):
@@ -51,6 +52,7 @@ class NotificationConfigOut(BaseModel):
     ui_auto_push_report: bool
     perf_auto_push_report: bool = False
     app_auto_push_report: bool = False
+    tm_assignment_notify: bool = True
 
     class Config:
         from_attributes = True
@@ -71,6 +73,7 @@ def _config_out(cfg: NotificationConfig) -> NotificationConfigOut:
         ui_auto_push_report=cfg.ui_auto_push_report,
         perf_auto_push_report=getattr(cfg, "perf_auto_push_report", False),
         app_auto_push_report=getattr(cfg, "app_auto_push_report", False),
+        tm_assignment_notify=getattr(cfg, "tm_assignment_notify", True),
     )
 
 
@@ -195,6 +198,7 @@ async def create_notification_config(item: NotificationConfigItem, project_id: i
         ui_auto_push_report=item.ui_auto_push_report,
         perf_auto_push_report=item.perf_auto_push_report,
         app_auto_push_report=item.app_auto_push_report,
+        tm_assignment_notify=item.tm_assignment_notify,
     )
     return _config_out(cfg)
 
@@ -223,6 +227,7 @@ async def update_notification_config(config_id: int, item: NotificationConfigIte
     cfg.ui_auto_push_report = item.ui_auto_push_report
     cfg.perf_auto_push_report = item.perf_auto_push_report
     cfg.app_auto_push_report = item.app_auto_push_report
+    cfg.tm_assignment_notify = item.tm_assignment_notify
     await cfg.save()
 
     return _config_out(cfg)
@@ -392,6 +397,20 @@ async def test_smtp_config(item: SmtpTestRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"SMTP 测试失败: {e}")
+    try:
+        await NotificationService._log(
+            project_id=None,
+            channel_type="email",
+            notify_type="smtp_test",
+            title="BrickCore SMTP 连通性测试",
+            content_summary={"to": result.get("to")},
+            recipients=[result.get("to") or item.to],
+            status="success",
+            error_msg="",
+            related_type="smtp_test",
+        )
+    except Exception:
+        pass
     return {"detail": f"测试邮件已发送至 {result['to']}", "data": result}
 
 

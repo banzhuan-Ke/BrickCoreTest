@@ -209,6 +209,11 @@ class AiRequirement(models.Model):
         default="pending",
         description="解析状态: pending/parsing/parsed/failed",
     )
+    review_status = fields.CharField(
+        max_length=32,
+        default="pending",
+        description="可测性评审: pending/in_review/approved/rejected",
+    )
     parse_error = fields.TextField(null=True, description="解析失败原因")
 
     is_del = fields.BooleanField(default=False, description="是否删除")
@@ -622,6 +627,39 @@ class BrowserLabTask(models.Model):
         table_description = "智能浏览器任务"
 
 
+class BrowserLabActionCache(models.Model):
+    """智能浏览器动作缓存（同任务复跑零 token 回放）"""
+
+    id = fields.IntField(pk=True)
+    project_id = fields.IntField(description="项目ID", index=True)
+    case_id = fields.IntField(null=True, description="用例ID", index=True)
+    cache_key = fields.CharField(max_length=64, unique=True, description="缓存键 SHA256")
+    start_url = fields.CharField(max_length=500, description="归一化起始 URL")
+    task_text = fields.TextField(description="归一化任务描述")
+    tags_json = fields.JSONField(default=list, description="用例标签（参与缓存键）")
+    variable_keys_json = fields.JSONField(default=list, description="变量名集合")
+    actions_json = fields.JSONField(default=list, description="可回放动作列表")
+    assertions_json = fields.JSONField(default=dict, description="终态断言")
+    status = fields.CharField(
+        max_length=20,
+        default="ready",
+        description="ready|stale|disabled",
+    )
+    source_task_id = fields.IntField(null=True, description="写入来源任务")
+    config_fingerprint = fields.CharField(
+        max_length=32, default="", description="配置指纹（审计，不进键）"
+    )
+    hit_count = fields.IntField(default=0, description="命中次数")
+    last_hit_at = fields.DatetimeField(null=True, description="最近命中时间")
+    schema_version = fields.IntField(default=1, description="动作 schema 版本")
+    created_at = fields.DatetimeField(auto_now_add=True)
+    updated_at = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "browser_lab_action_cache"
+        table_description = "智能浏览器动作缓存"
+
+
 class AiVisionImageCache(models.Model):
     """Vision 读图结果缓存（按项目 + 图片内容哈希 + 场景 + 模型去重）"""
 
@@ -640,6 +678,38 @@ class AiVisionImageCache(models.Model):
         table = "ai_vision_image_cache"
         table_description = "Vision 读图结果缓存"
         unique_together = (("project_id", "image_hash", "scene", "model"),)
+
+
+class UiAgentJob(models.Model):
+    """UI Agent 探索任务（生成 / 固化共用）"""
+
+    id = fields.IntField(pk=True)
+    project_id = fields.IntField(description="项目ID", index=True)
+    source = fields.CharField(max_length=64, default="ui_case_edit", description="来源")
+    source_ref = fields.JSONField(default=dict, description="来源引用")
+    status = fields.CharField(
+        max_length=20,
+        default="pending",
+        description="pending|running|done|failed|stopped",
+    )
+    run_mode = fields.CharField(max_length=16, default="local", description="local|runner")
+    device_id = fields.CharField(max_length=100, null=True, description="Runner 设备ID")
+    page_url = fields.CharField(max_length=500, description="起始 URL")
+    description = fields.TextField(description="测试描述")
+    max_steps = fields.IntField(default=15, description="最大步数")
+    steps_json = fields.JSONField(default=list, description="已产出步骤")
+    agent_log_json = fields.JSONField(default=list, description="探索日志")
+    tokens_used = fields.IntField(default=0, description="Token 消耗")
+    error_message = fields.TextField(null=True, description="失败原因")
+    ai_config_id = fields.IntField(null=True, description="AI 配置")
+    created_by = fields.CharField(max_length=50, default="", description="创建人")
+    started_at = fields.DatetimeField(null=True)
+    finished_at = fields.DatetimeField(null=True)
+    create_time = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "ui_agent_job"
+        table_description = "UI Agent 探索任务"
 
 
 class AssistantSession(models.Model):

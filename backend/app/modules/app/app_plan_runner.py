@@ -182,7 +182,12 @@ async def execute_app_plan(
                     is_del=False,
                 )
                 cases_payload.append(
-                    await AppExecutionService.build_case_item(case_exec, case, step)
+                    await AppExecutionService.build_case_item(
+                        case_exec,
+                        case,
+                        step,
+                        include_quarantine=bool(getattr(run_form, "include_quarantine", False)),
+                    )
                 )
 
             suite_record.case_count = len(cases_payload)

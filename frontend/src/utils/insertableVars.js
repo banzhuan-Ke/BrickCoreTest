@@ -2,7 +2,7 @@
  * 插入变量 / 插入工具「引用变量」共用数据源。
  * 约定：项目变量 + 环境变量 + Token 授权 + 内置 + 调用方 extra，禁止只列内置。
  */
-import { BUILTIN_VAR_HINTS, isSecretKey, varsObjectToList } from '@/utils/globalVars.js'
+import { BUILTIN_VAR_HINTS, isSecretKey, stripSystemGlobalVars, varsObjectToList } from '@/utils/globalVars.js'
 
 export function previewInsertableValue(value, key = '') {
   if (value === null || value === undefined || value === '') return ''
@@ -68,7 +68,7 @@ export function collectInsertableVarGroups(opts = {}) {
 
   pushGroup(
     '项目变量',
-    varsObjectToList(projectGlobalVars || {})
+    varsObjectToList(stripSystemGlobalVars(projectGlobalVars || {}))
       .filter((item) => !item._rawObject)
       .map((item) => ({
         key: item.key,
@@ -80,7 +80,7 @@ export function collectInsertableVarGroups(opts = {}) {
   if (envGlobalVars !== undefined && envGlobalVars !== null) {
     pushGroup(
       '环境变量',
-      varsObjectToList(envGlobalVars || {})
+      varsObjectToList(stripSystemGlobalVars(envGlobalVars || {}))
         .filter((item) => !item._rawObject)
         .map((item) => ({
           key: item.key,

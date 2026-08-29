@@ -10,7 +10,14 @@
     />
     <el-main class="case-main">
       <el-card class="edit-card">
-        <div class="card-header"><h2>{{ isEdit ? '编辑 App 用例' : '新建 App 用例' }}</h2></div>
+        <div class="card-header">
+          <h2>{{ isEdit ? '编辑 App 用例' : '新建 App 用例' }}</h2>
+          <LinkFunctionalCaseButton
+            v-if="isEdit"
+            asset-type="app_case"
+            :asset-id="Number(caseId)"
+          />
+        </div>
         <el-form :model="caseInfo" :rules="rules" ref="formRef" label-width="100px">
           <el-form-item label="用例名称" prop="name">
             <el-input v-model="caseInfo.name" maxlength="100" show-word-limit />
@@ -22,6 +29,16 @@
             <el-select v-model="caseInfo.level">
               <el-option v-for="lv in ['P0','P1','P2','P3']" :key="lv" :label="lv" :value="lv" />
             </el-select>
+          </el-form-item>
+          <el-form-item v-if="isEdit" label="执行隔离">
+            <el-switch
+              v-model="quarantineEnabled"
+              active-text="已隔离"
+              inactive-text="正常"
+              :loading="quarantineSaving"
+              @change="onQuarantineChange"
+            />
+            <div class="quarantine-hint">隔离后计划/定时默认跳过；单条调试仍可运行</div>
           </el-form-item>
           <el-form-item label="平台">
             <el-select v-model="caseInfo.platform_scope">
@@ -147,6 +164,7 @@ import appActionGroup, { APP_DRIVER_MODE_OPTIONS } from '@/datas/AppActionGroup.
 import { appCaseApi, appElementApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
+import LinkFunctionalCaseButton from '@/views/TestManagement/components/LinkFunctionalCaseButton.vue'
 import { serializeKeywordForDrag, buildStepFromKeyword, ensureStepsHaveIds, updateStepLocatorAtPath } from '@/utils/stepHelper'
 import { parseExecutionIdQuery, hasExecutionHintsPayload } from '@/utils/caseExecutionHints'
 import dateTools from '@/tools/dateTools'
@@ -166,6 +184,7 @@ import FragmentPickerDialog from '@/components/StepEditor/FragmentPickerDialog.v
 import UiCaseStepOptimizeDialog from '@/views/AI/components/UiCaseStepOptimizeDialog.vue'
 import AppCaseGenerator from '@/views/AI/components/AppCaseGenerator.vue'
 import CaseExecutionFailureAi from '@/components/CaseExecutionFailureAi.vue'
+import { stabilityApi } from '@/api/modules/stability.js'
 import { insertStepIntoList, resolveInsertAfterIndex } from '@/utils/stepHelper'
 import { Document, Edit, Mouse, Clock, Search, MessageBox, MoreFilled, Share, Setting, WarningFilled, Cpu } from '@element-plus/icons-vue'
 
@@ -186,6 +205,8 @@ const optimizeDialogVisible = ref(false)
 const generatorDialogVisible = ref(false)
 const debugDialogVisible = ref(false)
 const debugThroughIndex = ref(0)
+const quarantineEnabled = ref(false)
+const quarantineSaving = ref(false)
 const appElementOptions = ref([])
 const varInsertEnvId = ref(proStore.envList[0]?.id || null)
 provide('varInsertEnvId', varInsertEnvId)
@@ -359,6 +380,27 @@ async function loadDetail() {
     description: res.data.description || '',
     steps: Array.isArray(res.data.steps) ? res.data.steps : [],
   })
+  const tags = Array.isArray(res.data.tags) ? res.data.tags : []
+  quarantineEnabled.value = tags.some((t) => String(t || '').trim().toLowerCase() === 'quarantine')
+}
+
+async function onQuarantineChange(enabled) {
+  if (!caseId) return
+  quarantineSaving.value = true
+  try {
+    const res = await stabilityApi.setQuarantine(caseId, { enabled: !!enabled, domain: 'app' })
+    if (res.data?.code === 200) {
+      ElMessage.success(enabled ? '已隔离' : '已解除隔离')
+    } else {
+      quarantineEnabled.value = !enabled
+      ElMessage.error('隔离状态更新失败')
+    }
+  } catch (e) {
+    quarantineEnabled.value = !enabled
+    ElMessage.error(e?.response?.data?.detail || '隔离状态更新失败')
+  } finally {
+    quarantineSaving.value = false
+  }
 }
 
 const formatTime = (value) => dateTools.rTime(value)
@@ -472,6 +514,19 @@ watch(
 <style scoped lang="scss">
 @use '@/styles/case-step-editor-layout.scss';
 
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.card-header h2 {
+  margin: 0;
+}
+
 .execution-hints-collapse {
   margin-bottom: 12px;
   border: 1px solid var(--el-color-danger-light-5);
@@ -532,6 +587,13 @@ watch(
   margin-top: 4px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.quarantine-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
 }
 
 .sidebar-hint {

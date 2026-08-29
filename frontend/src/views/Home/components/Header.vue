@@ -62,20 +62,33 @@
       </el-dropdown>
       
       <!--显示通知-->
-      <el-badge :value="1" class="notice">
-        <el-dropdown trigger="click">
+      <el-badge :value="inboxUnread" :hidden="!inboxUnread" :max="99" class="notice">
+        <el-dropdown trigger="click" popper-class="inbox-dropdown-popper" @visible-change="onInboxVisible">
           <div class="avatar">
             <el-icon style="vertical-align: middle" :size="20">
               <Bell/>
             </el-icon>
           </div>
           <template #dropdown>
-            <el-dropdown-item>
-              <img src="@/assets/images/qq.jpg" alt="qq" style="margin-top: 10px">
-            </el-dropdown-item>
+            <NotificationInboxPanel ref="inboxPanelRef" @refresh-count="onInboxCount" />
           </template>
         </el-dropdown>
       </el-badge>
+
+      <!-- 联系作者（微信好友二维码，与站内信入口并存） -->
+      <el-popover placement="bottom-end" :width="280" trigger="click">
+        <template #reference>
+          <el-tooltip content="联系作者 / 加微信好友" placement="bottom">
+            <div class="avatar contact-icon">
+              <el-icon :size="20"><ChatDotRound /></el-icon>
+            </div>
+          </el-tooltip>
+        </template>
+        <div class="contact-popover">
+          <img src="/contact-wechat-qr.png" alt="微信好友二维码" class="contact-qr" />
+          <p class="contact-tip">搬砖客 · 扫码加微信好友</p>
+        </div>
+      </el-popover>
       
       <!-- 显示时间 -->
       <div class="time_info">
@@ -151,7 +164,9 @@ import dateTools from "@/tools/dateTools.js"
 import HelpContent from "@/components/HelpContent.vue"
 import ThemeSwitcher from "@/components/ThemeSwitcher.vue"
 import GlobalProjectSearch from "@/components/GlobalProjectSearch.vue"
-import { Search } from '@element-plus/icons-vue'
+import NotificationInboxPanel from "@/components/NotificationInboxPanel.vue"
+import { inboxApi } from '@/api/modules/sys'
+import { Search, ChatDotRound } from '@element-plus/icons-vue'
 
 // 定义props判断是否为项目列表页
 const props = defineProps({
@@ -201,6 +216,96 @@ function logout() {
 }
 
 const showSearch = ref(false)
+const inboxUnread = ref(0)
+const inboxPanelRef = ref(null)
+let inboxPollTimer = null
+
+const refreshInboxCount = async () => {
+  if (!uStore.isAuthenticated) return
+  try {
+    const res = await inboxApi.unreadCount()
+    inboxUnread.value = res.data?.data?.count || 0
+  } catch {
+    inboxUnread.value = 0
+  }
+}
+
+const onInboxCount = (count) => {
+  inboxUnread.value = count || 0
+}
+
+const onInboxVisible = (visible) => {
+  if (visible && inboxPanelRef.value?.refresh) {
+    inboxPanelRef.value.refresh()
+  }
+}
+
+let inboxEs = null
+let inboxEsRetryTimer = null
+
+const stopInboxSse = () => {
+  if (inboxEs) {
+    try {
+      inboxEs.close()
+    } catch {
+      /* ignore */
+    }
+    inboxEs = null
+  }
+  if (inboxEsRetryTimer) {
+    clearTimeout(inboxEsRetryTimer)
+    inboxEsRetryTimer = null
+  }
+}
+
+const startInboxSse = async () => {
+  stopInboxSse()
+  if (!uStore.isAuthenticated || !uStore.token) return
+  if (typeof EventSource === 'undefined') return
+  try {
+    const tokenRes = await inboxApi.streamToken()
+    const streamToken = tokenRes?.data?.token
+    if (!streamToken) return
+    const url = inboxApi.streamUrl(streamToken)
+    inboxEs = new EventSource(url)
+    inboxEs.addEventListener('inbox', (ev) => {
+      try {
+        const data = JSON.parse(ev.data || '{}')
+        if (typeof data.unread_count === 'number') {
+          inboxUnread.value = data.unread_count
+        } else {
+          refreshInboxCount()
+        }
+        if (inboxPanelRef.value?.refresh) {
+          inboxPanelRef.value.refresh()
+        }
+      } catch {
+        refreshInboxCount()
+      }
+    })
+    inboxEs.addEventListener('ready', () => {
+      refreshInboxCount()
+    })
+    inboxEs.onerror = () => {
+      stopInboxSse()
+      // SSE 断开后降级轮询，并稍后重连
+      if (!inboxPollTimer) {
+        inboxPollTimer = setInterval(refreshInboxCount, 30000)
+      }
+      inboxEsRetryTimer = setTimeout(() => {
+        if (inboxPollTimer) {
+          clearInterval(inboxPollTimer)
+          inboxPollTimer = null
+        }
+        startInboxSse()
+      }, 8000)
+    }
+  } catch {
+    if (!inboxPollTimer) {
+      inboxPollTimer = setInterval(refreshInboxCount, 30000)
+    }
+  }
+}
 
 // 帮助对话框
 let showHelp = ref(false)
@@ -270,6 +375,8 @@ onMounted(() => {
   clockTimer = setInterval(() => {
     nTime.value = getNowTime()
   }, 1000)
+  refreshInboxCount()
+  startInboxSse()
   if (screenfull.isEnabled) {
     screenfull.on('change', onScreenfullChange)
   }
@@ -279,6 +386,11 @@ onBeforeUnmount(() => {
   if (clockTimer) {
     clearInterval(clockTimer)
     clockTimer = null
+  }
+  stopInboxSse()
+  if (inboxPollTimer) {
+    clearInterval(inboxPollTimer)
+    inboxPollTimer = null
   }
   if (screenfull.isEnabled) {
     screenfull.off('change', onScreenfullChange)

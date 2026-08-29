@@ -30,9 +30,9 @@
             </el-button>
           </div>
           <div class="url-hint">
-            <span v-if="form.generation_mode === 'agent'">Agent 模式必须填写起始 URL，Backend 将自动打开浏览器逐步探索</span>
-            <span v-else-if="form.generation_mode === 'explore'">探索模式下 Backend 会自动抓取并执行，无需手动点击抓取</span>
-            <span v-else>提供页面地址后，AI 会先抓取页面元素结构，生成更准确的选择器</span>
+            <span v-if="form.generation_mode === 'agent'">Agent 模式须填写起始 URL，由 Runner 逐步探索页面</span>
+            <span v-else-if="form.generation_mode === 'explore'">探索模式由 Runner 自动抓取并执行，无需手动点击抓取</span>
+            <span v-else>填写页面地址后，Runner 抓取 DOM 结构，平台 LLM 生成更准确的选择器</span>
           </div>
         </el-form-item>
 
@@ -106,25 +106,19 @@
           </div>
         </el-form-item>
 
-        <el-form-item required>
-          <template #label>
-            <span>测试描述</span>
-            <el-tooltip
-              :content="descriptionTooltip"
-              placement="top"
-              raw-content
-              :show-after="200"
-            >
-              <el-icon class="label-tip-icon"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </template>
-          <el-input
-            v-model="form.description"
-            type="textarea"
-            :rows="5"
-            :placeholder="descriptionPlaceholder"
-          />
-        </el-form-item>
+        <BrowserLabTaskTextField
+          v-model="form.description"
+          label="测试描述"
+          required
+          :rows="5"
+          :placeholder="descriptionPlaceholder"
+          :label-tooltip="descriptionTooltip"
+          :start-url="form.page_url"
+          :ai-config-id="aiConfigId"
+          :project-id="projectId"
+          optimize-scene="ui_case"
+          :generation-mode="form.generation_mode"
+        />
 
         <el-form-item label="AI 模型">
           <el-select
@@ -142,11 +136,26 @@
             />
           </el-select>
         </el-form-item>
+
+        <BrowserRunModeFields
+          v-if="form.generation_mode !== 'single' || form.page_url?.trim()"
+          :form="form"
+        />
       </el-form>
     </div>
 
-    <!-- 生成中 -->
-    <div v-if="generating" class="generating-state">
+    <!-- Agent Runner 进度 -->
+    <UiAgentProgressPanel
+      v-if="generating && (form.generation_mode === 'agent' || form.generation_mode === 'explore') && agentJobId"
+      :visible="true"
+      :job-id="agentJobId"
+      :project-id="projectId"
+      @done="onAgentJobDone"
+      @fail="onAgentJobFail"
+    />
+
+    <!-- 生成中（非异步 job） -->
+    <div v-if="generating && !agentJobId" class="generating-state">
       <el-icon class="is-loading" :size="40"><Loading /></el-icon>
       <p>{{ form.generation_mode === 'agent' ? 'Agent 正在逐步探索页面…' : 'AI 正在生成测试步骤，请稍候…' }}</p>
       <p class="hint">{{ form.generation_mode === 'agent' ? '每步调用 LLM+浏览器执行，完整流程约 2-5 分钟；稳定流程更推荐「录制+AI优化」' : '根据描述复杂度，通常需要 10-30 秒' }}</p>
@@ -293,12 +302,19 @@
 <script setup>
 import { ref, reactive, watch, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Loading, View, Edit, Top, Bottom, Delete, QuestionFilled } from '@element-plus/icons-vue'
+import { Loading, View, Edit, Top, Bottom, Delete } from '@element-plus/icons-vue'
 import { aiGenerateApi } from '@/api/modules/ai'
 import http from '@/api/index'
 import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
+import BrowserRunModeFields from '@/components/BrowserRunModeFields.vue'
+import BrowserLabTaskTextField from '@/views/AI/browserLab/BrowserLabTaskTextField.vue'
+import UiAgentProgressPanel from '@/views/AI/components/UiAgentProgressPanel.vue'
+import { notifyUiAgentJobOutcome, shouldPresentUiAgentSteps } from '@/views/AI/components/uiAgentJobHelpers.js'
+import { ProjectStore } from '@/stores/module/ProjectStore.js'
 
 const { aiConfigId, enabledConfigs, loadingConfigs, loadConfigs } = useAiConfigSelect()
+
+const projectId = computed(() => ProjectStore().projectInfo?.id)
 
 const props = defineProps({
   modelValue: Boolean
@@ -315,6 +331,7 @@ const fetchedElements = ref([])
 const editingIndex = ref(-1)
 const exploreInfo = ref(null)
 const agentInfo = ref(null)
+const agentJobId = ref(null)
 const editingStep = reactive({
   keyword: '',
   method: '',
@@ -328,7 +345,10 @@ const form = reactive({
   page_url: '',
   generation_mode: 'single',
   max_rounds: 3,
-  max_steps: 15
+  max_steps: 15,
+  run_mode: 'runner',
+  device_id: null,
+  headless: true,
 })
 
 const pageUrlPlaceholder = computed(() => {
@@ -411,12 +431,16 @@ const resetForm = () => {
   form.generation_mode = 'single'
   form.max_rounds = 3
   form.max_steps = 15
+  form.run_mode = 'runner'
+  form.device_id = null
+  form.headless = true
   generatedSteps.value = []
   errors.value = []
   fetchedElements.value = []
   editingIndex.value = -1
   exploreInfo.value = null
   agentInfo.value = null
+  agentJobId.value = null
 }
 
 // 抓取页面元素
@@ -425,10 +449,18 @@ const handleFetchPage = async () => {
     ElMessage.warning('请输入目标页面地址')
     return
   }
+  if (!form.device_id) {
+    ElMessage.warning('请选择在线 Runner 执行设备')
+    return
+  }
 
   fetching.value = true
   try {
-    const res = await aiGenerateApi.fetchPage(form.page_url.trim())
+    const res = await aiGenerateApi.fetchPage({
+      url: form.page_url.trim(),
+      device_id: form.device_id,
+      headless: form.headless,
+    }, projectId.value)
     if (res.status === 200 && res.data?.data) {
       fetchedElements.value = res.data.data.elements || []
       ElMessage.success(`成功抓取 ${fetchedElements.value.length} 个页面元素`)
@@ -453,8 +485,28 @@ const handleGenerate = async () => {
     ElMessage.warning('Agent 模式请填写起始页面 URL')
     return
   }
+  if (form.generation_mode === 'agent' && form.run_mode === 'runner' && !form.device_id) {
+    ElMessage.warning('请选择在线 Runner 执行设备')
+    return
+  }
   if (form.generation_mode === 'explore' && !form.page_url?.trim()) {
     ElMessage.warning('多轮探索请填写起始页面 URL')
+    return
+  }
+  if (
+    (form.generation_mode === 'agent' || form.generation_mode === 'explore')
+    && form.run_mode === 'runner'
+    && !form.device_id
+  ) {
+    ElMessage.warning('请选择在线 Runner 执行设备')
+    return
+  }
+  if (
+    form.generation_mode === 'single'
+    && form.page_url?.trim()
+    && !form.device_id
+  ) {
+    ElMessage.warning('填写页面 URL 时请选择在线 Runner 执行设备')
     return
   }
 
@@ -464,6 +516,7 @@ const handleGenerate = async () => {
   editingIndex.value = -1
   exploreInfo.value = null
   agentInfo.value = null
+  agentJobId.value = null
 
   try {
     let res
@@ -472,16 +525,36 @@ const handleGenerate = async () => {
         description: form.description,
         page_url: form.page_url.trim(),
         max_steps: form.max_steps,
-        ai_config_id: aiConfigId.value || undefined
-      })
+        ai_config_id: aiConfigId.value || undefined,
+        run_mode: form.run_mode,
+        device_id: form.device_id || undefined,
+        headless: form.headless,
+      }, projectId.value)
+      const payload = res.data?.data
+      if (res.status === 200 && payload?.async && payload?.job_id) {
+        agentJobId.value = payload.job_id
+        const modeLabel = 'Runner'
+        ElMessage.success(`Agent 任务已开始（${modeLabel}）`)
+        return
+      }
     } else {
       res = await aiGenerateApi.generateUiCase({
         description: form.description,
         page_url: form.page_url || undefined,
         auto_explore: form.generation_mode === 'explore',
         max_rounds: form.max_rounds,
-        ai_config_id: aiConfigId.value || undefined
-      })
+        ai_config_id: aiConfigId.value || undefined,
+        run_mode: form.generation_mode === 'explore' ? form.run_mode : undefined,
+        device_id: form.device_id || undefined,
+        headless: form.headless,
+      }, projectId.value)
+      const payload = res.data?.data
+      if (form.generation_mode === 'explore' && res.status === 200 && payload?.async && payload?.job_id) {
+        agentJobId.value = payload.job_id
+        const modeLabel = 'Runner'
+        ElMessage.success(`多轮探索已开始（${modeLabel}）`)
+        return
+      }
     }
 
     if (res.status === 200 && res.data?.data?.steps) {
@@ -511,12 +584,53 @@ const handleGenerate = async () => {
   }
 }
 
+const onAgentJobDone = (jobData) => {
+  generating.value = false
+  agentJobId.value = null
+  if (!shouldPresentUiAgentSteps(jobData)) {
+    errors.value = [jobData?.error_message || 'Agent 探索失败']
+    ElMessage.error(jobData?.error_message || 'Agent 探索失败')
+    return
+  }
+  generatedSteps.value = jobData.steps || []
+  const explore = jobData.explore_info || jobData.source_ref?.explore_info
+  if (explore) {
+    exploreInfo.value = explore
+    agentInfo.value = null
+  } else {
+    agentInfo.value = {
+      mode: jobData.run_mode === 'runner' ? 'agent_runner' : 'agent_mcp',
+      executed_steps: (jobData.steps || []).length,
+      agent_log: jobData.agent_log || [],
+    }
+  }
+  if (jobData.error_message && jobData.status !== 'done') {
+    errors.value = [jobData.error_message]
+  } else {
+    errors.value = []
+  }
+  const exploreLabel = explore ? `探索 ${explore.rounds || 0} 轮` : `共 ${generatedSteps.value.length} 步`
+  notifyUiAgentJobOutcome(jobData, ElMessage, {
+    successMessage: `完成，${exploreLabel}`,
+    warnSparse: form.generation_mode === 'agent' && !explore,
+  })
+}
+
+const onAgentJobFail = (payload) => {
+  generating.value = false
+  agentJobId.value = null
+  const msg = payload?.error_message || 'Agent 订阅失败'
+  errors.value = [msg]
+  ElMessage.error(msg)
+}
+
 const handleRegenerate = () => {
   generatedSteps.value = []
   errors.value = []
   editingIndex.value = -1
   exploreInfo.value = null
   agentInfo.value = null
+  agentJobId.value = null
 }
 
 const handleDeleteStep = (index) => {

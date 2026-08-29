@@ -10,7 +10,7 @@
           style="margin-bottom: 12px;"
         />
         <h3>🚀 快速开始</h3>
-        <p>欢迎使用 BrickCore！本平台支持 <strong>Web UI 自动化</strong>、<strong>App 自动化</strong>、<strong>接口自动化</strong>、<strong>性能测试</strong>和 <strong>AI 自动化测试</strong>五大测试能力，帮助您快速构建完整的自动化测试体系。</p>
+        <p>欢迎使用 BrickCore！本平台支持 <strong>Web UI 自动化</strong>、<strong>App 自动化</strong>、<strong>接口自动化</strong>、<strong>性能测试</strong>、<strong>AI 自动化测试</strong>与 <strong>测试管理（版本交付）</strong>，帮助您快速构建完整的自动化测试体系。</p>
         
         <h4>Web 自动化流程：</h4>
         <ol>
@@ -65,6 +65,8 @@
           <li><strong>测试设计</strong> → Tab「思维导图/测试点」生成或导入 XMind 测试点；Tab「测试方案」生成方案</li>
           <li><strong>生成用例</strong> → Tab「需求文档」按章节生成，或 Tab「测试点」从测试点展开（单次最多 50 条）</li>
           <li><strong>复制入库</strong> → Tab「功能用例」勾选 →「导入到用例库」，形成项目级长期资产</li>
+          <li><strong>纳入版本</strong> → 「测试管理 → 版本」纳入范围，走评审 / 计划 / 门禁发布（见
+            <router-link class="help-doc-link" :to="{ path: '/docs', query: { doc: 'test-management' } }">测试管理</router-link>）</li>
           <li><strong>复核导出</strong> → 用例库或工作台编辑、导出禅道 XLSX；库内支持禅道 XLSX 回导</li>
           <li><strong>延伸自动化</strong> → 功能用例库勾选 → AI 生成 / 录制 UI 步骤；或接口模块 AI 生成用例</li>
         </ol>
@@ -116,7 +118,7 @@
         <p>路径：<strong>AI 测试 → AI 工作台</strong>。提供项目统计、推荐流程、快捷跳转，以及最近需求 / 最近 AI 生成记录；批量生成进行中时会显示进度条。</p>
 
         <h4>一、需求测试中心（文档 → 测试点 → 用例）</h4>
-        <p>路径：<strong>AI 测试 → 需求测试中心</strong>（`/ai-testing`）。原「需求用例生成」与「测试分析」已合并。</p>
+        <p>路径：<strong>测试管理 → 需求测试中心</strong>（`/ai-testing`）。原「需求用例生成」与「测试分析」已合并。</p>
         <p><strong>子页</strong>：需求列表 · 全部测试点 · 全部测试方案 · 单需求工作台（Tab：概览 / 需求文档 / 思维导图 / 测试点 / 测试方案 / 功能用例 / 配置）</p>
         <ol>
           <li><strong>上传文档</strong> → 需求列表上传 PDF / Word / TXT / MD，进入工作台</li>
@@ -145,7 +147,7 @@
         </table>
 
         <h4>二、功能用例库（项目级资产）</h4>
-        <p>路径：<strong>AI 测试 → 功能用例库</strong>。与工作区（需求工作台 Tab「功能用例」）分离，适合长期维护与自动化选型。</p>
+        <p>路径：<strong>测试管理 → 功能用例库</strong>。与工作区（需求工作台 Tab「功能用例」）分离，适合长期维护与自动化选型。</p>
         <ol>
           <li><strong>复制入库</strong> → 在工作台 Tab「功能用例」勾选 →「导入到用例库」；<strong>复制</strong>而非移动</li>
           <li><strong>禅道 XLSX 导入</strong> → 上传平台导出格式的 Excel 回导；导入时<strong>不自动去重</strong></li>
@@ -596,12 +598,12 @@
             </tr>
             <tr>
               <td>变量提取</td>
-              <td>从响应中提取数据供后续用例使用</td>
+              <td>从响应中提取数据供后续用例使用；JSON 路径可点输入框右侧图标打开提取工具</td>
               <td>接口依赖场景（如 Token 传递）</td>
             </tr>
             <tr>
               <td>断言规则</td>
-              <td>支持状态码、JSON 路径、响应头等多种断言</td>
+              <td>支持状态码、JSON 路径、响应头等多种断言；JSON 路径可对照响应示例点选字段</td>
               <td>验证接口返回是否符合预期</td>
             </tr>
             <tr>
@@ -734,7 +736,11 @@
 
       <div class="help-section">
         <h3>🔌 Mock 服务（接口模拟）</h3>
-        <p>Mock 服务用于模拟后端接口返回，当前端或第三方系统调用 Mock 地址时，平台会按预设规则返回固定响应。适用于后端接口尚未开发完成时的前端联调、异常场景测试等。</p>
+        <p>
+          Mock 服务用于模拟后端接口返回，当前端或第三方系统调用 Mock 地址时，平台会按预设规则返回固定响应。适用于后端接口尚未开发完成时的前端联调、异常场景测试等。
+          完整示例与同路径多场景说明见文档中心
+          <router-link class="help-doc-link" :to="{ path: '/docs', query: { doc: 'api-mock' } }">Mock 服务</router-link>。
+        </p>
 
         <h4>使用步骤：</h4>
         <ol>
@@ -876,10 +882,71 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
 
         <h4>压测执行机（必需 · BrickCoreRunner / BrickCorePerf）：</h4>
         <ul>
-          <li><strong>推荐</strong>：安装 BrickCoreRunner → 执行角色选「仅压测执行机」或「UI + 压测」→ 选择压测项目 → 上线</li>
+          <li><strong>推荐</strong>：安装 BrickCoreRunner → 本机能力勾选「压测」（可同时勾选接口代发）→ 选择所属项目 → 上线</li>
           <li><strong>精简包</strong>：下载 BrickCorePerf，解压后运行 <code>start-perf</code> 上线（无浏览器 GUI）</li>
           <li>施压一律由在线执行机完成，平台<strong>不再本机直跑</strong>；无在线 Worker 时无法启动压测</li>
           <li>客户端可在「当前会话日志」查看秒级 QPS/RT；完整日志见执行机安装目录</li>
+        </ul>
+      </div>
+
+      <el-divider />
+
+      <div class="help-section">
+        <h3>🚩 测试管理（版本交付闭环）</h3>
+        <p>
+          以<strong>版本</strong>为中心管理测试范围、评审、计划运行、缺陷与发布门禁。
+          自动化用例仍在 Web / App / 接口 / 性能模块维护；本模块做聚合与发布结论。
+        </p>
+        <p style="color:#909399;font-size:13px;">
+          完整说明见
+          <router-link class="help-doc-link" :to="{ path: '/docs', query: { doc: 'test-management' } }">测试管理</router-link>。
+        </p>
+
+        <h4>敏捷迭代（功能优先）：</h4>
+        <ul>
+          <li>版本列表 <strong>新建敏捷迭代</strong> → 自动进入测试中，概览展示敏捷向导</li>
+          <li>Phase 0：关联需求（可从需求测试中心选择）→ 可选需求可测性评审</li>
+          <li>Phase 1：功能用例库 → 纳入范围 → 风险/负责人 → 用例评审通过</li>
+          <li>Phase 2：建功能计划 → 设环境 → 创建运行 → 必测完成 → 处理 Blocker/Critical</li>
+          <li>Phase 3（可选）：映射自动化 → 核心覆盖 → 补齐自动化项 → 派发（不阻塞发布）</li>
+          <li>Phase 4：发布前检查 → 质量快照 → 就绪 / 发布</li>
+          <li>计划 Tab 支持一键冒烟/回归；范围 Tab 支持批量设置风险与负责人</li>
+          <li>指派通知：顶栏铃铛 SSE（短效 stream-token）+ 通知中心；项目「测试通知」+ 个人中心「通知偏好」（免打扰时段/时区、IM @）；运行页可指派执行人</li>
+          <li>版本可导出发布包（追溯 CSV + 质量摘要）；项目设置「质量门禁」可配阈值；需求可测性评审通过后向导 0.3 自动完成</li>
+          <li><strong>智能化</strong> Tab：运行通过率趋势、不稳定自动化、风险推荐、AI 版本总结（生成需 <code>ai_test:execute</code>，查看需 <code>test_quality:view</code>）</li>
+        </ul>
+
+        <h4>菜单：</h4>
+        <table class="help-table">
+          <thead>
+            <tr><th>菜单</th><th>路径</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>版本</td><td>/test-releases</td><td>版本列表与详情（范围 / 评审 / 计划 / 缺陷 / 质量）</td></tr>
+            <tr><td>需求测试中心</td><td>/ai-testing</td><td>需求文档 → 测试点 / 方案 / 用例</td></tr>
+            <tr><td>功能用例库</td><td>/ai-functional-cases</td><td>项目级功能用例；纳入版本</td></tr>
+            <tr><td>追溯矩阵</td><td>/test-traceability</td><td>需求 → 用例 → 执行 → 缺陷；服务端分页；可打开用例/去执行</td></tr>
+            <tr><td>评审模板</td><td>/test-review-templates</td><td>用例评审检查清单</td></tr>
+            <tr><td>需求评审</td><td>/test-requirement-reviews</td><td>需求可测性评审</td></tr>
+            <tr><td>缺陷台账</td><td>/test-defects</td><td>站内缺陷 + 快捷处理</td></tr>
+          </tbody>
+        </table>
+
+        <h4>推荐流程：</h4>
+        <ol>
+          <li><strong>创建版本</strong> → 纳入功能用例库中的范围用例，补自动化映射</li>
+          <li><strong>评审</strong> → 用例评审 / 需求可测性评审（权限 <code>test_review:*</code>）</li>
+          <li><strong>计划运行</strong> → 从范围建计划；手工结果 + 派发 UI/App/API/Perf 自动化并同步</li>
+          <li><strong>缺陷</strong> → 失败项建缺陷；台账按版本筛选</li>
+          <li><strong>质量</strong> → 预览门禁 → 生成快照；未通过可由授权人豁免（<code>test_quality:approve_exception</code>，约 14 天有效）</li>
+          <li><strong>状态</strong> → 测试中 → <strong>就绪</strong>（始终硬拦）→ <strong>已发布</strong>（默认提示模式；可设 <code>TEST_MANAGEMENT_QUALITY_GATE_ENFORCE=true</code> 强制拦截）</li>
+        </ol>
+
+        <h4>注意：</h4>
+        <ul>
+          <li>进入就绪前若提示快照陈旧，请重新生成快照或重新豁免</li>
+          <li>发布默认只警告不拦截；生产稳定后再开强制模式</li>
+          <li>升级需 <code>aerich upgrade</code> 至迁移 128–134，并确认角色具备 <code>test_*</code> / <code>test_quality:*</code> 权限</li>
         </ul>
       </div>
 
@@ -974,13 +1041,16 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
 
         <h4>Q14: 套件里登录用例 extract 了 token，为什么后面用例还是用不对？</h4>
         <p>A: 若同时启用了 <strong>Token 授权</strong> 且变量同名（如都叫 <code>token</code>），授权会在每条用例执行前覆盖套件传递的值。请关闭 Token 授权改走套件链式登录，或去掉套件登录用例、只用 Token 授权。详见 Token 授权页的「变量优先级」说明。</p>
+
+        <h4>Q15: 套件已经跑完，执行机还显示「执行中」？</h4>
+        <p>A: 刷新执行机列表或选机旁的「刷新」。平台会在整包结束后释放占槽；若提示忙碌并带记录号，等该任务完成后再勾选，不要理解成引擎版本不够。</p>
       </div>
 
       <el-divider />
 
       <div class="help-footer">
         <p>📧 遇到问题？请联系系统管理员或查看接口文档获取更多技术支持。</p>
-        <p style="color: #999; font-size: 12px;">版本：v1.6.0 | 更新日期：2026-08-16</p>
+        <p style="color: #999; font-size: 12px;">版本：v1.7.0 | 更新日期：2026-08-28</p>
       </div>
     </el-scrollbar>
   </div>

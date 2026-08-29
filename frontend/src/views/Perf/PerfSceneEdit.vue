@@ -1,8 +1,15 @@
 <template>
   <PageCard>
     <template #title>
-      <div style="font-size: 18px; font-weight: bold;">
-        {{ isEdit ? '✏️ 编辑性能测试场景' : '➕ 新建性能测试场景' }}
+      <div class="scene-title-row">
+        <span style="font-size: 18px; font-weight: bold;">
+          {{ isEdit ? '✏️ 编辑性能测试场景' : '➕ 新建性能测试场景' }}
+        </span>
+        <LinkFunctionalCaseButton
+          v-if="isEdit"
+          asset-type="perf_scene"
+          :asset-id="Number(sceneId)"
+        />
       </div>
     </template>
     <template #main>
@@ -223,6 +230,10 @@
                   </template>
                 </el-table-column>
               </el-table>
+              <div class="field-tip" style="margin-top:8px">
+                当前可选 {{ PERF_TARGET_GLOBAL_OPTIONS.length }} 项：QPS / 成功 QPS / 总请求数 / 平均与成功平均 RT / P90·P95·P99 与成功 P95 / 错误率。
+                勾选并填写目标值后才参与判定；未勾选或留空不影响其它项。
+              </div>
             </template>
           </div>
         </el-form-item>
@@ -877,12 +888,13 @@ import { Plus, Delete, QuestionFilled, Upload, Download } from '@element-plus/ic
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
+import LinkFunctionalCaseButton from '@/views/TestManagement/components/LinkFunctionalCaseButton.vue'
 import StreamRuleBuilder from '@/components/perf/StreamRuleBuilder.vue'
 import { perfSceneApi, httpCaseApi, httpSuiteApi, perfJourneyTemplateApi } from '@/api'
 import { perfSceneApi as perfSceneApiCSV, perfStreamParserApi } from '@/api/modules/perf'
 import { streamParserConfigApi } from '@/api/modules/sys.js'
 import { ProjectStore } from '@/stores/module/ProjectStore'
-import { defaultPerfTargets, normalizePerfTargetsLocal } from '@/views/Perf/perfTargets'
+import { defaultPerfTargets, normalizePerfTargetsLocal, ensureGlobalTargetItems, PERF_TARGET_GLOBAL_OPTIONS } from '@/views/Perf/perfTargets'
 
 const route = useRoute()
 const router = useRouter()
@@ -897,6 +909,13 @@ const allCases = ref([])
 const selectedCaseIds = ref([])
 const enableErrorThreshold = ref(false)
 const perfTargets = reactive(defaultPerfTargets())
+ensureGlobalTargetItems(perfTargets)
+watch(
+  () => [perfTargets.enabled, (perfTargets.items || []).map((i) => i && i.key).join(',')],
+  () => {
+    if (perfTargets.enabled) ensureGlobalTargetItems(perfTargets)
+  },
+)
 const perfTargetGlobalRows = computed(() =>
   (perfTargets.items || []).filter((it) => it.scope === 'global')
 )
@@ -1916,7 +1935,14 @@ const loadScene = async () => {
         }
       }
       enableErrorThreshold.value = !!(data.config.error_rate_threshold && data.config.error_rate_threshold > 0)
-      Object.assign(perfTargets, normalizePerfTargetsLocal(data.config.perf_targets))
+      const nextTargets = normalizePerfTargetsLocal(data.config.perf_targets)
+      perfTargets.enabled = nextTargets.enabled
+      perfTargets.profile = nextTargets.profile
+      perfTargets.mode = nextTargets.mode
+      perfTargets.min_total_requests = nextTargets.min_total_requests
+      perfTargets.min_duration_seconds = nextTargets.min_duration_seconds
+      perfTargets.items = nextTargets.items
+      ensureGlobalTargetItems(perfTargets)
     }
     if (data.scene_items) {
       form.scene_items = data.scene_items.map(item => ({
@@ -2115,6 +2141,13 @@ watch(
 </script>
 
 <style scoped>
+.scene-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .unit {
   margin-left: 8px;
   color: #999;

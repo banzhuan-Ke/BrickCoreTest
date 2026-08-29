@@ -130,6 +130,26 @@ export const projectSettingsApi = {
             params: projectId != null ? { project_id: projectId } : {}
         })
     },
+    async getTestNotifySettings(projectId) {
+        return await http.get('/sys/project-settings/test-notify', {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async updateTestNotifySettings(projectId, data) {
+        return await http.put('/sys/project-settings/test-notify', data, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async getQualityGateSettings(projectId) {
+        return await http.get('/sys/project-settings/quality-gate', {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
+    async updateQualityGateSettings(projectId, data) {
+        return await http.put('/sys/project-settings/quality-gate', data, {
+            params: projectId != null ? { project_id: projectId } : {}
+        })
+    },
 }
 
 // ========== 项目管理 ==========
@@ -179,6 +199,12 @@ export const projectApi = {
     async getMemberRoles(project_id) {
         return await http.get(`/sys/projects/${project_id}/members/roles`)
     },
+    /** 变量引用扫描 */
+    async getVariableUsages(project_id, name) {
+        return await http.get(`/sys/projects/${project_id}/variable-usages`, {
+            params: { name },
+        })
+    },
     
     // ===== 兼容旧命名 =====
     getProjectList(params) { return this.getList(params) },
@@ -206,6 +232,10 @@ export const envApi = {
     // 删除环境
     async delete(env_id) {
         return await http.delete(`/sys/envs/${env_id}`)
+    },
+    /** 跨环境批量增删/同步变量 */
+    async batchVars(data) {
+        return await http.post('/sys/envs/batch-vars', data)
     },
     
     // ===== 兼容旧命名 =====
@@ -541,6 +571,39 @@ export const notificationApi = {
     },
     async batchDeleteLogs(ids) {
         return await http.delete('/sys/notifications/logs', { data: { ids } })
+    }
+}
+
+// ========== 站内信 ==========
+export const inboxApi = {
+    async list(params = {}) {
+        return await http.get('/sys/inbox', { params })
+    },
+    async unreadCount(params = {}) {
+        return await http.get('/sys/inbox/unread-count', { params })
+    },
+    async markRead(notificationId) {
+        return await http.post(`/sys/inbox/${notificationId}/read`)
+    },
+    async markAllRead(params = {}) {
+        return await http.post('/sys/inbox/read-all', null, { params })
+    },
+    async getPreferences() {
+        return await http.get('/sys/inbox/preferences')
+    },
+    async updatePreferences(data) {
+        return await http.put('/sys/inbox/preferences', data)
+    },
+    async streamToken() {
+        return await http.get('/sys/inbox/stream-token')
+    },
+    /** EventSource URL（使用 /stream-token 签发的短效 token，勿传主会话 JWT） */
+    streamUrl(token) {
+        const base = (import.meta.env.VITE_BASE_API || '').replace(/\/$/, '')
+        const path = `${base}/sys/inbox/stream`
+        if (!token) return path
+        const sep = path.includes('?') ? '&' : '?'
+        return `${path}${sep}access_token=${encodeURIComponent(token)}`
     }
 }
 

@@ -1,15 +1,19 @@
-/** 性能验收目标 perf_targets（与后端 normalize 对齐的前端默认骨架） */
+/** 性能验收目标 perf_targets（与后端 normalize / GLOBAL_METRIC_META 对齐） */
 
 export const PERF_TARGET_GLOBAL_OPTIONS = [
   { key: 'qps', label: 'QPS', op: '>=', unit: '/s' },
   { key: 'success_qps', label: '成功 QPS', op: '>=', unit: '/s' },
   { key: 'total_requests', label: '总请求数', op: '>=', unit: '次' },
   { key: 'avg_response_time', label: '平均响应时间', op: '<=', unit: 'ms' },
+  { key: 'success_avg_response_time', label: '成功平均响应时间', op: '<=', unit: 'ms' },
   { key: 'p90_response_time', label: 'P90 响应时间', op: '<=', unit: 'ms' },
   { key: 'p95_response_time', label: 'P95 响应时间', op: '<=', unit: 'ms' },
+  { key: 'success_p95_response_time', label: '成功 P95 响应时间', op: '<=', unit: 'ms' },
   { key: 'p99_response_time', label: 'P99 响应时间', op: '<=', unit: 'ms' },
   { key: 'error_rate', label: '错误率', op: '<=', unit: '%' },
 ]
+
+const DEFAULT_ENABLED_KEYS = new Set(['qps', 'p95_response_time', 'error_rate'])
 
 function parseNonNegInt(val, fallback) {
   if (val === null || val === undefined || val === '') return fallback
@@ -25,6 +29,36 @@ function parseNonNegNumber(val) {
   return n
 }
 
+function globalItemSkeleton(meta, { enabled } = {}) {
+  return {
+    scope: 'global',
+    key: meta.key,
+    label: meta.label,
+    op: meta.op,
+    value: null,
+    unit: meta.unit,
+    severity: 'fail',
+    enabled: enabled != null ? !!enabled : DEFAULT_ENABLED_KEYS.has(meta.key),
+  }
+}
+
+function mergeGlobalItems(items) {
+  const byKey = {}
+  const others = []
+  for (const it of items) {
+    if (!it || typeof it !== 'object') continue
+    if (it.scope === 'global' && PERF_TARGET_GLOBAL_OPTIONS.some((m) => m.key === it.key)) {
+      byKey[it.key] = it
+    } else {
+      others.push(it)
+    }
+  }
+  const merged = PERF_TARGET_GLOBAL_OPTIONS.map((m) =>
+    byKey[m.key] ? byKey[m.key] : globalItemSkeleton(m, { enabled: false }),
+  )
+  return merged.concat(others)
+}
+
 export function defaultPerfTargets() {
   return {
     enabled: false,
@@ -32,11 +66,7 @@ export function defaultPerfTargets() {
     mode: 'all',
     min_total_requests: 100,
     min_duration_seconds: 60,
-    items: [
-      { scope: 'global', key: 'qps', label: 'QPS', op: '>=', value: null, unit: '/s', severity: 'fail', enabled: true },
-      { scope: 'global', key: 'p95_response_time', label: 'P95 响应时间', op: '<=', value: null, unit: 'ms', severity: 'fail', enabled: true },
-      { scope: 'global', key: 'error_rate', label: '错误率', op: '<=', value: null, unit: '%', severity: 'fail', enabled: true },
-    ],
+    items: PERF_TARGET_GLOBAL_OPTIONS.map((m) => globalItemSkeleton(m)),
   }
 }
 
@@ -70,6 +100,7 @@ export function normalizePerfTargetsLocal(raw) {
   }
   const globalItems = items.filter((i) => i.scope === 'global')
   const otherItems = items.filter((i) => i.scope !== 'global')
+  const filled = mergeGlobalItems(globalItems.length ? globalItems : base.items)
   return {
     enabled: !!raw.enabled,
     profile: 'custom',
@@ -77,8 +108,30 @@ export function normalizePerfTargetsLocal(raw) {
     // 允许 0（关闭可信度门槛）；不可用 ||，否则 0 会被改回默认
     min_total_requests: parseNonNegInt(raw.min_total_requests, 100),
     min_duration_seconds: parseNonNegInt(raw.min_duration_seconds, 60),
-    items: (globalItems.length ? globalItems : base.items).concat(otherItems),
+    items: filled.filter((i) => i.scope === 'global').concat(otherItems),
   }
+}
+
+/**
+ * 就地补齐全局指标行（旧场景 config 往往只有 QPS/P95/错误率三项）。
+ */
+export function ensureGlobalTargetItems(targets) {
+  if (!targets || typeof targets !== 'object') return targets
+  const next = normalizePerfTargetsLocal(targets)
+  const curGlobals = (targets.items || []).filter((i) => i && i.scope === 'global')
+  if (curGlobals.length >= PERF_TARGET_GLOBAL_OPTIONS.length) {
+    const keySet = new Set(curGlobals.map((i) => i.key))
+    if (PERF_TARGET_GLOBAL_OPTIONS.every((m) => keySet.has(m.key))) {
+      return targets
+    }
+  }
+  targets.enabled = next.enabled
+  targets.profile = next.profile
+  targets.mode = next.mode
+  targets.min_total_requests = next.min_total_requests
+  targets.min_duration_seconds = next.min_duration_seconds
+  targets.items = next.items
+  return targets
 }
 
 export function perfTargetsSummaryLines(targets) {

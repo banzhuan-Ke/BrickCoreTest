@@ -124,16 +124,22 @@
         </el-form-item>
         <el-form-item label="变量提取">
           <div class="extractor-list">
-            <p class="extractor-hint">
-              从登录接口的<strong>响应</strong>取值（不是请求）：可选响应体 JSON/正则，或响应头（如 Set-Cookie）。
-            </p>
+            <p class="extractor-hint">从登录接口的<strong>响应</strong>取值（不是请求）。下拉先选「响应体」或「响应头」，再填右侧路径 / Header 名；Cookie 一般选「响应头 · 指定 Header 名」并填 Set-Cookie。</p>
             <div v-for="(ex, idx) in form.extractors" :key="idx" class="extractor-row">
               <el-input v-model="ex.name" placeholder="变量名 token" style="width: 120px;" />
-              <HttpExtractorSourceSelect v-model="ex.source" select-style="width: 140px;" />
+              <HttpExtractorSourceSelect v-model="ex.source" select-style="width: 210px;" />
+              <JsonPathField
+                v-if="isJsonPathExtractorSource(ex.source)"
+                v-model="ex.path"
+                :sample-json="loginApiJsonSample"
+                :placeholder="extractorPathPlaceholder(ex.source)"
+                input-style="flex: 1; min-width: 0"
+              />
               <el-input
+                v-else
                 v-model="ex.path"
                 :placeholder="extractorPathPlaceholder(ex.source)"
-                style="flex: 1;"
+                style="flex: 1; min-width: 0"
               />
               <el-button icon="Delete" type="danger" link @click="form.extractors.splice(idx, 1)" />
             </div>
@@ -152,27 +158,39 @@
         </el-form-item>
       </template>
 
-      <el-collapse v-model="advancedOpen" class="advanced-collapse">
-        <el-collapse-item name="advanced" title="高级选项">
-          <p class="advanced-hint">一般请用<strong>接口登录</strong>或<strong>环境变量</strong>；下列自定义代码仅供特殊场景。</p>
-          <el-form-item label="授权方式" label-width="120px">
-            <el-radio-group v-model="form.auth_type">
-              <el-radio value="api_login">接口登录（推荐）</el-radio>
-              <el-radio value="custom_code">自定义代码</el-radio>
-            </el-radio-group>
-          </el-form-item>
-        </el-collapse-item>
-      </el-collapse>
-
-      <el-form-item label="有效期(分钟)">
-        <el-input-number v-model="form.ttl_minutes" :min="1" :max="10080" />
-      </el-form-item>
-      <el-form-item label="提前刷新(分钟)">
-        <el-input-number v-model="form.refresh_before_minutes" :min="0" :max="120" />
-      </el-form-item>
-      <el-form-item label="启用">
-        <el-switch v-model="form.is_enabled" />
-      </el-form-item>
+      <div class="advanced-panel">
+        <el-collapse v-model="advancedOpen" class="advanced-collapse">
+          <el-collapse-item name="advanced">
+            <template #title>
+              <span class="advanced-title">高级选项</span>
+              <span class="advanced-sub">有效期、刷新策略与授权方式</span>
+            </template>
+            <div class="advanced-body">
+              <p class="advanced-hint">
+                日常用<strong>接口登录</strong>即可；有效期控制 Token 缓存多久，提前刷新避免执行时已过期。
+              </p>
+              <el-form-item label="有效期(分钟)" label-width="120px">
+                <el-input-number v-model="form.ttl_minutes" :min="1" :max="10080" />
+                <span class="field-extra">登录成功后缓存时长</span>
+              </el-form-item>
+              <el-form-item label="提前刷新(分钟)" label-width="120px">
+                <el-input-number v-model="form.refresh_before_minutes" :min="0" :max="120" />
+                <span class="field-extra">到期前多久自动重新登录</span>
+              </el-form-item>
+              <el-form-item label="启用" label-width="120px">
+                <el-switch v-model="form.is_enabled" />
+              </el-form-item>
+              <el-divider content-position="left">授权方式</el-divider>
+              <el-form-item label="授权方式" label-width="120px">
+                <el-radio-group v-model="form.auth_type">
+                  <el-radio value="api_login">接口登录（推荐）</el-radio>
+                  <el-radio value="custom_code">自定义代码</el-radio>
+                </el-radio-group>
+              </el-form-item>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
     </el-form>
     <template #footer>
       <el-button @click="dialogVisible = false">取消</el-button>
@@ -214,7 +232,9 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import { httpAuthConfigApi } from '@/api/modules/httpAuth'
 import { httpApi } from '@/api/modules/http'
 import HttpExtractorSourceSelect from './components/HttpExtractorSourceSelect.vue'
-import { extractorPathPlaceholder } from './utils/httpExtractAssertUi.js'
+import JsonPathField from '@/components/JsonPathField.vue'
+import { extractorPathPlaceholder, isJsonPathExtractorSource } from './utils/httpExtractAssertUi.js'
+import { sampleJsonTextFromApi } from '@/utils/jsonPath.js'
 
 const proStore = ProjectStore()
 
@@ -262,6 +282,11 @@ function normalizeAuthExtractor(raw) {
   }
 }
 const form = reactive(defaultForm())
+
+const loginApiJsonSample = computed(() => {
+  const api = apiList.value.find((a) => a.id === form.login_api_id)
+  return sampleJsonTextFromApi(api)
+})
 
 const rules = {
   name: [{ required: true, message: '请输入授权名称', trigger: 'blur' }],
@@ -510,15 +535,45 @@ onMounted(() => {
 .page-tip { margin: 6px 0 0; font-size: 13px; line-height: 1.5; }
 .priority-tip { margin: 4px 0 0; }
 .priority-tip code { font-size: 12px; }
-.advanced-collapse { margin-bottom: 8px; border: none; }
+.advanced-panel {
+  margin: 8px 4px 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fafbfd 0%, #fff 48%);
+  overflow: hidden;
+}
+.advanced-collapse { margin: 0; border: none; }
 .advanced-collapse :deep(.el-collapse-item__header) {
-  height: 40px;
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
+  height: auto;
+  min-height: 48px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
   border-bottom: none;
+  line-height: 1.4;
 }
 .advanced-collapse :deep(.el-collapse-item__wrap) { border-bottom: none; }
-.advanced-hint { margin: 0 0 12px; font-size: 13px; color: var(--el-text-color-secondary); line-height: 1.5; }
+.advanced-collapse :deep(.el-collapse-item__content) { padding: 0 16px 14px; }
+.advanced-title { margin-right: 10px; }
+.advanced-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+}
+.advanced-body { padding: 4px 4px 2px; }
+.advanced-hint {
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.55;
+}
+.field-extra {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.extractor-list :deep(.http-extractor-source-select) { min-width: 200px; }
 .custom-code-tip { margin-bottom: 12px; font-size: 13px; }
 .custom-code-tip p { margin: 4px 0; line-height: 1.5; }
 .test-hint { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 8px; }

@@ -50,40 +50,11 @@
       />
 
       <div v-if="!isWsApi" class="worker-selector">
-        <el-checkbox v-model="viaWorker" @change="onViaWorkerChange">经执行机发送</el-checkbox>
-        <el-select
+        <ViaWorkerSelect
           v-model="selectedWorkerId"
-          placeholder="选择在线空闲执行机"
+          :env-id="selectedEnvId"
           size="small"
-          clearable
-          filterable
-          :disabled="!viaWorker"
-          style="width: 280px; margin-left: 8px;"
-        >
-          <el-option
-            v-for="w in idleWorkers"
-            :key="w.id"
-            :label="`${w.name} (#${w.id}) · ${w.host} · 引擎 ${w.engine_version || '?'}`"
-            :value="w.id"
-          />
-        </el-select>
-        <el-button
-          link
-          type="primary"
-          size="small"
-          style="margin-left: 4px;"
-          :loading="workersLoading"
-          @click="loadWorkers"
-        >刷新</el-button>
-        <el-tooltip
-          content="平台服务器访问不到被测系统时，勾选后由 BrickCorePerf / Runner 压测执行机代发请求。不勾选则仍由平台本机发送。执行机引擎需 ≥ 1.0.0。"
-          placement="top"
-        >
-          <span class="worker-hint">?</span>
-        </el-tooltip>
-        <span v-if="viaWorker && !idleWorkers.length" class="worker-warn">
-          暂无可用执行机（需在线空闲且引擎 ≥ {{ MIN_API_DEBUG_ENGINE }}）
-        </span>
+        />
       </div>
       
       <!-- 请求配置 -->
@@ -371,11 +342,10 @@ import { ElMessage } from 'element-plus'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import http from '@/api/index'
 import { httpCaseApi } from '@/api/modules/http'
-import { perfWorkerApi } from '@/api/modules/perf'
-import { parseWorkerList, filterOnlineWorkers } from '@/views/Perf/perfWorkerUtils'
 import EnvVarQuickEdit from '@/components/EnvVarQuickEdit.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
+import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
 import DataFactoryTagPicker from './DataFactoryTagPicker.vue'
 import { insertVarRef } from '@/utils/varInsert.js'
 import VariablePreviewPanel from '@/components/VariablePreviewPanel.vue'
@@ -404,38 +374,7 @@ const response = ref(null)
 const wsSteps = ref([])
 const customBaseUrl = ref('')
 const selectedEnvId = ref(null)
-const viaWorker = ref(false)
 const selectedWorkerId = ref(null)
-const workersLoading = ref(false)
-const workerList = ref([])
-/** 经执行机调试最少引擎版本（与后端门禁一致） */
-const MIN_API_DEBUG_ENGINE = '1.0.0'
-
-function parseEngineParts(v) {
-  return String(v || '0')
-    .split(/[^\d]+/)
-    .filter(Boolean)
-    .map((n) => Number(n) || 0)
-}
-
-function engineAtLeast(version, minimum) {
-  const a = parseEngineParts(version)
-  const b = parseEngineParts(minimum)
-  const len = Math.max(a.length, b.length)
-  for (let i = 0; i < len; i += 1) {
-    const x = a[i] || 0
-    const y = b[i] || 0
-    if (x > y) return true
-    if (x < y) return false
-  }
-  return true
-}
-
-const idleWorkers = computed(() =>
-  filterOnlineWorkers(workerList.value).filter(
-    (w) => w.status !== 'busy' && engineAtLeast(w.engine_version, MIN_API_DEBUG_ENGINE)
-  )
-)
 const varEditVisible = ref(false)
 const tagPickerVisible = ref(false)
 const saveCaseVisible = ref(false)
@@ -954,45 +893,8 @@ watch(() => [props.modelValue, props.api?.id], ([visible, id]) => {
   if (visible && id) {
     nextTick(() => fetchApiDetail(id))
   }
-  if (visible) {
-    loadWorkers()
-  }
 })
 
-const loadWorkers = async () => {
-  const pid = proStore.projectInfo?.id
-  if (!pid) {
-    workerList.value = []
-    return
-  }
-  workersLoading.value = true
-  try {
-    const res = await perfWorkerApi.getList({ project_id: pid })
-    workerList.value = parseWorkerList(res)
-    if (
-      selectedWorkerId.value &&
-      !idleWorkers.value.some((w) => w.id === selectedWorkerId.value)
-    ) {
-      selectedWorkerId.value = null
-    }
-  } catch (e) {
-    console.error(e)
-    workerList.value = []
-  } finally {
-    workersLoading.value = false
-  }
-}
-
-const onViaWorkerChange = (checked) => {
-  if (checked) {
-    loadWorkers()
-    if (!selectedWorkerId.value && idleWorkers.value.length === 1) {
-      selectedWorkerId.value = idleWorkers.value[0].id
-    }
-  }
-}
-
-// 弹窗关闭后重置
 const handleClosed = () => {
   selectedEnvId.value = null
   response.value = null
@@ -1000,7 +902,6 @@ const handleClosed = () => {
   request.base_url = ''
   request.body_fields = []
   bodyText.value = ''
-  viaWorker.value = false
   selectedWorkerId.value = null
 }
 
@@ -1096,24 +997,6 @@ const sendRequest = async () => {
   }
   if (!validateBeforeSend(fullUrl)) return
 
-  if (viaWorker.value) {
-    if (!selectedWorkerId.value) {
-      ElMessage.warning('请选择在线空闲执行机，或取消「经执行机发送」')
-      return
-    }
-    if (!idleWorkers.value.some((w) => w.id === selectedWorkerId.value)) {
-      ElMessage.warning('所选执行机已不可用，请刷新后重选')
-      return
-    }
-    if (
-      request.body_type === 'form-data' &&
-      request.body_fields.some((f) => f.field_type === 'file')
-    ) {
-      ElMessage.warning('经执行机发送暂不支持带文件的 form-data，请去掉文件字段或取消勾选')
-      return
-    }
-  }
-
   loading.value = true
   try {
 
@@ -1145,7 +1028,7 @@ const sendRequest = async () => {
       env_id: selectedEnvId.value || undefined,
       project_id: proStore.projectInfo?.id || undefined,
     }
-    if (viaWorker.value && selectedWorkerId.value) {
+    if (selectedWorkerId.value) {
       payload.worker_id = selectedWorkerId.value
     }
 
@@ -1256,32 +1139,11 @@ const sendWsRequest = async () => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
   padding: 8px 15px;
   background: var(--el-fill-color-blank);
   border: 1px dashed var(--el-border-color);
   border-radius: 4px;
   font-size: 13px;
-}
-
-.worker-hint {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  margin-left: 4px;
-  border-radius: 50%;
-  border: 1px solid var(--el-border-color);
-  color: var(--el-text-color-secondary);
-  font-size: 11px;
-  cursor: help;
-}
-
-.worker-warn {
-  color: var(--el-color-warning);
-  font-size: 12px;
-  margin-left: 4px;
 }
 
 .request-panel, .response-panel {

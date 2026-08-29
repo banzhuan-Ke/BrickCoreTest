@@ -180,6 +180,22 @@ async def build_api_failure_context(record: ApiRunRecord) -> dict[str, Any]:
     if req_detail.get("post_script_error"):
         logs_parts.append(f"后置脚本错误: {req_detail.get('post_script_error')}")
 
+    from app.modules.stability.buckets import extract_api_failure_code, map_failure_bucket
+    from app.modules.stability.request_id import extract_request_id_from_detail
+
+    request_id = extract_request_id_from_detail(req_detail, record.request_headers)
+    failure_code = extract_api_failure_code(
+        request_detail=req_detail,
+        assertions_result=getattr(record, "assertions_result", None),
+        error_msg=record.error_msg,
+    ) or ""
+    failure_bucket = map_failure_bucket(
+        failure_code=failure_code or None,
+        response_status=record.response_status,
+        error_msg=record.error_msg,
+        status=record.status,
+    )
+
     return {
         "target_type": "api",
         "case_name": case.name if case else "未知用例",
@@ -195,6 +211,9 @@ async def build_api_failure_context(record: ApiRunRecord) -> dict[str, Any]:
         "steps": "",
         "failed_step_index": "",
         "record_status": record.status or "",
+        "request_id": request_id,
+        "failure_code": failure_code,
+        "failure_bucket": failure_bucket,
     }
 
 
@@ -266,6 +285,18 @@ async def build_ui_failure_context(
     image_payload = context_images
 
     case = await execution.case
+    from app.modules.stability.buckets import (
+        extract_ui_error_msg,
+        extract_ui_failure_code,
+        map_failure_bucket,
+    )
+
+    failure_code = extract_ui_failure_code(result_data)
+    failure_bucket = map_failure_bucket(
+        failure_code=failure_code,
+        error_msg=error_msg or extract_ui_error_msg(result_data),
+        status=execution.status,
+    )
     prompt_vars = {
         "target_type": "ui",
         "case_name": result_data.get("name") or result_data.get("case_name") or (case.name if case else "未知用例"),
@@ -281,6 +312,9 @@ async def build_ui_failure_context(
         "failed_step_index": str(failed_idx + 1 if failed_idx >= 0 else ""),
         "screenshot_desc": screenshot_desc,
         "record_status": execution.status or "",
+        "request_id": "",
+        "failure_code": failure_code or "",
+        "failure_bucket": failure_bucket,
     }
     return prompt_vars, image_payload, screenshot_url
 
@@ -348,6 +382,18 @@ async def build_app_failure_context(
 
     image_payload = load_image_from_url(screenshot_url) if screenshot_url else None
 
+    from app.modules.stability.buckets import (
+        extract_ui_error_msg,
+        extract_ui_failure_code,
+        map_failure_bucket,
+    )
+
+    failure_code = extract_ui_failure_code(result_data)
+    failure_bucket = map_failure_bucket(
+        failure_code=failure_code,
+        error_msg=error_msg or extract_ui_error_msg(result_data),
+        status=execution.status,
+    )
     prompt_vars = {
         "target_type": "app",
         "case_name": result_data.get("name") or result_data.get("case_name") or (case.name if case else "未知用例"),
@@ -366,5 +412,8 @@ async def build_app_failure_context(
         "driver_mode": driver_mode or "",
         "device_udid": env.get("device_udid") or "",
         "platform": env.get("platform") or "android",
+        "request_id": "",
+        "failure_code": failure_code or "",
+        "failure_bucket": failure_bucket,
     }
     return prompt_vars, image_payload, screenshot_url

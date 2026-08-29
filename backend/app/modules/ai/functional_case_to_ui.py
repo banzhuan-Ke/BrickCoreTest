@@ -213,42 +213,43 @@ async def _generate_ui_steps(
     max_steps: int,
     project_id: int,
     user_info: dict,
+    device_id: Optional[str] = None,
+    request_base_url: str | None = None,
+    headless: bool = True,
 ) -> dict[str, Any]:
     from app.routers.ai.generate import (
-        GenerateUiCaseAgentRequest,
         GenerateUiCaseRequest,
-        UI_AGENT_DEFAULT_STEPS,
-        _generate_ui_case_agent,
-        _generate_ui_case_explore,
         _generate_ui_case_single,
     )
 
-    config = await _resolve_ai_config(ai_config_id, generation_mode)
+    mode = (generation_mode or "single").strip().lower()
+    if mode in ("agent", "explore"):
+        raise HTTPException(
+            status_code=400,
+            detail="Agent/探索模式请使用异步 job 接口，勿走同步预览",
+        )
+
+    config = await _resolve_ai_config(ai_config_id, mode)
     body = GenerateUiCaseRequest(
         description=description,
         page_url=page_url,
         ai_config_id=config.id,
-        auto_explore=generation_mode == "explore",
+        auto_explore=False,
         max_rounds=max_rounds,
+        device_id=device_id,
+        headless=headless,
     )
     start_time = time.time()
     try:
-        if generation_mode == "agent":
-            if not (page_url or "").strip():
-                raise HTTPException(status_code=400, detail="Agent 模式需填写目标页面 URL")
-            agent_body = GenerateUiCaseAgentRequest(
-                description=description,
-                page_url=page_url.strip(),
-                ai_config_id=config.id,
-                max_steps=max_steps or UI_AGENT_DEFAULT_STEPS,
-            )
-            return await _generate_ui_case_agent(
-                agent_body, config, project_id, user_info, start_time
-            )
-        if generation_mode == "explore" and body.page_url:
-            resp = await _generate_ui_case_explore(body, config, project_id, user_info, start_time)
-        else:
-            resp = await _generate_ui_case_single(body, config, project_id, user_info, start_time)
+        resp = await _generate_ui_case_single(
+            body,
+            config,
+            project_id,
+            user_info,
+            start_time,
+            request_base_url=request_base_url,
+            device_id=device_id,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -321,6 +322,9 @@ async def preview_functional_cases_to_ui(
     max_rounds: int,
     max_steps: int,
     user_info: dict,
+    device_id: Optional[str] = None,
+    request_base_url: str | None = None,
+    headless: bool = True,
 ) -> dict[str, Any]:
     validate_ui_generation_context(ctx)
     if not case_ids:
@@ -333,8 +337,20 @@ async def preview_functional_cases_to_ui(
     mode = (generation_mode or "single").strip().lower()
     if mode not in ("single", "explore", "agent"):
         raise HTTPException(status_code=400, detail="generation_mode 须为 single / explore / agent")
+    if mode == "agent":
+        raise HTTPException(
+            status_code=400,
+            detail="Agent 模式请使用 POST /ai/functional-cases/to-ui/agent-job 逐条创建任务并轮询",
+        )
+    if mode == "explore":
+        raise HTTPException(
+            status_code=400,
+            detail="多轮探索请使用 POST /ai/functional-cases/to-ui/explore-job 逐条创建任务并轮询",
+        )
     if mode in ("explore", "agent") and not (ctx.page_url or "").strip():
         raise HTTPException(status_code=400, detail=f"{mode} 模式需填写目标页面 URL")
+    if mode == "single" and (ctx.page_url or "").strip() and not (device_id or "").strip():
+        raise HTTPException(status_code=400, detail="填写页面 URL 时须选择在线 Runner 执行设备")
 
     cases = await AiFunctionalCase.filter(
         project_id=project_id, id__in=case_ids, is_del=False
@@ -379,6 +395,9 @@ async def preview_functional_cases_to_ui(
                 max_steps=max_steps,
                 project_id=project_id,
                 user_info=user_info,
+                device_id=device_id,
+                request_base_url=request_base_url,
+                headless=headless,
             )
             steps = data.get("steps") or []
             errors = data.get("errors") or []
@@ -430,6 +449,263 @@ async def preview_functional_cases_to_ui(
     }
 
 
+async def start_functional_case_agent_job(
+    *,
+    project_id: int,
+    functional_case_id: int,
+    ctx: UiGenerationContext,
+    max_steps: int,
+    run_mode: Optional[str],
+    device_id: Optional[str],
+    user_info: dict,
+    request_base_url: str | None = None,
+    headless: bool = True,
+) -> dict[str, Any]:
+    """单条功能用例启动 Agent 探索 job（批量预览逐条串行）。"""
+    validate_ui_generation_context(ctx)
+    if not (ctx.page_url or "").strip():
+        raise HTTPException(status_code=400, detail="Agent 模式需填写目标页面 URL")
+
+    fc = await AiFunctionalCase.get_or_none(
+        id=functional_case_id, project_id=project_id, is_del=False
+    )
+    if not fc:
+        raise HTTPException(status_code=404, detail="功能用例不存在")
+
+    from app.core.platform import config as settings
+    from app.modules.browser_dispatch import merge_job_platform_base_url, validate_device_online
+    from app.modules.ui.ui_agent_dispatch import dispatch_ui_agent_to_runner
+    from app.modules.ui.ui_agent_job_service import create_ui_agent_job, job_to_dict
+    from app.routers.ai.generate import _check_agent_daily_quota
+
+    await _check_agent_daily_quota(project_id)
+    config = await _resolve_ai_config(ctx.ai_config_id, "agent")
+    description = build_full_ui_description(fc, ctx)
+    if not settings.BROWSER_RUN_DISPATCH_ENABLED:
+        raise HTTPException(status_code=400, detail="Runner 派发未启用")
+    did = (device_id or "").strip()
+    await validate_device_online(did)
+
+    job = await create_ui_agent_job(
+        project_id=project_id,
+        page_url=ctx.page_url.strip(),
+        description=description,
+        max_steps=max_steps,
+        ai_config_id=config.id,
+        created_by=user_info.get("username") or user_info.get("sub") or "",
+        run_mode="runner",
+        device_id=did,
+        source="functional_case_batch",
+        source_ref=merge_job_platform_base_url(
+            {"functional_case_id": fc.id, "headless": bool(headless)},
+            request_base_url,
+        ),
+    )
+    try:
+        await dispatch_ui_agent_to_runner(job, config=config)
+    except HTTPException:
+        await job.delete()
+        raise
+    except Exception as exc:
+        await job.delete()
+        raise HTTPException(status_code=500, detail=f"启动 Agent 任务失败: {exc}") from exc
+
+    await _set_ui_import_status(fc, "generating", ctx=ctx)
+    return {
+        "async": True,
+        "job_id": job.id,
+        "functional_case_id": fc.id,
+        "title": fc.title,
+        "suggested_case_name": truncate_case_name(fc.title),
+        "suggested_level": priority_to_level(fc.priority),
+        "poll_path": f"/ai/ui-agent-jobs/{job.id}",
+        "job": job_to_dict(job),
+    }
+
+
+async def start_functional_case_explore_job(
+    *,
+    project_id: int,
+    functional_case_id: int,
+    ctx: UiGenerationContext,
+    max_rounds: int,
+    run_mode: Optional[str],
+    device_id: Optional[str],
+    user_info: dict,
+    request_base_url: str | None = None,
+    headless: bool = True,
+) -> dict[str, Any]:
+    """单条功能用例启动多轮探索 job（批量预览逐条串行）。"""
+    validate_ui_generation_context(ctx)
+    if not (ctx.page_url or "").strip():
+        raise HTTPException(status_code=400, detail="探索模式需填写目标页面 URL")
+
+    fc = await AiFunctionalCase.get_or_none(
+        id=functional_case_id, project_id=project_id, is_del=False
+    )
+    if not fc:
+        raise HTTPException(status_code=404, detail="功能用例不存在")
+
+    from app.core.platform import config as settings
+    from app.modules.browser_dispatch import merge_job_platform_base_url, validate_device_online
+    from app.modules.ui.ui_agent_dispatch import dispatch_ui_agent_to_runner
+    from app.modules.ui.ui_agent_job_service import create_ui_agent_job, job_to_dict
+    from app.routers.ai.generate import _check_agent_daily_quota
+
+    await _check_agent_daily_quota(project_id)
+    config = await _resolve_ai_config(ctx.ai_config_id, "explore")
+    description = build_full_ui_description(fc, ctx)
+    if not settings.BROWSER_RUN_DISPATCH_ENABLED:
+        raise HTTPException(status_code=400, detail="Runner 派发未启用")
+    did = (device_id or "").strip()
+    await validate_device_online(did)
+
+    rounds = max(1, min(int(max_rounds or 3), 10))
+    job = await create_ui_agent_job(
+        project_id=project_id,
+        page_url=ctx.page_url.strip(),
+        description=description,
+        max_steps=rounds,
+        ai_config_id=config.id,
+        created_by=user_info.get("username") or user_info.get("sub") or "",
+        run_mode="runner",
+        device_id=did,
+        source="ui_case_explore",
+        source_ref=merge_job_platform_base_url(
+            {"functional_case_id": fc.id, "max_rounds": rounds, "headless": bool(headless)},
+            request_base_url,
+        ),
+    )
+    try:
+        await dispatch_ui_agent_to_runner(job, config=config)
+    except HTTPException:
+        await job.delete()
+        raise
+    except Exception as exc:
+        await job.delete()
+        raise HTTPException(status_code=500, detail=f"启动探索任务失败: {exc}") from exc
+
+    await _set_ui_import_status(fc, "generating", ctx=ctx)
+    return {
+        "async": True,
+        "job_id": job.id,
+        "functional_case_id": fc.id,
+        "title": fc.title,
+        "suggested_case_name": truncate_case_name(fc.title),
+        "suggested_level": priority_to_level(fc.priority),
+        "poll_path": f"/ai/ui-agent-jobs/{job.id}",
+        "job": job_to_dict(job),
+    }
+
+
+async def finalize_functional_case_agent_preview(
+    *,
+    project_id: int,
+    job_id: int,
+    functional_case_id: int,
+    ctx: UiGenerationContext,
+) -> dict[str, Any]:
+    """Agent job 终态后合并登录前置，产出预览行。"""
+    from app.models.ai import UiAgentJob
+
+    job = await UiAgentJob.get_or_none(id=job_id, project_id=project_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Agent 任务不存在")
+    from app.modules.ui.ui_agent_heartbeat import maybe_fail_stale_runner_job
+
+    job = await maybe_fail_stale_runner_job(job)
+    ref = job.source_ref if isinstance(job.source_ref, dict) else {}
+    if int(ref.get("functional_case_id") or 0) != int(functional_case_id):
+        raise HTTPException(status_code=400, detail="任务与功能用例不匹配")
+
+    fc = await AiFunctionalCase.get_or_none(
+        id=functional_case_id, project_id=project_id, is_del=False
+    )
+    if not fc:
+        raise HTTPException(status_code=404, detail="功能用例不存在")
+
+    item: dict[str, Any] = {
+        "functional_case_id": fc.id,
+        "title": fc.title,
+        "description": build_full_ui_description(fc, ctx),
+        "suggested_case_name": truncate_case_name(fc.title),
+        "suggested_level": priority_to_level(fc.priority),
+        "status": "pending",
+        "steps": [],
+        "errors": [],
+        "tokens_used": int(job.tokens_used or 0),
+        "record_id": None,
+        "explore_info": None,
+        "agent_info": None,
+        "login_prefix_count": 0,
+        "error": "",
+    }
+
+    if job.status in ("done", "stopped"):
+        steps = list(job.steps_json or [])
+        if not steps:
+            item["status"] = "failed"
+            item["error"] = job.error_message or "AI 未返回有效步骤"
+            await _set_ui_import_status(fc, "failed", ctx=ctx, error=item["error"])
+        else:
+            final_steps, prefix_n = await finalize_ui_steps(project_id, steps, ctx)
+            item["status"] = "success"
+            item["steps"] = final_steps
+            item["tokens_used"] = int(job.tokens_used or 0)
+            item["login_prefix_count"] = prefix_n
+            explore_info = ref.get("explore_info")
+            if (job.source or "") == "ui_case_explore":
+                item["explore_info"] = explore_info or {
+                    "rounds": int(ref.get("max_rounds") or job.max_steps or 0),
+                    "page_changes": 0,
+                    "urls_visited": [],
+                    "screenshots": [],
+                }
+            else:
+                item["agent_info"] = {
+                    "mode": job.run_mode,
+                    "executed_steps": len(steps),
+                    "agent_log": job.agent_log_json or [],
+                }
+            await _set_ui_import_status(
+                fc,
+                "generated",
+                ctx=ctx,
+                steps=final_steps,
+                login_prefix_count=prefix_n,
+            )
+    elif job.status == "failed":
+        steps = list(job.steps_json or [])
+        if steps:
+            final_steps, prefix_n = await finalize_ui_steps(project_id, steps, ctx)
+            item["status"] = "success"
+            item["steps"] = final_steps
+            item["tokens_used"] = int(job.tokens_used or 0)
+            item["login_prefix_count"] = prefix_n
+            item["partial"] = True
+            item["error"] = job.error_message or "Agent 探索未完整完成，步骤可供核对"
+            item["agent_info"] = {
+                "mode": job.run_mode,
+                "executed_steps": len(steps),
+                "agent_log": job.agent_log_json or [],
+            }
+            await _set_ui_import_status(
+                fc,
+                "generated",
+                ctx=ctx,
+                steps=final_steps,
+                login_prefix_count=prefix_n,
+            )
+        else:
+            item["status"] = "failed"
+            item["error"] = job.error_message or "Agent 探索失败"
+            await _set_ui_import_status(fc, "failed", ctx=ctx, error=item["error"])
+    else:
+        raise HTTPException(status_code=400, detail=f"任务尚未结束（{job.status}）")
+
+    return item
+
+
 async def import_functional_cases_to_ui(
     *,
     project_id: int,
@@ -468,7 +744,12 @@ async def import_functional_cases_to_ui(
             case_description = build_case_description_from_functional(fc, ctx)
 
         try:
-            final_steps, prefix_n = await finalize_ui_steps(project_id, steps, ctx)
+            prefix_already = int(raw.get("login_prefix_count") or 0)
+            if prefix_already > 0:
+                final_steps = list(steps or [])
+                prefix_n = prefix_already
+            else:
+                final_steps, prefix_n = await finalize_ui_steps(project_id, steps, ctx)
             ui_case = await Case.create(
                 name=case_name[:50],
                 project_id=project_id,

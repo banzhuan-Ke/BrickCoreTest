@@ -1,187 +1,191 @@
 .box {
-  padding: 0 10px;
+  position: relative;
+  padding: 0 8px;
   flex-shrink: 0;
-  
+  z-index: 20;
+
   .tabs {
-    height: 44px;
-    z-index: 99;
+    min-height: 44px;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     background: var(--el-fill-color-light);
-    border-radius: 8px;
-    padding: 0 12px;
-    margin: 6px 0;
+    border-radius: 10px;
+    padding: 6px 10px;
+    margin: 4px 0 8px;
+    border: 1px solid var(--el-border-color-lighter);
+    box-sizing: border-box;
 
-    // 关闭所有按钮区域
     .button-wrapper {
       flex-shrink: 0;
       display: flex;
       align-items: center;
-      height: 32px;
-      
-      .el-button {
-        padding: 6px 12px;
-        font-size: 12px;
-        border-radius: 6px;
-        height: 32px;
-        line-height: 1;
-        
-        &:hover {
-          transform: scale(1.02);
-        }
-      }
     }
-    
-    // 标签区域
+
     .tabs-area {
       flex: 1;
+      min-width: 0;
       overflow: hidden;
       display: flex;
       align-items: center;
-      height: 32px;
-      
-      :deep(.el-tabs) {
+
+      :deep(.nav-tabs) {
         width: 100%;
-        
+
         .el-tabs__header {
           margin: 0;
-          height: 32px;
-          
-          .el-tabs__nav-wrap {
-            height: 32px;
-            
-            &::after {
-              display: none;
-            }
-            
-            .el-tabs__nav-scroll {
-              height: 32px;
-            }
-            
-            .el-tabs__nav {
-              display: flex;
-              gap: 4px;
-              border: none;
-              height: 32px;
-            }
-            
-            .el-tabs__item {
-              height: 32px;
-              line-height: 30px;
-              padding: 0 14px;
-              border-radius: 6px;
-              font-size: 13px;
-              font-weight: 500;
-              color: var(--el-text-color-regular);
-              background: var(--el-bg-color);
-              border: 1px solid var(--el-border-color-light);
-              transition: all 0.2s ease;
-              box-sizing: border-box;
-              cursor: grab;
+          border: none;
+        }
 
-              &:active {
-                cursor: grabbing;
-              }
-              
-              &:hover {
-                color: var(--el-color-primary);
-                border-color: var(--el-color-primary-light-5);
-              }
-              
-              &.is-active {
-                color: var(--el-color-primary);
-                background: var(--el-color-primary-light-9);
-                border-color: var(--el-color-primary);
-                font-weight: 600;
-                box-shadow: 0 2px 6px rgba(16, 125, 236, 0.15);
-              }
-              
-              // 关闭图标
-              .is-icon-close {
-                font-size: 12px;
-                margin-left: 6px;
-                
-                &:hover {
-                  background: var(--el-color-danger-light-9);
-                  color: var(--el-color-danger);
-                }
-              }
-              
-              // 图标样式
-              .el-icon {
-                font-size: 14px;
-                vertical-align: middle;
-                margin-right: 6px;
-              }
-            }
-          }
-          
-          .el-tabs__active-bar {
+        .el-tabs__nav-wrap {
+          &::after {
             display: none;
           }
+        }
+
+        .el-tabs__nav {
+          border: none;
+          display: flex;
+          gap: 4px;
+        }
+
+        .el-tabs__item {
+          height: 32px;
+          line-height: 30px;
+          padding: 0 12px !important;
+          border-radius: 8px !important;
+          font-size: 13px;
+          font-weight: 500;
+          color: var(--el-text-color-regular);
+          background: var(--el-bg-color);
+          border: 1px solid var(--el-border-color-light) !important;
+          margin: 0 !important;
+          transition: all 0.15s ease;
+          box-sizing: border-box;
+          cursor: grab;
+
+          &:active {
+            cursor: grabbing;
+          }
+
+          &:hover {
+            color: var(--el-color-primary);
+            border-color: var(--el-color-primary-light-5) !important;
+          }
+
+          &.is-active {
+            color: var(--el-color-primary);
+            background: var(--el-color-primary-light-9);
+            border-color: var(--el-color-primary) !important;
+            font-weight: 600;
+            box-shadow: 0 2px 6px rgba(16, 125, 236, 0.12);
+          }
+
+          .is-icon-close {
+            font-size: 12px;
+            margin-left: 4px;
+
+            &:hover {
+              background: var(--el-color-danger-light-9);
+              color: var(--el-color-danger);
+            }
+          }
+        }
+
+        .el-tabs__nav-next,
+        .el-tabs__nav-prev {
+          line-height: 32px;
+          font-size: 14px;
         }
       }
 
       :deep(.tab-drag-ghost) {
-        opacity: 0.6;
+        opacity: 0.55;
         background: var(--el-color-primary-light-9);
-        border-color: var(--el-color-primary-light-5);
+      }
+    }
+  }
+
+  .tab-label {
+    display: inline-flex;
+    align-items: center;
+    max-width: 160px;
+    gap: 6px;
+  }
+
+  .tab-icon {
+    flex-shrink: 0;
+  }
+
+  .tab-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tab-ctx-menu {
+    position: fixed;
+    z-index: 4000;
+    min-width: 148px;
+    margin: 0;
+    padding: 6px 0;
+    list-style: none;
+    background: var(--el-bg-color-overlay, #fff);
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+
+    li {
+      padding: 8px 14px;
+      font-size: 13px;
+      color: var(--el-text-color-primary);
+      cursor: pointer;
+      line-height: 1.3;
+
+      &:hover:not(.disabled):not(.divider) {
+        background: var(--el-fill-color-light);
+        color: var(--el-color-primary);
+      }
+
+      &.disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+        pointer-events: none;
+      }
+
+      &.divider {
+        height: 0;
+        margin: 4px 0;
+        padding: 0;
+        border-top: 1px solid var(--el-border-color-lighter);
+        cursor: default;
       }
     }
   }
 }
 
 html.theme-pro .box .tabs {
-  background: var(--pro-card-bg, rgba(255, 255, 255, 0.82));
-  border: 1px solid var(--pro-sidebar-border, rgba(226, 232, 244, 0.42));
-  border-radius: 12px;
+  background: var(--pro-card-bg, rgba(255, 255, 255, 0.9));
+  border-color: var(--pro-sidebar-border, rgba(226, 232, 244, 0.5));
   box-shadow: var(--pro-card-shadow, 0 4px 18px rgba(68, 87, 150, 0.045));
 
-  .tabs-area :deep(.el-tabs .el-tabs__item) {
-    border-radius: 8px;
+  .tabs-area :deep(.nav-tabs .el-tabs__item) {
     background: transparent;
-    border-color: transparent;
-    color: var(--el-text-color-regular);
+    border-color: transparent !important;
 
     &:hover {
-      background: rgba(255, 255, 255, 0.9);
-      color: var(--el-text-color-primary);
+      background: rgba(255, 255, 255, 0.92);
     }
 
     &.is-active {
       color: #fff;
       background: var(--el-color-primary);
-      border-color: var(--el-color-primary);
+      border-color: var(--el-color-primary) !important;
       box-shadow: 0 6px 16px rgba(75, 111, 255, 0.2);
     }
   }
 }
 
-// 暗黑模式适配
-.dark {
-  .box {
-    .tabs {
-      background: var(--el-fill-color-dark);
-      
-      .tabs-area {
-        :deep(.el-tabs) {
-          .el-tabs__item {
-            background: var(--el-bg-color-page);
-            border-color: var(--el-border-color-darker);
-            
-            &:hover {
-              border-color: var(--el-color-primary);
-            }
-            
-            &.is-active {
-              background: var(--el-color-primary-light-9);
-              color: #fff;
-              box-shadow: 0 2px 6px rgba(16, 125, 236, 0.25);
-            }
-          }
-        }
-      }
-    }
-  }
+.dark .box .tabs {
+  background: var(--el-fill-color-dark);
 }

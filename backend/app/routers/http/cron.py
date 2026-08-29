@@ -80,6 +80,7 @@ async def create_cron_job(item: ApiCronJobCreate, username: str = Depends(get_cu
         suite_id=item.suite_id,
         plan_id=item.plan_id,
         env_id=item.env_id,
+        worker_id=item.worker_id,
         run_type=item.run_type,
         interval=item.interval,
         run_date=run_date,
@@ -162,6 +163,7 @@ async def update_cron_job(job_id: str, item: ApiCronJobUpdate, username: str = D
     job.suite_id = item.suite_id
     job.plan_id = item.plan_id
     job.env_id = item.env_id
+    job.worker_id = item.worker_id
     job.run_type = item.run_type
     job.interval = item.interval
     job.run_date = run_date
@@ -242,6 +244,7 @@ async def _cron_job_to_out(job: ApiCronJob) -> dict:
         "plan_name": plan.name if plan else None,
         "target_type": target_type,
         "env_id": job.env_id,
+        "worker_id": getattr(job, "worker_id", None),
         "run_type": job.run_type,
         "interval": job.interval,
         "run_date": run_date_str,
@@ -345,6 +348,10 @@ async def execute_cron_job(job_id: str):
             print(f"[定时任务] 环境不存在: {job.env_id}")
             return
 
+        if getattr(job, "worker_id", None) is not None:
+            from app.modules.http.worker_http_proxy import require_api_proxy_worker
+            await require_api_proxy_worker(job.project_id, job.worker_id)
+
         # -------- 计划执行模式 --------
         if job.plan_id:
             exec_status, record_id = await _execute_plan_cron(job, env)
@@ -390,6 +397,13 @@ async def _execute_suite_cron(job: ApiCronJob, env) -> tuple:
 
     print(f"[定时任务] 套件模式，找到 {len(suite_cases)} 个用例")
 
+    from app.modules.http.worker_http_proxy import worker_record_fields
+    from app.models.perf import PerfWorker
+
+    proxy_worker = None
+    if getattr(job, "worker_id", None) is not None:
+        proxy_worker = await PerfWorker.get_or_none(id=job.worker_id)
+
     record = await ApiSuiteRunRecord.create(
         suite_id=job.suite_id,
         project_id=job.project_id,
@@ -398,7 +412,8 @@ async def _execute_suite_cron(job: ApiCronJob, env) -> tuple:
         total_cases=len(suite_cases),
         env_id=job.env_id,
         env_name=env.name,
-        run_by=job.create_by
+        run_by=job.create_by,
+        **worker_record_fields(proxy_worker, worker_id=job.worker_id),
     )
 
     start_time = time.time()
@@ -411,6 +426,7 @@ async def _execute_suite_cron(job: ApiCronJob, env) -> tuple:
             case_ids=case_ids,
             suite_record=record,
             username=job.create_by,
+            worker_id=job.worker_id,
         )
     except Exception as e:
         print(f"[定时任务] 套件执行异常: {e}")
@@ -454,6 +470,7 @@ async def _execute_plan_cron(job: ApiCronJob, env) -> tuple:
             env_id=job.env_id,
             stop_on_failure=False,
             auto_validate_schema=False,
+            worker_id=job.worker_id,
         )
         result = await run_plan(plan.id, req, username=job.create_by)
         # 将执行记录的 trigger_type 改为 cron

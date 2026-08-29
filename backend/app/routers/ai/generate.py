@@ -9,7 +9,7 @@ import time
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, Request, Header, Query
 from pydantic import BaseModel, Field
 
 from app.core.platform.auth import is_authenticated, require_permissions, verify_runner_or_internal
@@ -18,8 +18,7 @@ from app.modules.ai.ai_prompts import PromptManager, append_extra_instructions
 from app.core.llm.ai_usage_log import log_ai_usage
 from app.core.llm.llm_client import LLMClientFactory
 from app.core.platform.encryption import decrypt_value
-from app.modules.ui.page_fetcher import fetch_page_structure, format_elements_for_prompt, SmartPageExplorer
-from app.modules.ui.ui_agent_explorer import UiMcpAgentExplorer
+from app.modules.ui.page_fetcher import format_elements_for_prompt
 from app.modules.ui.ui_locator_heal import heal_locator
 from app.core.shared.ui_keywords import (
     UI_DEFAULT_PARAMS as _UI_DEFAULT_PARAMS,
@@ -48,6 +47,42 @@ _POPUP_FLOW_KEYWORDS = re.compile(
 
 def _description_suggests_popup_flow(description: str) -> bool:
     return bool(_POPUP_FLOW_KEYWORDS.search(description or ""))
+
+
+def _resolve_project_id(user_info: dict, project_id: Optional[int] = None) -> Optional[int]:
+    """从 Query / JWT / 用户默认项目解析 project_id。"""
+    pid = (
+        project_id
+        or user_info.get("project_id")
+        or user_info.get("current_project_id")
+        or user_info.get("default_project_id")
+    )
+    return int(pid) if pid else None
+
+
+_UI_LOCATOR_METHODS = frozenset({
+    "fill_value",
+    "click_ele",
+    "double_click_ele",
+    "clear_value",
+    "set_checked",
+    "hover",
+    "focus_element",
+    "select_option",
+    "type_value",
+    "drag_and_drop",
+    "long_click_element",
+    "upload_file",
+    "wait_for_element",
+    "scroll_to_element",
+    "kw_assert_element_text_contains",
+    "kw_assert_element_visible",
+    "frame_fill_value",
+    "frame_click_element",
+    "frame_hover",
+    "frame_focus_element",
+    "frame_select_option",
+})
 
 
 # ========== JSON 提取与清洗工具 ==========
@@ -220,7 +255,182 @@ def _normalize_extractors(extractors: list) -> list[dict]:
     return result
 
 
-def _validate_api_cases(cases: list) -> tuple[list[str], list[dict]]:
+def _normalize_form_field(raw: dict | None, *, name: str = "", default_type: str = "text") -> dict:
+    """标准化 form-data 字段结构。"""
+    src = raw if isinstance(raw, dict) else {}
+    field_name = str(src.get("name") or name or "").strip()
+    field_type = str(src.get("field_type") or default_type or "text").strip().lower()
+    if field_type not in ("text", "file"):
+        field_type = "text"
+    value = src.get("value", "")
+    if field_type == "file":
+        value = ""
+    elif value is None:
+        value = ""
+    elif not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False)
+        except Exception:
+            value = str(value)
+    return {
+        "name": field_name,
+        "value": value,
+        "field_type": field_type,
+        "file_name": str(src.get("file_name") or ""),
+        "mime_type": str(src.get("mime_type") or "application/octet-stream"),
+        # 文件引用须用户本地上传，AI 不得伪造
+        "file_key": "",
+        "file_bucket": "",
+        "description": str(src.get("description") or ""),
+    }
+
+
+def _body_dict_to_form_fields(body: dict) -> list[dict]:
+    """把 AI 误写成 JSON 对象的 body，转成 form-data 文本字段。"""
+    fields = []
+    if not isinstance(body, dict):
+        return fields
+    for key, val in body.items():
+        name = str(key or "").strip()
+        if not name:
+            continue
+        fields.append(_normalize_form_field({"name": name, "value": val, "field_type": "text"}))
+    return fields
+
+
+def _align_case_body_to_api(
+    case: dict,
+    api_body_type: str | None,
+    api_body_fields: list | None = None,
+    api_body=None,
+) -> dict:
+    """
+    强制用例请求体类型与接口定义一致。
+    LLM 常把 form-data 接口写成 JSON；此处做确定性纠偏，避免导入后类型错误。
+    """
+    if not isinstance(case, dict):
+        return case
+
+    allowed = {"json", "form-data", "x-www-form-urlencoded", "xml", "raw"}
+    body_type = str(api_body_type or case.get("request_body_type") or "json").strip().lower() or "json"
+    if body_type not in allowed:
+        body_type = "json"
+    case["request_body_type"] = body_type
+
+    if body_type == "form-data":
+        ai_fields_raw = case.get("request_body_fields") or []
+        ai_by_name: dict[str, dict] = {}
+        if isinstance(ai_fields_raw, list):
+            for item in ai_fields_raw:
+                if not isinstance(item, dict):
+                    continue
+                n = str(item.get("name") or "").strip()
+                if n:
+                    ai_by_name[n] = item
+
+        body = case.get("request_body")
+        if isinstance(body, dict):
+            for key, val in body.items():
+                n = str(key or "").strip()
+                if not n:
+                    continue
+                if n not in ai_by_name:
+                    ai_by_name[n] = {"name": n, "value": val, "field_type": "text"}
+                elif ai_by_name[n].get("value") in (None, "") and val not in (None, ""):
+                    ai_by_name[n] = {**ai_by_name[n], "value": val}
+
+        result: list[dict] = []
+        seen: set[str] = set()
+        for af in (api_body_fields or []):
+            if not isinstance(af, dict):
+                continue
+            name = str(af.get("name") or "").strip()
+            if not name:
+                continue
+            seen.add(name)
+            ai = ai_by_name.get(name) or {}
+            field_type = str(af.get("field_type") or ai.get("field_type") or "text").strip().lower()
+            if field_type not in ("text", "file"):
+                field_type = "text"
+            merged = {
+                **af,
+                **{k: v for k, v in ai.items() if v not in (None, "")},
+                "name": name,
+                "field_type": field_type,
+            }
+            if field_type == "file":
+                merged["value"] = ""
+                merged["file_key"] = ""
+                merged["file_bucket"] = ""
+            elif merged.get("value") in (None, ""):
+                merged["value"] = af.get("value") or ""
+            result.append(_normalize_form_field(merged, name=name, default_type=field_type))
+
+        for name, ai in ai_by_name.items():
+            if name in seen:
+                continue
+            result.append(_normalize_form_field(ai, name=name))
+
+        if not result and isinstance(api_body, dict) and api_body:
+            result = _body_dict_to_form_fields(api_body)
+
+        case["request_body_fields"] = result
+        case["request_body"] = {}
+        return case
+
+    # 非 form-data：清空 fields
+    case["request_body_fields"] = []
+
+    if body_type == "x-www-form-urlencoded":
+        body = case.get("request_body")
+        if isinstance(body, list):
+            converted = {}
+            for item in body:
+                if isinstance(item, dict) and item.get("name"):
+                    converted[str(item["name"])] = "" if item.get("value") is None else str(item.get("value"))
+            case["request_body"] = converted
+        elif isinstance(body, dict):
+            case["request_body"] = {
+                str(k): ("" if v is None else v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+                for k, v in body.items()
+            }
+        elif isinstance(api_body, dict):
+            case["request_body"] = dict(api_body)
+        else:
+            case["request_body"] = {}
+        return case
+
+    if body_type in ("xml", "raw"):
+        body = case.get("request_body")
+        if isinstance(body, (dict, list)):
+            case["request_body"] = json.dumps(body, ensure_ascii=False)
+        elif body is None:
+            case["request_body"] = api_body if isinstance(api_body, str) else ""
+        else:
+            case["request_body"] = str(body)
+        return case
+
+    # json
+    body = case.get("request_body")
+    if isinstance(body, str):
+        try:
+            case["request_body"] = json.loads(body) if body.strip() else {}
+        except Exception:
+            case["request_body"] = {}
+    elif body is None:
+        case["request_body"] = api_body if isinstance(api_body, (dict, list)) else {}
+    elif not isinstance(body, (dict, list)):
+        case["request_body"] = {}
+    return case
+
+
+def _validate_api_cases(
+    cases: list,
+    *,
+    api_body_type: str | None = None,
+    api_body_fields: list | None = None,
+    api_body=None,
+) -> tuple[list[str], list[dict]]:
     """
     校验 API 用例字段完整性，并做字段标准化
     返回：(错误列表, 有效用例列表)
@@ -256,15 +466,17 @@ def _validate_api_cases(cases: list) -> tuple[list[str], list[dict]]:
             request_params = []
         case["request_params"] = request_params
 
-        # 标准化请求体类型和字段
+        # 先粗标准化，再按接口定义强制对齐 body 类型
         case["request_body_type"] = case.get("request_body_type", "json")
         case["request_body_fields"] = case.get("request_body_fields", []) or []
         if not isinstance(case["request_body_fields"], list):
             case["request_body_fields"] = []
-        # form-data 类型时 request_body 必须是对象（空对象也行）
-        if case["request_body_type"] == "form-data":
-            if not isinstance(case.get("request_body"), dict):
-                case["request_body"] = {}
+        _align_case_body_to_api(
+            case,
+            api_body_type if api_body_type is not None else case.get("request_body_type"),
+            api_body_fields,
+            api_body,
+        )
 
         # 标准化断言和提取器
         normalized_assertions = _normalize_assertions(case.get("assertions", []))
@@ -336,6 +548,28 @@ def _normalize_ui_steps(steps: list) -> tuple[list[dict], list[str]]:
         for smart_err in _validate_smart_step_params(method, params):
             errors.append(f"第 {i + 1} 步 '{method}' {smart_err}")
 
+        if method in _UI_LOCATOR_METHODS and params.get("locator"):
+            from app.core.shared.locator_utils import split_css_locator_alternatives
+
+            primary, backups = split_css_locator_alternatives(str(params.get("locator") or ""))
+            if backups:
+                params["locator"] = primary
+                step_meta = step.get("meta") if isinstance(step.get("meta"), dict) else {}
+                existing = [
+                    str(c).strip()
+                    for c in (step_meta.get("candidates") or [])
+                    if str(c).strip()
+                ]
+                merged_candidates: list[str] = []
+                seen_candidates: set[str] = set()
+                for cand in backups + existing:
+                    if cand and cand not in seen_candidates and cand != primary:
+                        seen_candidates.add(cand)
+                        merged_candidates.append(cand)
+                if merged_candidates:
+                    step_meta = {**step_meta, "candidates": merged_candidates}
+                    step["meta"] = step_meta
+
         # 填充默认值
         defaults = _UI_DEFAULT_PARAMS.get(method, {})
         for key, val in defaults.items():
@@ -370,58 +604,154 @@ def _normalize_ui_steps(steps: list) -> tuple[list[dict], list[str]]:
 
 # ========== UI 用例生成 ==========
 
+class OptimizeUiDescriptionRequest(BaseModel):
+    task_text: str = Field(..., min_length=2, max_length=4000)
+    start_url: Optional[str] = Field(default=None, max_length=500)
+    case_name: Optional[str] = Field(default=None, max_length=200)
+    ai_config_id: Optional[int] = None
+    generation_mode: Optional[str] = Field(
+        default=None,
+        description="single / explore / agent / solidify，用于优化提示上下文",
+    )
+
+
+@router.post(
+    "/optimize-description",
+    summary="AI 优化 UI 测试描述",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def optimize_ui_description(
+    body: OptimizeUiDescriptionRequest,
+    project_id: Optional[int] = Query(None, description="项目 ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    """将自然语言测试描述改写为更适合 AI 生成 Playwright 步骤的中文说明。"""
+    pid = _resolve_project_id(user_info, project_id)
+    if not pid:
+        raise HTTPException(status_code=400, detail="请先选择项目")
+    username = user_info.get("username") or user_info.get("sub") or ""
+    try:
+        from app.modules.ai.description_text_optimizer import (
+            SCENE_UI_AGENT_SOLIDIFY,
+            SCENE_UI_CASE,
+            optimize_description_text,
+        )
+
+        mode = (body.generation_mode or "").strip().lower()
+        scene = SCENE_UI_AGENT_SOLIDIFY if mode == "solidify" else SCENE_UI_CASE
+        data = await optimize_description_text(
+            scene,
+            task_text=body.task_text,
+            start_url=(body.start_url or "").strip(),
+            case_name=(body.case_name or "").strip(),
+            ai_config_id=body.ai_config_id,
+            username=username,
+            project_id=int(pid),
+            generation_mode=(body.generation_mode or "").strip(),
+        )
+        return StandardResponse(data=data)
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+    except Exception as ex:
+        logger.exception("[generate] optimize ui description failed")
+        raise HTTPException(status_code=500, detail=f"AI 优化失败: {ex}") from ex
+
+
 class GenerateUiCaseRequest(BaseModel):
     description: str = Field(..., description="自然语言描述测试步骤", min_length=1, max_length=2000)
     page_url: Optional[str] = Field(default=None, description="目标页面URL")
     ai_config_id: Optional[int] = Field(default=None, description="指定 LLM 配置ID")
     auto_explore: bool = Field(default=False, description="是否启用多轮探索模式（登录态、跨页面）")
     max_rounds: int = Field(default=3, ge=1, le=10, description="最大探索轮次")
+    run_mode: Optional[str] = Field(default=None, description="runner（固定执行器）")
+    device_id: Optional[str] = Field(default=None, max_length=100, description="Runner 设备 ID（有 page_url 时必填）")
+    headless: bool = Field(default=True, description="无头模式（默认 true；false 为有头调试）")
 
 
 @router.post("/ui-case", summary="AI 生成 UI 测试用例步骤")
 async def generate_ui_case(
     body: GenerateUiCaseRequest,
+    request: Request,
+    project_id: Optional[int] = Query(None, description="项目 ID"),
     user_info: dict = Depends(is_authenticated),
 ):
     """
     基于自然语言描述，使用 AI 生成 UI 自动化测试步骤
     支持两种模式：
-    1. 单页面模式（auto_explore=false）：基于 page_url 抓取 DOM 后一次性生成
-    2. 多轮探索模式（auto_explore=true）：在同一个浏览器 context 内执行-抓取-生成循环
+    1. 单页面模式（auto_explore=false）：Runner 抓 DOM → 平台 LLM 一次性生成
+    2. 多轮探索模式（auto_explore=true）：Runner 多轮探索异步 job
     """
     start_time = time.time()
-    project_id = user_info.get("project_id") or user_info.get("current_project_id")
+    pid = _resolve_project_id(user_info, project_id)
 
     # 1. 获取 LLM 配置
     config = await _get_ai_config(body.ai_config_id, scene="ui_case_generate")
 
+    from app.modules.browser_dispatch import request_base_url as resolve_request_base_url
+
+    req_base = resolve_request_base_url(request)
+
     # 2. 多轮探索模式（显式开启，或描述涉及弹窗/支付等动态浮层）
     use_explore = body.auto_explore or _description_suggests_popup_flow(body.description)
     if use_explore and body.page_url:
-        return await _generate_ui_case_explore(body, config, project_id, user_info, start_time)
+        if not pid:
+            raise HTTPException(status_code=400, detail="缺少项目上下文")
+        data = await _start_ui_case_explore_async_job(
+            body,
+            config,
+            int(pid),
+            user_info,
+            request_base_url=req_base,
+        )
+        return StandardResponse(data=data, message="多轮探索任务已开始，请轮询进度")
 
-    # 3. 单页面模式（原有逻辑）
-    return await _generate_ui_case_single(body, config, project_id, user_info, start_time)
+    # 3. 单页面模式：有 URL 时经 Runner 抓 DOM，平台调 LLM
+    return await _generate_ui_case_single(
+        body, config, pid, user_info, start_time, request_base_url=req_base
+    )
 
 
-async def _generate_ui_case_single(body, config, project_id, user_info, start_time):
-    """单页面模式生成 UI 用例步骤"""
+async def _generate_ui_case_single(
+    body,
+    config,
+    project_id,
+    user_info,
+    start_time,
+    *,
+    request_base_url: str | None = None,
+    device_id: str | None = None,
+):
+    """单页面模式：Runner 抓 DOM（可选）+ 平台 LLM 生成步骤。"""
     page_elements_text = ""
     fetched_elements = []
+    did = (device_id or getattr(body, "device_id", None) or "").strip() or None
     if body.page_url:
+        if not did:
+            raise HTTPException(status_code=400, detail="填写页面 URL 时须选择在线 Runner 执行设备")
         try:
-            page_data = await fetch_page_structure(body.page_url, timeout=15)
+            from app.modules.ui.page_fetch_dispatch import fetch_page_structure_via_runner
+
+            page_data = await fetch_page_structure_via_runner(
+                url=body.page_url,
+                device_id=did,
+                project_id=int(project_id) if project_id else None,
+                request_base_url=request_base_url,
+                timeout=20,
+                headless=getattr(body, "headless", True),
+            )
             if page_data:
                 fetched_elements = page_data.get("elements", [])
                 page_elements_text = format_elements_for_prompt(fetched_elements)
                 logger.info(
-                    f"[generate_ui_case] 页面抓取成功: {page_data.get('url')}, "
+                    f"[generate_ui_case] Runner 页面抓取成功: {page_data.get('url')}, "
                     f"elements={len(fetched_elements)}"
                 )
             else:
-                logger.warning(f"[generate_ui_case] 页面抓取失败，降级为纯描述生成: {body.page_url}")
+                logger.warning(f"[generate_ui_case] Runner 页面抓取失败，降级为纯描述生成: {body.page_url}")
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.warning(f"[generate_ui_case] 页面抓取异常，降级为纯描述生成: {e}")
+            logger.warning(f"[generate_ui_case] Runner 页面抓取异常，降级为纯描述生成: {e}")
 
     # 渲染 Prompt
     try:
@@ -525,118 +855,59 @@ async def _generate_ui_case_single(body, config, project_id, user_info, start_ti
     })
 
 
-async def _generate_ui_case_explore(body, config, project_id, user_info, start_time):
-    """多轮探索模式生成 UI 用例步骤"""
-    total_tokens = 0
-    last_raw_response = ""
+async def _start_ui_case_explore_async_job(
+    body: GenerateUiCaseRequest,
+    config: AiConfig,
+    project_id: int,
+    user_info: dict,
+    *,
+    request_base_url: str | None = None,
+) -> dict[str, Any]:
+    """多轮探索：创建 ui_agent_job（source=ui_case_explore）并派发 Runner。"""
+    from app.core.platform import config as settings
+    from app.modules.browser_dispatch import merge_job_platform_base_url, validate_device_online
+    from app.modules.ui.ui_agent_dispatch import dispatch_ui_agent_to_runner
+    from app.modules.ui.ui_agent_job_service import create_ui_agent_job, job_to_dict
 
-    async def llm_generate_func(dom_text, description, executed_steps, current_url, round_index):
-        nonlocal total_tokens, last_raw_response
+    await _check_agent_daily_quota(project_id)
+    if not settings.BROWSER_RUN_DISPATCH_ENABLED:
+        raise HTTPException(status_code=400, detail="Runner 派发未启用（BROWSER_RUN_DISPATCH_ENABLED=0）")
+    device_id = (body.device_id or "").strip()
+    await validate_device_online(device_id)
 
-        # 格式化已执行步骤
-        executed_steps_text = ""
-        if executed_steps:
-            executed_steps_text = json.dumps(executed_steps, ensure_ascii=False, indent=2)
-
-        # 渲染 Prompt
-        try:
-            system_prompt, user_prompt = await PromptManager.render("ui_case_generation", {
-                "description": description,
-                "page_url": current_url,
-                "page_elements": dom_text,
-                "executed_steps": executed_steps_text,
-                "executed_steps_count": len(executed_steps),
-                "current_url": current_url,
-                "round_index": round_index,
-            })
-        except ValueError as e:
-            logger.error(f"[explore] Prompt 渲染失败: {e}")
-            return []
-
-        # 调用 LLM
-        try:
-            resp = await _call_llm(system_prompt, user_prompt, config)
-        except Exception as e:
-            logger.error(f"[explore] LLM 调用失败: {e}")
-            return []
-
-        last_raw_response = resp.get("content", "")
-        total_tokens += resp.get("tokens", 0)
-
-        # 提取 JSON
-        steps = _extract_json_array(last_raw_response)
-        if not steps:
-            logger.warning(f"[explore] 第 {round_index} 轮无法解析 JSON，响应: {last_raw_response[:300]}")
-            return []
-
-        # 校验与规范化
-        valid_steps, errs = _normalize_ui_steps(steps)
-        if errs:
-            logger.warning(f"[explore] 第 {round_index} 轮步骤校验警告: {errs}")
-
-        return valid_steps
-
-    # 启动 SmartPageExplorer
-    explorer = SmartPageExplorer(
-        start_url=body.page_url,
-        description=body.description,
-        max_rounds=body.max_rounds,
-        timeout=15,
-    )
-
-    try:
-        result = await explorer.explore(llm_generate_func)
-    except Exception as e:
-        logger.error(f"[generate_ui_case_explore] 探索异常: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"多轮探索失败: {str(e)}"
-        )
-
-    duration_ms = int((time.time() - start_time) * 1000)
-
-    # 记录生成历史
-    record_id = await _save_ui_generate_record(
-        project_id, body, config,
-        result["steps"], result["errors"], last_raw_response,
-        total_tokens, duration_ms, user_info,
-        extra_output={
-            "explore_info": {
-                "rounds": result["rounds"],
-                "page_changes": result["page_changes"],
-                "urls_visited": result["urls_visited"],
-                "screenshots": result.get("screenshots", []),
-            }
-        }
-    )
-
-    await log_ai_usage(
-        config,
-        "ui_case_generate",
-        user_info=user_info,
+    job = await create_ui_agent_job(
         project_id=project_id,
-        tokens_used=total_tokens,
-        duration_ms=duration_ms,
-        input_summary=body.description[:500],
-        output_summary=f"探索 {result['rounds']} 轮，{len(result['steps'])} 步",
-        mode="explore",
-        record_id=record_id,
+        page_url=body.page_url.strip(),
+        description=body.description.strip(),
+        max_steps=body.max_rounds,
+        ai_config_id=config.id,
+        created_by=user_info.get("username", "") or user_info.get("sub", "") or "",
+        run_mode="runner",
+        device_id=device_id,
+        source="ui_case_explore",
+        source_ref=merge_job_platform_base_url(
+            {"max_rounds": body.max_rounds, "headless": bool(body.headless)},
+            request_base_url,
+        ),
     )
+    try:
+        await dispatch_ui_agent_to_runner(job, config=config)
+    except HTTPException:
+        await job.delete()
+        raise
+    except Exception as exc:
+        await job.delete()
+        raise HTTPException(status_code=500, detail=f"启动多轮探索失败: {exc}") from exc
 
-    return StandardResponse(data={
-        "steps": result["steps"],
-        "errors": result["errors"],
-        "raw_response": last_raw_response,
-        "tokens_used": total_tokens,
-        "duration_ms": duration_ms,
-        "record_id": record_id,
-        "explore_info": {
-            "rounds": result["rounds"],
-            "page_changes": result["page_changes"],
-            "urls_visited": result["urls_visited"],
-            "screenshots": result.get("screenshots", []),
-        },
-    })
+    return {
+        "async": True,
+        "job_id": job.id,
+        "run_mode": "runner",
+        "device_id": device_id,
+        "poll_path": f"/ai/ui-agent-jobs/{job.id}",
+        "job": job_to_dict(job),
+    }
+
 
 
 class GenerateUiCaseAgentRequest(BaseModel):
@@ -649,6 +920,9 @@ class GenerateUiCaseAgentRequest(BaseModel):
         le=UI_AGENT_MAX_STEPS,
         description="最大 Agent 步数（每步 1 次 LLM）",
     )
+    run_mode: Optional[str] = Field(default=None, description="已忽略；固定 runner")
+    device_id: Optional[str] = Field(default=None, max_length=100, description="Runner 设备 ID")
+    headless: bool = Field(default=True, description="无头模式（默认 true）")
 
 
 def _compact_agent_executed_steps(steps: list | None, *, tail: int = 10) -> str:
@@ -663,33 +937,6 @@ def _compact_agent_executed_steps(steps: list | None, *, tail: int = 10) -> str:
         "recent_steps": steps[-tail:],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
-
-
-def _prepend_agent_browser_steps(steps: list, start_url: str) -> list:
-    """Agent 在 Backend 内已打开浏览器，返回步骤需补 Runner 前置 open_browser / open_url"""
-    methods = {s.get("method") for s in steps if isinstance(s, dict)}
-    prefix: list[dict] = []
-    ts = int(time.time() * 1000)
-    if "open_browser" not in methods:
-        prefix.append({
-            "id": f"step_{ts}_pre0",
-            "keyword": "打开浏览器",
-            "method": "open_browser",
-            "desc": "打开浏览器",
-            "params": {"browser_type": "chromium"},
-            "children": [],
-        })
-    if "open_url" not in methods and (start_url or "").strip():
-        url = start_url.strip()
-        prefix.append({
-            "id": f"step_{ts}_pre1",
-            "keyword": "访问页面url",
-            "method": "open_url",
-            "desc": f"访问 {url}",
-            "params": {"url": url, "wait_until": "domcontentloaded", "timeout": 30000},
-            "children": [],
-        })
-    return prefix + list(steps)
 
 
 async def _check_agent_daily_quota(project_id: Optional[int]) -> None:
@@ -710,177 +957,62 @@ async def _check_agent_daily_quota(project_id: Optional[int]) -> None:
         )
 
 
-async def _generate_ui_case_agent(
+
+async def _start_ui_case_agent_async_job(
     body: GenerateUiCaseAgentRequest,
     config: AiConfig,
     project_id: Optional[int],
     user_info: dict,
-    start_time: float,
+    *,
+    request_base_url: str | None = None,
 ) -> dict[str, Any]:
-    """MCP 式 Agent 探索生成 UI 步骤（供路由与功能用例转 UI 复用）"""
+    """创建 ui_agent_job 并派发 Runner，前端轮询 GET job。"""
+    from app.core.platform import config as settings
+    from app.modules.browser_dispatch import merge_job_platform_base_url, validate_device_online
+    from app.modules.ui.ui_agent_dispatch import dispatch_ui_agent_to_runner
+    from app.modules.ui.ui_agent_job_service import create_ui_agent_job, job_to_dict
+
     await _check_agent_daily_quota(project_id)
+    if not project_id:
+        raise HTTPException(status_code=400, detail="缺少项目上下文")
+    if not settings.BROWSER_RUN_DISPATCH_ENABLED:
+        raise HTTPException(status_code=400, detail="Runner 派发未启用（BROWSER_RUN_DISPATCH_ENABLED=0）")
+    device_id = (body.device_id or "").strip()
+    await validate_device_online(device_id)
 
-    total_tokens = 0
-    last_raw_response = ""
-
-    async def llm_plan_func(
-        accessibility_snapshot,
-        snapshot_type,
-        description,
-        executed_steps,
-        current_url,
-        step_index,
-        stuck_hint: str = "",
-    ):
-        nonlocal total_tokens, last_raw_response
-        executed_steps_text = _compact_agent_executed_steps(executed_steps)
-        hint = (stuck_hint or "").strip()
-        try:
-            system_prompt, user_prompt = await PromptManager.render("ui_agent_plan", {
-                "description": description,
-                "accessibility_snapshot": accessibility_snapshot,
-                "snapshot_type": snapshot_type,
-                "executed_steps": executed_steps_text,
-                "current_url": current_url,
-                "step_index": step_index,
-                "stuck_hint": hint,
-                "has_stuck_hint": bool(hint),
-            })
-        except ValueError as e:
-            logger.error(f"[ui_agent] Prompt 渲染失败: {e}")
-            return {"done": True, "message": f"Prompt 渲染失败: {e}"}
-
-        try:
-            resp = await _call_llm(system_prompt, user_prompt, config)
-        except Exception as e:
-            logger.error(f"[ui_agent] LLM 调用失败: {e}")
-            return {"done": True, "message": f"LLM 调用失败: {e}"}
-
-        last_raw_response = resp.get("content", "")
-        total_tokens += resp.get("tokens", 0)
-        parsed = _extract_json_object(last_raw_response)
-        if not parsed:
-            logger.warning(f"[ui_agent] 第 {step_index} 步无法解析 JSON: {last_raw_response[:300]}")
-            return {"done": True, "message": "无法解析 LLM 响应"}
-
-        if parsed.get("done"):
-            return {"done": True, "message": parsed.get("message") or "完成"}
-
-        step = parsed.get("step")
-        if not step:
-            return {"done": True, "message": "LLM 未返回 step"}
-
-        valid_steps, errs = _normalize_ui_steps([step])
-        if errs:
-            logger.warning(f"[ui_agent] 第 {step_index} 步校验警告: {errs}")
-        if not valid_steps:
-            return {"done": True, "message": "步骤校验失败"}
-
-        return {"done": False, "step": valid_steps[0]}
-
-    async def llm_heal_func(
-        method,
-        failed_locator,
-        step_desc,
-        error_message,
-        page_url,
-        accessibility_snapshot,
-        snapshot_type,
-    ):
-        nonlocal total_tokens
-        try:
-            result = await heal_locator(
-                method=method,
-                failed_locator=failed_locator,
-                step_desc=step_desc,
-                error_message=error_message,
-                page_url=page_url,
-                accessibility_snapshot=accessibility_snapshot,
-                call_llm=lambda s, u: _call_llm(s, u, config),
-                ai_config_id=config.id,
-            )
-            total_tokens += result.get("tokens_used") or 0
-            return result
-        except Exception as e:
-            logger.warning(f"[ui_agent] 自愈失败: {e}")
-            return {"success": False, "reason": str(e)}
-
-    explorer = UiMcpAgentExplorer(
-        start_url=body.page_url.strip(),
-        description=body.description,
-        max_rounds=1,
-        timeout=15,
+    job = await create_ui_agent_job(
+        project_id=int(project_id),
+        page_url=body.page_url.strip(),
+        description=body.description.strip(),
+        max_steps=body.max_steps,
+        ai_config_id=config.id,
+        created_by=user_info.get("username", "") or user_info.get("sub", "") or "",
+        run_mode="runner",
+        device_id=device_id,
+        source="ui_case_edit",
+        source_ref=merge_job_platform_base_url(
+            {"headless": bool(body.headless)},
+            request_base_url,
+        ),
     )
-
     try:
-        result = await explorer.agent_explore(
-            llm_plan_func,
-            max_steps=body.max_steps,
-            heal_func=llm_heal_func,
-        )
-    except Exception as e:
-        logger.error(f"[ui_agent] 探索异常: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Agent 探索失败: {str(e)}") from e
-
-    result["steps"] = _prepend_agent_browser_steps(result.get("steps") or [], body.page_url)
-
-    duration_ms = int((time.time() - start_time) * 1000)
-
-    record_id = None
-    if project_id:
-        try:
-            record = await AiGenerateRecord.create(
-                project_id=project_id,
-                generate_type="ui_case_agent",
-                input_summary={
-                    "description": body.description,
-                    "page_url": body.page_url,
-                    "max_steps": body.max_steps,
-                },
-                output_content={
-                    "steps": result["steps"],
-                    "errors": result["errors"],
-                    "agent_log": result.get("agent_log", []),
-                    "raw_response": last_raw_response,
-                },
-                status="pending",
-                ai_config_id=config.id,
-                tokens_used=total_tokens,
-                duration_ms=duration_ms,
-                create_by=user_info.get("username", ""),
-            )
-            record_id = record.id
-        except Exception as e:
-            logger.warning(f"[ui_agent] 保存记录失败: {e}")
-
-    await log_ai_usage(
-        config,
-        "ui_case_agent",
-        user_info=user_info,
-        project_id=project_id,
-        tokens_used=total_tokens,
-        duration_ms=duration_ms,
-        input_summary=body.description[:500],
-        output_summary=f"Agent {len(result.get('steps') or [])} 步",
-        page_url=body.page_url,
-        record_id=record_id,
-    )
+        await dispatch_ui_agent_to_runner(job, config=config)
+    except HTTPException:
+        await job.delete()
+        raise
+    except Exception as exc:
+        await job.delete()
+        raise HTTPException(status_code=500, detail=f"启动 Agent 任务失败: {exc}") from exc
 
     return {
-        "steps": result["steps"],
-        "errors": result["errors"],
-        "tokens_used": total_tokens,
-        "duration_ms": duration_ms,
-        "record_id": record_id,
-        "agent_info": {
-            "mode": "agent_mcp",
-            "executed_steps": result.get("executed_steps", 0),
-            "agent_log": result.get("agent_log", []),
-            "urls_visited": result.get("urls_visited", []),
-            "screenshots": result.get("screenshots", []),
-        },
-        "raw_response": last_raw_response,
+        "async": True,
+        "job_id": job.id,
+        "run_mode": "runner",
+        "device_id": device_id,
+        "poll_path": f"/ai/ui-agent-jobs/{job.id}",
+        "job": job_to_dict(job),
     }
+
 
 
 @router.post(
@@ -890,19 +1022,37 @@ async def _generate_ui_case_agent(
 )
 async def generate_ui_case_agent(
     body: GenerateUiCaseAgentRequest,
+    request: Request,
+    project_id: Optional[int] = Query(None, description="项目 ID"),
     user_info: dict = Depends(is_authenticated),
 ):
     """
     Playwright MCP 思路：accessibility snapshot → 逐步规划 → 执行 → 固化标准 steps。
     每步调用 1 次文本 LLM，适合探索性生成，不建议直接用于 CI 定时任务。
+    统一走 ui_agent_job 异步模型，前端轮询 GET /ai/ui-agent-jobs/{id}。
     """
-    start_time = time.time()
-    project_id = user_info.get("project_id") or user_info.get("current_project_id")
+    pid = _resolve_project_id(user_info, project_id)
 
     config = await _get_ai_config(body.ai_config_id, scene="ui_case_agent")
 
-    data = await _generate_ui_case_agent(body, config, project_id, user_info, start_time)
-    return StandardResponse(data=data)
+    from app.core.platform import config as settings
+
+    if not pid:
+        raise HTTPException(status_code=400, detail="缺少项目上下文")
+    if not settings.BROWSER_RUN_DISPATCH_ENABLED:
+        raise HTTPException(status_code=400, detail="Runner 派发未启用（BROWSER_RUN_DISPATCH_ENABLED=0）")
+
+    from app.modules.browser_dispatch import request_base_url as resolve_request_base_url
+
+    data = await _start_ui_case_agent_async_job(
+        body,
+        config,
+        int(pid),
+        user_info,
+        request_base_url=resolve_request_base_url(request),
+    )
+    msg = "Agent 任务已派发至 Runner"
+    return StandardResponse(data=data, message=msg)
 
 
 class LocatorHealRequest(BaseModel):
@@ -1763,8 +1913,13 @@ async def generate_api_case(
             detail=error_msg
         )
 
-    # 6. 校验字段
-    errors, valid_cases = _validate_api_cases(cases)
+    # 6. 校验字段（并强制对齐接口 body_type，避免 form-data 被写成 JSON）
+    errors, valid_cases = _validate_api_cases(
+        cases,
+        api_body_type=api_def.body_type or "json",
+        api_body_fields=api_def.body_fields or [],
+        api_body=api_def.body,
+    )
 
     # 7. 记录生成历史
     duration_ms = int((time.time() - start_time) * 1000)
@@ -1827,8 +1982,13 @@ async def import_api_cases(
     if not api_def:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="接口定义不存在")
 
-    # 校验用例
-    _, valid_cases = _validate_api_cases(body.cases)
+    # 校验用例（导入时同样按接口 body_type 纠偏）
+    _, valid_cases = _validate_api_cases(
+        body.cases,
+        api_body_type=api_def.body_type or "json",
+        api_body_fields=api_def.body_fields or [],
+        api_body=api_def.body,
+    )
     if not valid_cases:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="没有有效的用例可导入")
 
@@ -1873,19 +2033,80 @@ async def import_api_cases(
 
 class FetchPageRequest(BaseModel):
     url: str = Field(..., description="目标页面URL", min_length=1, max_length=500)
+    device_id: str = Field(..., description="Runner 设备 ID", min_length=1, max_length=100)
+    headless: bool = Field(default=True, description="无头模式（默认 true）")
 
 
-@router.post("/fetch-page", summary="预抓取页面元素结构")
+class PageFetchRunnerCallbackBody(BaseModel):
+    ok: bool = True
+    request_id: Optional[str] = None
+    page: Optional[dict] = None
+    error: Optional[str] = None
+
+
+@router.post(
+    "/page-fetch/{request_id}/runner-callback",
+    summary="Runner 单页 DOM 抓取回调",
+    include_in_schema=False,
+)
+async def page_fetch_runner_callback(
+    request_id: str,
+    body: PageFetchRunnerCallbackBody,
+    authorization: Optional[str] = Header(None),
+    x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
+):
+    from app.modules.browser_dispatch import verify_internal_job_token
+    from app.modules.ui import page_fetch_bridge
+
+    rid = str(request_id).strip()
+    token = (x_internal_token or "").strip()
+    if not token and authorization:
+        auth = authorization.strip()
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+    if not token:
+        raise HTTPException(status_code=401, detail="缺少任务鉴权 token")
+    data = verify_internal_job_token(token)
+    if str(data.get("job_id")) != rid:
+        raise HTTPException(status_code=403, detail="任务 token 与 request_id 不匹配")
+    if (data.get("task_type") or "") != "page_fetch":
+        raise HTTPException(status_code=403, detail="非页面抓取任务 token")
+
+    payload = {
+        "ok": bool(body.ok),
+        "request_id": rid,
+        "page": body.page if isinstance(body.page, dict) else None,
+        "error": (body.error or "")[:1000],
+    }
+    await page_fetch_bridge.complete(rid, payload)
+    return StandardResponse(data={"accepted": True})
+
+
+@router.post("/fetch-page", summary="预抓取页面元素结构（经 Runner）")
 async def fetch_page(
     body: FetchPageRequest,
+    request: Request,
+    project_id: Optional[int] = Query(None, description="项目 ID"),
     user_info: dict = Depends(is_authenticated),
 ):
     """
-    使用 Playwright 无头浏览器抓取目标页面的可交互元素列表
-    供前端 AI 生成 UI 用例时展示页面结构
+    经 Runner 无头浏览器抓取目标页面可交互元素列表，
+    供前端 AI 生成 UI 用例时展示页面结构。
     """
+    from app.modules.browser_dispatch import request_base_url as resolve_request_base_url
+    from app.modules.ui.page_fetch_dispatch import fetch_page_structure_via_runner
+
+    pid = _resolve_project_id(user_info, project_id)
     try:
-        page_data = await fetch_page_structure(body.url, timeout=15)
+        page_data = await fetch_page_structure_via_runner(
+            url=body.url,
+            device_id=body.device_id,
+            project_id=int(pid) if pid else None,
+            request_base_url=resolve_request_base_url(request),
+            timeout=20,
+            headless=body.headless,
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[fetch_page] 抓取异常: {e}", exc_info=True)
         raise HTTPException(
@@ -1896,7 +2117,7 @@ async def fetch_page(
     if not page_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="无法抓取目标页面，请检查 URL 是否可访问"
+            detail="无法抓取目标页面，请检查 URL 是否可访问，并确认 Runner 在线",
         )
 
     return StandardResponse(data={

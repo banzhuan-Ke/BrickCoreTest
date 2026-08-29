@@ -12,11 +12,49 @@ GLOBAL_METRIC_META = {
     "success_qps": {"label": "成功 QPS", "op": ">=", "unit": "/s"},
     "total_requests": {"label": "总请求数", "op": ">=", "unit": "次"},
     "avg_response_time": {"label": "平均响应时间", "op": "<=", "unit": "ms"},
+    "success_avg_response_time": {"label": "成功平均响应时间", "op": "<=", "unit": "ms"},
     "p90_response_time": {"label": "P90 响应时间", "op": "<=", "unit": "ms"},
     "p95_response_time": {"label": "P95 响应时间", "op": "<=", "unit": "ms"},
+    "success_p95_response_time": {"label": "成功 P95 响应时间", "op": "<=", "unit": "ms"},
     "p99_response_time": {"label": "P99 响应时间", "op": "<=", "unit": "ms"},
     "error_rate": {"label": "错误率", "op": "<=", "unit": "%"},
 }
+
+# 默认勾选启用（目标值仍可空，空值不参与判定）
+_DEFAULT_ENABLED_GLOBAL_KEYS = frozenset({"qps", "p95_response_time", "error_rate"})
+
+
+def _global_item_skeleton(key: str, *, enabled: Optional[bool] = None) -> dict:
+    meta = GLOBAL_METRIC_META[key]
+    return {
+        "scope": "global",
+        "key": key,
+        "label": meta["label"],
+        "op": meta["op"],
+        "value": None,
+        "unit": meta["unit"],
+        "severity": "fail",
+        "enabled": bool(enabled) if enabled is not None else (key in _DEFAULT_ENABLED_GLOBAL_KEYS),
+    }
+
+
+def _default_global_items() -> list[dict]:
+    return [_global_item_skeleton(k) for k in GLOBAL_METRIC_META]
+
+
+def _merge_global_items(items: list[dict]) -> list[dict]:
+    """按 GLOBAL_METRIC_META 顺序补齐缺失全局指标，保留用户已有配置与非 global 项。"""
+    by_key: dict[str, dict] = {}
+    others: list[dict] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        if it.get("scope") == "global" and it.get("key") in GLOBAL_METRIC_META:
+            by_key[str(it["key"])] = it
+        else:
+            others.append(it)
+    merged = [by_key[k] if k in by_key else _global_item_skeleton(k, enabled=False) for k in GLOBAL_METRIC_META]
+    return merged + others
 
 CASE_METRIC_META = {
     "total": {"label": "请求数", "op": ">=", "unit": "次"},
@@ -38,45 +76,14 @@ VALID_SCOPES = {"global", "case", "phase"}
 
 
 def default_perf_targets() -> dict:
-    """场景编辑默认骨架：三项常用指标，value 为空（不参与判定）。"""
+    """场景编辑默认骨架：全量全局指标；常用三项默认勾选，value 为空（不参与判定）。"""
     return {
         "enabled": False,
         "profile": "custom",
         "mode": "all",
         "min_total_requests": 100,
         "min_duration_seconds": 60,
-        "items": [
-            {
-                "scope": "global",
-                "key": "qps",
-                "label": "QPS",
-                "op": ">=",
-                "value": None,
-                "unit": "/s",
-                "severity": "fail",
-                "enabled": True,
-            },
-            {
-                "scope": "global",
-                "key": "p95_response_time",
-                "label": "P95 响应时间",
-                "op": "<=",
-                "value": None,
-                "unit": "ms",
-                "severity": "fail",
-                "enabled": True,
-            },
-            {
-                "scope": "global",
-                "key": "error_rate",
-                "label": "错误率",
-                "op": "<=",
-                "value": None,
-                "unit": "%",
-                "severity": "fail",
-                "enabled": True,
-            },
-        ],
+        "items": _default_global_items(),
     }
 
 
@@ -204,6 +211,8 @@ def normalize_perf_targets(raw: Any) -> dict:
                 items.append(norm)
     if not items:
         items = list(base["items"])
+    else:
+        items = _merge_global_items(items)
 
     return {
         "enabled": enabled,
@@ -270,6 +279,15 @@ def resolve_core_metrics(record: Any) -> dict[str, Any]:
             if success_qps is None:
                 success_qps = 0.0
 
+    success_avg = None
+    success_p95 = None
+    bd = _record_attr(record, "error_breakdown", None) or {}
+    if isinstance(bd, dict):
+        sl = bd.get("success_latency") or {}
+        if isinstance(sl, dict):
+            success_avg = _to_float(sl.get("avg_response_time", sl.get("avg")))
+            success_p95 = _to_float(sl.get("p95_response_time", sl.get("p95")))
+
     return {
         "total_requests": total_requests,
         "success_count": success_count,
@@ -278,8 +296,10 @@ def resolve_core_metrics(record: Any) -> dict[str, Any]:
         "qps": qps,
         "success_qps": success_qps,
         "avg_response_time": _to_float(_record_attr(record, "avg_response_time", None)),
+        "success_avg_response_time": success_avg,
         "p90_response_time": _to_float(_record_attr(record, "p90_response_time", None)),
         "p95_response_time": _to_float(_record_attr(record, "p95_response_time", None)),
+        "success_p95_response_time": success_p95,
         "p99_response_time": _to_float(_record_attr(record, "p99_response_time", None)),
         "error_rate": error_rate,
     }
@@ -438,8 +458,8 @@ def evaluate_perf_targets(record: Any) -> dict:
     items_cfg = targets.get("items") or []
     results: list[dict] = []
     for it in items_cfg:
-        # 启用但 value 为空：视为未配置该项，不展示、不计入 summary
-        if it.get("enabled", True) and it.get("value") is None:
+        # 无目标值：不展示、不计入（无论是否勾选）；勾选但留空 = 未配置该项
+        if it.get("value") is None:
             continue
         results.append(_evaluate_one(record, it, metrics=metrics))
 

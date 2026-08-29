@@ -192,7 +192,10 @@
       </el-form-item>
       <el-form-item label="全局变量：" label-width="100px">
         <GlobalVarsEditor ref="projectVarsEditorRef" v-model="projectGlobalVars" json-height="220px" />
-        <div class="field-hint">项目级默认值；与环境变量同名时，执行以环境变量为准</div>
+        <div class="field-hint">
+          项目级默认值；与环境变量同名时，执行以环境变量为准。
+          推荐到 <strong>环境配置 → 项目共享变量</strong> 维护（更易发现）。系统配置键已自动隐藏。
+        </div>
       </el-form-item>
     </el-form>
     <template #footer>

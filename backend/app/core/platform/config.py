@@ -41,6 +41,14 @@ BROWSER_LAB_MAX_LLM_FAILURES = int(os.getenv("BROWSER_LAB_MAX_LLM_FAILURES", "3"
 BROWSER_LAB_VIEWPORT_WIDTH = int(os.getenv("BROWSER_LAB_VIEWPORT_WIDTH", "1920"))
 BROWSER_LAB_VIEWPORT_HEIGHT = int(os.getenv("BROWSER_LAB_VIEWPORT_HEIGHT", "1080"))
 
+# 浏览器 Agent 运行位置（Browser Lab / UI Agent 共用）
+BROWSER_RUN_DEFAULT_MODE = "runner"
+BROWSER_RUN_DISPATCH_ENABLED = os.getenv("BROWSER_RUN_DISPATCH_ENABLED", "1").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+# Runner Browser Lab 心跳超时（秒），无 heartbeat 回调则 failed
+BROWSER_LAB_RUNNER_HEARTBEAT_TIMEOUT = int(os.getenv("BROWSER_LAB_RUNNER_HEARTBEAT_TIMEOUT", "120"))
+
 # ========================= MySQL数据库的配置 =========================
 DATABASE = {
     'host': os.getenv('DATABASE_HOST', 'localhost'),
@@ -77,6 +85,11 @@ APSCHEDULER_CONFIG = {
     'password': os.getenv('REDIS_PASSWORD', 'R3d1s_S3cur3#2026')
 }
 
+# 测试管理质量门禁：true 时发布版本须通过门禁或已批准豁免
+TEST_MANAGEMENT_QUALITY_GATE_ENFORCE = os.getenv(
+    "TEST_MANAGEMENT_QUALITY_GATE_ENFORCE", "false"
+).lower() in ("1", "true", "yes")
+
 # TORTOISE_ORM配置
 TORTOISE_ORM = {
     'connections': {
@@ -88,7 +101,7 @@ TORTOISE_ORM = {
     "timezone": "Asia/Shanghai",
     'apps': {
         'models': {
-            'models': ['aerich.models', 'app.models.sys', 'app.models.ui', 'app.models.app', 'app.models.http', 'app.models.schedule', 'app.models.perf', 'app.models.ai', 'app.models.knowledge'],
+            'models': ['aerich.models', 'app.models.sys', 'app.models.ui', 'app.models.app', 'app.models.http', 'app.models.schedule', 'app.models.perf', 'app.models.ai', 'app.models.knowledge', 'app.models.test_management'],
             'default_connection': 'default'
         },
     }
@@ -103,13 +116,13 @@ ALGORITHM = "HS256"
 TOKEN_TIMEOUT = 60 * 60 * 24 * 1
 # Runner 客户端会话 token 有效期（秒），默认 7 天
 RUNNER_TOKEN_TIMEOUT = int(os.getenv("RUNNER_TOKEN_TIMEOUT", str(60 * 60 * 24 * 7)))
-RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.6.1")
+RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.7.0")
 # 引擎最低版本（压测 / 录制等能力通用门禁）
 RUNNER_ENGINE_VERSION_MIN = os.getenv("RUNNER_ENGINE_VERSION_MIN", "1.0.0")
 RUNNER_CLIENT_VERSION_MIN = os.getenv("RUNNER_CLIENT_VERSION_MIN", "1.3.8")
-RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.6.1")
+RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.7.0")
 # 平台产品版本（页脚、/runner/version 展示，与 Runner 客户端版本独立）
-PLATFORM_VERSION = os.getenv("PLATFORM_VERSION", "1.6.0")
+PLATFORM_VERSION = os.getenv("PLATFORM_VERSION", "1.7.0")
 # Runner 客户端安装包下载地址（zip 或文档页）；为空时客户端根据平台地址推导
 RUNNER_CLIENT_DOWNLOAD_URL = os.getenv("RUNNER_CLIENT_DOWNLOAD_URL", "").strip()
 # Phase 6：connect 下发按设备隔离的 MQ/Redis 凭证（需 RabbitMQ Management + Redis ACL）
@@ -195,6 +208,9 @@ API_FILE_BUCKET = os.getenv('API_FILE_BUCKET', 'api-test-files')
 AI_REQUIREMENT_BUCKET = os.getenv('AI_REQUIREMENT_BUCKET', 'ai-requirements')
 AI_KNOWLEDGE_BUCKET = os.getenv('AI_KNOWLEDGE_BUCKET', 'ai-knowledge')
 UI_TEST_FILE_BUCKET = os.getenv('UI_TEST_FILE_BUCKET', 'ui-test-files')
+TEST_DEFECT_FILE_BUCKET = os.getenv('TEST_DEFECT_FILE_BUCKET', 'test-defect-files')
+TEST_DEFECT_FILE_MAX_BYTES = int(os.getenv('TEST_DEFECT_FILE_MAX_BYTES', str(20 * 1024 * 1024)))
+TEST_DEFECT_ATTACHMENTS_MAX = int(os.getenv('TEST_DEFECT_ATTACHMENTS_MAX', '20'))
 KNOWLEDGE_DIR = os.path.join(STATIC_DIR, 'ai_knowledge')
 KNOWLEDGE_GENERIC_TEMPLATE_DIR = os.path.join(STATIC_DIR, 'knowledge', 'generic')
 KNOWLEDGE_MAX_FILE_MB = int(os.getenv('KNOWLEDGE_MAX_FILE_MB', '20'))

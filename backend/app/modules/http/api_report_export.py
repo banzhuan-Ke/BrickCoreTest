@@ -159,11 +159,17 @@ def generate_api_html_report(
     success = suite_record.get('success_cases', 0)
     failed = suite_record.get('failed_cases', 0)
     skipped = suite_record.get('skipped_cases', 0)
+    quarantine_skip = suite_record.get('quarantine_skip', 0) or 0
     error = suite_record.get('error_cases', 0) or 0
+    denom = max(0, int(total) - int(quarantine_skip))
+    # 进度条仅反映可计入分母的用例；隔离不进分子也不进分母
+    membership_skip = max(0, int(skipped) - int(quarantine_skip)) if int(skipped) >= int(quarantine_skip) else max(0, int(skipped))
 
-    success_percent = round(success / total * 100, 2) if total > 0 else 0
-    fail_percent = round(failed / total * 100, 2) if total > 0 else 0
-    skip_percent = round(skipped / total * 100, 2) if total > 0 else 0
+    success_percent = round(success / denom * 100, 2) if denom > 0 else 0
+    fail_percent = round(failed / denom * 100, 2) if denom > 0 else 0
+    skip_percent = round(membership_skip / denom * 100, 2) if denom > 0 else 0
+    # 展示用：跳过卡片不重复计隔离（隔离有独立卡片）
+    skipped_display = membership_skip
 
     status = suite_record.get('status', '未知')
     if status == 'success':
@@ -192,6 +198,20 @@ def generate_api_html_report(
     http_duration = round(float(http_duration or 0), 2)
     username = suite_record.get('run_by', '未知')
     env_name = suite_record.get('env_name', '未知')
+    worker_id = suite_record.get('worker_id')
+    worker_name = suite_record.get('worker_name') or ''
+    if worker_id is not None:
+        worker_label = f"经执行机 #{worker_id}"
+        if worker_name:
+            worker_label += f" {worker_name}"
+        worker_html = (
+            '<div class="info-item">'
+            '<span class="label">执行机：</span>'
+            f'<span class="value">{worker_label}</span>'
+            '</div>'
+        )
+    else:
+        worker_html = ''
     generate_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     # 报告类型标签
@@ -332,6 +352,7 @@ def generate_api_html_report(
                     <span class="label">执行环境：</span>
                     <span class="value">{env_name}</span>
                 </div>
+                {worker_html}
                 <div class="info-item">
                     <span class="label">总用例数：</span>
                     <span class="value">{total}</span>
@@ -347,7 +368,8 @@ def generate_api_html_report(
             <div class="card info"><div class="number">{total}</div><div class="label">用例总数</div></div>
             <div class="card success"><div class="number">{success}</div><div class="label">成功</div></div>
             <div class="card fail"><div class="number">{failed}</div><div class="label">失败</div></div>
-            <div class="card warning"><div class="number">{skipped}</div><div class="label">跳过</div></div>
+            <div class="card warning"><div class="number">{skipped_display}</div><div class="label">跳过</div></div>
+            <div class="card info"><div class="number">{quarantine_skip}</div><div class="label">已隔离未跑</div></div>
             <div class="card"><div class="number" style="color:#67c23a;">{http_duration:.0f}</div><div class="label">接口总耗时(ms)</div></div>
             <div class="card"><div class="number">{duration:.0f}</div><div class="label">执行总耗时(ms)</div></div>
         </div>

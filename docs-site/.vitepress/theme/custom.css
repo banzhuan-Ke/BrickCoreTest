@@ -1,0 +1,23 @@
+/* 专题文截图：缩小以免喧宾夺主 */
+.vp-doc table img {
+  max-width: min(420px, 100%);
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg-soft);
+}
+
+.vp-doc img[src*="/demo/"] {
+  max-width: min(480px, 100%);
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--vp-c-divider);
+}
+
+.vp-doc table td:first-child {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--vp-c-brand-1);
+  vertical-align: middle;
+  white-space: nowrap;
+}

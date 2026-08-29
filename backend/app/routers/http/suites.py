@@ -36,6 +36,8 @@ async def create_suite(item: ApiSuiteCreate, username: str = Depends(get_current
     project = await Project.get_or_none(id=item.project_id, is_del=False)
     if not project:
         raise HTTPException(status_code=422, detail="项目不存在")
+    if item.catalog_id:
+        await resolve_catalog(item.project_id, item.catalog_id)
     
     async with transactions.in_transaction():
         suite = await ApiTestSuite.create(
@@ -192,7 +194,11 @@ async def update_suite(suite_id: int, item: ApiSuiteUpdate, username: str = Depe
     
     async with transactions.in_transaction():
         suite.name = item.name
-        suite.catalog_id = item.catalog_id
+        if item.catalog_id:
+            await resolve_catalog(suite.project_id, item.catalog_id)
+            suite.catalog_id = item.catalog_id
+        else:
+            suite.catalog_id = None
         suite.env_id = item.env_id
         suite.timeout = item.timeout
         suite.retry_count = item.retry_count
@@ -325,6 +331,8 @@ async def run_single_case(
     data_run_index: Optional[int] = None,
     data_row_label: Optional[str] = None,
     project_global_vars: dict = None,
+    *,
+    worker_id: Optional[int] = None,
 ) -> ApiRunResult:
     """执行单个用例"""
     stage_timings = {}
@@ -373,7 +381,9 @@ async def run_single_case(
 
     # ===== API Token 授权注入 =====
     from app.modules.http.api_auth_service import inject_auth_variables
-    auth_vars, auth_err = await inject_auth_variables(case.project_id, env_id, all_variables)
+    auth_vars, auth_err = await inject_auth_variables(
+        case.project_id, env_id, all_variables, worker_id=worker_id
+    )
     if auth_err:
         return ApiRunResult(record_id=0, status="failed", error=f"授权刷新失败: {auth_err}")
     auth_injected_keys = list(auth_vars.keys()) if auth_vars else []
@@ -402,6 +412,9 @@ async def run_single_case(
         api_headers=api.headers,
         case_headers=case.request_headers,
     )
+    from app.modules.stability.request_id import ensure_request_id
+
+    headers, request_id = ensure_request_id(headers)
     
     api_params = api.params or []
     if isinstance(api_params, dict):
@@ -506,7 +519,11 @@ async def run_single_case(
         "replacements": all_replacements,
         "auth_injected_keys": auth_injected_keys,
         "script_logs": script_logs,   # 前置脚本日志（后置脚本日志将在执行后追加）
+        "request_id": request_id,
     }
+    if worker_id is not None:
+        request_detail["via_worker"] = True
+        request_detail["worker_id"] = worker_id
     
     stage_timings["build_request_ms"] = round((time.time() - _stage_start) * 1000, 2)
     _stage_start = time.time()
@@ -527,6 +544,11 @@ async def run_single_case(
     is_grpc = api_protocol == "grpc"
     
     async def _execute_once():
+        if worker_id is not None and is_ws:
+            raise RuntimeError("经执行机暂不支持 WebSocket 用例，未回退为本机发送")
+        if worker_id is not None and is_grpc:
+            raise RuntimeError("经执行机暂不支持 gRPC 用例，未回退为本机发送")
+
         if is_ws:
             from app.modules.http.ws_executor import execute_ws_case_attempt
 
@@ -586,6 +608,7 @@ async def run_single_case(
                 auto_validate_schema=auto_validate_schema,
                 env_id=env_id,
                 script_logs=script_logs,
+                worker_id=worker_id,
             )
             last_attempt_timings.update(attempt_timings)
             return (
@@ -632,115 +655,139 @@ async def run_single_case(
                 db_assertion_results,
             )
 
-        async with httpx.AsyncClient(timeout=case.timeout, follow_redirects=True) as client:
-            method = api.method.upper()
-            kwargs = {"headers": prepare_httpx_headers(headers), "params": params}
-
-            if method in ["POST", "PUT", "PATCH"]:
-                if body_type in ["json", "xml"] and isinstance(body, (dict, list)):
-                    kwargs["json"] = body if body_type == "json" else body
-                elif body_type == "form-data":
-                    kwargs["files"] = build_form_data_multipart(
-                        body_fields, API_FILE_BUCKET, use_bytes_io=True
-                    )
-                elif body is not None:
-                    kwargs["data"] = body
-
-            _t0 = time.time()
-            response = await client.request(method, url, **kwargs)
-            last_attempt_timings["request_ms"] = round((time.time() - _t0) * 1000, 2)
+        method = api.method.upper()
+        if worker_id is not None:
+            from app.modules.http.worker_http_proxy import WorkerProxyError, send_http_via_worker
 
             try:
-                response_body = response.json()
-            except:
-                response_body = response.text
-
-            # 执行断言（支持条件分支 assertion_groups）
-            _t0 = time.time()
-            all_passed, assertion_rows, matched_group = run_case_assertions(response, response_body, case)
-            assertions_result = []
-            for row in assertion_rows:
-                assertions_result.append(ApiAssertionResult(
-                    type=row.get("type"),
-                    target=row.get("target"),
-                    operator=row.get("operator"),
-                    expected=row.get("expected"),
-                    actual=row.get("actual"),
-                    passed=row.get("passed"),
-                    group_name=row.get("group_name"),
-                    description=row.get("description"),
-                ))
-            if matched_group:
-                last_attempt_timings["assertion_group"] = matched_group
-            last_attempt_timings["assertion_ms"] = round((time.time() - _t0) * 1000, 2)
-
-            # 自动校验响应 Schema
-            _t0 = time.time()
-            if auto_validate_schema:
-                schema_data = api.response_schema or {}
-                schema_obj = schema_data.get('schema') if isinstance(schema_data, dict) else None
-                if schema_obj:
-                    from .utils import validate_response_schema
-                    schema_assertions = validate_response_schema(response_body, schema_obj)
-                    for sa in schema_assertions:
-                        assertions_result.append(sa)
-                        if not sa.get("passed"):
-                            all_passed = False
-            last_attempt_timings["schema_validate_ms"] = round((time.time() - _t0) * 1000, 2)
-            
-            # 提取变量
-            _t0 = time.time()
-            extracted_vars, extractor_results = extract_variables(
-                response_body, case.extractors or [], headers=response.headers
-            )
-            last_attempt_timings["extract_vars_ms"] = round((time.time() - _t0) * 1000, 2)
-
-            # ===== 后置脚本 =====
-            _t0 = time.time()
-            if case.post_script:
-                from .script_runner import run_script
-                resp_ctx = {
-                    "status_code": response.status_code,
-                    "body": response_body,
-                    "headers": dict(response.headers),
-                }
-                script_vars = {**all_variables, **extracted_vars}
-                post_result = run_script(case.post_script, script_vars, resp_ctx)
-                for key, val in post_result["variables"].items():
-                    if key not in all_variables or val != all_variables.get(key):
-                        extracted_vars[key] = val
-                        all_variables[key] = val
-                script_logs.extend(post_result["logs"])
-                if post_result["error"]:
-                    script_logs.append(f"[post_script ERROR] {post_result['error']}")
-            last_attempt_timings["post_script_ms"] = round((time.time() - _t0) * 1000, 2)
-
-            # ===== 数据库断言 =====
-            _t0 = time.time()
-            db_assertion_results = []
-            if getattr(case, "db_assertions", None):
-                from app.core.db.db_factory_service import evaluate_db_assertions
-                script_vars = {**all_variables, **extracted_vars}
-                db_eval = await evaluate_db_assertions(
-                    case.db_assertions or [],
-                    script_vars,
-                    env_id,
-                    case.project_id,
+                response = await send_http_via_worker(
+                    project_id=case.project_id,
+                    worker_id=worker_id,
+                    method=method,
+                    url=url,
+                    headers=headers if isinstance(headers, dict) else {},
+                    params=params,
+                    body=body,
+                    body_type=body_type,
+                    body_fields=body_fields,
+                    timeout=int(case.timeout or 30),
                 )
-                for dr in db_eval.get("results", []):
-                    db_assertion_results.append(ApiAssertionResult(
-                        type="db",
-                        target=dr.get("target"),
-                        operator=dr.get("operator", "equals"),
-                        expected=dr.get("expected"),
-                        actual=dr.get("actual"),
-                        passed=bool(dr.get("passed")),
-                    ))
-                    if not dr.get("passed"):
-                        all_passed = False
-            last_attempt_timings["db_assertion_ms"] = round((time.time() - _t0) * 1000, 2)
+            except WorkerProxyError as exc:
+                raise RuntimeError(str(exc)) from exc
+            last_attempt_timings["request_ms"] = round(response.elapsed_ms, 2)
+            if response.worker_name:
+                request_detail["worker_name"] = response.worker_name
+        else:
+            async with httpx.AsyncClient(timeout=case.timeout, follow_redirects=True) as client:
+                kwargs = {"headers": prepare_httpx_headers(headers), "params": params}
 
-            return response, response_body, assertions_result, all_passed, extracted_vars, extractor_results, db_assertion_results
+                if method in ["POST", "PUT", "PATCH"]:
+                    if body_type in ["json", "xml"] and isinstance(body, (dict, list)):
+                        kwargs["json"] = body if body_type == "json" else body
+                    elif body_type == "form-data":
+                        kwargs["files"] = build_form_data_multipart(
+                            body_fields, API_FILE_BUCKET, use_bytes_io=True
+                        )
+                    elif body is not None:
+                        kwargs["data"] = body
+
+                _t0 = time.time()
+                response = await client.request(method, url, **kwargs)
+                last_attempt_timings["request_ms"] = round((time.time() - _t0) * 1000, 2)
+
+        try:
+            response_body = response.json()
+        except Exception:
+            response_body = getattr(response, "text", None)
+            if response_body is None:
+                response_body = ""
+
+        # 执行断言（支持条件分支 assertion_groups）
+        _t0 = time.time()
+        all_passed, assertion_rows, matched_group = run_case_assertions(response, response_body, case)
+        assertions_result = []
+        for row in assertion_rows:
+            assertions_result.append(ApiAssertionResult(
+                type=row.get("type"),
+                target=row.get("target"),
+                operator=row.get("operator"),
+                expected=row.get("expected"),
+                actual=row.get("actual"),
+                passed=row.get("passed"),
+                group_name=row.get("group_name"),
+                description=row.get("description"),
+            ))
+        if matched_group:
+            last_attempt_timings["assertion_group"] = matched_group
+        last_attempt_timings["assertion_ms"] = round((time.time() - _t0) * 1000, 2)
+
+        # 自动校验响应 Schema
+        _t0 = time.time()
+        if auto_validate_schema:
+            schema_data = api.response_schema or {}
+            schema_obj = schema_data.get('schema') if isinstance(schema_data, dict) else None
+            if schema_obj:
+                from .utils import validate_response_schema
+                schema_assertions = validate_response_schema(response_body, schema_obj)
+                for sa in schema_assertions:
+                    assertions_result.append(sa)
+                    if not sa.get("passed"):
+                        all_passed = False
+        last_attempt_timings["schema_validate_ms"] = round((time.time() - _t0) * 1000, 2)
+
+        # 提取变量
+        _t0 = time.time()
+        extracted_vars, extractor_results = extract_variables(
+            response_body, case.extractors or [], headers=response.headers
+        )
+        last_attempt_timings["extract_vars_ms"] = round((time.time() - _t0) * 1000, 2)
+
+        # ===== 后置脚本 =====
+        _t0 = time.time()
+        if case.post_script:
+            from .script_runner import run_script
+            resp_ctx = {
+                "status_code": response.status_code,
+                "body": response_body,
+                "headers": dict(response.headers),
+            }
+            script_vars = {**all_variables, **extracted_vars}
+            post_result = run_script(case.post_script, script_vars, resp_ctx)
+            for key, val in post_result["variables"].items():
+                if key not in all_variables or val != all_variables.get(key):
+                    extracted_vars[key] = val
+                    all_variables[key] = val
+            script_logs.extend(post_result["logs"])
+            if post_result["error"]:
+                script_logs.append(f"[post_script ERROR] {post_result['error']}")
+        last_attempt_timings["post_script_ms"] = round((time.time() - _t0) * 1000, 2)
+
+        # ===== 数据库断言 =====
+        _t0 = time.time()
+        db_assertion_results = []
+        if getattr(case, "db_assertions", None):
+            from app.core.db.db_factory_service import evaluate_db_assertions
+            script_vars = {**all_variables, **extracted_vars}
+            db_eval = await evaluate_db_assertions(
+                case.db_assertions or [],
+                script_vars,
+                env_id,
+                case.project_id,
+            )
+            for dr in db_eval.get("results", []):
+                db_assertion_results.append(ApiAssertionResult(
+                    type="db",
+                    target=dr.get("target"),
+                    operator=dr.get("operator", "equals"),
+                    expected=dr.get("expected"),
+                    actual=dr.get("actual"),
+                    passed=bool(dr.get("passed")),
+                ))
+                if not dr.get("passed"):
+                    all_passed = False
+        last_attempt_timings["db_assertion_ms"] = round((time.time() - _t0) * 1000, 2)
+
+        return response, response_body, assertions_result, all_passed, extracted_vars, extractor_results, db_assertion_results
 
     # 重试循环
     last_error = None
@@ -923,6 +970,8 @@ async def run_data_driven_case(
     base_variables: dict = None,
     auto_validate_schema: bool = False,
     propagate_extracted: bool = True,
+    *,
+    worker_id: Optional[int] = None,
 ):
     """数据驱动执行：按 data_set 每行执行一次 run_single_case，返回 ApiDataDrivenRunResult"""
     from app.schemas.http import ApiDataDrivenRunResult
@@ -935,7 +984,10 @@ async def run_data_driven_case(
 
     if not data_set:
         # 无数据集时当做普通单次执行
-        result = await run_single_case(case_id, env_id, None, username, base_variables, auto_validate_schema)
+        result = await run_single_case(
+            case_id, env_id, None, username, base_variables, auto_validate_schema,
+            worker_id=worker_id,
+        )
         return ApiDataDrivenRunResult(
             total_rows=1,
             results=[result],
@@ -962,6 +1014,7 @@ async def run_data_driven_case(
             auto_validate_schema,
             data_run_index=idx,
             data_row_label=row_label,
+            worker_id=worker_id,
         )
         results.append(result)
         if propagate_extracted and result.extracted_vars:
@@ -1010,7 +1063,13 @@ async def run_suite(suite_id: int, request: ApiSuiteRunRequest, username: str = 
         raise HTTPException(status_code=422, detail="请指定执行环境")
     
     return await batch_run(
-        ApiBatchRunRequest(case_ids=case_ids, env_id=env_id, suite_id=suite_id, auto_validate_schema=getattr(request, 'auto_validate_schema', False)),
+        ApiBatchRunRequest(
+            case_ids=case_ids,
+            env_id=env_id,
+            suite_id=suite_id,
+            auto_validate_schema=getattr(request, "auto_validate_schema", False),
+            worker_id=getattr(request, "worker_id", None),
+        ),
         None,
         username
     )
@@ -1052,11 +1111,14 @@ async def get_run_records(
             "success_cases": record.success_cases,
             "failed_cases": record.failed_cases,
             "skipped_cases": record.skipped_cases,
+            "quarantine_skip": getattr(record, "quarantine_skip", 0) or 0,
             "start_time": record.start_time,
             "end_time": record.end_time,
             "duration": record.duration,
             "env_id": record.env_id,
             "env_name": record.env_name,
+            "worker_id": getattr(record, "worker_id", None),
+            "worker_name": getattr(record, "worker_name", None),
             "run_by": record.run_by
         })
     
@@ -1114,10 +1176,13 @@ async def get_run_record_detail(record_id: int):
         "success_cases": record.success_cases,
         "failed_cases": record.failed_cases,
         "skipped_cases": record.skipped_cases,
+        "quarantine_skip": getattr(record, "quarantine_skip", 0) or 0,
         "start_time": record.start_time,
         "end_time": record.end_time,
         "duration": record.duration,
         "env_name": record.env_name,
+        "worker_id": getattr(record, "worker_id", None),
+        "worker_name": getattr(record, "worker_name", None),
         "run_by": record.run_by,
         "case_results": case_results
     }

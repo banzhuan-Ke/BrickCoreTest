@@ -149,6 +149,15 @@
           type="danger"
           @click="handleBatchDelete"
         >删除选中 ({{ selectedIds.length }})</el-button>
+        <el-button
+          v-if="canReleaseEdit && selectedIds.length"
+          type="warning"
+          @click="openAddToRelease"
+        >纳入版本 ({{ selectedIds.length }})</el-button>
+        <el-button
+          v-if="canReleaseView && selectedIds.length === 1"
+          @click="openAssetLinks"
+        >关联自动化</el-button>
       </div>
 
       <el-table
@@ -157,7 +166,9 @@
         :data="caseList"
         border
         stripe
+        class="case-table-clickable"
         @selection-change="onSelect"
+        @row-click="onCaseRowClick"
       >
         <el-table-column type="selection" width="45" fixed="left" />
         <template v-for="col in activeColumns" :key="col.key">
@@ -321,7 +332,7 @@
         </template>
         <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button link type="primary" @click.stop="openEdit(row)">编辑</el-button>
             <el-button
               v-if="row.ui_case_id"
               link
@@ -368,86 +379,168 @@
         @size-change="loadList"
       />
 
-      <el-dialog
+      <el-drawer
         v-model="editVisible"
         :title="editDialogTitle"
-        width="820px"
+        size="760px"
         destroy-on-close
-        top="5vh"
-        @closed="editForm = null"
+        class="case-lifecycle-drawer"
+        @closed="onEditClosed"
       >
-        <el-form v-if="editForm" label-width="110px" class="edit-form">
-          <el-row :gutter="16">
-            <el-col :span="12">
-              <el-form-item label="所属产品">
-                <el-input v-model="editForm.product" placeholder="禅道「所属产品」" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item label="所属模块">
-                <el-input v-model="editForm.module" placeholder="功能模块路径，与产品区分" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="24">
-              <el-form-item label="关联需求">
-                <el-input v-model="editForm.related_story" placeholder="相关研发需求" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="24">
-              <el-form-item label="用例标题" required>
-                <el-input v-model="editForm.title" type="textarea" :rows="2" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item label="禅道ID">
-                <el-input
-                  v-model="editForm.zentao_case_id"
-                  placeholder="禅道用例编号（导入禅道后可回填）"
-                  clearable
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item label="优先级">
-                <el-select v-model="editForm.priority" style="width: 100%;">
-                  <el-option label="1-高" value="1" /><el-option label="2-中" value="2" />
-                  <el-option label="3-低" value="3" /><el-option label="4-建议" value="4" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item label="用例类型">
-                <el-select v-model="editForm.type" style="width: 100%;">
-                  <el-option v-for="t in ZENTAO_CASE_TYPES" :key="t" :label="t" :value="t" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item label="适用阶段"><el-input v-model="editForm.stage" /></el-form-item>
-            </el-col>
-            <el-col :span="24">
-              <el-form-item label="前置条件">
-                <el-input v-model="editForm.precondition" type="textarea" :rows="2" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="24">
-              <el-form-item label="关键词"><el-input v-model="editForm.keywords" /></el-form-item>
-            </el-col>
-          </el-row>
-          <el-form-item label="步骤">
-            <div v-for="(st, idx) in editForm.steps" :key="idx" class="step-row">
-              <el-input v-model="st.step" placeholder="步骤" type="textarea" :rows="1" />
-              <el-input v-model="st.expect" placeholder="预期" type="textarea" :rows="1" />
-              <el-button link type="danger" @click="editForm.steps.splice(idx, 1)">删</el-button>
-            </div>
-            <el-button size="small" @click="editForm.steps.push({ step: '', expect: '' })">+ 步骤</el-button>
-          </el-form-item>
-        </el-form>
-        <template #footer>
-          <el-button @click="editVisible = false">取消</el-button>
-          <el-button type="primary" :loading="saving" @click="saveEdit">保存</el-button>
-        </template>
-      </el-dialog>
+        <div v-if="editForm" v-loading="lifecycleLoading">
+          <el-tabs v-model="editTab">
+            <el-tab-pane label="基本信息" name="basic">
+              <el-form label-width="110px" class="edit-form">
+                <el-row :gutter="16">
+                  <el-col :span="12">
+                    <el-form-item label="所属产品">
+                      <el-input v-model="editForm.product" placeholder="禅道「所属产品」" :disabled="!canExecute" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="所属模块">
+                      <el-input v-model="editForm.module" placeholder="功能模块路径，与产品区分" :disabled="!canExecute" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="24">
+                    <el-form-item label="关联需求文案">
+                      <el-input v-model="editForm.related_story" placeholder="相关研发需求" :disabled="!canExecute" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="24">
+                    <el-form-item label="用例标题" required>
+                      <el-input v-model="editForm.title" type="textarea" :rows="2" :disabled="!canExecute" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="禅道ID">
+                      <el-input
+                        v-model="editForm.zentao_case_id"
+                        placeholder="禅道用例编号（导入禅道后可回填）"
+                        clearable
+                        :disabled="!canExecute"
+                      />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="优先级">
+                      <el-select v-model="editForm.priority" style="width: 100%;" :disabled="!canExecute">
+                        <el-option label="1-高" value="1" /><el-option label="2-中" value="2" />
+                        <el-option label="3-低" value="3" /><el-option label="4-建议" value="4" />
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="用例类型">
+                      <el-select v-model="editForm.type" style="width: 100%;" :disabled="!canExecute">
+                        <el-option v-for="t in ZENTAO_CASE_TYPES" :key="t" :label="t" :value="t" />
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="适用阶段">
+                      <el-input v-model="editForm.stage" :disabled="!canExecute" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="24">
+                    <el-form-item label="关键词">
+                      <el-input v-model="editForm.keywords" :disabled="!canExecute" />
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+              </el-form>
+            </el-tab-pane>
+            <el-tab-pane label="详情/步骤" name="steps">
+              <el-form label-width="110px" class="edit-form">
+                <el-form-item label="前置条件">
+                  <el-input
+                    v-model="editForm.precondition"
+                    type="textarea"
+                    :rows="3"
+                    :disabled="!canExecute"
+                  />
+                </el-form-item>
+                <el-form-item label="步骤">
+                  <div v-for="(st, idx) in editForm.steps" :key="idx" class="step-row">
+                    <el-input v-model="st.step" placeholder="步骤" type="textarea" :rows="1" :disabled="!canExecute" />
+                    <el-input v-model="st.expect" placeholder="预期" type="textarea" :rows="1" :disabled="!canExecute" />
+                    <el-button
+                      v-if="canExecute"
+                      link
+                      type="danger"
+                      @click="editForm.steps.splice(idx, 1)"
+                    >删</el-button>
+                  </div>
+                  <el-button
+                    v-if="canExecute"
+                    size="small"
+                    @click="editForm.steps.push({ step: '', expect: '' })"
+                  >+ 步骤</el-button>
+                </el-form-item>
+              </el-form>
+            </el-tab-pane>
+            <el-tab-pane v-if="editForm.id" label="需求" name="requirement">
+              <el-descriptions v-if="lifecycle?.requirement" :column="1" border>
+                <el-descriptions-item label="需求 ID">{{ lifecycle.requirement.id }}</el-descriptions-item>
+                <el-descriptions-item label="名称">{{ lifecycle.requirement.name }}</el-descriptions-item>
+                <el-descriptions-item label="评审状态">{{ lifecycle.requirement.review_status || '—' }}</el-descriptions-item>
+                <el-descriptions-item label="解析状态">{{ lifecycle.requirement.parse_status || '—' }}</el-descriptions-item>
+              </el-descriptions>
+              <el-empty v-else description="未关联 AI 需求（可在基本信息填写关联需求文案）" />
+              <div v-if="lifecycle?.releases?.length" style="margin-top: 12px">
+                <h4>纳入版本</h4>
+                <el-table :data="lifecycle.releases" border size="small">
+                  <el-table-column prop="release_key" label="版本号" width="120" />
+                  <el-table-column prop="release_name" label="名称" min-width="140" />
+                  <el-table-column prop="scope_status" label="范围状态" width="110" />
+                </el-table>
+              </div>
+            </el-tab-pane>
+            <el-tab-pane v-if="editForm.id" label="缺陷" name="defects">
+              <el-table :data="lifecycle?.defects || []" border size="small" empty-text="暂无关联缺陷">
+                <el-table-column prop="defect_key" label="编号" width="110" />
+                <el-table-column prop="title" label="标题" min-width="180" show-overflow-tooltip />
+                <el-table-column prop="status" label="状态" width="100" />
+                <el-table-column prop="severity" label="严重度" width="90" />
+                <el-table-column label="操作" width="90">
+                  <template #default="{ row }">
+                    <el-button link type="primary" @click="goDefect(row.id)">打开</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane v-if="editForm.id" label="测试计划" name="plans">
+              <el-table :data="lifecycle?.plan_runs || []" border size="small" empty-text="暂无计划运行记录">
+                <el-table-column prop="plan_name" label="计划" min-width="140" show-overflow-tooltip />
+                <el-table-column prop="title" label="运行项" min-width="140" show-overflow-tooltip />
+                <el-table-column prop="result_status" label="结果" width="100" />
+                <el-table-column label="操作" width="100">
+                  <template #default="{ row }">
+                    <el-button
+                      v-if="row.run_id"
+                      link
+                      type="primary"
+                      @click="$router.push(`/test-plan-runs/${row.run_id}`)"
+                    >运行</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <div v-if="lifecycle?.asset_links?.length" style="margin-top: 12px">
+                <h4>自动化映射</h4>
+                <el-table :data="lifecycle.asset_links" border size="small">
+                  <el-table-column prop="asset_type" label="类型" width="120" />
+                  <el-table-column prop="asset_id" label="资产ID" width="100" />
+                  <el-table-column prop="link_type" label="链接类型" width="110" />
+                </el-table>
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+          <div class="case-drawer-footer">
+            <el-button @click="editVisible = false">关闭</el-button>
+            <el-button v-if="canExecute" type="primary" :loading="saving" @click="saveEdit">保存</el-button>
+          </div>
+        </div>
+      </el-drawer>
 
       <el-drawer v-model="dupVisible" title="重复检验结果" size="920px" class="dup-drawer">
         <div v-if="!dupGroups.length" class="dup-empty">
@@ -531,19 +624,34 @@
         :project-id="projectId()"
         @done="onRecordDone"
       />
+      <PickReleaseDialog
+        v-if="projectId()"
+        v-model="addToReleaseVisible"
+        :project-id="projectId()"
+        :case-ids="selectedIds"
+      />
+      <AssetLinkDialog
+        v-if="projectId()"
+        v-model="assetLinkVisible"
+        :project-id="projectId()"
+        :functional-case-id="assetLinkCaseId"
+        :case-title="assetLinkCaseTitle"
+      />
     </template>
   </PageCard>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageCard from '@/components/PageCard.vue'
 import TableColumnPicker from '@/components/TableColumnPicker.vue'
 import FunctionalCaseToUiDialog from '@/views/AI/components/FunctionalCaseToUiDialog.vue'
 import FunctionalCaseToAppDialog from '@/views/AI/components/FunctionalCaseToAppDialog.vue'
 import FunctionalCaseRecordDialog from '@/views/AI/components/FunctionalCaseRecordDialog.vue'
+import PickReleaseDialog from '@/views/TestManagement/components/PickReleaseDialog.vue'
+import AssetLinkDialog from '@/views/TestManagement/components/AssetLinkDialog.vue'
 import { aiFunctionalCaseApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
@@ -577,6 +685,7 @@ const UI_STATUS_LABELS = {
 const proStore = ProjectStore()
 const uStore = UserStore()
 const router = useRouter()
+const route = useRoute()
 const canExecute = computed(() => uStore.hasPermission('ai_test:execute'))
 const canImportUi = computed(
   () => uStore.hasPermission('ai_test:execute') && uStore.hasPermission('ui_case:edit')
@@ -584,11 +693,17 @@ const canImportUi = computed(
 const canImportApp = computed(
   () => uStore.hasPermission('ai_test:execute') && uStore.hasPermission('app_case:edit')
 )
+const canReleaseView = computed(() => uStore.hasPermission('test_release:view'))
+const canReleaseEdit = computed(() => uStore.hasPermission('test_release:edit'))
 
 const toUiVisible = ref(false)
 const toAppVisible = ref(false)
 const recordVisible = ref(false)
 const recordCase = ref(null)
+const addToReleaseVisible = ref(false)
+const assetLinkVisible = ref(false)
+const assetLinkCaseId = ref(null)
+const assetLinkCaseTitle = ref('')
 
 const loading = ref(false)
 const caseList = ref([])
@@ -658,7 +773,10 @@ const onSearch = () => {
 
 const editVisible = ref(false)
 const editForm = ref(null)
-const editDialogTitle = computed(() => (editForm.value?.id ? '编辑用例' : '新建用例'))
+const editTab = ref('basic')
+const lifecycle = ref(null)
+const lifecycleLoading = ref(false)
+const editDialogTitle = computed(() => (editForm.value?.id ? `用例 #${editForm.value.id}` : '新建用例'))
 const saving = ref(false)
 
 const dupVisible = ref(false)
@@ -748,7 +866,37 @@ const onSelect = (rows) => {
   selectedIds.value = rows.map(r => r.id)
 }
 
+const onCaseRowClick = (row, _col, event) => {
+  if (event?.target?.closest?.('.el-checkbox, .el-button, a')) return
+  openEdit(row)
+}
+
+const loadLifecycle = async (caseId) => {
+  lifecycle.value = null
+  if (!caseId) return
+  lifecycleLoading.value = true
+  try {
+    const res = await aiFunctionalCaseApi.lifecycle(caseId, projectId())
+    lifecycle.value = res.data?.data || null
+  } catch {
+    lifecycle.value = null
+  } finally {
+    lifecycleLoading.value = false
+  }
+}
+
+const onEditClosed = () => {
+  editForm.value = null
+  lifecycle.value = null
+  editTab.value = 'basic'
+}
+
+const goDefect = (defectId) => {
+  router.push({ path: '/test-defects', query: { defect_id: String(defectId) } })
+}
+
 const openEdit = (row) => {
+  editTab.value = 'basic'
   if (row) {
     editForm.value = {
       id: row.id,
@@ -766,6 +914,8 @@ const openEdit = (row) => {
       status: row.status || 'confirmed',
       steps: (row.steps || []).map(s => ({ step: s.step || '', expect: s.expect || '' }))
     }
+    editVisible.value = true
+    loadLifecycle(row.id)
   } else {
     editForm.value = {
       id: null,
@@ -783,8 +933,9 @@ const openEdit = (row) => {
       status: 'confirmed',
       steps: [{ step: '', expect: '' }]
     }
+    lifecycle.value = null
+    editVisible.value = true
   }
-  editVisible.value = true
 }
 
 const saveEdit = async () => {
@@ -1038,6 +1189,33 @@ const goSourceRequirement = (row) => {
   })
 }
 
+const openAddToRelease = () => {
+  if (!projectId()) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  if (!selectedIds.value.length) {
+    ElMessage.warning('请先选择用例')
+    return
+  }
+  addToReleaseVisible.value = true
+}
+
+const openAssetLinks = () => {
+  if (!projectId()) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  if (selectedIds.value.length !== 1) {
+    ElMessage.warning('请选择 1 条功能用例查看映射')
+    return
+  }
+  const fc = caseList.value.find(c => c.id === selectedIds.value[0])
+  assetLinkCaseId.value = selectedIds.value[0]
+  assetLinkCaseTitle.value = fc?.title || `#${selectedIds.value[0]}`
+  assetLinkVisible.value = true
+}
+
 const openRecordDialog = () => {
   if (!projectId()) {
     ElMessage.warning('请先选择项目')
@@ -1104,14 +1282,28 @@ const onToAppDone = () => {
   loadList()
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (!projectId()) {
     ElMessage.warning('请先在顶部选择项目')
     return
   }
   loadImportBatches()
   loadFilterOptions()
-  loadList()
+  await loadList()
+  const caseId = route.query.case_id ? Number(route.query.case_id) : null
+  if (caseId) {
+    const row = caseList.value.find((c) => c.id === caseId)
+    if (row) openEdit(row)
+    else {
+      try {
+        const res = await aiFunctionalCaseApi.get(caseId, projectId())
+        const data = res.data?.data
+        if (data) openEdit(data)
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 })
 
 watch(
@@ -1180,9 +1372,20 @@ watch(
   width: 100%;
 }
 .edit-form {
-  max-height: 65vh;
-  overflow-y: auto;
+  max-height: none;
+  overflow-y: visible;
   padding-right: 8px;
+}
+.case-drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.case-table-clickable :deep(.el-table__row) {
+  cursor: pointer;
 }
 .dup-empty { padding: 24px; text-align: center; color: var(--el-text-color-secondary); }
 .dup-actions {

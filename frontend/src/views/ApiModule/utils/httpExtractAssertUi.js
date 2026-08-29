@@ -26,7 +26,7 @@ export const EXTRACTOR_SOURCE_GROUPS = [
     options: [
       {
         value: 'header',
-        label: 'Header 名',
+        label: '指定 Header 名',
         placeholder: 'Set-Cookie',
         hint: '从响应头提取；填写 Header 名称（如 Set-Cookie、Authorization）',
       },
@@ -145,9 +145,17 @@ export function assertionTargetPlaceholder(type, { includeWs = false } = {}) {
   return findAssertionTypeOption(type, { includeWs })?.targetPlaceholder || '目标'
 }
 
+export function isJsonPathAssertionType(type) {
+  return type === 'json_path' || type === 'ws_json_path'
+}
+
+export function isJsonPathExtractorSource(source) {
+  return source === 'json' || source === 'jsonpath'
+}
+
 export function assertionTargetColumnLabel(type) {
   if (type === 'header') return 'Header 名'
-  if (type === 'json_path' || type === 'ws_json_path') return 'JSONPath'
+  if (isJsonPathAssertionType(type)) return 'JSONPath'
   return '目标'
 }
 

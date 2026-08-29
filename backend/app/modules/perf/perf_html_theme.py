@@ -308,6 +308,10 @@ AI_NOTE_TO_TARGET_KEY = {
     "error_rate": "error_rate",
     "total_requests": "total_requests",
     "success_qps": "success_qps",
+    "success_avg_rt": "success_avg_response_time",
+    "success_p95": "success_p95_response_time",
+    "p90": "p90_response_time",
+    "p99": "p99_response_time",
 }
 
 
@@ -329,8 +333,8 @@ def target_card_note(
 ) -> tuple[str, str]:
     """返回 (note_text, value_css_class)。
 
-    未配置目标：固定文案，不贴 AI 短评。
-    已配置：系统 message 优先；可选附加「AI 解读」。
+    未配置目标 / 本指标无目标项：只贴 AI 常规解读（若有），不写「无法按 SLA 判定」。
+    已配置本指标：系统 message 优先；可选附加「AI 解读」。
     """
     ev = evaluation if isinstance(evaluation, dict) else {}
     has_valued = any(
@@ -340,12 +344,20 @@ def target_card_note(
         and it.get("status") != "skipped"
         for it in (ev.get("items") or [])
     )
+
+    def _ai_only() -> tuple[str, str]:
+        if ai and ai_note_key:
+            ai_txt = metric_note(ai, ai_note_key)
+            if ai_txt:
+                return f"AI 解读：{ai_txt}", ""
+        return "", ""
+
     if not ev.get("enabled") or not has_valued:
-        return "未配置性能目标，无法判定是否达标", ""
+        return _ai_only()
 
     item = target_item_by_global_key(ev, target_key)
-    if not item:
-        return "", ""
+    if not item or item.get("status") == "skipped":
+        return _ai_only()
 
     sys_msg = str(item.get("message") or "").strip()
     st = item.get("status") or "unknown"
@@ -474,9 +486,16 @@ def chart_notes_by_label(ai: Optional[dict]) -> dict[str, dict[str, str]]:
     return out
 
 
-def render_ai_lists(ai: dict) -> str:
+def render_ai_lists(ai: dict, *, kind: Optional[str] = None) -> str:
     parts = []
     points = ai.get("conclusion_points") or ai.get("metric_deltas") or []
+    points_title = (
+        "分章要点"
+        if (kind or "").strip().lower() in ("merge",)
+        or str(ai.get("analysis_mode") or "").strip() == "chapter_portrait"
+        else "关键指标对照"
+    )
+    force_flat = points_title == "分章要点"
     if isinstance(points, list) and points:
         lis = []
         for p in points:
@@ -489,7 +508,7 @@ def render_ai_lists(ai: dict) -> str:
             text = str(p.get("text") or p.get("note") or "").strip()
             if not text and not label:
                 continue
-            tone = str(p.get("tone") or "").strip().lower()
+            tone = "flat" if force_flat else str(p.get("tone") or "").strip().lower()
             cls = {
                 "better": "pct-better",
                 "worse": "pct-worse",
@@ -498,12 +517,12 @@ def render_ai_lists(ai: dict) -> str:
                 "degraded": "pct-worse",
             }.get(tone, "")
             body = f"<strong>{h(label)}</strong>：{colorize_pct_in_text(text)}" if label else colorize_pct_in_text(text)
-            if cls:
+            if cls and not force_flat:
                 lis.append(f'<li><span class="{cls}">{body}</span></li>')
             else:
                 lis.append(f"<li>{body}</li>")
         if lis:
-            parts.append("<p><strong>关键指标对照</strong></p><ul>" + "".join(lis) + "</ul>")
+            parts.append(f"<p><strong>{points_title}</strong></p><ul>" + "".join(lis) + "</ul>")
     for label, key in (
         ("关注要点", "highlights"),
         ("风险", "risks"),
@@ -520,7 +539,12 @@ def render_ai_lists(ai: dict) -> str:
     return "".join(parts)
 
 
-def render_conclusion_box(ai: Optional[dict], *, fallback_html: str = "") -> str:
+def render_conclusion_box(
+    ai: Optional[dict],
+    *,
+    fallback_html: str = "",
+    kind: Optional[str] = None,
+) -> str:
     ai = ai if isinstance(ai, dict) else {}
     if ai_is_done(ai) and (ai.get("summary") or ai.get("content") or ai.get("markdown") or ai.get("conclusion_points")):
         text = ai.get("summary") or ai.get("content") or ai.get("markdown") or ""
@@ -530,12 +554,16 @@ def render_conclusion_box(ai: Optional[dict], *, fallback_html: str = "") -> str
             body += f"<p><strong>概览</strong></p><p>{h(overview)}</p>"
         if text:
             body += f"<p><strong>结论</strong></p><p>{h(text)}</p>"
-        body += render_ai_lists(ai)
-        # 有恶化要点时用 warn 边框，提示领导重点看
+        body += render_ai_lists(ai, kind=kind)
+        # 有恶化要点时用 warn 边框；汇总分章不按 better/worse 标红
         tones = []
-        for p in (ai.get("conclusion_points") or ai.get("metric_deltas") or []):
-            if isinstance(p, dict):
-                tones.append(str(p.get("tone") or "").lower())
+        force_flat = (kind or "").strip().lower() in ("merge",) or str(
+            ai.get("analysis_mode") or ""
+        ).strip() == "chapter_portrait"
+        if not force_flat:
+            for p in (ai.get("conclusion_points") or ai.get("metric_deltas") or []):
+                if isinstance(p, dict):
+                    tones.append(str(p.get("tone") or "").lower())
         box_cls = "conclusion-box warn" if any(t in ("worse", "degraded") for t in tones) else "conclusion-box"
         return f'<div class="{box_cls}">{body}</div>'
     if ai.get("status") in ("running", "pending"):

@@ -116,7 +116,15 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
     total_cases = result.get("case_count", 0)
     success = result.get("success", 0)
     skip = result.get("skip", 0)
-    pass_rate = round((success + skip) / total_cases * 100, 2) if total_cases > 0 else 0
+    from app.modules.stability.metrics import compute_suite_pass_rate, count_quarantine_skips
+
+    quarantine_skip = count_quarantine_skips(result.get("executed_cases"))
+    pass_rate = compute_suite_pass_rate(
+        success=success,
+        skip=skip,
+        quarantine_skip=quarantine_skip,
+        case_count=total_cases or case_count,
+    )
 
     run_all = len(result.get("executed_cases", []))
     no_run = result.get("no_run", 0)
@@ -175,6 +183,7 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
     suite_data.fail = result.get("fail", 0)
     suite_data.error = result.get("error", 0)
     suite_data.skip = result.get("skip", 0)
+    suite_data.quarantine_skip = quarantine_skip
     parsed_start = _parse_runner_datetime(result.get("start_time"))
     if parsed_start is not None:
         suite_data.start_time = parsed_start
@@ -253,6 +262,7 @@ async def _reaggregate_plan_execution(task_record_id: int) -> None:
                 "fail": s.fail,
                 "error": s.error,
                 "skip": s.skip,
+                "quarantine_skip": getattr(s, "quarantine_skip", 0) or 0,
                 "run_all": s.run_all,
                 "no_run": s.no_run,
                 "duration": s.duration,
@@ -265,6 +275,7 @@ async def _reaggregate_plan_execution(task_record_id: int) -> None:
         fail = agg["fail"]
         error = agg["error"]
         skip = agg["skip"]
+        quarantine_skip = agg.get("quarantine_skip", 0)
         run_all = agg["run_all"]
         no_run = agg["no_run"]
         duration = agg["duration"]
@@ -280,6 +291,7 @@ async def _reaggregate_plan_execution(task_record_id: int) -> None:
         task_data.fail = fail
         task_data.error = error
         task_data.skip = skip
+        task_data.quarantine_skip = quarantine_skip
         task_data.duration = duration
         task_data.pass_rate = pass_rate
         await task_data.save()

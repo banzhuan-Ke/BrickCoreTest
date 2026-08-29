@@ -120,7 +120,7 @@ async def stop_plan_execution(record_id: int) -> dict:
             suite_execution_id__in=list(stopped_suite_ids),
             is_del=False,
             status__in=list(STOPPABLE_CASE_STATUSES),
-        ).update(status="error")
+        ).update(status="no_run")
 
     sent = _send_stop_to_devices(device_ids, plan_execution_id=record_id)
     return {"detail": "停止成功，已通知执行器中断", "devices_notified": sent}
@@ -154,7 +154,7 @@ async def stop_suite_execution(record_id: int) -> dict:
         suite_execution_id=record_id,
         is_del=False,
         status__in=list(STOPPABLE_CASE_STATUSES),
-    ).update(status="error")
+    ).update(status="no_run")
 
     sent = _send_stop_to_devices(
         device_ids,
@@ -182,7 +182,8 @@ async def stop_case_execution(record_id: int) -> dict:
         )
         device_ids = set(await _online_device_ids())
 
-    record.status = "error"
+    # 手动停止单条：未跑完，记为 no_run（非 error），避免用例列表显示「运行错误」
+    record.status = "no_run"
     await record.save()
 
     sent = _send_stop_to_devices(

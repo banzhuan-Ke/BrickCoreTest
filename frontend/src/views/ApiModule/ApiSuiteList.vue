@@ -95,100 +95,106 @@
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
-      width="960px"
+      width="980px"
+      top="4vh"
       :close-on-click-modal="false"
       destroy-on-close
+      class="bc-dialog bc-dialog--wide suite-edit-dialog"
       @closed="handleDialogClosed"
     >
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="套件名称" prop="name">
-              <el-input v-model="form.name" placeholder="请输入套件名称" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="所属目录" prop="catalog_id">
-              <CatalogTreeSelect
-                v-model="form.catalog_id"
-                :project-id="projectId"
-                placeholder="选择目录"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="默认环境" prop="env_id">
-              <el-select v-model="form.env_id" placeholder="选择默认环境" clearable style="width: 100%">
-                <el-option
-                  v-for="env in proStore.envList"
-                  :key="env.id"
-                  :label="env.name"
-                  :value="env.id"
+      <div class="bc-dialog-body">
+        <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" class="bc-dialog-form">
+          <section class="bc-dialog-section">
+            <div class="bc-dialog-section__title">基础信息</div>
+            <div class="bc-dialog-grid-2">
+              <el-form-item label="套件名称" prop="name">
+                <el-input v-model="form.name" placeholder="请输入套件名称" maxlength="100" show-word-limit />
+              </el-form-item>
+              <el-form-item label="所属目录" prop="catalog_id">
+                <CatalogTreeSelect
+                  v-model="form.catalog_id"
+                  :project-id="projectId"
+                  placeholder="选择目录"
                 />
-              </el-select>
+              </el-form-item>
+            </div>
+            <el-form-item label="描述">
+              <el-input v-model="form.description" type="textarea" :rows="2" placeholder="可选，简要说明套件用途" />
             </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="超时时间(秒)">
-              <el-input-number v-model="form.timeout" :min="10" :max="3600" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        
-        <el-row :gutter="20">
-          <el-col :span="12">
-            <el-form-item label="失败重试">
-              <el-input-number v-model="form.retry_count" :min="0" :max="5" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item>
-              <el-checkbox v-model="form.stop_on_failure">失败时停止</el-checkbox>
-            </el-form-item>
-          </el-col>
-        </el-row>
+          </section>
 
-        <el-form-item label="执行模式">
-          <el-switch
-            v-model="form.parallel"
-            active-text="并行执行"
-            inactive-text="串行执行"
-          />
-          <span class="hint-text" style="margin-left:12px;color:var(--el-text-color-secondary);font-size:12px">
-            串行模式下用例按序执行且提取变量可传递；并行模式下用例同时执行，变量不传递
-          </span>
-        </el-form-item>
-        
-        <el-form-item label="描述">
-          <el-input v-model="form.description" type="textarea" :rows="2" />
-        </el-form-item>
+          <section class="bc-dialog-section">
+            <div class="bc-dialog-section__title">执行设置</div>
+            <div class="bc-dialog-grid-2">
+              <el-form-item label="默认环境" prop="env_id">
+                <el-select v-model="form.env_id" placeholder="选择默认环境" clearable style="width: 100%">
+                  <el-option
+                    v-for="env in proStore.envList"
+                    :key="env.id"
+                    :label="env.name"
+                    :value="env.id"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="超时时间(秒)">
+                <el-input-number v-model="form.timeout" :min="10" :max="3600" controls-position="right" style="width: 100%" />
+              </el-form-item>
+              <el-form-item label="失败重试">
+                <el-input-number v-model="form.retry_count" :min="0" :max="5" controls-position="right" style="width: 100%" />
+              </el-form-item>
+              <el-form-item label="失败策略">
+                <el-checkbox v-model="form.stop_on_failure">失败时停止后续用例</el-checkbox>
+              </el-form-item>
+            </div>
+            <el-form-item label="执行模式">
+              <div class="bc-dialog-mode-row">
+                <el-switch
+                  v-model="form.parallel"
+                  inline-prompt
+                  active-text="并行"
+                  inactive-text="串行"
+                />
+                <span class="bc-dialog-mode-hint">
+                  {{ form.parallel
+                    ? '并行：用例同时执行，提取变量不跨用例传递'
+                    : '串行：按序执行，前置用例提取变量可向后传递' }}
+                </span>
+              </div>
+            </el-form-item>
+          </section>
 
-        <el-collapse class="suite-hooks-collapse">
-          <el-collapse-item title="数据工厂（前置/后置 SQL）" name="sql">
-            <el-form-item label="前置 SQL">
-              <el-select v-model="form.setup_sql_ids" multiple filterable placeholder="选择 setup 模板" style="width: 100%">
-                <el-option v-for="t in setupTemplates" :key="t.id" :label="t.name" :value="t.id" />
-              </el-select>
+          <section class="bc-dialog-section bc-dialog-section--muted">
+            <el-collapse class="bc-dialog-collapse suite-hooks-collapse">
+              <el-collapse-item title="数据工厂（前置 / 后置 SQL）" name="sql">
+                <el-form-item label="前置 SQL">
+                  <el-select v-model="form.setup_sql_ids" multiple filterable placeholder="选择 setup 模板" style="width: 100%">
+                    <el-option v-for="t in setupTemplates" :key="t.id" :label="t.name" :value="t.id" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="后置 SQL">
+                  <el-select v-model="form.teardown_sql_ids" multiple filterable placeholder="选择 teardown 模板" style="width: 100%">
+                    <el-option v-for="t in teardownTemplates" :key="t.id" :label="t.name" :value="t.id" />
+                  </el-select>
+                </el-form-item>
+              </el-collapse-item>
+              <el-collapse-item title="套件级数据库断言" name="db">
+                <DbAssertionsEditor v-model="form.db_assertions" :datasources="datasources" />
+              </el-collapse-item>
+            </el-collapse>
+          </section>
+
+          <section class="bc-dialog-section">
+            <div class="bc-dialog-section__title">
+              套件用例
+              <span class="bc-dialog-section__meta">按序号决定执行顺序</span>
+            </div>
+            <el-form-item prop="case_ids" label-width="0" class="suite-case-picker-item">
+              <ApiSuiteCasePicker v-model="form.case_ids" :case-options="caseOptions" />
             </el-form-item>
-            <el-form-item label="后置 SQL">
-              <el-select v-model="form.teardown_sql_ids" multiple filterable placeholder="选择 teardown 模板" style="width: 100%">
-                <el-option v-for="t in teardownTemplates" :key="t.id" :label="t.name" :value="t.id" />
-              </el-select>
-            </el-form-item>
-          </el-collapse-item>
-          <el-collapse-item title="套件级数据库断言" name="db">
-            <DbAssertionsEditor v-model="form.db_assertions" :datasources="datasources" />
-          </el-collapse-item>
-        </el-collapse>
-        
-        <el-form-item label="套件用例" prop="case_ids">
-          <ApiSuiteCasePicker v-model="form.case_ids" :case-options="caseOptions" />
-        </el-form-item>
-      </el-form>
-      
+          </section>
+        </el-form>
+      </div>
+
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" @click="handleSubmit" :loading="submitting">确定</el-button>
@@ -199,25 +205,39 @@
     <el-dialog
       v-model="runDialogVisible"
       title="执行套件"
-      width="500px"
+      width="560px"
       destroy-on-close
+      class="bc-dialog"
     >
-      <el-form :model="runForm" label-width="100px">
-        <el-form-item label="执行环境">
-          <el-select v-model="runForm.env_id" placeholder="选择执行环境（默认使用套件配置）" clearable style="width: 100%">
-            <el-option
-              v-for="env in proStore.envList"
-              :key="env.id"
-              :label="env.name"
-              :value="env.id"
-            />
-          </el-select>
-          <div v-if="currentSuite?.env_id" class="env-tip">
-            套件默认环境: {{ proStore.envList.find(e => e.id === currentSuite.env_id)?.name || '未知' }}
-          </div>
-        </el-form-item>
-      </el-form>
-      
+      <div class="bc-dialog-body">
+        <section class="bc-dialog-section">
+          <div class="bc-dialog-section__title">执行配置</div>
+          <el-form :model="runForm" label-width="96px" class="bc-dialog-form">
+            <el-form-item label="执行环境">
+              <el-select v-model="runForm.env_id" placeholder="选择执行环境（默认使用套件配置）" clearable filterable style="width: 100%">
+                <el-option
+                  v-for="env in proStore.envList"
+                  :key="env.id"
+                  :label="env.name"
+                  :value="env.id"
+                />
+              </el-select>
+              <div v-if="currentSuite?.env_id" class="bc-dialog-hint">
+                套件默认环境：{{ proStore.envList.find(e => e.id === currentSuite.env_id)?.name || '未知' }}
+              </div>
+            </el-form-item>
+            <el-form-item label="执行机">
+              <ViaWorkerSelect
+                v-model="runForm.worker_id"
+                :env-id="runForm.env_id"
+                force-serial-hint
+              />
+            </el-form-item>
+            <IncludeQuarantineCheckbox v-model="runForm.include_quarantine" />
+          </el-form>
+        </section>
+      </div>
+
       <template #footer>
         <el-button @click="runDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="confirmRun" :loading="running">开始执行</el-button>
@@ -228,15 +248,16 @@
     <el-dialog
       v-model="polling"
       title="套件执行中"
-      width="400px"
+      width="420px"
       :show-close="false"
       :close-on-click-modal="false"
       :close-on-press-escape="false"
+      class="bc-dialog"
     >
-      <div style="text-align: center; padding: 20px 0;">
-        <el-icon class="is-loading" style="font-size: 40px; color: #409eff;"><Loading /></el-icon>
-        <p style="margin-top: 16px; color: #606266;">正在后台执行测试套件，请稍候…</p>
-        <p style="font-size: 12px; color: #909399;">每隔 3 秒自动检查执行状态</p>
+      <div class="bc-dialog-progress">
+        <el-icon class="is-loading bc-dialog-progress__icon"><Loading /></el-icon>
+        <p class="bc-dialog-progress__title">正在后台执行测试套件，请稍候…</p>
+        <p class="bc-dialog-progress__desc">每隔 3 秒自动检查执行状态</p>
       </div>
       <template #footer>
         <el-button @click="stopPollingAndClose">后台运行（不等待）</el-button>
@@ -304,6 +325,8 @@ import http from '@/api/index'
 import ApiSuiteCasePicker from './components/ApiSuiteCasePicker.vue'
 import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
+import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
+import IncludeQuarantineCheckbox from '@/components/IncludeQuarantineCheckbox.vue'
 import { getHttpResponseMs } from './utils/runTiming'
 import DbAssertionsEditor from './components/DbAssertionsEditor.vue'
 import { dataFactoryApi } from '@/api/modules/dataFactory'
@@ -336,7 +359,7 @@ const currentId = ref(null)
 
 // 执行相关
 const runDialogVisible = ref(false)
-const runForm = reactive({ env_id: null })
+const runForm = reactive({ env_id: null, worker_id: null, include_quarantine: false })
 const running = ref(false)
 const currentSuite = ref(null)
 const resultDialogVisible = ref(false)
@@ -592,6 +615,8 @@ const handleRun = (row) => {
   currentSuite.value = row
   // 优先使用套件的默认环境
   runForm.env_id = row.env_id || null
+  runForm.worker_id = null
+  runForm.include_quarantine = false
   runDialogVisible.value = true
 }
 
@@ -604,7 +629,11 @@ const confirmRun = async () => {
   running.value = true
   try {
     // 调用异步接口，立即拿到 record_id
-    const res = await http.apiModuleApi.runSuiteAsync(currentSuite.value.id, runForm)
+    const res = await http.apiModuleApi.runSuiteAsync(currentSuite.value.id, {
+      env_id: runForm.env_id,
+      include_quarantine: !!runForm.include_quarantine,
+      ...(runForm.worker_id ? { worker_id: runForm.worker_id } : {}),
+    })
     const data = res.data || res
     pollingRecordId.value = data.record_id
     pollingStatus.value = 'running'
@@ -704,9 +733,15 @@ onUnmounted(() => {
   justify-content: flex-end;
 }
 
-.env-tip {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-top: 5px;
+.suite-case-picker-item {
+  margin-bottom: 0;
+
+  :deep(.el-form-item__content) {
+    width: 100%;
+  }
+}
+
+.suite-hooks-collapse {
+  border: none;
 }
 </style>

@@ -44,8 +44,8 @@
     </template>
   </PageCard>
 
-  <el-dialog v-model="dlgVisible" :title="form.id ? '编辑定时任务' : '新建定时任务'" width="560px" destroy-on-close>
-    <el-form :model="form" label-width="100px">
+  <el-dialog v-model="dlgVisible" :title="form.id ? '编辑定时任务' : '新建定时任务'" width="560px" destroy-on-close class="bc-dialog">
+    <el-form :model="form" label-width="100px" class="bc-dialog-form">
       <el-form-item label="任务名称"><el-input v-model="form.name" /></el-form-item>
       <el-form-item label="目标类型">
         <el-radio-group v-model="form.target_type">

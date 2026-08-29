@@ -110,6 +110,79 @@
                 </el-form-item>
               </el-form>
             </el-tab-pane>
+
+            <!-- 通知偏好 -->
+            <el-tab-pane label="通知偏好" name="notify">
+              <el-alert
+                type="info"
+                :closable="false"
+                show-icon
+                style="margin-bottom: 16px"
+                title="测试管理指派通知的个人偏好"
+                description="免打扰按所选时区计算。IM @ 依赖个人资料中的手机号（钉钉/企微可真实 @；飞书自定义机器人仅在正文显示 @手机号）。"
+              />
+              <el-form label-width="160px" class="profile-form" v-loading="prefLoading">
+                <el-form-item label="站内信">
+                  <el-switch v-model="prefForm.inbox_enabled" />
+                </el-form-item>
+                <el-form-item label="外发（邮件/IM）">
+                  <el-switch v-model="prefForm.external_enabled" />
+                </el-form-item>
+                <el-form-item label="IM @ 本人">
+                  <el-switch v-model="prefForm.im_at_enabled" />
+                  <span class="pref-hint">需已填写合法手机号</span>
+                </el-form-item>
+                <el-form-item label="免打扰">
+                  <el-switch v-model="prefForm.dnd_enabled" />
+                </el-form-item>
+                <el-form-item v-if="prefForm.dnd_enabled" label="免打扰时段">
+                  <el-time-select
+                    v-model="prefForm.dnd_start"
+                    start="00:00"
+                    step="00:30"
+                    end="23:30"
+                    placeholder="开始"
+                    style="width: 120px"
+                  />
+                  <span style="margin: 0 8px">至</span>
+                  <el-time-select
+                    v-model="prefForm.dnd_end"
+                    start="00:00"
+                    step="00:30"
+                    end="23:30"
+                    placeholder="结束"
+                    style="width: 120px"
+                  />
+                  <span class="pref-hint">跨午夜有效，如 22:00–08:00</span>
+                </el-form-item>
+                <el-form-item v-if="prefForm.dnd_enabled" label="免打扰时区">
+                  <el-select v-model="prefForm.dnd_timezone" filterable style="width: 220px">
+                    <el-option label="Asia/Shanghai（中国）" value="Asia/Shanghai" />
+                    <el-option label="UTC" value="UTC" />
+                    <el-option label="Asia/Tokyo" value="Asia/Tokyo" />
+                    <el-option label="Asia/Singapore" value="Asia/Singapore" />
+                    <el-option label="Europe/London" value="Europe/London" />
+                    <el-option label="America/New_York" value="America/New_York" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item v-if="prefForm.dnd_enabled" label="免打扰也屏蔽站内信">
+                  <el-switch v-model="prefForm.dnd_mute_inbox" />
+                </el-form-item>
+                <el-form-item label="静音事件">
+                  <el-checkbox-group v-model="prefForm.muted_events">
+                    <el-checkbox
+                      v-for="opt in mutedEventOptions"
+                      :key="opt.value"
+                      :label="opt.value"
+                    >{{ opt.label }}</el-checkbox>
+                  </el-checkbox-group>
+                </el-form-item>
+                <el-form-item>
+                  <el-button type="primary" :loading="prefSaving" @click="savePrefs">保存偏好</el-button>
+                  <el-button @click="loadPrefs">刷新</el-button>
+                </el-form-item>
+              </el-form>
+            </el-tab-pane>
           </el-tabs>
         </el-card>
       </el-col>
@@ -118,19 +191,43 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { UserStore } from '@/stores/module/UserStore'
-import { userApi, fileApi } from '@/api/modules/sys'
-import { useRouter } from 'vue-router'
+import { userApi, fileApi, inboxApi } from '@/api/modules/sys'
+import { useRoute, useRouter } from 'vue-router'
 
 const userStore = UserStore()
 const router = useRouter()
+const route = useRoute()
 
 const activeTab = ref('info')
 const saving = ref(false)
 const pwdSaving = ref(false)
 const uploading = ref(false)
+const prefLoading = ref(false)
+const prefSaving = ref(false)
+
+const mutedEventOptions = [
+  { value: 'scope_owner_assigned', label: '测试范围用例指派' },
+  { value: 'defect_assigned', label: '缺陷指派' },
+  { value: 'review_invited', label: '评审邀请' },
+  { value: 'review_item_pending', label: '评审待办' },
+  { value: 'plan_run_item_assigned', label: '运行项执行人' },
+  { value: 'quality_gate_failed', label: '质量门禁未过' }
+]
+
+const prefForm = reactive({
+  inbox_enabled: true,
+  external_enabled: true,
+  im_at_enabled: true,
+  muted_events: [],
+  dnd_enabled: false,
+  dnd_start: '22:00',
+  dnd_end: '08:00',
+  dnd_mute_inbox: false,
+  dnd_timezone: 'Asia/Shanghai'
+})
 
 const infoFormRef = ref()
 const pwdFormRef = ref()
@@ -335,8 +432,54 @@ const resetPwdForm = () => {
   pwdFormRef.value?.resetFields()
 }
 
+const applyPrefs = (data) => {
+  Object.assign(prefForm, {
+    inbox_enabled: data.inbox_enabled !== false,
+    external_enabled: data.external_enabled !== false,
+    im_at_enabled: data.im_at_enabled !== false,
+    muted_events: Array.isArray(data.muted_events) ? [...data.muted_events] : [],
+    dnd_enabled: !!data.dnd_enabled,
+    dnd_start: data.dnd_start || '22:00',
+    dnd_end: data.dnd_end || '08:00',
+    dnd_mute_inbox: !!data.dnd_mute_inbox,
+    dnd_timezone: data.dnd_timezone || 'Asia/Shanghai'
+  })
+}
+
+const loadPrefs = async () => {
+  prefLoading.value = true
+  try {
+    const res = await inboxApi.getPreferences()
+    applyPrefs(res.data?.data || {})
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '加载通知偏好失败')
+  } finally {
+    prefLoading.value = false
+  }
+}
+
+const savePrefs = async () => {
+  prefSaving.value = true
+  try {
+    const res = await inboxApi.updatePreferences({ ...prefForm })
+    applyPrefs(res.data?.data || prefForm)
+    ElMessage.success('通知偏好已保存')
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '保存失败')
+  } finally {
+    prefSaving.value = false
+  }
+}
+
+watch(activeTab, (tab) => {
+  if (tab === 'notify') loadPrefs()
+})
+
 onMounted(() => {
+  const tab = String(route.query.tab || '')
+  if (tab === 'notify') activeTab.value = 'notify'
   loadProfile()
+  if (activeTab.value === 'notify') loadPrefs()
 })
 </script>
 
@@ -383,5 +526,10 @@ onMounted(() => {
 .profile-form {
   max-width: 500px;
   padding-top: 10px;
+}
+.pref-hint {
+  margin-left: 10px;
+  color: #909399;
+  font-size: 12px;
 }
 </style>

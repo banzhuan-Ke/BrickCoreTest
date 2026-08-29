@@ -31,6 +31,42 @@ def validate_default_start_url(url: str) -> str:
     return u
 
 
+def validate_apm_trace_base_url(url: str) -> str:
+    """
+    校验 APM 链路前缀：仅允许 http(s)，防 javascript:/data: 等存储型 XSS。
+    空串表示未配置。
+    """
+    u = str(url or "").strip()
+    if not u:
+        return ""
+    if len(u) > 500:
+        raise ValueError("APM 链路前缀长度不能超过 500 字符")
+    if any(c.isspace() for c in u):
+        raise ValueError("APM 链路前缀不能包含空白字符")
+    if not u.lower().startswith(("http://", "https://")):
+        raise ValueError("APM 链路前缀须以 http:// 或 https:// 开头")
+    return u
+
+
+def build_apm_trace_url(base: str, request_id: str) -> str:
+    """将校验过的 base 与 request_id 拼成可打开外链；非法 scheme 返回空。"""
+    from urllib.parse import quote
+
+    try:
+        prefix = validate_apm_trace_base_url(base)
+    except ValueError:
+        return ""
+    rid = str(request_id or "").strip()
+    if not prefix or not rid:
+        return ""
+    encoded = quote(rid, safe="")
+    if "{rid}" in prefix or "{request_id}" in prefix:
+        return prefix.replace("{rid}", encoded).replace("{request_id}", encoded)
+    if not prefix.endswith(("/", "=", "&", "?")):
+        prefix = f"{prefix}/"
+    return f"{prefix}{encoded}"
+
+
 def validate_record_start_url(url: str) -> str:
     """校验录制启动 URL（须为已解析的完整地址）。"""
     u = str(url or "").strip()

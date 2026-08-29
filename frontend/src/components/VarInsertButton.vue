@@ -74,7 +74,7 @@ import { Promotion } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { httpAuthConfigApi } from '@/api/modules/httpAuth'
-import { BUILTIN_VAR_HINTS, isSecretKey, varsObjectToList } from '@/utils/globalVars.js'
+import { BUILTIN_VAR_HINTS, isSecretKey, stripSystemGlobalVars, varsObjectToList } from '@/utils/globalVars.js'
 import { insertVarRef, snapshotInsertTarget } from '@/utils/varInsert.js'
 import EnvVarQuickEdit from '@/components/EnvVarQuickEdit.vue'
 // 变量源约定与 ToolInsertButton 一致：项目/环境/授权/内置/extra；
@@ -141,13 +141,15 @@ function openEnvVarEdit() {
 
 const projectVars = computed(() => {
   const gv = proStore.projectInfo?.global_vars
-  return varsObjectToList(gv && typeof gv === 'object' ? gv : {})
+  return varsObjectToList(stripSystemGlobalVars(gv && typeof gv === 'object' ? gv : {})).filter(
+    (r) => !r._rawObject
+  )
 })
 
 const envVars = computed(() => {
   if (!props.envId) return []
   const env = proStore.envList.find((e) => e.id === props.envId)
-  return varsObjectToList(env?.global_vars)
+  return varsObjectToList(stripSystemGlobalVars(env?.global_vars || {})).filter((r) => !r._rawObject)
 })
 
 function previewValue(value, key = '') {

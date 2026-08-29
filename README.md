@@ -1,12 +1,13 @@
 # BrickCore 自动化测试平台
 
-> **当前版本 v1.6.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
+> **当前版本 v1.7.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
 
 覆盖 **Web UI、App、接口、性能、AI** 等测试能力，支持私有化部署、文档中心与执行器网盘分发。平台源码见本仓库；Web / App / 压测执行请配合下方 **BrickCoreRunner** 安装包使用。
 
 ## 核心亮点
 
-- **一站式**：Web / App / 接口 / 性能 / AI 测试统一入口，资产与权限集中管理
+- **一站式**：Web / App / 接口 / 性能 / AI / **测试管理** 统一入口，资产与权限集中管理
+- **测试管理**：版本范围 → 评审 → 计划 → 缺陷 → 质量门禁 / 追溯；高级能力见扩展包
 - **AI 辅助**：需求→功能用例、接口用例生成、失败分析、平台助手「小测」、MCP 外部接入
 - **迭代资料库**：文件夹、检索/问答、通用报告向导与 Embedding（可选）
 - **录制与自愈**：Web 录制回放、交互调试、定位器自愈，降低脚本维护成本
@@ -38,6 +39,7 @@
 | **App 自动化** | 用例/元素库/元素探查/套件/计划/定时任务/片段；真机调度需 Runner 勾选 **App 自动化** |
 | **接口自动化** | Swagger/Postman 导入、测试计划、WebSocket、数据工厂、Mock（同路径多场景）、定时执行 |
 | **性能测试** | 流式/SSE 阶段、业务链路、CSV 参数化、分布式 Worker、HTML 报告 |
+| **测试管理** | 版本范围、评审、计划运行、缺陷、质量门禁 / 敏捷向导、追溯矩阵；高级能力见扩展包 |
 | **AI 测试** | 需求→功能用例、智能浏览器、失败分析、平台助手「小测」、MCP 外部接入、**迭代资料库** |
 | **平台能力** | 统一测试目录、数据看板、RBAC、文档中心、邮件/钉钉/企微通知 |
 
@@ -73,12 +75,13 @@
 | Web 录制 + 定位器自愈 / 定位助手 | MCP/助手录制；自愈与 DevTools 定位辅助 |
 | 接口 AI 生成 · Mock | 基于 Swagger 生成用例；Mock 同路径多场景 |
 | **App 自动化** | 元素探查、用例/计划/片段；真机执行需 App Runner |
+| **测试管理** | 版本范围 → 评审 → 计划 → 缺陷 → 门禁 / 追溯 |
 
 ---
 
 ## 执行器下载（BrickCoreRunner）
 
-**Web 录制、UI 执行、App 真机、分布式压测 Worker** 需安装 **BrickCoreRunner** 客户端（建议 **v1.6.1**，引擎 **1.6.1**）。
+**Web 录制、UI 执行、App 真机、分布式压测 Worker** 需安装 **BrickCoreRunner** 客户端（建议 **v1.7.0**，引擎 **1.7.0**）。
 
 **百度网盘**（提取码 **`9gbi`**）：
 
@@ -104,6 +107,10 @@
 
 更多说明：[docs-site/guide/runner-client.md](docs-site/guide/runner-client.md) · [执行器获取与发布](docs-site/guide/runner-packaging.md)
 
+### 测试管理扩展包（可选）
+
+质量门禁、指派通知、版本智能化、导出版本包等高级能力由 **brickcore_tm** 扩展包提供。从源码自建且提示未安装扩展包时，请按 [测试管理扩展包](docs-site/guide/brickcore-tm-pack.md) 下载 `.bcpack` 并安装。
+
 > 维护者：更新网盘后请同步本 README，并在 **系统管理 → 执行器发布** 填写相同外链。
 
 ---
@@ -128,6 +135,7 @@
 
 ```bash
 git clone https://gitee.com/BanZhuanKeOrz/BrickCore.git
+# 或 GitHub：git clone https://github.com/banzhuan-Ke/BrickCoreTest.git
 cd BrickCore
 cd frontend && npm install && npm run build && cd ..
 
@@ -146,7 +154,7 @@ docker exec -it fastapi_backend aerich upgrade
 | 平台 | admin | BrickCore123456 |
 | MySQL | admin | BrickCore123456 |
 
-升级至 **v1.6.0** 时务必执行 `aerich upgrade`，并重新构建前端；执行器请同步更新至 **1.6.1**。
+升级至 **v1.7.0** 时务必执行 `aerich upgrade`，并重新构建前端；执行器请同步更新至 **1.7.0**。
 
 ---
 
@@ -167,14 +175,14 @@ docker exec -it fastapi_backend aerich upgrade
 | 文档 | 说明 |
 |------|------|
 | [docs-site/](docs-site/) | 平台使用说明（与登录后「文档中心」内置文档同源） |
-| [版本更新记录](docs-site/guide/release-notes.md) | **v1.6.0** 变更与升级指引 |
+| [版本更新记录](docs-site/guide/release-notes.md) | **v1.7.0** 变更与升级指引 |
 | [亮点功能](docs-site/guide/highlights.md) | 能力总览与快速跳转 |
 | [Docker 部署](docs-site/guide/docker-deploy.md) | 云服务器自建（Linux） |
 | [Windows 部署](docs-site/guide/windows-deploy.md) | Windows 本机 Docker / 无 Docker 开发 |
 
-当前公开仓为 **v1.6.0**。通用迭代资料库已开放；定制文档页签预留，需联系管理员开通定制开发。
+当前公开仓为 **v1.7.0**。通用迭代资料库已开放；定制文档页签预留，需联系管理员开通定制开发。
 
-问题与建议：[Issues](https://gitee.com/BanZhuanKeOrz/BrickCore/issues) 或下方交流群。
+问题与建议：[Gitee Issues](https://gitee.com/BanZhuanKeOrz/BrickCore/issues) · [GitHub](https://github.com/banzhuan-Ke/BrickCoreTest) 或下方交流群。
 
 ---
 

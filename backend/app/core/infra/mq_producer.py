@@ -72,6 +72,8 @@ class MQProducer:
         record_session_id=None,
         case_execution_id=None,
         debug_session_id=None,
+        browser_lab_task_id=None,
+        ui_agent_job_id=None,
         stop_all_on_device=False,
     ):
         """
@@ -83,6 +85,8 @@ class MQProducer:
         :param record_session_id: 录制会话ID
         :param case_execution_id: 单用例执行记录ID
         :param debug_session_id: UI 交互调试会话ID
+        :param browser_lab_task_id: 智能浏览器任务 ID
+        :param ui_agent_job_id: UI Agent 任务 ID
         """
         data = {
             "action": "stop",
@@ -91,6 +95,8 @@ class MQProducer:
             "record_session_id": record_session_id,
             "case_execution_id": case_execution_id,
             "debug_session_id": debug_session_id,
+            "browser_lab_task_id": browser_lab_task_id,
+            "ui_agent_job_id": ui_agent_job_id,
             "stop_all_on_device": bool(stop_all_on_device),
         }
         msg = json.dumps(data, ensure_ascii=False).encode('utf-8')

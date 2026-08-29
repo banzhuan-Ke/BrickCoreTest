@@ -3,8 +3,6 @@
 > 配合 [Web 录制与稳定回放用户指南](./web-recording-playback.md) 使用。  
 > Runner 安装、MQ、多进程等问题见 [Runner 排查指南](./runner-troubleshooting.md)。
 
----
-
 ## 1. 排障总流程
 
 ```mermaid

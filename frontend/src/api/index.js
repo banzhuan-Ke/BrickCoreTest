@@ -139,6 +139,8 @@ export default {
         getSuiteDetail: httpSuiteApi.getDetail,  // 兼容命名
         runSuite: httpExecApi.runSuite,  // 兼容命名
         runSuiteAsync: httpExecApi.runSuiteAsync,  // 异步执行套件
+        runPlan: httpPlanApi.runPlan,
+        runPlanAsync: httpPlanApi.runPlanAsync,
         // 执行
         runApi: httpExecApi.runCase,
         runApiSuite: httpExecApi.runSuite,

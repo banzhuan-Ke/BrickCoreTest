@@ -20,10 +20,12 @@ def strip_case_ids_from_scene_items(scene_items: list | None, case_ids: set[int]
     out = []
     for item in scene_items or []:
         if not isinstance(item, dict):
+            out.append(item)
             continue
         try:
             cid = int(item.get("case_id"))
         except (TypeError, ValueError):
+            out.append(item)
             continue
         if cid in case_ids:
             continue
@@ -42,10 +44,12 @@ def strip_case_ids_from_journey(config: dict | None, case_ids: set[int]) -> dict
         steps = []
         for s in phase.get("steps") or []:
             if not isinstance(s, dict):
+                steps.append(s)
                 continue
             try:
                 cid = int(s.get("case_id"))
             except (TypeError, ValueError):
+                steps.append(s)
                 continue
             if cid in case_ids:
                 continue
@@ -74,34 +78,40 @@ def scene_references_any_case(scene: PerfScene, case_ids: set[int]) -> bool:
     return bool(journey_ids & case_ids)
 
 
-async def purge_case_references(*, project_id: int, case_ids: list[int]) -> dict[str, int]:
+async def purge_case_references(*, project_id: int, case_ids: list[int], using_db=None) -> dict[str, int]:
     """删除套件关联，并从压测场景 scene_items / journey 中移除用例引用。"""
     ids = list(dict.fromkeys(int(x) for x in case_ids))
     if not ids:
         return {"suite_links_removed": 0, "scenes_updated": 0}
 
     id_set = set(ids)
-    suite_deleted = await ApiSuiteCase.filter(case_id__in=ids).delete()
+    suite_qs = ApiSuiteCase.filter(case_id__in=ids)
+    if using_db is not None:
+        suite_qs = suite_qs.using_db(using_db)
+    suite_deleted = await suite_qs.delete()
 
     scenes_updated = 0
-    scenes = await PerfScene.filter(project_id=project_id, is_del=False).all()
+    scene_qs = PerfScene.filter(project_id=project_id, is_del=False)
+    if using_db is not None:
+        scene_qs = scene_qs.using_db(using_db)
+    scenes = await scene_qs.all()
     for scene in scenes:
         if not scene_references_any_case(scene, id_set):
             continue
         scene.scene_items = strip_case_ids_from_scene_items(scene.scene_items, id_set)
         scene.config = strip_case_ids_from_journey(scene.config, id_set)
-        await scene.save()
+        await scene.save(using_db=using_db)
         scenes_updated += 1
 
     return {"suite_links_removed": int(suite_deleted or 0), "scenes_updated": scenes_updated}
 
 
-async def soft_delete_cases(cases: list[ApiTestCase]) -> int:
+async def soft_delete_cases(cases: list[ApiTestCase], *, using_db=None) -> int:
     n = 0
     for case in cases:
         if case.is_del:
             continue
         case.is_del = True
-        await case.save()
+        await case.save(using_db=using_db)
         n += 1
     return n

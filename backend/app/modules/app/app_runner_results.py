@@ -160,7 +160,15 @@ async def _save_app_suite_result(suite_record_id: int, result: dict[str, Any]) -
     total_cases = result.get("case_count", 0)
     success = result.get("success", 0)
     skip = result.get("skip", 0)
-    pass_rate = round((success + skip) / total_cases * 100, 2) if total_cases > 0 else 0
+    from app.modules.stability.metrics import compute_suite_pass_rate, count_quarantine_skips
+
+    quarantine_skip = count_quarantine_skips(result.get("executed_cases"))
+    pass_rate = compute_suite_pass_rate(
+        success=success,
+        skip=skip,
+        quarantine_skip=quarantine_skip,
+        case_count=total_cases or case_count,
+    )
     run_all = len(result.get("executed_cases", []))
     no_run = result.get("no_run", 0)
     if run_all == 0 and case_count > 0 and not result.get("fail") and not result.get("error"):
@@ -177,6 +185,7 @@ async def _save_app_suite_result(suite_record_id: int, result: dict[str, Any]) -
     suite_data.fail = result.get("fail", 0)
     suite_data.error = result.get("error", 0)
     suite_data.skip = result.get("skip", 0)
+    suite_data.quarantine_skip = quarantine_skip
     suite_data.duration = result.get("duration", 0)
     suite_data.execution_log = result.get("execution_log", [])
     suite_data.pass_rate = pass_rate
@@ -207,38 +216,39 @@ async def _reaggregate_app_plan_execution(plan_record_id: int) -> None:
         return
 
     case_count = plan_data.case_count or 0
-    success = sum(s.success or 0 for s in suites)
-    fail = sum(s.fail or 0 for s in suites)
-    error = sum(s.error or 0 for s in suites)
-    skip = sum(s.skip or 0 for s in suites)
-    run_all = sum(s.run_all or 0 for s in suites)
-    no_run = sum(s.no_run or 0 for s in suites)
-    duration = max((s.duration or 0) for s in suites)
-    pass_rate = round((success + skip) / case_count * 100, 2) if case_count > 0 else 0
+    from app.modules.ui.plan_reaggregation import aggregate_plan_from_suites
 
-    statuses = [s.status for s in suites]
-    terminal = {"执行完成", "已停止"}
-    if any(s not in terminal for s in statuses):
-        status = "已停止" if any(s == "已停止" for s in statuses) else "执行中"
-    elif all(s == "执行完成" for s in statuses):
-        status = "执行完成"
-    else:
-        status = "执行中"
+    suite_rows = [
+        {
+            "status": s.status,
+            "success": s.success or 0,
+            "fail": s.fail or 0,
+            "error": s.error or 0,
+            "skip": s.skip or 0,
+            "quarantine_skip": getattr(s, "quarantine_skip", 0) or 0,
+            "run_all": s.run_all or 0,
+            "no_run": s.no_run or 0,
+            "duration": s.duration or 0,
+        }
+        for s in suites
+    ]
+    agg = aggregate_plan_from_suites(suite_rows, case_count=case_count)
 
-    plan_data.status = status
-    plan_data.run_all = run_all
-    plan_data.no_run = no_run
-    plan_data.success = success
-    plan_data.fail = fail
-    plan_data.error = error
-    plan_data.skip = skip
-    plan_data.duration = duration
-    plan_data.pass_rate = pass_rate
+    plan_data.status = agg["status"]
+    plan_data.run_all = agg["run_all"]
+    plan_data.no_run = agg["no_run"]
+    plan_data.success = agg["success"]
+    plan_data.fail = agg["fail"]
+    plan_data.error = agg["error"]
+    plan_data.skip = agg["skip"]
+    plan_data.quarantine_skip = agg.get("quarantine_skip", 0)
+    plan_data.duration = agg["duration"]
+    plan_data.pass_rate = agg["pass_rate"]
     await plan_data.save()
 
-    if status in ("执行完成", "已停止"):
+    if agg["status"] in ("执行完成", "已停止"):
         await release_device_locks_for_holder("exec", str(plan_record_id))
-        if status == "执行完成":
+        if agg["status"] == "执行完成":
             await _maybe_notify_app_plan_complete(plan_data)
 
 

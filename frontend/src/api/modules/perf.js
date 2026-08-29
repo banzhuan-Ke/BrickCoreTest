@@ -198,7 +198,7 @@ export const perfRecordApi = {
     }
 }
 
-// ========== 压测对比报告（2–10 条持久化） ==========
+// ========== 压测对比报告（2–20 条持久化） ==========
 export const perfComparisonApi = {
     async getList(params) {
         return await http.get('/perf/comparison-reports', { params })

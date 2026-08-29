@@ -105,8 +105,8 @@
 ### 方式一：BrickCoreRunner 完整客户端（含 GUI）
 
 1. 安装 **BrickCoreRunner**（见 [执行器说明](./runner-client.md)）
-2. 登录平台 → 执行角色选 **仅压测执行机** 或 **UI + 压测**
-3. 选择 **压测项目**（须与平台顶部项目一致）→ 点击 **上线**
+2. 登录平台 → 在 **本机能力** 勾选 **压测**（可同时勾选接口代发 / Web / App）
+3. 选择 **所属项目**（须与平台顶部项目一致）→ 点击 **上线**
 4. 在 **性能测试 → 执行机** 确认节点 **在线**（来源一般为「完整客户端」）
 
 客户端会在 **当前会话日志** 实时显示压测进度（秒级 QPS、RT、错误率等）；完整日志见客户端安装目录下的执行机日志。下线时会自动向平台注销，无需等待心跳超时。
@@ -176,11 +176,11 @@
 
 | 能力 | 作用 | 配置位置 |
 |------|------|----------|
-| **性能验收目标** `perf_targets` | 判断**本次**指标是否达到业务绝对值（如 QPS≥x、P95≤y）；报告确定性 pass/warn/fail | 场景编辑；启动时可覆盖；写入执行 `config_snapshot` |
+| **性能验收目标** `perf_targets` | 判断**本次**指标是否达到业务绝对值（QPS / 成功 QPS / 总请求数 / 平均与成功平均 RT / P90·P95·成功 P95·P99 / 错误率等）；报告确定性 pass/warn/fail | 场景编辑；启动时可覆盖；写入执行 `config_snapshot` |
 | **基线** `baseline_policy` | 判断相对**历史黄金基线**是否退化 | 报告页「设为基线」+ 场景阈值 |
 | **错误率熔断** `error_rate_threshold` | **运行中**错误率过高自动停止 | 场景编辑 |
 
-- AI 分析只**解释** `target_evaluation`，不得自造「预期基准值 / 业务可接受范围」；未配置目标时报告明示「无法判定是否达标」
+- AI 分析只**解释** `target_evaluation`，不得自造「预期基准值 / 业务可接受范围」；某指标未配目标时做常规结果解读，不以「无法按 SLA 判定」敷衍；整页未启用验收目标时，目标明细区仍提示可配置
 - 历史报告只读当时快照中的 `perf_targets`，事后改场景不影响旧记录
 
 **基线与可信度**
@@ -194,9 +194,9 @@
 
 | 配置 | 当前推荐值 | 说明 |
 |------|------------|------|
-| BrickCoreRunner 客户端 | **≥ 1.6.1**（推荐） | 与 `runner_client/__init__.py`、`VERSION.txt` 一致；最低上线 `RUNNER_CLIENT_VERSION_MIN=1.3.8` |
-| `RUNNER_CLIENT_VERSION_LATEST` | `1.6.1` | 服务器 `.env` / `docker-compose.yml` |
-| `RUNNER_ENGINE_VERSION` | `1.6.1` | 与 `runner/settings.py` 中 `RUNNER_VERSION` 一致；引擎最低 `RUNNER_ENGINE_VERSION_MIN` 默认 ≥1.0.0 |
+| BrickCoreRunner 客户端 | **≥ 1.7.0**（推荐） | 与 `runner_client/__init__.py`、`VERSION.txt` 一致；最低上线 `RUNNER_CLIENT_VERSION_MIN=1.3.8` |
+| `RUNNER_CLIENT_VERSION_LATEST` | `1.7.0` | 服务器 `.env` / `docker-compose.yml` |
+| `RUNNER_ENGINE_VERSION` | `1.7.0` | 与 `runner/settings.py` 中 `RUNNER_VERSION` 一致；引擎最低 `RUNNER_ENGINE_VERSION_MIN` 默认 ≥1.0.0 |
 
 生产环境浏览器访问平台一般为 **80 端口**（Nginx），`--master` / 客户端服务器地址 **不要写 :8000**（8000 为容器内 Backend）。
 

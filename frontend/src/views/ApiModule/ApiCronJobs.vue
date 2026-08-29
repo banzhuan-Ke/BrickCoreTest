@@ -164,9 +164,10 @@
       :title="isEdit ? '编辑定时任务' : '新建定时任务'"
       width="620px"
       destroy-on-close
+      class="bc-dialog"
       @closed="resetForm"
     >
-      <el-form ref="formRef" :model="form" :rules="currentRules" label-width="100px">
+      <el-form ref="formRef" :model="form" :rules="currentRules" label-width="100px" class="bc-dialog-form">
         <el-form-item label="任务名称" prop="name">
           <el-input v-model="form.name" placeholder="请输入任务名称" />
         </el-form-item>
@@ -212,6 +213,14 @@
               :value="env.id"
             />
           </el-select>
+        </el-form-item>
+
+        <el-form-item label="执行机">
+          <ViaWorkerSelect
+            v-model="form.worker_id"
+            :env-id="form.env_id"
+            force-serial-hint
+          />
         </el-form-item>
 
         <el-form-item label="执行类型" prop="run_type">
@@ -309,6 +318,7 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import http from '@/api/index'
 import { httpPlanApi } from '@/api/modules/http'
 import ApiRunDetail from './components/ApiRunDetail.vue'
+import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
 import { makeTableRowIndexRefs } from '@/utils/tableIndex'
 import TableColumnPicker from '@/components/TableColumnPicker.vue'
 import { useTableColumns } from '@/composables/useTableColumns.js'
@@ -355,6 +365,7 @@ const form = reactive({
   suite_id: null,
   plan_id: null,
   env_id: null,
+  worker_id: null,
   run_type: 'Interval',
   interval: 3600,
   run_date: '',
@@ -449,7 +460,7 @@ const handlePageChange = (val) => { page.value = val; fetchJobs() }
 const resetForm = () => {
   Object.assign(form, {
     name: '', target_type: 'suite', suite_id: null, plan_id: null,
-    env_id: null, run_type: 'Interval', run_date: '', interval: 3600,
+    env_id: null, worker_id: null, run_type: 'Interval', run_date: '', interval: 3600,
     crontab: { minute: '*', hour: '*', day: '*', month: '*', day_of_week: '*' },
     state: false
   })
@@ -469,6 +480,7 @@ const handleEdit = (row) => {
     suite_id: row.suite_id || null,
     plan_id: row.plan_id || null,
     env_id: row.env_id,
+    worker_id: row.worker_id || null,
     run_type: row.run_type,
     interval: row.interval,
     run_date: row.run_date,
@@ -490,6 +502,7 @@ const handleSubmit = async () => {
       suite_id: form.target_type === 'suite' ? form.suite_id : null,
       plan_id: form.target_type === 'plan' ? form.plan_id : null,
       env_id: form.env_id,
+      worker_id: form.worker_id || null,
       run_type: form.run_type,
       interval: form.interval,
       run_date: form.run_date || null,
@@ -525,11 +538,15 @@ const handleToggle = async (row) => {
 
 const handleRunNow = async (row) => {
   try {
+    const payload = {
+      env_id: row.env_id,
+      ...(row.worker_id ? { worker_id: row.worker_id } : {}),
+    }
     if (row.target_type === 'plan') {
-      await httpPlanApi.runPlanAsync(row.plan_id, { env_id: row.env_id })
+      await httpPlanApi.runPlanAsync(row.plan_id, payload)
       ElMessage.success('计划已开始后台执行')
     } else {
-      await http.apiModuleApi.runSuiteAsync(row.suite_id, { env_id: row.env_id })
+      await http.apiModuleApi.runSuiteAsync(row.suite_id, payload)
       ElMessage.success('套件已开始后台执行')
     }
   } catch (error) {

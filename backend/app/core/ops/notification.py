@@ -7,6 +7,8 @@ import json
 import hmac
 import hashlib
 import base64
+import logging
+import re
 import urllib.parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -14,7 +16,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 from email.header import Header
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import httpx
 import smtplib
@@ -33,6 +35,16 @@ from app.core.shared.report_export import (
     build_email_html_report,
     email_report_attachment_note,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _compose_relative_link(link_path: str, link_query: Optional[dict[str, Any]] = None) -> str:
+    path = (link_path or "").strip() or "/"
+    if not path.startswith("/"):
+        path = f"/{path}"
+    qs = urllib.parse.urlencode({k: v for k, v in (link_query or {}).items() if v is not None})
+    return f"{path}?{qs}" if qs else path
 
 
 class NotificationService:
@@ -479,7 +491,9 @@ class NotificationService:
                         "name": report_info.get("name"),
                         "status": report_info.get("status"),
                     },
-                    recipients=[(cfg.config or {}).get("webhook_url", "")],
+                    recipients=NotificationService._log_recipients_for_channel(
+                        cfg.channel_type, recipients, cfg
+                    ),
                     status=status_flag,
                     error_msg=error_text,
                     related_id=related_id,
@@ -523,6 +537,73 @@ class NotificationService:
         return text
 
     @staticmethod
+    def _sanitize_log_content(payload: dict) -> dict:
+        safe = dict(payload or {})
+        if safe.get("assignee_mobile"):
+            safe["assignee_mobile"] = "***"
+        return safe
+
+    @staticmethod
+    async def _platform_public_base() -> str:
+        from app.core.platform import config as platform_config
+
+        base = (platform_config.BASE_URL or "").strip().rstrip("/")
+        if base:
+            return base
+        try:
+            from app.models.sys import SystemMcpConfig
+
+            row = await SystemMcpConfig.first()
+            if row and (row.base_url or "").strip():
+                return row.base_url.strip().rstrip("/")
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _ensure_absolute_link(link: str, *, base: str = "") -> str:
+        s = (link or "").strip()
+        if not s or s.startswith(("http://", "https://")):
+            return s
+        root = (base or "").strip().rstrip("/")
+        if not root:
+            from app.core.platform import config as platform_config
+
+            root = (platform_config.BASE_URL or "").strip().rstrip("/")
+        if not root:
+            return s if s.startswith("/") else f"/{s}"
+        path = s if s.startswith("/") else f"/{s}"
+        return f"{root}{path}"
+
+    @staticmethod
+    async def resolve_public_link(
+        link_path: str,
+        link_query: Optional[dict[str, Any]] = None,
+    ) -> str:
+        rel = _compose_relative_link(link_path, link_query)
+        if rel.startswith(("http://", "https://")):
+            return rel
+        base = await NotificationService._platform_public_base()
+        if not base:
+            logger.warning("未配置 BASE_URL，外发通知链接将为相对路径")
+        return NotificationService._ensure_absolute_link(rel, base=base)
+
+    @staticmethod
+    def _mask_webhook_url(url: str) -> str:
+        s = str(url or "")
+        return (s[:48] + "…") if len(s) > 48 else s
+
+    @staticmethod
+    def _log_recipients_for_channel(channel_type: str, recipients: List[str], cfg: Any = None) -> List[str]:
+        if channel_type == "email":
+            return recipients
+        if recipients:
+            return [NotificationService._mask_webhook_url(r) for r in recipients]
+        if cfg is not None:
+            return [NotificationService._mask_webhook_url((cfg.config or {}).get("webhook_url", ""))]
+        return recipients
+
+    @staticmethod
     async def _log(
         project_id: Optional[int],
         channel_type: str,
@@ -562,6 +643,214 @@ class NotificationService:
             "app": "app_alert_on_failure",
         }
         return mapping.get((alert_scope or "").strip().lower(), "ui_alert_on_failure")
+
+    @staticmethod
+    async def send_project_notice(
+        project_id: int,
+        title: str,
+        content: dict,
+        related_id: Optional[int] = None,
+        related_type: str = "",
+    ):
+        """项目级通用通知：推送到所有已启用渠道，不依赖各模块「失败告警」开关。
+
+        用于质量门禁快照/豁免等与执行失败无关的事件。
+        """
+        configs = await NotificationConfig.filter(project_id=project_id, enabled=True).all()
+        if not configs:
+            return
+        for cfg in configs:
+            status_flag = "failed"
+            error_text = ""
+            recipients: List[str] = []
+            if cfg.channel_type == "email":
+                recipients = cfg.config.get("recipients", []) or []
+                if not recipients:
+                    continue
+            try:
+                if cfg.channel_type == "email":
+                    await NotificationService._send_email_alert(cfg, title, content)
+                elif cfg.channel_type == "dingtalk":
+                    await NotificationService._send_dingtalk_alert(cfg, title, content)
+                elif cfg.channel_type == "wechat":
+                    await NotificationService._send_wechat_alert(cfg, title, content)
+                elif cfg.channel_type == "feishu":
+                    await NotificationService._send_feishu_alert(cfg, title, content)
+                else:
+                    continue
+                status_flag = "success"
+            except Exception as e:
+                error_text = str(e)
+                print(f"[NotificationService] 发送项目通知失败 ({cfg.channel_type}): {e}")
+            finally:
+                await NotificationService._log(
+                    project_id=project_id,
+                    channel_type=cfg.channel_type,
+                    notify_type="notice",
+                    title=title,
+                    content_summary=content,
+                    recipients=NotificationService._log_recipients_for_channel(
+                        cfg.channel_type, recipients, cfg
+                    ),
+                    status=status_flag,
+                    error_msg=error_text,
+                    related_id=related_id,
+                    related_type=related_type,
+                )
+
+    @staticmethod
+    async def send_assignment_message(
+        project_id: int,
+        title: str,
+        content: dict,
+        *,
+        assignee_email: Optional[str] = None,
+        assignee_mobile: Optional[str] = None,
+        channel_types: Optional[List[str]] = None,
+        email_allowed: bool = True,
+        related_id: Optional[int] = None,
+        related_type: str = "assignment",
+    ) -> List[dict]:
+        """测试管理指派外发：邮件仅发给被指派人；IM 走项目 Webhook，可按手机号 @。
+
+        channel_types=None 不限渠道；[] 表示不推送任何渠道。
+        email_allowed=False 时跳过邮件（个人偏好/DND），IM 群广播不受影响。
+        返回各渠道推送结果 [{channel, status, error?}, ...]。
+        """
+        payload = dict(content or {})
+        payload["notice_kind"] = "assignment"
+        mobile = (assignee_mobile or payload.get("assignee_mobile") or "").strip()
+        at_mobiles = [mobile] if re.fullmatch(r"1[3-9]\d{9}", mobile) else []
+        results: List[dict] = []
+        if channel_types is not None and len(channel_types) == 0:
+            return results
+        configs = await NotificationConfig.filter(project_id=project_id, enabled=True).all()
+        allowed = set(channel_types) if channel_types is not None else None
+
+        async def _finish_channel(
+            *,
+            channel_type: str,
+            status_flag: str,
+            error_text: str = "",
+            recipients: Optional[List[str]] = None,
+            cfg_obj: Any = None,
+        ) -> None:
+            rec = recipients or []
+            results.append(
+                {
+                    "channel": channel_type,
+                    "status": status_flag,
+                    "error": error_text or None,
+                }
+            )
+            log_status = (
+                "success"
+                if status_flag == "success"
+                else "skipped"
+                if status_flag == "skipped"
+                else "failed"
+            )
+            await NotificationService._log(
+                project_id=project_id,
+                channel_type=channel_type,
+                notify_type="assignment",
+                title=title,
+                content_summary=NotificationService._sanitize_log_content(payload),
+                recipients=NotificationService._log_recipients_for_channel(
+                    channel_type, rec, cfg_obj
+                ),
+                status=log_status,
+                error_msg=error_text or ("" if status_flag != "skipped" else "已跳过"),
+                related_id=related_id,
+                related_type=related_type,
+            )
+
+        for cfg in configs:
+            if getattr(cfg, "tm_assignment_notify", True) is False:
+                continue
+            if allowed is not None and cfg.channel_type not in allowed:
+                continue
+            # 指派邮件统一走全局 SMTP；项目邮件渠道仅用于执行告警/自动推报告
+            if cfg.channel_type == "email":
+                continue
+            status_flag = "failed"
+            error_text = ""
+            recipients: List[str] = []
+            try:
+                if cfg.channel_type == "dingtalk":
+                    await NotificationService._send_dingtalk_alert(
+                        cfg, title, payload, at_mobiles=at_mobiles
+                    )
+                elif cfg.channel_type == "wechat":
+                    await NotificationService._send_wechat_alert(
+                        cfg, title, payload, at_mobiles=at_mobiles
+                    )
+                elif cfg.channel_type == "feishu":
+                    await NotificationService._send_feishu_alert(
+                        cfg, title, payload, at_mobiles=at_mobiles
+                    )
+                else:
+                    continue
+                status_flag = "success"
+            except Exception as e:
+                error_text = str(e)
+                logger.error(
+                    "[NotificationService] 指派通知失败 (%s): %s",
+                    cfg.channel_type,
+                    e,
+                )
+            await _finish_channel(
+                channel_type=cfg.channel_type,
+                status_flag=status_flag,
+                error_text=error_text,
+                recipients=recipients,
+                cfg_obj=cfg,
+            )
+
+        email_wanted = allowed is None or "email" in allowed
+
+        async def _send_assignment_email_via_global_smtp() -> None:
+            if not email_allowed:
+                await _finish_channel(
+                    channel_type="email",
+                    status_flag="skipped",
+                    error_text="个人偏好或免打扰已关闭邮件外发",
+                )
+                return
+            email = (assignee_email or "").strip()
+            if not email:
+                await _finish_channel(
+                    channel_type="email",
+                    status_flag="skipped",
+                    error_text="被指派人未配置邮箱",
+                )
+                return
+            if not await SystemSmtpConfig.first():
+                await _finish_channel(
+                    channel_type="email",
+                    status_flag="failed",
+                    error_text="未配置全局 SMTP",
+                )
+                return
+            status_flag = "failed"
+            error_text = ""
+            try:
+                body = NotificationService._build_alert_body(payload, is_html=True)
+                await NotificationService._send_email(to=[email], subject=title, body_html=body)
+                status_flag = "success"
+            except Exception as e:
+                error_text = str(e)
+                logger.error("[NotificationService] 指派邮件失败: %s", e)
+            await _finish_channel(
+                channel_type="email",
+                status_flag=status_flag,
+                error_text=error_text,
+                recipients=[email],
+            )
+
+        if email_wanted:
+            await _send_assignment_email_via_global_smtp()
+        return results
 
     @staticmethod
     async def send_alert(
@@ -624,7 +913,9 @@ class NotificationService:
                     notify_type="alert",
                     title=title,
                     content_summary=content,
-                    recipients=recipients if cfg.channel_type == "email" else [cfg.config.get("webhook_url", "")],
+                    recipients=NotificationService._log_recipients_for_channel(
+                        cfg.channel_type, recipients, cfg
+                    ),
                     status=status_flag,
                     error_msg=error_text,
                     related_id=related_id,
@@ -1245,8 +1536,14 @@ class NotificationService:
         await NotificationService._send_email(to=recipients, subject=title, body_html=body)
 
     @staticmethod
-    async def _send_dingtalk_alert(cfg: NotificationConfig, title: str, content: dict):
-        """发送钉钉告警"""
+    async def _send_dingtalk_alert(
+        cfg: NotificationConfig,
+        title: str,
+        content: dict,
+        *,
+        at_mobiles: Optional[List[str]] = None,
+    ):
+        """发送钉钉告警；at_mobiles 非空时 @ 对应手机号。"""
         config = cfg.config or {}
         webhook = config.get("webhook_url")
         if not webhook:
@@ -1265,13 +1562,20 @@ class NotificationService:
             webhook = f"{webhook}&timestamp={timestamp}&sign={sign}"
 
         text = NotificationService._build_alert_body(content, is_html=False)
+        mobiles = [m for m in (at_mobiles or []) if m]
+        if mobiles:
+            # 钉钉 markdown @ 需在正文中出现 @手机号
+            mention = " ".join(f"@{m}" for m in mobiles)
+            text = f"{mention}\n{text}"
         payload = {
             "msgtype": "markdown",
             "markdown": {
                 "title": title,
                 "text": text
-            }
+            },
         }
+        if mobiles:
+            payload["at"] = {"atMobiles": mobiles, "isAtAll": False}
 
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(webhook, json=payload)
@@ -1281,20 +1585,37 @@ class NotificationService:
                 raise RuntimeError(f"钉钉发送失败: {result}")
 
     @staticmethod
-    async def _send_wechat_alert(cfg: NotificationConfig, title: str, content: dict):
-        """发送企业微信告警"""
+    async def _send_wechat_alert(
+        cfg: NotificationConfig,
+        title: str,
+        content: dict,
+        *,
+        at_mobiles: Optional[List[str]] = None,
+    ):
+        """发送企业微信告警；有手机号时改用 text + mentioned_mobile_list 以支持 @。"""
         config = cfg.config or {}
         webhook = config.get("webhook_url")
         if not webhook:
             raise ValueError("未配置企微 Webhook")
 
         text = NotificationService._build_alert_body(content, is_html=False)
-        payload = {
-            "msgtype": "markdown",
-            "markdown": {
-                "content": text
+        mobiles = [m for m in (at_mobiles or []) if m]
+        if mobiles:
+            body = f"{title}\n{text}" if title else text
+            payload = {
+                "msgtype": "text",
+                "text": {
+                    "content": body,
+                    "mentioned_mobile_list": mobiles,
+                },
             }
-        }
+        else:
+            payload = {
+                "msgtype": "markdown",
+                "markdown": {
+                    "content": text
+                }
+            }
 
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(webhook, json=payload)
@@ -1304,14 +1625,24 @@ class NotificationService:
                 raise RuntimeError(f"企微发送失败: {result}")
 
     @staticmethod
-    async def _send_feishu_alert(cfg: NotificationConfig, title: str, content: dict):
-        """发送飞书告警（自定义机器人 Webhook）"""
+    async def _send_feishu_alert(
+        cfg: NotificationConfig,
+        title: str,
+        content: dict,
+        *,
+        at_mobiles: Optional[List[str]] = None,
+    ):
+        """发送飞书告警。自定义机器人无法按手机号真实 @，正文中写入 @手机号 提示。"""
         config = cfg.config or {}
         webhook = config.get("webhook_url")
         if not webhook:
             raise ValueError("未配置飞书 Webhook")
 
         text = NotificationService._build_alert_body(content, is_html=False)
+        mobiles = [m for m in (at_mobiles or []) if m]
+        if mobiles:
+            mention = " ".join(f"@{m}" for m in mobiles)
+            text = f"{mention}\n{text}"
         message = f"**{title}**\n{text}" if title else text
         payload = {
             "msg_type": "text",
@@ -1330,7 +1661,11 @@ class NotificationService:
 
     @staticmethod
     def _build_alert_body(content: dict, is_html: bool = False) -> str:
-        """组装告警内容"""
+        """组装告警/通知内容。"""
+        if (content or {}).get("notice_kind") == "quality":
+            return NotificationService._build_quality_notice_body(content, is_html=is_html)
+        if (content or {}).get("notice_kind") == "assignment":
+            return NotificationService._build_assignment_notice_body(content, is_html=is_html)
         t = content.get("execution_type", "")
         name = content.get("name", "")
         status = content.get("status", "")
@@ -1340,7 +1675,7 @@ class NotificationService:
         pass_rate = content.get("pass_rate", 0)
         duration = content.get("duration", 0)
         run_by = content.get("run_by", "")
-        link = content.get("link", "")
+        link = NotificationService._ensure_absolute_link(content.get("link", ""))
         time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if is_html:
@@ -1368,3 +1703,90 @@ class NotificationService:
             if link:
                 md += f"\n[查看详情]({link})"
             return md
+
+    @staticmethod
+    def _build_quality_notice_body(content: dict, is_html: bool = False) -> str:
+        name = content.get("name", "")
+        status = content.get("status", "")
+        release_key = content.get("release_key", "")
+        metrics = content.get("metrics") or {}
+        waiver = content.get("waiver_reason") or ""
+        time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        completion = metrics.get("completion_rate")
+        pass_rate = metrics.get("pass_rate")
+        blocker = metrics.get("blocker_open")
+        critical = metrics.get("critical_open")
+        if is_html:
+            body = f"""
+            <h3>版本质量门禁通知</h3>
+            <p><b>版本：</b>{release_key} {name}</p>
+            <p><b>结论：</b>{status}</p>
+            <p><b>完成率：</b>{completion} &nbsp; <b>通过率：</b>{pass_rate}</p>
+            <p><b>Blocker：</b>{blocker} &nbsp; <b>Critical：</b>{critical}</p>
+            <p><b>时间：</b>{time_str}</p>
+            """
+            if waiver:
+                body += f"<p><b>豁免原因：</b>{waiver}</p>"
+            return body
+        md = f"""### 版本质量门禁通知
+**版本：** {release_key} {name}
+**结论：** {status}
+**完成率：** {completion}　**通过率：** {pass_rate}
+**Blocker：** {blocker}　**Critical：** {critical}
+**时间：** {time_str}
+"""
+        if waiver:
+            md += f"**豁免原因：** {waiver}\n"
+        return md
+
+    @staticmethod
+    def _escape_md_text(text: str) -> str:
+        s = str(text or "")
+        for ch in ("\\", "*", "_", "[", "]", "(", ")", "`", "#", ">", "|"):
+            s = s.replace(ch, "\\" + ch)
+        return s
+
+    @staticmethod
+    def _build_assignment_notice_body(content: dict, is_html: bool = False) -> str:
+        event_label = content.get("event_label") or content.get("event_type") or "指派"
+        name = content.get("name") or ""
+        detail = content.get("detail") or ""
+        project_name = content.get("project_name") or ""
+        actor = content.get("actor") or ""
+        link = NotificationService._ensure_absolute_link(content.get("link") or "")
+        time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if is_html:
+            esc = html_module.escape
+            event_label = esc(str(event_label))
+            name = esc(str(name))
+            detail = esc(str(detail))
+            project_name = esc(str(project_name))
+            actor = esc(str(actor))
+            link_esc = esc(str(link)) if link else ""
+            body = f"""
+            <h3>测试管理指派通知</h3>
+            <p><b>类型：</b>{event_label}</p>
+            <p><b>标题：</b>{name}</p>
+            <p><b>说明：</b>{detail}</p>
+            <p><b>项目：</b>{project_name} &nbsp; <b>操作人：</b>{actor}</p>
+            <p><b>时间：</b>{time_str}</p>
+            """
+            if link:
+                body += f'<p><a href="{link_esc}">打开详情</a></p>'
+            return body
+        esc = NotificationService._escape_md_text
+        event_label = esc(str(event_label))
+        name = esc(str(name))
+        detail = esc(str(detail))
+        project_name = esc(str(project_name))
+        actor = esc(str(actor))
+        md = f"""### 测试管理指派通知
+**类型：** {event_label}
+**标题：** {name}
+**说明：** {detail}
+**项目：** {project_name}　**操作人：** {actor}
+**时间：** {time_str}
+"""
+        if link:
+            md += f"\n[打开详情](<{link}>)"
+        return md

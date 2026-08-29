@@ -30,6 +30,7 @@
       <el-tab-pane label="自愈与 AI Act" name="heal" />
       <el-tab-pane label="录制与调试" name="recording" />
       <el-tab-pane label="失败分析" name="failure" />
+      <el-tab-pane label="执行可信度" name="stability" />
       <el-tab-pane label="压测 AI" name="perf" />
       <el-tab-pane label="功能用例" name="cases" />
     </el-tabs>
@@ -156,6 +157,64 @@
             v-model="execSettings.failure_analysis_allow_run_override"
             :disabled="!execSettings.failure_analysis_enabled"
           />
+        </el-form-item>
+      </template>
+
+      <template v-else-if="activeSection === 'stability'">
+        <p v-if="compactHint" class="section-lead">
+          执行可信度窗口与「不稳定」判定。保存后列表立即按新阈值计算。
+        </p>
+        <el-form-item label="窗口 N">
+          <el-input-number v-model="execSettings.stability_n" :min="5" :max="50" :step="1" />
+          <div class="form-tip">窗口通过率 / 不稳定判定使用最近 N 次已结束执行；默认 20</div>
+        </el-form-item>
+        <el-form-item label="近况条数">
+          <el-input-number v-model="execSettings.stability_recent_k" :min="1" :max="20" :step="1" />
+          <div class="form-tip">近况通过率取最近 K 次；默认 5</div>
+        </el-form-item>
+        <el-divider content-position="left">不稳定判定</el-divider>
+        <el-form-item label="最少样本">
+          <el-input-number v-model="execSettings.stability_unstable_min_n" :min="5" :max="50" :step="1" />
+          <div class="form-tip">通过率 / 首跑 / 重试挽回规则需至少这么多样本；默认 10</div>
+        </el-form-item>
+        <el-form-item label="窗口通过率低于">
+          <el-input-number
+            v-model="passBelowPct"
+            :min="50"
+            :max="100"
+            :step="1"
+          />
+          <span class="form-unit">%</span>
+          <div class="form-tip">低于此百分比标为不稳定。90% 仍可能因「时好时坏」被标不稳定</div>
+        </el-form-item>
+        <el-form-item label="首跑通过率低于">
+          <el-input-number
+            v-model="firstPassBelowPct"
+            :min="50"
+            :max="100"
+            :step="1"
+          />
+          <span class="form-unit">%</span>
+          <div class="form-tip">接口可区分重试；Web/App 无首跑数据时不套用此条</div>
+        </el-form-item>
+        <el-form-item label="重试挽回次数 ≥">
+          <el-input-number v-model="execSettings.stability_unstable_salvage_min" :min="0" :max="20" :step="1" />
+          <div class="form-tip">0 表示关闭该条。默认 3</div>
+        </el-form-item>
+        <el-form-item label="成败切换样本 ≥">
+          <el-input-number v-model="execSettings.stability_unstable_switch_min_n" :min="3" :max="50" :step="1" />
+        </el-form-item>
+        <el-form-item label="成败切换次数 ≥">
+          <el-input-number v-model="execSettings.stability_unstable_switch_min" :min="0" :max="20" :step="1" />
+          <div class="form-tip">窗口内成功/失败来回切换达到此次数即不稳定（时好时坏）。0 关闭。默认 3</div>
+        </el-form-item>
+        <el-form-item label="APM 外链前缀">
+          <el-input
+            v-model="execSettings.apm_trace_base_url"
+            placeholder="https://apm.example/trace?id="
+            clearable
+          />
+          <div class="form-tip">可选。执行记录若带 request_id，可按此前缀拼 APM 查询链接（列表暂不展示）</div>
         </el-form-item>
       </template>
 
@@ -293,6 +352,15 @@ const execSettings = reactive({
   failure_analysis_enabled: true,
   failure_analysis_default_on_report: true,
   failure_analysis_allow_run_override: true,
+  stability_n: 20,
+  stability_recent_k: 5,
+  stability_unstable_min_n: 10,
+  stability_unstable_pass_below: 0.85,
+  stability_unstable_first_pass_below: 0.85,
+  stability_unstable_salvage_min: 3,
+  stability_unstable_switch_min_n: 5,
+  stability_unstable_switch_min: 3,
+  apm_trace_base_url: '',
   perf_ai_analysis_enabled: false,
   perf_ai_analysis_default_on_run: false,
   perf_ai_analysis_allow_run_override: true,
@@ -307,6 +375,19 @@ const execSettings = reactive({
 })
 const execSettingsLoading = ref(false)
 const execSettingsSaving = ref(false)
+
+const passBelowPct = computed({
+  get: () => Math.round(Number(execSettings.stability_unstable_pass_below || 0.85) * 100),
+  set: (v) => {
+    execSettings.stability_unstable_pass_below = Number(v) / 100
+  },
+})
+const firstPassBelowPct = computed({
+  get: () => Math.round(Number(execSettings.stability_unstable_first_pass_below || 0.85) * 100),
+  set: (v) => {
+    execSettings.stability_unstable_first_pass_below = Number(v) / 100
+  },
+})
 
 const loadExecutionSettings = async () => {
   const pid = projectId.value
@@ -345,6 +426,17 @@ const SECTION_PAYLOAD_KEYS = {
     'failure_analysis_default_on_report',
     'failure_analysis_allow_run_override',
   ],
+  stability: [
+    'stability_n',
+    'stability_recent_k',
+    'stability_unstable_min_n',
+    'stability_unstable_pass_below',
+    'stability_unstable_first_pass_below',
+    'stability_unstable_salvage_min',
+    'stability_unstable_switch_min_n',
+    'stability_unstable_switch_min',
+    'apm_trace_base_url',
+  ],
   perf: [
     'perf_ai_analysis_enabled',
     'perf_ai_analysis_default_on_run',
@@ -370,6 +462,15 @@ const buildSavePayload = () => {
       failure_analysis_enabled: execSettings.failure_analysis_enabled,
       failure_analysis_default_on_report: execSettings.failure_analysis_default_on_report,
       failure_analysis_allow_run_override: execSettings.failure_analysis_allow_run_override,
+      stability_n: execSettings.stability_n,
+      stability_recent_k: execSettings.stability_recent_k,
+      stability_unstable_min_n: execSettings.stability_unstable_min_n,
+      stability_unstable_pass_below: execSettings.stability_unstable_pass_below,
+      stability_unstable_first_pass_below: execSettings.stability_unstable_first_pass_below,
+      stability_unstable_salvage_min: execSettings.stability_unstable_salvage_min,
+      stability_unstable_switch_min_n: execSettings.stability_unstable_switch_min_n,
+      stability_unstable_switch_min: execSettings.stability_unstable_switch_min,
+      apm_trace_base_url: execSettings.apm_trace_base_url,
       perf_ai_analysis_enabled: execSettings.perf_ai_analysis_enabled,
       perf_ai_analysis_default_on_run: execSettings.perf_ai_analysis_default_on_run,
       perf_ai_analysis_allow_run_override: execSettings.perf_ai_analysis_allow_run_override,
@@ -456,8 +557,7 @@ watch(projectId, (pid) => {
 }
 .form-unit {
   margin-left: 8px;
-  color: #606266;
-  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 .section-lead {
   margin: 0 0 12px;

@@ -268,14 +268,16 @@
       <!-- 响应结构 -->
       <el-collapse v-model="responseCollapse" class="response-collapse">
         <el-collapse-item title="响应结构定义（可选，用于 AI 生成精准断言）" name="response">
-          <el-form-item>
+          <el-form-item class="response-field-item" label-width="110px">
             <template #label>
-              <span>响应 Schema</span>
+              <span class="response-field-label">响应 Schema</span>
               <el-tooltip content="OpenAPI 格式的响应结构定义，用于描述返回字段的类型、是否必填等元数据。AI 会基于此生成字段类型校验断言。" placement="top">
                 <el-icon class="label-tip"><QuestionFilled /></el-icon>
               </el-tooltip>
-              <el-button type="primary" link size="small" @click="showSchemaGenDialog" icon="MagicStick" style="margin-left: 8px;">一键生成</el-button>
             </template>
+            <div class="response-field-toolbar">
+              <el-button type="primary" link size="small" @click="showSchemaGenDialog" icon="MagicStick">一键生成</el-button>
+            </div>
             <JsonTextarea
               v-model="responseSchemaText"
               :rows="5"
@@ -283,9 +285,9 @@
             />
             <div class="field-hint">填写 OpenAPI 格式的 schema 定义（如字段类型、必填性）。通常从 Swagger/Apifox 导入时自动填充</div>
           </el-form-item>
-          <el-form-item>
+          <el-form-item class="response-field-item" label-width="110px">
             <template #label>
-              <span>响应示例</span>
+              <span class="response-field-label">响应示例</span>
               <el-tooltip content="支持标准 JSON，或 SSE 等多行文本（如 event:message + data:{...}）。AI 会参考此示例生成断言。可通过【测试接口】一键保存。" placement="top">
                 <el-icon class="label-tip"><QuestionFilled /></el-icon>
               </el-tooltip>
@@ -309,7 +311,7 @@
   </el-dialog>
   
   <!-- 测试环境选择弹窗 -->
-  <el-dialog v-model="testDialogVisible" title="测试接口" width="500px" append-to-body destroy-on-close>
+  <el-dialog v-model="testDialogVisible" title="测试接口" width="560px" append-to-body destroy-on-close>
     <el-form :model="testForm" label-width="100px">
       <el-form-item label="执行环境">
         <el-select v-model="testForm.env_id" placeholder="选择环境（基础URL 为空时必填）" clearable style="width: 100%">
@@ -321,6 +323,9 @@
           />
         </el-select>
         <div v-if="selectedEnv?.host" class="env-host">{{ selectedEnv.host }}</div>
+      </el-form-item>
+      <el-form-item v-if="form.protocol !== 'websocket' && form.protocol !== 'grpc'" label="执行机">
+        <ViaWorkerSelect v-model="testForm.worker_id" :env-id="testForm.env_id" />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -488,6 +493,7 @@ import DataFactoryTagPicker from './DataFactoryTagPicker.vue'
 import { insertVarRef } from '@/utils/varInsert.js'
 import JsonTextarea from '@/components/JsonTextarea.vue'
 import HeaderEditorPanel from '@/components/HeaderEditorPanel.vue'
+import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
 import WsStepsEditor from './WsStepsEditor.vue'
 import ApiTestFilePicker from '@/components/ApiTestFilePicker.vue'
 import {
@@ -529,7 +535,7 @@ const testing = ref(false)
 const testDialogVisible = ref(false)
 const testResultVisible = ref(false)
 const testActiveTab = ref('request')
-const testForm = reactive({ env_id: null })
+const testForm = reactive({ env_id: null, worker_id: null })
 const testResult = ref(null)
 
 // 响应结构折叠面板
@@ -540,7 +546,10 @@ const schemaGenVisible = ref(false)
 const schemaGenForm = reactive({ input: '' })
 
 const showSchemaGenDialog = () => {
-  schemaGenForm.input = ''
+  const example = form.response_schema?.example
+  schemaGenForm.input = (example != null && example !== '')
+    ? formatResponseExample(example)
+    : ''
   schemaGenVisible.value = true
 }
 
@@ -548,6 +557,8 @@ const useExistingExample = () => {
   const example = form.response_schema?.example
   if (example != null && example !== '') {
     schemaGenForm.input = formatResponseExample(example)
+  } else {
+    ElMessage.warning('尚未填写响应示例')
   }
 }
 
@@ -668,6 +679,7 @@ const getStatusType = (code) => {
 
 const showTestDialog = () => {
   testForm.env_id = refEnvId.value || null
+  testForm.worker_id = null
   testDialogVisible.value = true
 }
 
@@ -1129,6 +1141,7 @@ const handleTest = async () => {
       timeout: 30,
       env_id: envId || undefined,
       project_id: proStore.projectInfo?.id || undefined,
+      ...(testForm.worker_id ? { worker_id: testForm.worker_id } : {}),
     })
     
     if (res.status === 200) {
@@ -1299,6 +1312,24 @@ const handleTest = async () => {
     font-size: 12px;
     color: var(--el-text-color-secondary);
     margin-top: 4px;
+  }
+
+  :deep(.response-field-item .el-form-item__label) {
+    white-space: nowrap;
+    height: auto !important;
+    line-height: 32px;
+    align-items: center;
+  }
+
+  .response-field-label {
+    display: inline;
+    white-space: nowrap;
+  }
+
+  .response-field-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 4px;
   }
 }
 

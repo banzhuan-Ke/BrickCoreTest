@@ -27,7 +27,7 @@
               >复制</el-button>
             </div>
             <div style="margin-top: 8px;">
-              <strong>方式 A · 完整执行器</strong>：安装 <strong>BrickCoreRunner</strong>，登录后切换为「仅压测执行机」或「UI + 压测」，选择与上方 ID 对应的压测项目后点「上线」。
+              <strong>方式 A · 完整执行器</strong>：安装 <strong>BrickCoreRunner</strong>，登录后在「本机能力」勾选「压测」（可同时勾选接口代发），选择与上方 ID 对应的项目后点「上线」。
             </div>
             <div style="margin-top: 8px;">
               <strong>方式 B · 精简压测包</strong>：下载 <strong>BrickCorePerf</strong>（Win / Mac 分包），解压后运行 <code>start-perf</code>；配置里的 <code>PERF_PROJECT_ID</code> 填上方项目 ID。终端会记住上次配置，回车启动或按 <code>C</code> 修改。

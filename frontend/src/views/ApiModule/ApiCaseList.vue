@@ -122,7 +122,13 @@
                   >
                     <el-tag type="warning" size="small" style="margin-right:5px;cursor:default">已过期</el-tag>
                   </el-tooltip>
-                  {{ row.name }}
+                  <CaseNameCell
+                    :name="row.name"
+                    :tags="row.tags"
+                    :quarantine="!!row.quarantine"
+                    :unstable="!!stabilityMap[row.id]?.unstable"
+                    :stability="stabilityMap[row.id]"
+                  />
                 </div>
               </template>
             </el-table-column>
@@ -285,49 +291,77 @@
   />
   
   <!-- 环境选择弹窗 -->
-  <el-dialog v-model="envDialog.visible" title="选择执行环境" width="640px" top="6vh" destroy-on-close class="env-select-dialog">
-    <el-form :model="envDialog" label-width="100px">
-      <el-form-item label="执行环境" required>
-        <el-select v-model="envDialog.env_id" placeholder="选择执行环境" style="width: 100%">
-          <el-option
-            v-for="env in proStore.envList"
-            :key="env.id"
-            :label="envAuthLabel(env)"
-            :value="env.id"
-          />
-        </el-select>
-        <div class="env-auth-hint">
-          Token 授权按<strong>环境</strong>绑定。用例 Header 里的
-          <code v-pre>${{token1}}</code>
-          只有选中授权所在环境时才会注入；调试授权成功不等于已写入缓存（编辑态调试会写入）。
+  <el-dialog
+    v-model="envDialog.visible"
+    title="选择执行环境"
+    width="680px"
+    top="6vh"
+    destroy-on-close
+    class="bc-dialog env-select-dialog"
+  >
+    <div class="bc-dialog-body">
+      <section class="bc-dialog-section">
+        <div class="bc-dialog-section__title">执行配置</div>
+        <el-form :model="envDialog" label-width="96px" class="bc-dialog-form">
+          <el-form-item label="执行环境" required>
+            <el-select v-model="envDialog.env_id" placeholder="选择执行环境" style="width: 100%" filterable>
+              <el-option
+                v-for="env in proStore.envList"
+                :key="env.id"
+                :label="envAuthLabel(env)"
+                :value="env.id"
+              />
+            </el-select>
+            <div class="bc-dialog-hint">
+              Token 授权按<strong>环境</strong>绑定；Header 中的
+              <code v-pre>${{token1}}</code>
+              仅在选中授权所在环境时注入。
+              <el-tooltip
+                placement="top"
+                content="调试授权成功不等于已写入缓存；编辑态调试会写入缓存。"
+              >
+                <el-icon class="env-hint-help"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </div>
+            <el-alert
+              v-if="envAuthHint"
+              :type="envAuthHint.type"
+              :closable="false"
+              show-icon
+              class="bc-dialog-alert"
+              :title="envAuthHint.title"
+            />
+          </el-form-item>
+          <el-form-item label="执行机">
+            <ViaWorkerSelect
+              v-model="envDialog.worker_id"
+              :env-id="envDialog.env_id"
+              force-serial-hint
+            />
+          </el-form-item>
+          <el-form-item label="选项">
+            <div class="bc-dialog-options">
+              <div class="bc-dialog-option">
+                <el-checkbox v-model="envDialog.auto_validate_schema">自动校验响应 Schema</el-checkbox>
+              </div>
+              <div v-if="!envDialog.isBatch" class="bc-dialog-option">
+                <el-checkbox v-model="envDialog.propagate_extracted">行间传递提取变量</el-checkbox>
+                <span class="bc-dialog-hint">数据驱动多轮时，上一行 extract 传入下一行</span>
+              </div>
+            </div>
+          </el-form-item>
+        </el-form>
+      </section>
+
+      <section v-if="envDialog.env_id" class="bc-dialog-section bc-dialog-section--muted">
+        <VariablePreviewPanel :env-id="envDialog.env_id" />
+        <div class="bc-dialog-actions-inline">
+          <VarInsertButton :env-id="envDialog.env_id" label="插入变量" />
+          <el-button type="primary" link size="small" @click="varEditVisible = true" icon="Edit">
+            编辑环境变量
+          </el-button>
         </div>
-        <el-alert
-          v-if="envAuthHint"
-          :type="envAuthHint.type"
-          :closable="false"
-          show-icon
-          style="margin-top: 8px;"
-          :title="envAuthHint.title"
-        />
-      </el-form-item>
-      <el-form-item label="Schema 校验">
-        <el-checkbox v-model="envDialog.auto_validate_schema">自动校验响应 Schema</el-checkbox>
-      </el-form-item>
-      <el-form-item v-if="!envDialog.isBatch" label="数据驱动">
-        <el-checkbox v-model="envDialog.propagate_extracted">行间传递提取变量</el-checkbox>
-        <div class="field-hint-sm">数据驱动多轮执行时，上一行 extract 结果传入下一行</div>
-      </el-form-item>
-    </el-form>
-    <VariablePreviewPanel
-      v-if="envDialog.env_id"
-      :env-id="envDialog.env_id"
-    />
-    <div v-if="envDialog.env_id" class="env-dialog-actions">
-      <VarInsertButton
-        :env-id="envDialog.env_id"
-        label="插入变量"
-      />
-      <el-button type="primary" link size="small" @click="varEditVisible = true" icon="Edit">编辑环境变量</el-button>
+      </section>
     </div>
     <template #footer>
       <el-button @click="envDialog.visible = false">取消</el-button>
@@ -887,6 +921,9 @@ import ApiCaseGenerator from '@/views/AI/components/ApiCaseGenerator.vue'
 import EnvVarQuickEdit from '@/components/EnvVarQuickEdit.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import VariablePreviewPanel from '@/components/VariablePreviewPanel.vue'
+import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
+import CaseNameCell from '@/components/CaseNameCell.vue'
+import { stabilityApi } from '@/api/modules/stability.js'
 import BatchRunResultDialog from './components/BatchRunResultDialog.vue'
 import BatchCatalogDialog from '@/components/BatchCatalogDialog.vue'
 import CopyToProjectDialog from '@/components/CopyToProjectDialog.vue'
@@ -935,6 +972,32 @@ const apiList = ref([])
 const loading = ref(false)
 const envLoading = ref(false)
 const selectedCases = ref([])
+const stabilityMap = ref({})
+
+import { hasQuarantineTag } from '@/utils/caseStability.js'
+
+async function loadStabilityMap(rows) {
+  const ids = (rows || []).map((r) => r.id).filter(Boolean)
+  if (!ids.length || !proStore.projectInfo?.id) {
+    stabilityMap.value = {}
+    return
+  }
+  try {
+    const res = await stabilityApi.listCases({
+      project_id: proStore.projectInfo.id,
+      domain: 'api',
+      case_ids: ids.join(','),
+      size: Math.max(ids.length, 20),
+    })
+    const map = {}
+    for (const item of res.data?.data?.items || []) {
+      map[item.case_id] = item
+    }
+    stabilityMap.value = map
+  } catch (e) {
+    console.error(e)
+  }
+}
 
 const caseTableRef = ref(null)
 const editDialog = reactive({ visible: false, data: null })
@@ -1068,6 +1131,7 @@ const copyDialog = reactive({ visible: false, row: null })
 const envDialog = reactive({
   visible: false,
   env_id: null,
+  worker_id: null,
   case: null,
   isBatch: false,
   auto_validate_schema: false,
@@ -1205,6 +1269,7 @@ const getCaseList = async () => {
       }
       caseList.value = data
       pagination.total = res.data.total
+      await loadStabilityMap(data)
     }
   } catch (error) {
     ElMessage.error('获取用例列表失败')
@@ -1407,6 +1472,7 @@ const handleBatchRun = async () => {
   envDialog.case = null
   envDialog.isBatch = true
   envDialog.env_id = pickDefaultRunEnvId()
+  envDialog.worker_id = null
   envDialog.auto_validate_schema = false
   envDialog.propagate_extracted = true
   envDialog.visible = true
@@ -1419,11 +1485,24 @@ const handleRun = async (row) => {
     return
   }
 
+  if (hasQuarantineTag(row.tags)) {
+    try {
+      await ElMessageBox.confirm(
+        '该用例已隔离，单条调试仍会执行。确认继续？',
+        '已隔离用例',
+        { type: 'warning', confirmButtonText: '继续执行', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+  }
+
   await loadAuthConfigsForRun()
   // 打开环境选择弹窗：优先选中已启用 Token 授权的环境
   envDialog.case = row
   envDialog.isBatch = false
   envDialog.env_id = pickDefaultRunEnvId()
+  envDialog.worker_id = null
   envDialog.auto_validate_schema = false
   envDialog.propagate_extracted = true
   envDialog.visible = true
@@ -1459,7 +1538,8 @@ const confirmRun = async () => {
       const res = await http.apiModuleApi.runBatch({
         case_ids: caseIds,
         env_id: envDialog.env_id,
-        auto_validate_schema: envDialog.auto_validate_schema
+        auto_validate_schema: envDialog.auto_validate_schema,
+        ...(envDialog.worker_id ? { worker_id: envDialog.worker_id } : {}),
       })
       if (res.status >= 200 && res.status < 300) {
         envDialog.visible = false
@@ -1478,6 +1558,7 @@ const confirmRun = async () => {
         env_id: envDialog.env_id,
         auto_validate_schema: envDialog.auto_validate_schema,
         propagate_extracted: envDialog.propagate_extracted,
+        ...(envDialog.worker_id ? { worker_id: envDialog.worker_id } : {}),
       })
       if (res.status >= 200 && res.status < 300) {
         envDialog.visible = false
@@ -1545,18 +1626,11 @@ watch(
 </script>
 
 <style scoped lang="scss">
-.env-dialog-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 0 20px 10px;
-}
-
-.field-hint-sm {
-  font-size: 12px;
+.env-hint-help {
+  margin-left: 4px;
+  vertical-align: -2px;
   color: var(--el-text-color-secondary);
-  margin-top: 4px;
+  cursor: help;
 }
 
 .case-list-layout {
@@ -1578,7 +1652,11 @@ watch(
   }
   
   .case-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-weight: 500;
+    max-width: 100%;
   }
   
   .case-priority {
@@ -1940,17 +2018,6 @@ watch(
 .env-select-dialog .el-dialog__body {
   overflow: auto;
   max-height: calc(90vh - 120px);
-}
-
-.env-auth-hint {
-  margin-top: 8px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--el-text-color-secondary);
-}
-
-.env-auth-hint code {
-  font-size: 12px;
 }
 
 .run-result-dialog .el-dialog__body {

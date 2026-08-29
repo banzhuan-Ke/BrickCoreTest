@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.platform.auth import is_authenticated, require_permissions
+from app.core.platform.permissions import ENVIRONMENT_VIEW
 from app.core.platform.project_access import (
     PROJECT_ROLE_MANAGER,
     PROJECT_ROLE_MEMBER,
@@ -205,3 +206,26 @@ async def update_project(
             raise HTTPException(status_code=422, detail=str(e))
     await project.save()
     return ProjectSchemas(**_project_dict(project, my_role=my_role))
+
+
+@router.get(
+    "/{project_id}/variable-usages",
+    summary="查询变量在用例/套件/计划等处的引用",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permissions(ENVIRONMENT_VIEW))],
+)
+async def get_variable_usages(
+    project_id: int,
+    name: str,
+    user_info: dict = Depends(is_authenticated),
+):
+    await assert_project_access(user_info, project_id, min_role=PROJECT_ROLE_VIEWER)
+    project = await Project.get_or_none(id=project_id, is_del=False)
+    if not project:
+        raise HTTPException(status_code=422, detail="项目不存在")
+    from app.modules.sys.variable_usages import collect_variable_usages
+
+    try:
+        return await collect_variable_usages(project_id, name)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))

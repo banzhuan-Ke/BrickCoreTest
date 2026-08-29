@@ -7,7 +7,7 @@ import copy
 from typing import Any, Optional
 
 from app.models.sys import Project
-from app.core.shared.start_url import validate_default_start_url
+from app.core.shared.start_url import validate_apm_trace_base_url, validate_default_start_url
 
 AI_SETTINGS_GLOBAL_VARS_KEY = "ai_settings"
 
@@ -45,11 +45,120 @@ DEFAULT_AI_PROJECT_SETTINGS: dict[str, Any] = {
     "perf_ai_analysis_default_on_run": False,
     "perf_ai_analysis_allow_run_override": True,
     "requirement_case": copy.deepcopy(DEFAULT_REQUIREMENT_CASE_SETTINGS),
+    "stability_n": 20,
+    "stability_recent_k": 5,
+    "stability_unstable_min_n": 10,
+    "stability_unstable_pass_below": 0.85,
+    "stability_unstable_first_pass_below": 0.85,
+    "stability_unstable_salvage_min": 3,
+    "stability_unstable_switch_min_n": 5,
+    "stability_unstable_switch_min": 3,
+    "apm_trace_base_url": "",
 }
 
-_STRING_SETTINGS_KEYS = frozenset({"recording_locator_strategy", "default_start_url"})
+_STRING_SETTINGS_KEYS = frozenset({
+    "recording_locator_strategy",
+    "default_start_url",
+    "apm_trace_base_url",
+})
 _NESTED_SETTINGS_KEYS = frozenset({"requirement_case"})
-_INT_SETTINGS_KEYS = frozenset({"ai_act_max_per_case", "debug_max_step_timeout_seconds"})
+_INT_SETTINGS_KEYS = frozenset({
+    "ai_act_max_per_case",
+    "debug_max_step_timeout_seconds",
+})
+_STABILITY_INT_KEYS = frozenset({
+    "stability_n",
+    "stability_recent_k",
+    "stability_unstable_min_n",
+    "stability_unstable_salvage_min",
+    "stability_unstable_switch_min_n",
+    "stability_unstable_switch_min",
+})
+_STABILITY_RATE_KEYS = frozenset({
+    "stability_unstable_pass_below",
+    "stability_unstable_first_pass_below",
+})
+
+
+def _apply_stability_setting(target: dict[str, Any], key: str, value: Any) -> None:
+    if key == "stability_n":
+        target[key] = normalize_stability_n(value)
+    elif key == "stability_recent_k":
+        target[key] = normalize_stability_recent_k(value)
+    elif key == "stability_unstable_min_n":
+        target[key] = _clamp_int(value, 10, 5, 50)
+    elif key == "stability_unstable_salvage_min":
+        target[key] = _clamp_int(value, 3, 0, 20)
+    elif key == "stability_unstable_switch_min_n":
+        target[key] = _clamp_int(value, 5, 3, 50)
+    elif key == "stability_unstable_switch_min":
+        target[key] = _clamp_int(value, 3, 0, 20)
+    elif key in _STABILITY_RATE_KEYS:
+        target[key] = normalize_stability_rate(value)
+
+STABILITY_N_DEFAULT = 20
+STABILITY_N_MIN = 5
+STABILITY_N_MAX = 50
+STABILITY_RECENT_K_DEFAULT = 5
+STABILITY_RECENT_K_MIN = 1
+STABILITY_RECENT_K_MAX = 20
+STABILITY_RATE_DEFAULT = 0.85
+
+
+def normalize_stability_n(value: Any) -> int:
+    if value is None or (isinstance(value, str) and not str(value).strip()):
+        return STABILITY_N_DEFAULT
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        return STABILITY_N_DEFAULT
+    if num <= 0:
+        return STABILITY_N_DEFAULT
+    return max(STABILITY_N_MIN, min(STABILITY_N_MAX, num))
+
+
+def normalize_stability_recent_k(value: Any) -> int:
+    if value is None or (isinstance(value, str) and not str(value).strip()):
+        return STABILITY_RECENT_K_DEFAULT
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        return STABILITY_RECENT_K_DEFAULT
+    if num <= 0:
+        return STABILITY_RECENT_K_DEFAULT
+    return max(STABILITY_RECENT_K_MIN, min(STABILITY_RECENT_K_MAX, num))
+
+
+def normalize_stability_rate(value: Any, default: float = STABILITY_RATE_DEFAULT) -> float:
+    if value is None or (isinstance(value, str) and not str(value).strip()):
+        return default
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return default
+    if num > 1:
+        num = num / 100.0
+    return max(0.5, min(1.0, round(num, 4)))
+
+
+def get_stability_policy(settings: dict[str, Any] | None) -> dict[str, Any]:
+    src = settings if isinstance(settings, dict) else {}
+    min_n = _clamp_int(src.get("stability_unstable_min_n"), 10, 5, 50)
+    salvage_min = _clamp_int(src.get("stability_unstable_salvage_min"), 3, 0, 20)
+    switch_min_n = _clamp_int(src.get("stability_unstable_switch_min_n"), 5, 3, 50)
+    switch_min = _clamp_int(src.get("stability_unstable_switch_min"), 3, 0, 20)
+    return {
+        "n": normalize_stability_n(src.get("stability_n")),
+        "recent_k": normalize_stability_recent_k(src.get("stability_recent_k")),
+        "rules": {
+            "min_n": min_n,
+            "pass_below": normalize_stability_rate(src.get("stability_unstable_pass_below")),
+            "first_pass_below": normalize_stability_rate(src.get("stability_unstable_first_pass_below")),
+            "salvage_min": salvage_min,
+            "switch_min_n": switch_min_n,
+            "switch_min": switch_min,
+        },
+    }
 
 # 交互调试单步超时：1～120 秒
 DEBUG_MAX_STEP_TIMEOUT_SECONDS_DEFAULT = 5
@@ -168,6 +277,8 @@ def normalize_ai_project_settings(raw: Any) -> dict[str, Any]:
                     base[key] = DEFAULT_AI_PROJECT_SETTINGS["ai_act_max_per_case"]
             elif key == "debug_max_step_timeout_seconds":
                 base[key] = normalize_debug_max_step_timeout_seconds(raw[key])
+            elif key in _STABILITY_INT_KEYS or key in _STABILITY_RATE_KEYS:
+                _apply_stability_setting(base, key, raw[key])
             elif key == "recording_locator_strategy":
                 base[key] = normalize_recording_locator_strategy(raw[key])
             elif key in _STRING_SETTINGS_KEYS:
@@ -221,11 +332,15 @@ async def save_ai_project_settings(project_id: int, updates: dict[str, Any]) -> 
                 pass
         elif key == "debug_max_step_timeout_seconds":
             current[key] = normalize_debug_max_step_timeout_seconds(updates[key])
+        elif key in _STABILITY_INT_KEYS or key in _STABILITY_RATE_KEYS:
+            _apply_stability_setting(current, key, updates[key])
         elif key == "recording_locator_strategy":
             current[key] = normalize_recording_locator_strategy(updates[key])
         elif key in _STRING_SETTINGS_KEYS:
             if key == "default_start_url":
                 current[key] = validate_default_start_url(updates[key])
+            elif key == "apm_trace_base_url":
+                current[key] = validate_apm_trace_base_url(updates[key])
             else:
                 current[key] = str(updates[key] or "").strip()
         elif key in _INT_SETTINGS_KEYS:

@@ -11,11 +11,17 @@ export function isVarEntryObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) && 'value' in value
 }
 
-/** 系统保留键（项目 global_vars 内嵌套配置，非表格变量） */
+/**
+ * 系统保留键：存在 project/env.global_vars 里，但是模块配置对象，不是用例变量。
+ * 出现在「项目共享变量」表格里会变成 [object Object]。
+ */
 const RESERVED_KEYS = new Set([
   'ai_settings',
   'zentao_export',
+  'case_naming',
+  'knowledge_settings',
   '__default_start_url',
+  '__default_perf_worker_id',
   '__ui_timeout_scale',
   '__ui_nav_wait_until',
   '__ui_busy_selectors',
@@ -26,10 +32,55 @@ const RESERVED_KEYS = new Set([
   '__ui_action_settle_quiet_ms',
   '__ui_auth_inject',
   '__ui_storage_state',
+  '__ui_auth_profiles',
+  '__ui_auth_enabled',
 ])
 
+export function isReservedGlobalVarKey(key) {
+  const k = String(key || '').trim()
+  if (!k) return false
+  if (RESERVED_KEYS.has(k)) return true
+  return k.startsWith('__')
+}
+
+/** 应隐藏的系统配置：保留键，或非 {value} 的嵌套对象 */
+export function isSystemGlobalVarEntry(key, value) {
+  if (isReservedGlobalVarKey(key)) return true
+  if (value !== null && typeof value === 'object' && !Array.isArray(value) && !isVarEntryObject(value)) {
+    return true
+  }
+  return false
+}
+
+export function pickSystemGlobalVars(globalVars) {
+  const out = {}
+  if (!globalVars || typeof globalVars !== 'object' || Array.isArray(globalVars)) return out
+  for (const [key, value] of Object.entries(globalVars)) {
+    if (isSystemGlobalVarEntry(key, value)) out[key] = value
+  }
+  return out
+}
+
+export function stripSystemGlobalVars(globalVars) {
+  const out = {}
+  if (!globalVars || typeof globalVars !== 'object' || Array.isArray(globalVars)) return out
+  for (const [key, value] of Object.entries(globalVars)) {
+    if (isSystemGlobalVarEntry(key, value)) continue
+    out[key] = value
+  }
+  return out
+}
+
+/** 用户编辑结果 + 原系统配置；系统键始终以原配置为准 */
+export function mergeUserVarsWithSystem(userVars, originalGlobalVars) {
+  return {
+    ...stripSystemGlobalVars(userVars),
+    ...pickSystemGlobalVars(originalGlobalVars),
+  }
+}
+
 export function parseVarEntry(key, value) {
-  if (RESERVED_KEYS.has(key) && typeof value === 'object' && value !== null && !isVarEntryObject(value)) {
+  if (isSystemGlobalVarEntry(key, value)) {
     return {
       key: String(key),
       value,
@@ -39,14 +90,15 @@ export function parseVarEntry(key, value) {
     }
   }
   if (isVarEntryObject(value)) {
+    const rawVal = value.value
     return {
       key: String(key),
       value:
-        value.value === null || value.value === undefined
+        rawVal === null || rawVal === undefined
           ? ''
-          : typeof value.value === 'object'
-            ? value.value
-            : String(value.value),
+          : typeof rawVal === 'object'
+            ? JSON.stringify(rawVal)
+            : String(rawVal),
       description: String(value.description || ''),
       secret: Boolean(value.secret) || isSecretKey(key),
       _rawObject: false,
@@ -58,11 +110,11 @@ export function parseVarEntry(key, value) {
       value === null || value === undefined
         ? ''
         : typeof value === 'object'
-          ? value
+          ? JSON.stringify(value)
           : String(value),
     description: '',
     secret: isSecretKey(key),
-    _rawObject: typeof value === 'object' && value !== null,
+    _rawObject: false,
   }
 }
 
@@ -106,15 +158,15 @@ export function getVarValue(globalVars, key) {
   return entry ?? ''
 }
 
-/** 执行/预览用：扁平化为 { 变量名: 值字符串 }，跳过系统保留键 */
+/** 执行/预览用：扁平化为 { 变量名: 值字符串 }，跳过系统配置 */
 export function flattenGlobalVars(globalVars) {
   if (!globalVars || typeof globalVars !== 'object' || Array.isArray(globalVars)) {
     return {}
   }
   const out = {}
-  for (const [key, value] of Object.entries(globalVars)) {
+  for (const [key, value] of Object.entries(stripSystemGlobalVars(globalVars))) {
     const k = String(key).trim()
-    if (!k || RESERVED_KEYS.has(k)) continue
+    if (!k) continue
     if (isVarEntryObject(value)) {
       out[k] = value.value === null || value.value === undefined ? '' : String(value.value)
     } else if (value !== null && typeof value !== 'object') {
@@ -133,6 +185,9 @@ export function validateVarList(list) {
   for (const row of list || []) {
     const key = (row.key || '').trim()
     if (!key) continue
+    if (isReservedGlobalVarKey(key)) {
+      return { ok: false, error: `「${key}」为系统保留配置键，不能作为普通变量名` }
+    }
     if (keys.includes(key)) {
       if (!duplicates.includes(key)) duplicates.push(key)
     } else {
@@ -151,7 +206,7 @@ export function validateVarsObject(obj) {
     return { ok: false, error: '环境变量必须是 JSON 对象（键值对）' }
   }
   for (const [key, value] of Object.entries(obj)) {
-    if (RESERVED_KEYS.has(key)) continue
+    if (isSystemGlobalVarEntry(key, value)) continue
     if (isVarEntryObject(value)) {
       if (value.value !== null && typeof value.value === 'object') {
         return { ok: false, error: `变量「${key}」的值不能是嵌套对象或数组` }
@@ -162,7 +217,7 @@ export function validateVarsObject(obj) {
       return { ok: false, error: `变量「${key}」需使用扩展格式或字符串值` }
     }
   }
-  return validateVarList(varsObjectToList(obj))
+  return validateVarList(varsObjectToList(stripSystemGlobalVars(obj)))
 }
 
 export function formatVarsPreview(globalVars, maxKeys = 4) {
@@ -174,9 +229,9 @@ export function formatVarsPreview(globalVars, maxKeys = 4) {
   return keys.length <= maxKeys ? `${shown}（${keys.length} 项）` : `${shown}${more}`
 }
 
-/** 用户可见的环境变量行（排除系统保留键） */
+/** 用户可见的环境变量行（排除系统配置） */
 export function userVarRows(globalVars) {
-  return varsObjectToList(globalVars).filter((r) => !r._rawObject && !RESERVED_KEYS.has(r.key))
+  return varsObjectToList(stripSystemGlobalVars(globalVars)).filter((r) => !r._rawObject)
 }
 
 export function countUserVars(globalVars) {

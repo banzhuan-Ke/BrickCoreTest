@@ -232,6 +232,7 @@ class NotificationConfig(models.Model):
     ui_auto_push_report = fields.BooleanField(default=False, description="UI计划执行成功后自动推送报告")
     perf_auto_push_report = fields.BooleanField(default=False, description="性能测试执行完成后自动推送报告")
     app_auto_push_report = fields.BooleanField(default=False, description="App计划/套件执行完成后自动推送报告")
+    tm_assignment_notify = fields.BooleanField(default=True, description="是否接收测试管理指派类外发")
     create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
     update_time = fields.DatetimeField(auto_now=True, description="更新时间")
 
@@ -401,6 +402,70 @@ class PlatformDoc(models.Model):
     class Meta:
         table = "platform_doc"
         table_description = "平台文档"
+
+
+class UserNotification(models.Model):
+    """用户站内信（测试管理指派等）"""
+
+    id = fields.IntField(pk=True)
+    project = fields.ForeignKeyField(
+        "models.Project",
+        related_name="user_notifications",
+        description="所属项目",
+    )
+    user_id = fields.IntField(description="接收人用户 ID")
+    category = fields.CharField(max_length=32, default="test_management", description="分类")
+    event_type = fields.CharField(max_length=64, description="事件类型")
+    title = fields.CharField(max_length=255, description="标题")
+    body = fields.TextField(null=True, description="摘要")
+    link_path = fields.CharField(max_length=255, default="", description="前端路由 path")
+    link_query = fields.JSONField(null=True, description="路由 query")
+    entity_type = fields.CharField(max_length=64, default="", description="实体类型")
+    entity_id = fields.IntField(null=True, description="实体 ID")
+    actor_id = fields.IntField(null=True, description="操作人用户 ID")
+    is_read = fields.BooleanField(default=False, description="是否已读")
+    read_at = fields.DatetimeField(null=True, description="已读时间")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+    create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
+
+    class Meta:
+        table = "user_notification"
+        table_description = "用户站内信"
+        indexes = (
+            ("user_id", "project_id", "is_read", "create_time"),
+            ("user_id", "is_del", "create_time"),
+        )
+
+
+class UserNotificationPreference(models.Model):
+    """用户级通知偏好 / 免打扰"""
+
+    id = fields.IntField(pk=True)
+    user = fields.ForeignKeyField(
+        "models.User",
+        related_name="notification_preference",
+        unique=True,
+        description="用户",
+    )
+    inbox_enabled = fields.BooleanField(default=True, description="是否接收站内信")
+    external_enabled = fields.BooleanField(default=True, description="是否接收外发")
+    im_at_enabled = fields.BooleanField(default=True, description="IM 是否 @ 本人")
+    muted_events = fields.JSONField(null=True, description="静音事件类型列表")
+    dnd_enabled = fields.BooleanField(default=False, description="免打扰开关")
+    dnd_start = fields.CharField(max_length=8, default="22:00", description="免打扰开始 HH:MM")
+    dnd_end = fields.CharField(max_length=8, default="08:00", description="免打扰结束 HH:MM")
+    dnd_mute_inbox = fields.BooleanField(default=False, description="免打扰期间是否屏蔽站内信")
+    dnd_timezone = fields.CharField(
+        max_length=64,
+        default="Asia/Shanghai",
+        description="免打扰时段时区（IANA）",
+    )
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "user_notification_preference"
+        table_description = "用户通知偏好"
 
 
 class AssetFavorite(models.Model):

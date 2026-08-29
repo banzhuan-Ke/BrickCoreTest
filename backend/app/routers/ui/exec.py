@@ -70,6 +70,8 @@ class ExecutionService:
             "headless": headless,
             "browser": resolved_browser,
             "browser_type": resolved_browser,
+            # host：报告/旧逻辑兼容；target_host：Runner / 调试导航主字段
+            "host": env.host,
             "target_host": env.host,
             "environment_id": env.id,
             "project_id": project_id,
@@ -130,17 +132,29 @@ class ExecutionService:
         case_: Case,
         step_meta: Any,
         project_id: int,
+        *,
+        include_quarantine: bool = False,
     ) -> Dict[str, Any]:
         """构建单个用例执行项（展开片段引用）"""
+        from app.modules.stability.quarantine import resolve_case_skip
+
         expanded_steps = await ExecutionService.expand_steps_or_raise(case_.steps, project_id)
-        return {
+        skip, skip_reason = resolve_case_skip(
+            membership_skip=bool(step_meta.skip) if step_meta else False,
+            tags=getattr(case_, "tags", None),
+            include_quarantine=include_quarantine,
+        )
+        item = {
             "execution_id": case_execution.id,
             "id": case_.id,
             "name": case_.name,
-            "skip": step_meta.skip if step_meta else False,
+            "skip": skip,
             "run_mode": (step_meta.run_mode if step_meta else None) or "standalone",
             "steps": expanded_steps,
         }
+        if skip_reason:
+            item["skip_reason"] = skip_reason
+        return item
     
     @staticmethod
     async def build_suite_payload(
@@ -439,7 +453,13 @@ async def run_suite(
         }
 
     cases = [
-        await ExecutionService.build_case_item(case_execution, case_, step, project_id)
+        await ExecutionService.build_case_item(
+            case_execution,
+            case_,
+            step,
+            project_id,
+            include_quarantine=bool(getattr(item, "include_quarantine", False)),
+        )
         for case_execution, case_, step in case_rows
     ]
 
@@ -502,6 +522,7 @@ async def run_task(
         failure_analysis_on_report=item.failure_analysis_on_report,
         ui_timeout_scale=item.ui_timeout_scale,
         trigger_source=item.trigger_source,
+        include_quarantine=bool(getattr(item, "include_quarantine", False)),
     )
 
 

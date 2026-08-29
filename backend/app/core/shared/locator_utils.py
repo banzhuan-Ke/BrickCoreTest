@@ -201,6 +201,71 @@ def prefer_popup_elements(raw: list) -> list:
     return raw
 
 
+def split_css_selector_list(selector: str) -> list[str]:
+    """按顶层逗号拆分 CSS 选择器列表（忽略引号与括号内的逗号）。"""
+    s = (selector or "").strip()
+    if not s:
+        return []
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    quote: str | None = None
+    for ch in s:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in "'\"":
+            quote = ch
+            buf.append(ch)
+            continue
+        if ch in "([":
+            depth += 1
+            buf.append(ch)
+            continue
+        if ch in ")]":
+            depth = max(0, depth - 1)
+            buf.append(ch)
+            continue
+        if ch == "," and depth == 0:
+            part = "".join(buf).strip()
+            if part:
+                parts.append(part)
+            buf = []
+            continue
+        buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def split_css_locator_alternatives(locator: str) -> tuple[str, list[str]]:
+    """
+    将 AI 常见的「逗号拼接多定位」拆为主 locator + 备用列表。
+    不处理 get_by_* / xpath= / >> 链式等 Playwright 原生语法。
+    """
+    loc = (locator or "").strip()
+    if not loc:
+        return loc, []
+    low = loc.lower()
+    if ">>" in loc or loc.startswith(("get_by_", "xpath=", "text=", "css=")):
+        return loc, []
+    parts = split_css_selector_list(loc)
+    if len(parts) <= 1:
+        return loc, []
+    primary = normalize_locator(parts[0])
+    backups = [normalize_locator(p) for p in parts[1:] if normalize_locator(p)]
+    seen = {primary}
+    deduped: list[str] = []
+    for item in backups:
+        if item and item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return primary, deduped
+
+
 def normalize_locator(locator: Any) -> str:
     if locator is None:
         return ""

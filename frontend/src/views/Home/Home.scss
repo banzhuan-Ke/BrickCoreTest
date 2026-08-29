@@ -42,6 +42,11 @@
     flex-direction: column;
   }
 
+  /* 页签栏固定在内容区顶部，避免被滚动内容盖住 */
+  .el-main > .box {
+    flex-shrink: 0;
+  }
+
   .main_box {
     flex: 1;
     min-height: 0;

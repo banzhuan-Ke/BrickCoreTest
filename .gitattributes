@@ -1,3 +1,5 @@
 # Windows cmd 脚本必须 CRLF，否则会解析错乱（变量名截断、'd' 不是命令等）
 *.bat text eol=crlf
 *.cmd text eol=crlf
+# Linux/macOS shell 在 Docker/WSL 中须 LF，CRLF 会导致 set -euo pipefail 报错
+*.sh text eol=lf

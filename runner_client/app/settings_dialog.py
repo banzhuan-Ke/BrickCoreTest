@@ -28,12 +28,24 @@ from runner_client.app.preferences import (
     set_windows_autostart,
 )
 from runner_client.app.runner_execution_config import (
+    DEFAULT_BROWSER_LAB_GIF_FRAME_SKIP,
+    DEFAULT_BROWSER_LAB_GIF_MAX_WIDTH,
+    DEFAULT_BROWSER_LAB_STEP_MAX_WIDTH,
     DEFAULT_CASE_ERROR_RETRIES,
     DEFAULT_VIEWPORT_HEIGHT,
     DEFAULT_VIEWPORT_WIDTH,
+    MAX_BROWSER_LAB_GIF_FRAME_SKIP,
+    MAX_BROWSER_LAB_GIF_MAX_WIDTH,
+    MAX_BROWSER_LAB_STEP_MAX_WIDTH,
     MAX_CASE_ERROR_RETRIES,
+    MIN_BROWSER_LAB_GIF_FRAME_SKIP,
+    MIN_BROWSER_LAB_GIF_MAX_WIDTH,
+    MIN_BROWSER_LAB_STEP_MAX_WIDTH,
     MIN_VIEWPORT_HEIGHT,
     MIN_VIEWPORT_WIDTH,
+    PREF_BROWSER_LAB_GIF_FRAME_SKIP,
+    PREF_BROWSER_LAB_GIF_MAX_WIDTH,
+    PREF_BROWSER_LAB_STEP_MAX_WIDTH,
     PREF_UI_DEBUG_HOTKEYS,
     normalize_execution_prefs,
     save_execution_prefs,
@@ -170,6 +182,47 @@ class SettingsDialog(QDialog):
         exec_form.addRow(reset_btn)
         layout.addWidget(exec_box)
 
+        bl_box = QGroupBox("智能浏览器回放（截图 / GIF）")
+        bl_form = QFormLayout(bl_box)
+
+        self.bl_step_width_spin = QSpinBox()
+        self.bl_step_width_spin.setRange(MIN_BROWSER_LAB_STEP_MAX_WIDTH, MAX_BROWSER_LAB_STEP_MAX_WIDTH)
+        self.bl_step_width_spin.setSingleStep(80)
+        self.bl_step_width_spin.setValue(exec_prefs[PREF_BROWSER_LAB_STEP_MAX_WIDTH])
+        self.bl_step_width_spin.setSuffix(" px")
+        self.bl_step_width_spin.setToolTip(
+            "每步截图上传 MinIO 前的最大宽度；越小体积越小，文字可能略糊。"
+        )
+        bl_form.addRow("步骤截图最大宽度", self.bl_step_width_spin)
+
+        self.bl_gif_width_spin = QSpinBox()
+        self.bl_gif_width_spin.setRange(MIN_BROWSER_LAB_GIF_MAX_WIDTH, MAX_BROWSER_LAB_GIF_MAX_WIDTH)
+        self.bl_gif_width_spin.setSingleStep(80)
+        self.bl_gif_width_spin.setValue(exec_prefs[PREF_BROWSER_LAB_GIF_MAX_WIDTH])
+        self.bl_gif_width_spin.setSuffix(" px")
+        self.bl_gif_width_spin.setToolTip("回放 GIF 合成后的最大宽度。")
+        bl_form.addRow("回放 GIF 最大宽度", self.bl_gif_width_spin)
+
+        self.bl_gif_skip_spin = QSpinBox()
+        self.bl_gif_skip_spin.setRange(MIN_BROWSER_LAB_GIF_FRAME_SKIP, MAX_BROWSER_LAB_GIF_FRAME_SKIP)
+        self.bl_gif_skip_spin.setValue(exec_prefs[PREF_BROWSER_LAB_GIF_FRAME_SKIP])
+        self.bl_gif_skip_spin.setToolTip(
+            "1=每步一帧；2=每 2 步取 1 帧（长任务推荐，体积更小）。"
+        )
+        bl_form.addRow("GIF 跳帧间隔", self.bl_gif_skip_spin)
+
+        bl_hint = QLabel(
+            "步骤截图与 GIF 在 Runner 本地压缩后直传 MinIO，不再经平台回调塞 base64。"
+            "任务步数多、耗时长时，可适当降低宽度或把跳帧设为 2。"
+        )
+        bl_hint.setWordWrap(True)
+        bl_form.addRow(bl_hint)
+
+        bl_reset_btn = QPushButton("恢复智能浏览器回放默认")
+        bl_reset_btn.clicked.connect(self._reset_browser_lab_defaults)
+        bl_form.addRow(bl_reset_btn)
+        layout.addWidget(bl_box)
+
         hotkey_box = QGroupBox("交互调试快捷键")
         hotkey_form = QFormLayout(hotkey_box)
         hint = QLabel(
@@ -252,6 +305,11 @@ class SettingsDialog(QDialog):
         self.viewport_height_spin.setValue(DEFAULT_VIEWPORT_HEIGHT)
         self.error_retries_spin.setValue(DEFAULT_CASE_ERROR_RETRIES)
 
+    def _reset_browser_lab_defaults(self) -> None:
+        self.bl_step_width_spin.setValue(DEFAULT_BROWSER_LAB_STEP_MAX_WIDTH)
+        self.bl_gif_width_spin.setValue(DEFAULT_BROWSER_LAB_GIF_MAX_WIDTH)
+        self.bl_gif_skip_spin.setValue(DEFAULT_BROWSER_LAB_GIF_FRAME_SKIP)
+
     def _save(self) -> None:
         prefs: dict[str, Any] = dict(load_preferences())
         prefs.update(
@@ -273,6 +331,12 @@ class SettingsDialog(QDialog):
             self.viewport_width_spin.value() != prefs.get("runner_viewport_width", DEFAULT_VIEWPORT_WIDTH)
             or self.viewport_height_spin.value() != prefs.get("runner_viewport_height", DEFAULT_VIEWPORT_HEIGHT)
             or self.error_retries_spin.value() != prefs.get("runner_case_error_retries", DEFAULT_CASE_ERROR_RETRIES)
+            or self.bl_step_width_spin.value()
+            != prefs.get(PREF_BROWSER_LAB_STEP_MAX_WIDTH, DEFAULT_BROWSER_LAB_STEP_MAX_WIDTH)
+            or self.bl_gif_width_spin.value()
+            != prefs.get(PREF_BROWSER_LAB_GIF_MAX_WIDTH, DEFAULT_BROWSER_LAB_GIF_MAX_WIDTH)
+            or self.bl_gif_skip_spin.value()
+            != prefs.get(PREF_BROWSER_LAB_GIF_FRAME_SKIP, DEFAULT_BROWSER_LAB_GIF_FRAME_SKIP)
             or merge_hotkeys(prefs.get(PREF_UI_DEBUG_HOTKEYS)) != merge_hotkeys(self._prefs.get(PREF_UI_DEBUG_HOTKEYS))
         )
 
@@ -280,14 +344,17 @@ class SettingsDialog(QDialog):
             self.viewport_width_spin.value(),
             self.viewport_height_spin.value(),
             self.error_retries_spin.value(),
+            browser_lab_step_max_width=self.bl_step_width_spin.value(),
+            browser_lab_gif_max_width=self.bl_gif_width_spin.value(),
+            browser_lab_gif_frame_skip=self.bl_gif_skip_spin.value(),
             base_prefs=prefs,
         )
 
         if exec_changed and self._runner_online:
             QMessageBox.information(
                 self,
-                "Web 执行配置",
-                "执行参数/快捷键已保存。请先「下线」再「上线」，新配置才会生效。",
+                "执行器配置",
+                "执行参数/快捷键/智能浏览器回放已保存。请先「下线」再「上线」，新配置才会生效。",
             )
         self.accept()
 

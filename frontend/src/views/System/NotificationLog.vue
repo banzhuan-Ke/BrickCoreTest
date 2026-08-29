@@ -15,12 +15,16 @@
           <el-option label="企微" value="wechat"/>
           <el-option label="飞书" value="feishu"/>
         </el-select>
-        <el-select v-model="filter.notify_type" placeholder="通知类型" clearable style="width: 120px;">
+        <el-select v-model="filter.notify_type" placeholder="通知类型" clearable style="width: 140px;">
           <el-option label="告警" value="alert"/>
           <el-option label="报告" value="report"/>
+          <el-option label="指派" value="assignment"/>
+          <el-option label="公告" value="notice"/>
+          <el-option label="SMTP 测试" value="smtp_test"/>
         </el-select>
         <el-select v-model="filter.status" placeholder="推送状态" clearable style="width: 120px;">
           <el-option label="成功" value="success"/>
+          <el-option label="跳过" value="skipped"/>
           <el-option label="失败" value="failed"/>
         </el-select>
         <el-button type="primary" @click="getLogList" icon="Search">查询</el-button>
@@ -38,10 +42,13 @@
             {{ scope.row.project_name || '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="类型" width="90">
+        <el-table-column label="类型" width="100">
           <template #default="scope">
             <el-tag v-if="scope.row.notify_type === 'alert'" type="danger">告警</el-tag>
             <el-tag v-else-if="scope.row.notify_type === 'report'" type="primary">报告</el-tag>
+            <el-tag v-else-if="scope.row.notify_type === 'assignment'" type="warning">指派</el-tag>
+            <el-tag v-else-if="scope.row.notify_type === 'notice'" type="success">公告</el-tag>
+            <el-tag v-else-if="scope.row.notify_type === 'smtp_test'" type="info">SMTP 测试</el-tag>
             <span v-else>{{ scope.row.notify_type }}</span>
           </template>
         </el-table-column>
@@ -66,6 +73,8 @@
         <el-table-column label="状态" width="90">
           <template #default="scope">
             <el-tag v-if="scope.row.status === 'success'" type="success">成功</el-tag>
+            <el-tag v-else-if="scope.row.status === 'skipped'" type="info">跳过</el-tag>
+            <el-tag v-else-if="scope.row.error_msg && /跳过|未配置|免打扰|偏好|未开启测试指派/.test(scope.row.error_msg)" type="info">跳过</el-tag>
             <el-tag v-else type="danger">失败</el-tag>
           </template>
         </el-table-column>

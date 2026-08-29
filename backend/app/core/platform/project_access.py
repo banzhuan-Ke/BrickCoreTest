@@ -86,6 +86,12 @@ async def assert_project_access(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录")
 
     if await user_bypasses_project_membership(user_id, user_info.get("is_superuser", False)):
+        # 超管也校验项目存在，避免写入时外键冲突变成难读的 IntegrityError
+        from app.models.sys import Project
+
+        project = await Project.get_or_none(id=project_id, is_del=False)
+        if not project:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="项目不存在")
         return PROJECT_ROLE_OWNER
 
     from app.models.sys import Project

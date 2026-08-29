@@ -595,6 +595,7 @@
               mode="comparison"
               variant="conclusion"
               :target-id="report.id"
+              :report-kind="aiPanelReportKind"
               :initial-analysis="liveAi || report.ai_analysis"
               :label-map="metricLabelMap"
               @analysis-updated="onAiUpdated"
@@ -671,6 +672,12 @@ const baselineEnabled = computed(() => {
     return ids.size <= 1
   }
   return true
+})
+/** 汇总或未启用基准的合并+对比：AI 面板按分章要点展示，不做红绿对照 */
+const aiPanelReportKind = computed(() => {
+  if (isMerge.value) return 'merge'
+  if (isHybrid.value && !baselineEnabled.value) return 'merge'
+  return reportKind.value
 })
 const chapters = computed(() => snapshot.value.chapters || [])
 /** 纯对比无 chapters 时，从 records 合成各轮画像（与导出 HTML 一致） */

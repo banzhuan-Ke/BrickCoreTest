@@ -262,8 +262,11 @@ export const uiDebugApi = {
     async compareSteps(sessionId, data) {
         return await http.post(`/ui/debug/sessions/${sessionId}/compare-steps`, data)
     },
-    async syncSteps(sessionId, data) {
-        return await http.post(`/ui/debug/sessions/${sessionId}/sync-steps`, data, { timeout: 120000 })
+    async syncSteps(sessionId, data, config = {}) {
+        return await http.post(`/ui/debug/sessions/${sessionId}/sync-steps`, data, {
+            timeout: 120000,
+            ...config,
+        })
     },
     async highlightStep(sessionId, data) {
         return await http.post(`/ui/debug/sessions/${sessionId}/highlight`, data, { timeout: 60000 })
@@ -286,6 +289,13 @@ export const uiDebugApi = {
             timeout: 30000,
             skipErrorHandler: true,
         })
+    },
+}
+
+/** Web 定位助手（编辑态生成候选） */
+export const locatorAssistApi = {
+    async suggest(data) {
+        return await http.post('/ui/locator-assist/suggest', data, { timeout: 120000 })
     },
 }
 

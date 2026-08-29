@@ -11,7 +11,6 @@ from PySide6.QtCore import QThread, QTimer, Qt, Signal, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QFont, QIcon, QColor, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QApplication,
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -26,7 +25,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QPlainTextEdit,
-    QRadioButton,
     QScrollArea,
     QSplitter,
     QSpinBox,
@@ -43,6 +41,8 @@ from runner_client.app.app_local_status import build_app_local_panel_text
 from runner_client.app.brick_animation import StartupSplash
 from runner_client.app.recording_panel import RecordingPanel
 from runner_client.app.engine_manager import EngineManager
+from runner_client.app.agent_task_tracker import ActiveAgentTask, apply_log_line
+from runner_client.app.local_runner_control import request_stop_active_agent
 from runner_client.app.health import probe_connect_bundle
 from runner_client.app.perf_worker_manager import PerfWorkerManager
 from runner_client.app.preferences import load_preferences
@@ -298,7 +298,7 @@ class _ConnectWorker(QThread):
                 self.prepared.emit(
                     {
                         "runtime_ok": False,
-                        "message": "请至少勾选「Web 自动化」或「App 自动化」之一。",
+                        "message": "已选择 UI 通道，请至少勾选 Web 或 App。",
                         "repair": None,
                         "runtime_kind": "ui",
                     }
@@ -408,6 +408,7 @@ class MainWindow(QMainWindow):
         self._recording_control_busy = False
         self._pending_perf_project_id: int | None = None
         self._last_app_udid: str = ""
+        self._active_agent_task: ActiveAgentTask | None = None
 
         self._app_status_debounce = QTimer(self)
         self._app_status_debounce.setSingleShot(True)
@@ -485,7 +486,7 @@ class MainWindow(QMainWindow):
         title_col.setSpacing(2)
         title = QLabel("BrickCore Runner")
         title.setObjectName("appTitle")
-        subtitle = QLabel("UI 自动化 · 分布式压测 · 一体化执行器")
+        subtitle = QLabel("Web / App / 接口代发 / 压测")
         subtitle.setObjectName("appSubtitle")
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
@@ -544,23 +545,31 @@ class MainWindow(QMainWindow):
         device_form.addRow("设备名称", self.device_name_edit)
         scroll_layout.addWidget(device_box)
 
-        self.engine_box = QGroupBox("UI 引擎能力")
+        self.engine_box = QGroupBox("本机能力")
         engine_layout = QVBoxLayout(self.engine_box)
         engine_row = QHBoxLayout()
-        self.engine_web_cb = QCheckBox("Web 自动化")
+        self.engine_web_cb = QCheckBox("Web")
         self.engine_web_cb.setChecked(bool(self.prefs.get("engine_web_enabled", True)))
-        self.engine_app_cb = QCheckBox("App 自动化")
+        self.engine_app_cb = QCheckBox("App")
         self.engine_app_cb.setChecked(bool(self.prefs.get("engine_app_enabled", False)))
-        self.engine_web_cb.setToolTip("启用 Playwright Web UI 自动化任务")
-        self.engine_app_cb.setToolTip("启用 Android App 自动化任务（需 adb + uiautomator2 + 真机）")
-        for cb in (self.engine_web_cb, self.engine_app_cb):
+        self.role_api_cb = QCheckBox("接口代发")
+        self.role_api_cb.setChecked(bool(self.prefs.get("enable_api_proxy", False)))
+        self.role_perf_cb = QCheckBox("压测")
+        self.role_perf_cb.setChecked(bool(self.prefs.get("enable_perf", False)))
+        self.engine_web_cb.setToolTip("承接 Playwright Web UI 自动化任务")
+        self.engine_app_cb.setToolTip("承接 Android App 自动化任务（需 adb + uiautomator2 + 真机）")
+        self.role_api_cb.setToolTip(
+            "承接平台「经执行机发送」的接口调试 / 套件整包。与压测共用同一 Worker 进程和项目。"
+        )
+        self.role_perf_cb.setToolTip("承接分布式压测任务。与接口代发共用同一 Worker 进程和项目。")
+        for cb in (self.engine_web_cb, self.engine_app_cb, self.role_api_cb, self.role_perf_cb):
             engine_row.addWidget(cb)
-            cb.toggled.connect(self._on_engine_flags_changed)
+            cb.toggled.connect(self._on_caps_changed)
         engine_row.addStretch()
         engine_layout.addLayout(engine_row)
         engine_hint = QLabel(
-            "与「执行角色 / 压测」独立：勾选后上线才向平台上报对应能力。"
-            "可仅 Web、仅 App，或两者同时启用。"
+            "复选，选啥用啥。Web / App 走 UI 通道；接口代发与压测共用同一执行机进程和项目（同一时间只能跑一个任务）。"
+            "勾选接口或压测后需选择项目（与平台顶部项目一致）。"
         )
         engine_hint.setWordWrap(True)
         engine_hint.setStyleSheet("color: #909399; font-size: 11px;")
@@ -626,7 +635,7 @@ class MainWindow(QMainWindow):
         app_layout.addWidget(self.app_report_label)
 
         app_hint = QLabel(
-            "说明：勾选上方「App 自动化」后上线才会接收 App 任务。"
+            "说明：勾选上方「App」后上线才会接收 App 任务。"
             "首次使用请在 runner\\venv 下执行 python -m uiautomator2 init（需 adb 已连通设备）。"
             "详细步骤见解压目录内《执行器安装指南》→ App 自动化。"
         )
@@ -636,39 +645,18 @@ class MainWindow(QMainWindow):
         scroll_layout.addWidget(self.app_box)
         self._reset_app_local_status_idle()
 
-        role_box = QGroupBox("执行角色")
-        role_layout = QVBoxLayout(role_box)
-        role_row = QHBoxLayout()
-        self.role_ui = QRadioButton("仅 UI 执行器")
-        self.role_perf = QRadioButton("仅压测执行机")
-        self.role_both = QRadioButton("UI + 压测（双开）")
-        self.role_ui.setChecked(True)
-        self._role_group = QButtonGroup(self)
-        for btn in (self.role_ui, self.role_perf, self.role_both):
-            self._role_group.addButton(btn)
-            role_row.addWidget(btn)
-        role_row.addStretch()
-        role_layout.addLayout(role_row)
-        role_hint = QLabel("压测模式需在平台执行场景时勾选「使用分布式 Worker」。")
-        role_hint.setWordWrap(True)
-        role_hint.setStyleSheet("color: #909399; font-size: 12px;")
-        role_layout.addWidget(role_hint)
-        scroll_layout.addWidget(role_box)
-
-        self.perf_box = QGroupBox("压测配置")
+        self.perf_box = QGroupBox("接口 / 压测项目")
         perf_form = QFormLayout(self.perf_box)
         self.perf_project_combo = QComboBox()
         self.perf_project_combo.setPlaceholderText("登录后加载项目列表")
-        perf_form.addRow("压测项目", self.perf_project_combo)
+        perf_form.addRow("所属项目", self.perf_project_combo)
         self.perf_max_concurrent_spin = QSpinBox()
         self.perf_max_concurrent_spin.setRange(1, 2000)
         self.perf_max_concurrent_spin.setValue(200)
-        perf_form.addRow("最大并发", self.perf_max_concurrent_spin)
+        perf_form.addRow("压测最大并发", self.perf_max_concurrent_spin)
+        self.perf_max_concurrent_spin.setToolTip("仅压测施压使用；接口代发不受此值限制。")
         self.perf_box.setVisible(False)
         scroll_layout.addWidget(self.perf_box)
-
-        for btn in (self.role_ui, self.role_perf, self.role_both):
-            btn.toggled.connect(self._on_role_changed)
 
         btn_row = QHBoxLayout()
         self.login_btn = QPushButton("登录")
@@ -696,8 +684,8 @@ class MainWindow(QMainWindow):
         self.health_api = QLabel("平台 API ○")
         self.health_mq = QLabel("消息队列 ○")
         self.health_redis = QLabel("Redis ○")
-        self.health_engine = QLabel("UI 引擎 ○")
-        self.health_perf = QLabel("压测节点 ○")
+        self.health_engine = QLabel("Web/App ○")
+        self.health_perf = QLabel("执行机 ○")
         for lbl in (self.health_api, self.health_mq, self.health_redis, self.health_engine, self.health_perf):
             lbl.setObjectName("healthPill")
             lbl.setProperty("health", "idle")
@@ -729,6 +717,12 @@ class MainWindow(QMainWindow):
         self.clear_log_btn.setToolTip("仅清空下方面板中的日志显示，不删除磁盘上的日志文件")
         self.clear_log_btn.clicked.connect(self._clear_log_display)
         log_header.addWidget(self.clear_log_btn)
+        self.stop_agent_btn = QPushButton("停止当前任务")
+        self.stop_agent_btn.setObjectName("dangerBtn")
+        self.stop_agent_btn.setToolTip("停止本机正在运行的智能浏览器 / UI Agent 任务（无需打开平台页面）")
+        self.stop_agent_btn.setEnabled(False)
+        self.stop_agent_btn.clicked.connect(self._on_stop_active_agent)
+        log_header.addWidget(self.stop_agent_btn)
         self.history_log_btn = QPushButton("历史日志…")
         self.history_log_btn.clicked.connect(self._open_log_history)
         log_header.addWidget(self.history_log_btn)
@@ -765,6 +759,7 @@ class MainWindow(QMainWindow):
         self._outer_splitter.setChildrenCollapsible(False)
         self._outer_splitter.setSizes([820, 0])
         layout.addWidget(self._outer_splitter, stretch=1)
+        self._on_caps_changed()
 
     def _reset_app_local_status_idle(self) -> None:
         """App 面板初始态：不探测 adb/u2，等用户点击「刷新检测」。"""
@@ -890,19 +885,55 @@ class MainWindow(QMainWindow):
         self.tray_login_action.setEnabled(not online)
 
     def _get_execution_role(self) -> str:
-        if self.role_both.isChecked():
+        need_ui = self._needs_ui_role()
+        need_perf = self._needs_perf_role()
+        if need_ui and need_perf:
             return EXEC_ROLE_BOTH
-        if self.role_perf.isChecked():
+        if need_perf:
             return EXEC_ROLE_PERF
-        return EXEC_ROLE_UI
+        if need_ui:
+            return EXEC_ROLE_UI
+        return ""
+
+    def _worker_kind_labels(self) -> list[str]:
+        labels: list[str] = []
+        if self.role_api_cb.isChecked():
+            labels.append("接口代发")
+        if self.role_perf_cb.isChecked():
+            labels.append("压测")
+        return labels
+
+    def _worker_kind_text(self, *, empty: str = "执行机") -> str:
+        labels = self._worker_kind_labels()
+        return " + ".join(labels) if labels else empty
+
+    def _worker_health_name(self) -> str:
+        labels = self._worker_kind_labels()
+        if len(labels) == 2:
+            return "接口/压测"
+        if labels:
+            return labels[0]
+        return "执行机"
+
+    def _ui_engine_health_name(self) -> str:
+        enable_web, enable_app = self._get_engine_flags()
+        if enable_web and enable_app:
+            return "Web/App"
+        if enable_web:
+            return "Web"
+        if enable_app:
+            return "App"
+        return "Web/App"
 
     def _needs_ui_role(self, role: str | None = None) -> bool:
-        role = role or self._get_execution_role()
-        return role in (EXEC_ROLE_UI, EXEC_ROLE_BOTH)
+        if role is not None:
+            return role in (EXEC_ROLE_UI, EXEC_ROLE_BOTH)
+        return self.engine_web_cb.isChecked() or self.engine_app_cb.isChecked()
 
     def _needs_perf_role(self, role: str | None = None) -> bool:
-        role = role or self._get_execution_role()
-        return role in (EXEC_ROLE_PERF, EXEC_ROLE_BOTH)
+        if role is not None:
+            return role in (EXEC_ROLE_PERF, EXEC_ROLE_BOTH)
+        return self.role_api_cb.isChecked() or self.role_perf_cb.isChecked()
 
     def _get_engine_flags(self) -> tuple[bool, bool]:
         return self.engine_web_cb.isChecked(), self.engine_app_cb.isChecked()
@@ -921,34 +952,34 @@ class MainWindow(QMainWindow):
             self.api.engine_web_enabled = enable_web
             self.api.engine_app_enabled = enable_app
 
-    def _on_engine_flags_changed(self, _checked: bool = False) -> None:
+    def _on_caps_changed(self, _checked: bool = False) -> None:
         enable_web, enable_app = self._get_engine_flags()
         self.prefs["engine_web_enabled"] = enable_web
         self.prefs["engine_app_enabled"] = enable_app
+        self.prefs["enable_api_proxy"] = self.role_api_cb.isChecked()
+        self.prefs["enable_perf"] = self.role_perf_cb.isChecked()
         from runner_client.app.preferences import save_preferences
 
         save_preferences(self.prefs)
         self._sync_api_engine_flags()
-        if not self._online:
-            self._schedule_app_local_status_refresh()
-
-    def _on_role_changed(self, _checked: bool = False) -> None:
-        need_ui = self._needs_ui_role()
         need_perf = self._needs_perf_role()
         self.perf_box.setVisible(need_perf)
-        self.engine_box.setVisible(need_ui)
-        self.app_box.setVisible(need_ui)
+        self.app_box.setVisible(enable_app)
         disabled = self._online
-        for btn in (self.role_ui, self.role_perf, self.role_both):
-            btn.setEnabled(not disabled)
-        for cb in (self.engine_web_cb, self.engine_app_cb):
+        for cb in (self.engine_web_cb, self.engine_app_cb, self.role_api_cb, self.role_perf_cb):
             cb.setEnabled(not disabled)
         self.perf_project_combo.setEnabled(not disabled)
-        self.perf_max_concurrent_spin.setEnabled(not disabled)
+        self.perf_max_concurrent_spin.setEnabled(
+            not disabled and self.role_perf_cb.isChecked()
+        )
+        if not self._online:
+            self._set_health_label(self.health_engine, self._ui_engine_health_name(), None)
+            self._set_health_label(self.health_perf, self._worker_health_name(), None)
+            if enable_app:
+                self._schedule_app_local_status_refresh()
 
     def _apply_session_execution_prefs(self, session: dict) -> None:
-        """恢复会话中的设备名、压测参数与引擎勾选；执行角色每次打开默认 UI。"""
-        self.role_ui.setChecked(True)
+        """恢复会话中的能力勾选、项目与压测并发。"""
         max_conc = session.get("perf_max_concurrent")
         if isinstance(max_conc, int) and max_conc > 0:
             self.perf_max_concurrent_spin.setValue(max_conc)
@@ -960,10 +991,20 @@ class MainWindow(QMainWindow):
         if enable_app is None:
             enable_app = self.prefs.get("engine_app_enabled", False)
         self._apply_engine_flags(bool(enable_web), bool(enable_app))
+        enable_api = session.get("enable_api_proxy")
+        if enable_api is None:
+            enable_api = self.prefs.get("enable_api_proxy", False)
+        enable_perf = session.get("enable_perf")
+        if enable_perf is None:
+            enable_perf = self.prefs.get("enable_perf", False)
+        self.role_api_cb.blockSignals(True)
+        self.role_perf_cb.blockSignals(True)
+        self.role_api_cb.setChecked(bool(enable_api))
+        self.role_perf_cb.setChecked(bool(enable_perf))
+        self.role_api_cb.blockSignals(False)
+        self.role_perf_cb.blockSignals(False)
         self._sync_api_engine_flags()
-        self._on_role_changed()
-        if not self._online:
-            self._schedule_app_local_status_refresh()
+        self._on_caps_changed()
 
     def _select_perf_project(self, project_id: int | None) -> None:
         if project_id is None:
@@ -1106,10 +1147,46 @@ class MainWindow(QMainWindow):
     def _append_log(self, text: str) -> None:
         if not text:
             return
-        self.log_view.appendPlainText(_clean_log_text(text))
+        cleaned = _clean_log_text(text)
+        self.log_view.appendPlainText(cleaned)
+        for line in cleaned.splitlines():
+            self._active_agent_task = apply_log_line(self._active_agent_task, line)
+        self._sync_stop_agent_btn()
         scrollbar = self.log_view.verticalScrollBar()
         if scrollbar:
             scrollbar.setValue(scrollbar.maximum())
+
+    def _sync_stop_agent_btn(self) -> None:
+        if not hasattr(self, "stop_agent_btn"):
+            return
+        enabled = bool(
+            self._online
+            and self._active_agent_task
+            and self._needs_ui_role(self._active_role)
+            and self.engine.is_running
+        )
+        self.stop_agent_btn.setEnabled(enabled)
+        if self._active_agent_task:
+            self.stop_agent_btn.setText(f"停止 {self._active_agent_task.label}")
+        else:
+            self.stop_agent_btn.setText("停止当前任务")
+
+    def _on_stop_active_agent(self) -> None:
+        task = self._active_agent_task
+        label = task.label if task else "当前 Agent 任务"
+        answer = QMessageBox.question(
+            self,
+            "停止任务",
+            f"确定停止本机正在运行的 {label}？\n\n将通知 Runner 优雅停止并回传「已停止」到平台。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            request_stop_active_agent(source="runner_client_ui")
+            self._append_log(f"[客户端] 已发送本机停止指令：{label}")
+        except Exception as exc:
+            QMessageBox.warning(self, "停止失败", str(exc))
 
     def _open_log_history(self) -> None:
         dialog = _LogHistoryDialog(self.engine, parent=self)
@@ -1185,7 +1262,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_health(self, *, force_api_probe: bool = False) -> None:
         # UI 上线且已绿：靠 30s 心跳维持，不另打 /runner/health
-        # 仅压测角色无 UI 心跳，仍按 TTL 低频探活，避免绿灯永久粘住
+        # 仅接口代发/压测时无 UI 心跳，仍按 TTL 低频探活，避免绿灯永久粘住
         if force_api_probe:
             self._schedule_api_health_probe(force=True)
         elif (
@@ -1216,8 +1293,8 @@ class MainWindow(QMainWindow):
                 perf_ok = None
         else:
             engine_ok = perf_ok = None
-        self._set_health_label(self.health_engine, "UI 引擎", engine_ok)
-        self._set_health_label(self.health_perf, "压测节点", perf_ok)
+        self._set_health_label(self.health_engine, self._ui_engine_health_name(), engine_ok)
+        self._set_health_label(self.health_perf, self._worker_health_name(), perf_ok)
 
     def _check_version_on_startup(self) -> None:
         base_url = self._current_server_url()
@@ -1469,6 +1546,8 @@ class MainWindow(QMainWindow):
             "perf_max_concurrent": self.perf_max_concurrent_spin.value(),
             "engine_web_enabled": self.engine_web_cb.isChecked(),
             "engine_app_enabled": self.engine_app_cb.isChecked(),
+            "enable_api_proxy": self.role_api_cb.isChecked(),
+            "enable_perf": self.role_perf_cb.isChecked(),
         }
         project_id = self.perf_project_combo.currentData()
         if project_id is not None:
@@ -1518,23 +1597,25 @@ class MainWindow(QMainWindow):
             return
 
         execution_role = self._get_execution_role()
-        if self._needs_ui_role(execution_role):
-            enable_web, enable_app = self._get_engine_flags()
-            if not enable_web and not enable_app:
-                QMessageBox.warning(self, "提示", "请至少勾选「Web 自动化」或「App 自动化」之一")
-                return
+        enable_web, enable_app = self._get_engine_flags()
+        need_ui = self._needs_ui_role()
+        need_perf = self._needs_perf_role()
+        if not need_ui and not need_perf:
+            QMessageBox.warning(self, "提示", "请至少勾选一项本机能力：Web、App、接口代发或压测")
+            return
+        if need_ui:
             self._sync_api_engine_flags()
-        if self._needs_perf_role(execution_role):
+        if need_perf:
             project_id = self.perf_project_combo.currentData()
             if not project_id:
-                QMessageBox.warning(self, "提示", "请选择压测项目（需与平台顶部项目一致）")
+                QMessageBox.warning(self, "提示", "请选择所属项目（需与平台顶部项目一致）")
                 return
 
-        if execution_role == EXEC_ROLE_BOTH:
+        if need_ui and need_perf:
             answer = QMessageBox.question(
                 self,
                 "双开确认",
-                "UI + 压测同时运行会占用较多 CPU 与网络带宽，可能影响 UI 用例稳定性。\n\n是否继续？",
+                "UI（Web/App）与接口代发/压测同时运行会占用较多 CPU 与网络，可能影响 UI 用例稳定性。\n\n是否继续？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
@@ -1582,7 +1663,13 @@ class MainWindow(QMainWindow):
             self._on_connect()
             return
 
-        execution_role = result.get("execution_role") or EXEC_ROLE_UI
+        execution_role = result.get("execution_role") or ""
+        if execution_role not in (EXEC_ROLE_UI, EXEC_ROLE_PERF, EXEC_ROLE_BOTH):
+            self.connect_btn.setEnabled(True)
+            self.login_btn.setEnabled(True)
+            self._set_status("上线失败")
+            QMessageBox.warning(self, "提示", "请至少勾选一项本机能力：Web、App、接口代发或压测")
+            return
         self._active_role = execution_role
         self.connect_data = result.get("connect_data") or {}
         device_name = self.device_name_edit.text().strip() or "执行设备"
@@ -1607,24 +1694,31 @@ class MainWindow(QMainWindow):
                 )
 
         started_parts: list[str] = []
+        enable_web, enable_app = self._get_engine_flags()
         try:
             if self._needs_ui_role(execution_role):
+                if enable_web:
+                    started_parts.append("Web")
+                if enable_app:
+                    started_parts.append("App")
                 self.engine.start(self.connect_data, device_name)
-                started_parts.append("UI")
             if self._needs_perf_role(execution_role):
                 project_id = int(self.perf_project_combo.currentData())
                 self._perf_project_id = project_id
-                perf_name = device_name if execution_role == EXEC_ROLE_PERF else f"{device_name}-压测"
+                perf_name = device_name if execution_role == EXEC_ROLE_PERF else f"{device_name}-执行机"
                 self.perf_engine.start(
                     master_url=base_url,
                     name=perf_name,
                     project_id=project_id,
                     max_concurrent=self.perf_max_concurrent_spin.value(),
-                    # UI 角色上线后才有 runner_token；纯压测依赖登录 JWT（Authorization Bearer）
+                    # UI 角色上线后才有 runner_token；纯压测/接口代发依赖登录 JWT（Authorization Bearer）
                     runner_token=self.api.runner_token if self.api else None,
                     access_token=self.api.user_token if self.api else None,
                 )
-                started_parts.append("压测")
+                if self.role_api_cb.isChecked():
+                    started_parts.append("接口代发")
+                if self.role_perf_cb.isChecked():
+                    started_parts.append("压测")
         except Exception as exc:
             if self.engine.is_running:
                 self.engine.stop()
@@ -1647,6 +1741,7 @@ class MainWindow(QMainWindow):
         self.connect_btn.setEnabled(False)
         self.disconnect_btn.setEnabled(True)
         self.login_btn.setEnabled(False)
+        self._sync_stop_agent_btn()
         self.poll_timer.start()
         if self._needs_ui_role(execution_role):
             self.heartbeat_timer.start()
@@ -1674,8 +1769,14 @@ class MainWindow(QMainWindow):
 
         enable_web, enable_app = self._get_engine_flags()
         if self._needs_ui_role(execution_role):
+            ui_parts = []
+            if enable_web:
+                ui_parts.append("Web")
+            if enable_app:
+                ui_parts.append("App")
             self._append_log(
-                f"[客户端] UI 引擎已启动，device_id={device_id}，python={runner_python_executable()}"
+                f"[客户端] 已启动 {' + '.join(ui_parts) or 'Web/App'} 通道，"
+                f"device_id={device_id}，python={runner_python_executable()}"
             )
             caps = detect_runner_capabilities(enable_web=enable_web, enable_app=enable_app)
             engine_types = caps.get("runner_engine_types") or []
@@ -1685,6 +1786,15 @@ class MainWindow(QMainWindow):
             if "app" in engine_types:
                 labels.append("App")
             self._append_log(f"[客户端] 已上报引擎能力：{' + '.join(labels) if labels else '无'}")
+            if enable_web:
+                bu = (caps.get("toolchain_status") or {}).get("browser_use")
+                if bu == "ok":
+                    self._append_log("[Web] browser-use 已就绪（智能浏览器 Runner 模式可用）")
+                elif bu == "missing":
+                    self._append_log(
+                        "[Web] browser-use 未安装，智能浏览器 Runner 模式不可用；"
+                        "请重新运行 start-client.bat 或安装包内的依赖修复"
+                    )
             if enable_app and "app" in engine_types:
                 udid = caps.get("app_udid") or "（未识别序列号）"
                 if caps.get("app_udid"):
@@ -1692,15 +1802,17 @@ class MainWindow(QMainWindow):
                 self._append_log(f"[App] 已启用：adb + u2 正常，当前 Android 设备 {udid}")
             elif enable_app:
                 self._append_log("[App] 已勾选但未就绪，请查看 App 面板并点击「刷新检测」")
-            elif not enable_web and not enable_app:
-                self._append_log("[客户端] 未启用 Web / App 引擎能力")
         if self._needs_perf_role(execution_role):
+            kinds = self._worker_kind_labels()
+            extra = ""
+            if self.role_perf_cb.isChecked():
+                extra = f"，max_concurrent={self.perf_max_concurrent_spin.value()}"
             self._append_log(
-                f"[客户端] 压测 Worker 已启动，project_id={self.perf_project_combo.currentData()}，"
-                f"max_concurrent={self.perf_max_concurrent_spin.value()}"
+                f"[客户端] 已启动执行机（{' + '.join(kinds) or 'Worker'}），"
+                f"project_id={self.perf_project_combo.currentData()}{extra}"
             )
 
-        self._on_role_changed()
+        self._on_caps_changed()
         self.health_timer.start()
         self._refresh_health(force_api_probe=True)
         self._sync_tray_actions()
@@ -1732,21 +1844,23 @@ class MainWindow(QMainWindow):
         ):
             try:
                 self.api.unregister_perf_worker(self._perf_project_id)
-                self._append_log("[客户端] 压测 Worker 已向平台注销")
+                self._append_log(f"[客户端] 执行机已向平台注销（{self._worker_kind_text()}）")
             except Exception as exc:
-                self._append_log(f"[客户端] 压测 Worker 注销失败：{exc}")
+                self._append_log(f"[客户端] 执行机注销失败：{exc}")
         self.engine.stop()
         self.perf_engine.stop()
         self.connect_data = None
         self._perf_project_id = None
         self._online = False
         self._active_role = EXEC_ROLE_UI
+        self._active_agent_task = None
         self.connect_btn.setEnabled(bool(self.api and self.api.user_token))
         self.disconnect_btn.setEnabled(False)
         self.login_btn.setEnabled(True)
         self._set_status("已下线")
         self._append_log("[客户端] 执行器已下线")
-        self._on_role_changed()
+        self._sync_stop_agent_btn()
+        self._on_caps_changed()
         self._refresh_health()
         self._sync_tray_actions()
 
@@ -1859,7 +1973,7 @@ class MainWindow(QMainWindow):
                 perf_chunk = self.perf_engine.read_new_output()
             if perf_chunk:
                 for line in perf_chunk.splitlines():
-                    self._append_log(f"[压测] {line}")
+                    self._append_log(f"[执行机] {line}")
 
         if not self._online:
             return
@@ -1873,11 +1987,12 @@ class MainWindow(QMainWindow):
             and not self.perf_engine.is_running
         )
         if ui_dead:
-            self._append_log("[客户端] UI 引擎进程已退出")
+            self._append_log("[客户端] Web/App 通道进程已退出")
         if perf_dead:
-            self._append_log("[客户端] 压测 Worker 进程已退出")
+            self._append_log("[客户端] 执行机进程已退出")
         if ui_dead or perf_dead:
             self._on_disconnect()
+        self._sync_stop_agent_btn()
 
     def _send_heartbeat(self) -> None:
         if not self.api or not self.connect_data or not self._needs_ui_role(self._active_role):

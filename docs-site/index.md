@@ -47,7 +47,7 @@
 
 - **文档中心**：**帮助中心 → 文档中心**
 - **接口文档（Swagger）**：**系统管理 → 接口文档**（若已开放）
-- **开源仓库**：[Gitee BrickCore](https://gitee.com/BanZhuanKeOrz/BrickCore)
+- **开源仓库**：[GitHub BrickCoreTest](https://github.com/banzhuan-Ke/BrickCoreTest) · 镜像 [Gitee BrickCore](https://gitee.com/BanZhuanKeOrz/BrickCore)
 
 ## 支持与交流
 
@@ -60,9 +60,9 @@
 **加群交流**
 
 扫码加入 **BrickCoreAI 测试平台交流群**，交流使用问题、部署与版本动态。  
-二维码约 7 天有效（当前至 8 月 23 日前），过期请以页面最新码为准。
+二维码约 7 天有效（当前至 8 月 29 日前），过期请以页面最新码为准。
 
-<img src="../assets/wechat-group.png" width="200" alt="BrickCoreAI 测试平台交流群" /><br />
+<img src="../assets/readme/image-wechat-group-brickcore.png" width="200" alt="BrickCoreAI 测试平台交流群" /><br />
 <sub>微信加群</sub>
 
 </td>
