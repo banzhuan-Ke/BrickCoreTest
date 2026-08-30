@@ -33,6 +33,8 @@ export default defineConfig({
             { text: 'Token 授权', link: '/guide/api-auth' },
             { text: '性能测试', link: '/guide/perf-testing' },
             { text: '压测 Worker 协议', link: '/guide/perf-worker-protocol' },
+            { text: '测试管理', link: '/guide/test-management' },
+            { text: '测试管理扩展包', link: '/guide/brickcore-tm-pack' },
             { text: 'AI 测试', link: '/guide/ai-testing' },
             { text: '迭代资料库', link: '/guide/knowledge-base' },
             { text: '智能浏览器', link: '/guide/browser-lab' },

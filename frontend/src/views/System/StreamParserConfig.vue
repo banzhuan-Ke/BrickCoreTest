@@ -133,7 +133,7 @@
           </el-collapse>
 
           <el-form-item label="名称" required>
-            <el-input v-model="form.name" placeholder="如：KCF 问答 SSE v1" />
+            <el-input v-model="form.name" placeholder="如：问答 SSE v1" />
           </el-form-item>
           <el-form-item label="说明文档">
             <el-input
@@ -158,7 +158,7 @@
               </el-option>
             </el-select>
             <div class="field-hint">
-              「问答流式 v1」适用于 KCF 标准协议；「规则配置」为标准 data/event SSE + 阶段匹配（可加预处理整形嵌套 JSON / Patch 流）；
+              「问答流式 v1」适用于常见问答 SSE 协议；「规则配置」为标准 data/event SSE + 阶段匹配（可加预处理整形嵌套 JSON / Patch 流）；
               「自定义 SSE」可改 datas/events 等行前缀，适配其它组协议；「仅总耗时」不做内容解析。
             </div>
           </el-form-item>

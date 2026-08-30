@@ -16,6 +16,7 @@ export const BUILTIN_DOC_IDS = new Set([
   'api-auth',
   'perf-testing',
   'test-management',
+  'brickcore-tm-pack',
   'ai-testing',
   'knowledge-base',
   'browser-lab',
