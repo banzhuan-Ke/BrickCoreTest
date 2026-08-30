@@ -337,7 +337,7 @@
               </el-option>
             </el-select>
             <div class="field-tip">
-              本场景真正生效的解析方式。标准 KCF 用「问答流式 v1」；标准 SSE 字段用「规则配置」；
+              本场景真正生效的解析方式。标准问答 SSE 用「问答流式 v1」；标准 SSE 字段用「规则配置」；
               行首是 datas/events 等非标准协议时用「自定义 SSE」并改前缀。
             </div>
           </el-form-item>
