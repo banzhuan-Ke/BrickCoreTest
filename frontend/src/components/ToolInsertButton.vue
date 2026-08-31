@@ -30,7 +30,7 @@
         />
         <p class="tool-insert-tip">
           执行时自动计算；套件/计划内<strong>同一表达式只算一次</strong>（随机数等同次运行保持一致）。<br />
-          引用变量：<code>@变量名</code>；固定值：用 <code>"..."</code> 或 <code>'...'</code> 包裹，可含 <code>|</code>、<code>=</code>、<code>@</code>，例如 <code v-pre>${{dt:md5|text="test@163.com"}}</code>。
+          引用变量：<code>@变量名</code>；固定值优先 <code>'...'</code>（便于放进 JSON 双引号字符串），也可用 <code>"..."</code>；可含 <code>|</code>、<code>=</code>、<code>@</code>。
         </p>
         <div class="tool-list">
           <template v-if="groupedTools.length">
@@ -68,8 +68,8 @@
           <template #title>参数写法</template>
           <ul class="tips-list">
             <li><strong>引用变量</strong>：选「引用变量」，生成 <code>@token</code></li>
-            <li><strong>固定值</strong>：选「固定值」，插入时会<strong>自动加双引号</strong>，如 <code v-pre>"test@163.com"</code>、<code v-pre>"a|b=c"</code></li>
-            <li>手动编写时：固定值请写 <code v-pre>${{dt:md5|text="hello|world"}}</code>；勿把固定值写成 <code>@test@163.com</code></li>
+            <li><strong>固定值</strong>：插入时<strong>优先自动加单引号</strong>（避免和 JSON 的 <code>"..."</code> 冲突），如 <code v-pre>'%Y-%m-%d'</code>、<code v-pre>'test@163.com'</code>；值里本身有单引号时才改用双引号</li>
+            <li>在 JSON Body 里光标放在 <code>:</code> 后插入时，会自动包成 <code v-pre>"${{dt:...}}"</code>；勿把固定值写成 <code>@test@163.com</code></li>
           </ul>
         </el-alert>
         <el-form label-width="100px" size="default">
@@ -358,7 +358,7 @@ function validateParams() {
 async function doInsert(toolId, params, options = {}) {
   const result = await insertDtToolRef(toolId, params, options)
   if (result?.ok) {
-    const expr = formatDtToolRef(toolId, params, options)
+    const expr = result.text || formatDtToolRef(toolId, params, options)
     const tip =
       result.mode === 'copy'
         ? `已复制 ${expr}，请粘贴到目标输入框`

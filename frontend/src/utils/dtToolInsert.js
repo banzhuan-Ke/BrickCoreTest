@@ -1,13 +1,17 @@
-/** 内联数据工厂工具表达式：${{dt:md5|text=@token}} / ${{dt:md5|text="a|b"}} */
+/** 内联数据工厂工具表达式：${{dt:md5|text=@token}} / ${{dt:md5|text='a|b'}} */
 
 import { formatVarRef, insertVarRef } from './varInsert.js'
 
 /**
- * 固定值用双引号包裹（自动转义内部 " 和 \）
+ * 固定值优先用单引号（JSON Body 里外层通常是双引号，避免人手再改）。
+ * 值内含单引号时回退双引号，并转义内部 " 与 \。
  * @param {string} val
  */
 export function quoteDtLiteral(val) {
   const s = String(val ?? '')
+  if (!s.includes("'")) {
+    return `'${s.replace(/\\/g, '\\\\')}'`
+  }
   const escaped = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
   return `"${escaped}"`
 }
@@ -43,5 +47,9 @@ export function formatDtToolRef(toolId, paramValues = {}, options = {}) {
 }
 
 export function insertDtToolRef(toolId, paramValues = {}, options = {}) {
-  return insertVarRef(buildDtToolInner(toolId, paramValues, options))
+  const inner = buildDtToolInner(toolId, paramValues, options)
+  return insertVarRef(inner, options).then((result) => ({
+    ...result,
+    text: result?.text ?? formatDtToolRef(toolId, paramValues, options),
+  }))
 }
