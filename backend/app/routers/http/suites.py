@@ -1,5 +1,6 @@
 """接口测试套件和执行相关 API"""
 import json
+import logging
 import time
 import asyncio
 from typing import List, Optional
@@ -23,6 +24,8 @@ from app.core.platform.permissions import API_SUITE_VIEW, API_SUITE_EDIT, API_CA
 from app.models.sys import Environment, Project, TestCatalog
 from app.core.platform.config import API_FILE_BUCKET
 from app.core.shared.catalog_utils import apply_catalog_filter, resolve_catalog, load_active_catalog_names
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["接口测试套件"], dependencies=[Depends(is_authenticated), Depends(require_permissions(API_SUITE_VIEW))])
 
@@ -319,6 +322,19 @@ from .utils import (
 )
 from app.core.case.variable_resolver import VariableResolver
 from app.modules.data_tools.errors import ToolExecutionError
+
+
+def _format_case_run_exc(exc: BaseException) -> str:
+    """避免 str(exc) 为空时前端只看到「未知错误」。"""
+    msg = str(exc).strip()
+    if msg:
+        return msg
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    if cause is not None:
+        cmsg = str(cause).strip()
+        if cmsg:
+            return f"{type(exc).__name__}: {cmsg}"
+    return f"{type(exc).__name__}（无详细信息，请查看 backend 日志）"
 
 
 async def run_single_case(
@@ -673,21 +689,32 @@ async def run_single_case(
                     timeout=int(case.timeout or 30),
                 )
             except WorkerProxyError as exc:
-                raise RuntimeError(str(exc)) from exc
+                raise RuntimeError(_format_case_run_exc(exc)) from exc
             last_attempt_timings["request_ms"] = round(response.elapsed_ms, 2)
             if response.worker_name:
                 request_detail["worker_name"] = response.worker_name
         else:
             async with httpx.AsyncClient(timeout=case.timeout, follow_redirects=True) as client:
-                kwargs = {"headers": prepare_httpx_headers(headers), "params": params}
+                send_headers = headers if isinstance(headers, dict) else {}
+                # form-data 须由 httpx 自动带 boundary；手动 Content-Type 会导致文件发不出去
+                if body_type == "form-data":
+                    send_headers = {
+                        k: v
+                        for k, v in send_headers.items()
+                        if str(k).lower() != "content-type"
+                    }
+                kwargs = {"headers": prepare_httpx_headers(send_headers), "params": params}
 
                 if method in ["POST", "PUT", "PATCH"]:
                     if body_type in ["json", "xml"] and isinstance(body, (dict, list)):
                         kwargs["json"] = body if body_type == "json" else body
                     elif body_type == "form-data":
-                        kwargs["files"] = build_form_data_multipart(
-                            body_fields, API_FILE_BUCKET, use_bytes_io=True
-                        )
+                        try:
+                            kwargs["files"] = build_form_data_multipart(
+                                body_fields, API_FILE_BUCKET, use_bytes_io=True
+                            )
+                        except ValueError as exc:
+                            raise RuntimeError(str(exc)) from exc
                     elif body is not None:
                         kwargs["data"] = body
 
@@ -833,14 +860,20 @@ async def run_single_case(
                 await asyncio.sleep(1)
         except Exception as e:
             attempt_time = (time.time() - attempt_start) * 1000
-            last_error = str(e)
+            last_error = _format_case_run_exc(e)
+            logger.exception(
+                "[run_single_case] case_id=%s attempt=%s 执行异常: %s",
+                case_id,
+                attempt + 1,
+                last_error,
+            )
             retry_history.append({
                 "attempt": attempt + 1,
                 "status": "error",
                 "response_status": None,
                 "response_time": round(attempt_time, 2),
                 "response_body": None,
-                "error": str(e),
+                "error": last_error,
                 "assertion_passed": 0,
                 "assertion_total": 0,
                 "assertions": []
@@ -864,6 +897,7 @@ async def run_single_case(
 
     if last_response is None:
         # 所有重试均异常
+        err_msg = (last_error or "").strip() or "未知错误"
         request_detail_for_error = locals().get('request_detail', {
             "url": {"original": "", "final": url if 'url' in locals() else ""},
             "headers": {"original": {}, "final": safe_headers},
@@ -873,6 +907,14 @@ async def run_single_case(
             "replacements": [],
             "stage_timings": stage_timings,
         })
+        if isinstance(request_detail_for_error, dict):
+            request_detail_for_error = dict(request_detail_for_error)
+            request_detail_for_error["stage_timings"] = stage_timings
+            request_detail_for_error["retry_info"] = {
+                "retry_count": max(0, len(retry_history) - 1),
+                "total_attempts": len(retry_history),
+                "attempts": retry_history,
+            }
         record_data = {
             "case_id": case_id,
             "project_id": case.project_id,
@@ -881,7 +923,7 @@ async def run_single_case(
             "request_method": "WS" if is_ws else (api.method if api else ""),
             "request_headers": safe_headers,
             "request_body": body if 'body' in locals() else None,
-            "error_msg": last_error or "未知错误",
+            "error_msg": err_msg,
             "request_detail": request_detail_for_error,
             "run_by": username,
             "data_run_index": data_run_index,
@@ -894,7 +936,10 @@ async def run_single_case(
         return ApiRunResult(
             record_id=record.id,
             status="failed",
-            error=last_error or "未知错误",
+            error=err_msg,
+            request_detail=request_detail_for_error,
+            case_id=case.id,
+            case_name=case.name,
             data_run_index=data_run_index,
             data_row_label=data_row_label,
         )
