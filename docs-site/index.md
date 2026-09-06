@@ -60,7 +60,7 @@
 **加群交流**
 
 扫码加入 **BrickCoreAI 测试平台交流群**，交流使用问题、部署与版本动态。  
-二维码约 7 天有效（当前至 8 月 29 日前），过期请以页面最新码为准。
+二维码约 7 天有效（当前至 9 月 13 日前），过期请以页面最新码为准。
 
 <img src="../assets/readme/image-wechat-group-brickcore.png" width="200" alt="BrickCoreAI 测试平台交流群" /><br />
 <sub>微信加群</sub>
