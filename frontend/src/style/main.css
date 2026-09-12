@@ -3,13 +3,16 @@ body,
 #app {
     padding: 0;
     margin: 0;
-    height: 100vh;
+    /* 与界面缩放 --ui-zoom 对齐，避免 zoom<1 时底部留白 */
+    height: calc(100vh / var(--ui-zoom, 1));
+    min-height: calc(100vh / var(--ui-zoom, 1));
     font-size: 13px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
 /*-------------------------------主题颜色修改----------------------------*/
 :root {
+    --ui-zoom: 1;
     --el-tabs-header-height: 32px;
     /* 主题色 - 现代蓝色 */
     --primary-color: #107dec;

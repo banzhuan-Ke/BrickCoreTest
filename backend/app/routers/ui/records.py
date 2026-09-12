@@ -24,6 +24,7 @@ from app.core.shared.report_export import generate_html_report, ImageExportOptio
 from app.modules.ui.ui_case_status import apply_ui_case_status_filter
 from app.core.shared.media_presign import presign_media_urls_in_result
 from app.schemas.ui import SuiteResultSchemas, TaskResultSchemas
+from app.routers.perf.report_utils import apply_display_nicknames
 
 # 异步导出任务缓存（内存，24h TTL）
 export_tasks: dict = {}
@@ -108,6 +109,7 @@ async def get_task_record(project_id: int, task_id: int = None, page: int = 1, s
             "execution_log": i.execution_log,
             "is_del": i.is_del
         })
+    await apply_display_nicknames(result)
     return {"total": total, "data": result, "delete_mode": delete_mode}
 
 
@@ -247,6 +249,7 @@ async def get_suite_record(
             "execution_log": i.execution_log,
             "is_del": i.is_del
         })
+    await apply_display_nicknames(result)
     return {"total": total, "data": result, "delete_mode": delete_mode}
 
 
@@ -371,6 +374,7 @@ async def get_case_record(
             "env": i.env,
             "is_del": i.is_del
         })
+    await apply_display_nicknames(result)
     return {"total": total, "data": result, "delete_mode": delete_mode}
 
 

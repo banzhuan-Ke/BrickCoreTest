@@ -8,9 +8,9 @@ from app.modules.knowledge.constants import DOC_TYPES
 from app.modules.knowledge.knowledge_context import load_documents_for_refs, _is_bug_export_candidate
 
 try:
-    from app.modules.knowledge.packs.digitech.doc_classifier import classify_digitech_doc
-except ImportError:  # CE / 未打包行业扩展时
-    def classify_digitech_doc(doc: AiKnowledgeDocument) -> Optional[str]:  # type: ignore[misc]
+    from app.modules.knowledge.packs._industry.doc_classifier import classify_industry_doc
+except ImportError:  # 未打包行业扩展时
+    def classify_industry_doc(doc: AiKnowledgeDocument) -> Optional[str]:  # type: ignore[misc]
         return None
 
 # 同一迭代可有多份文档的类型（如多份 PRD/需求）
@@ -31,7 +31,7 @@ ROLE_LABELS: dict[str, str] = {
     "quality_pptx_template": "质量回顾模板",
 }
 
-DIGITECH_SLOT_PROFILES: dict[str, list[tuple[str, bool]]] = {
+INDUSTRY_SLOT_PROFILES: dict[str, list[tuple[str, bool]]] = {
     "scheme": [
         ("iteration_plan", True),
         ("test_plan", False),
@@ -89,9 +89,9 @@ GENERIC_REPORT_SLOT_PROFILES: dict[str, list[tuple[str, bool]]] = {
 
 
 def _detect_doc_role(doc: AiKnowledgeDocument) -> str:
-    digitech_role = classify_digitech_doc(doc)
-    if digitech_role:
-        return digitech_role
+    industry_role = classify_industry_doc(doc)
+    if industry_role:
+        return industry_role
     if doc.doc_type in DOC_TYPES and doc.doc_type != "other":
         return doc.doc_type
     fn = (doc.file_name or "").lower()

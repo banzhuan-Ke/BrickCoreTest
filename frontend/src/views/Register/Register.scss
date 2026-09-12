@@ -2,6 +2,7 @@
 
 .mian {
   height: 100vh;
+  height: calc(100vh / var(--ui-zoom, 1));
   width: 100vw;
   display: flex;
   align-items: center;
@@ -12,7 +13,7 @@
 
   .login_shell--register {
     width: min(980px, calc(100vw - 48px));
-    max-height: calc(100vh - 80px);
+    max-height: calc(100vh / var(--ui-zoom, 1) - 80px);
   }
 
   .login_shell {

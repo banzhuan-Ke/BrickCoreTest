@@ -33,6 +33,7 @@ function optionLabel(key, preview = '', description = '') {
  * @param {object|null} [opts.envGlobalVars] 有环境时传入；null/undefined 表示未选环境
  * @param {Array<{name:string,preview?:any,description?:string}>} [opts.authItems]
  * @param {string[]} [opts.extraVars]
+ * @param {{label:string, items:{key:string,preview?:string,description?:string}[]}[]} [opts.extraGroups]
  * @param {boolean} [opts.includeBuiltin=true]
  * @returns {{label:string, items:{key:string,label:string,preview:string,description:string}[]}[]}
  */
@@ -42,6 +43,7 @@ export function collectInsertableVarGroups(opts = {}) {
     envGlobalVars = undefined,
     authItems = [],
     extraVars = [],
+    extraGroups = [],
     includeBuiltin = true,
   } = opts
 
@@ -120,6 +122,10 @@ export function collectInsertableVarGroups(opts = {}) {
       description: '',
     }))
   )
+
+  for (const block of extraGroups || []) {
+    pushGroup(block.label || '其他', block.items || [])
+  }
 
   return groups
 }

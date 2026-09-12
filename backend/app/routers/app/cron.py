@@ -20,6 +20,7 @@ from app.core.infra.scheduler_lock import with_scheduler_lock
 from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppCronJob, AppPlan, AppPlanExecution, AppSuite
 from app.models.sys import Device, Environment
+from app.routers.perf.report_utils import apply_display_nicknames
 from app.schemas.app import AppCronJobCreate, AppCronJobUpdate, AppRunForm
 
 job_stores = {
@@ -459,6 +460,7 @@ async def get_cron_job_records(
                 "env": record.env,
             })
 
+    await apply_display_nicknames(result)
     return {"data": result, "total": total, "page": page, "size": size}
 
 

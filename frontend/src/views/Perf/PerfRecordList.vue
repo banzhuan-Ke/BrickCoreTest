@@ -209,6 +209,16 @@
       <el-form-item label="报告标题">
         <el-input v-model="createForm.title" placeholder="可空，自动生成" maxlength="200" clearable />
       </el-form-item>
+      <el-form-item label="描述">
+        <el-input
+          v-model="createForm.description"
+          type="textarea"
+          :rows="2"
+          maxlength="2000"
+          show-word-limit
+          placeholder="可选。展示在增强报告抬头，如：扩容前后对比 / 四档上传汇总"
+        />
+      </el-form-item>
       <el-form-item v-if="createForm.kind !== 'merge'" label="基准记录">
         <el-select v-model="createForm.referenceId" style="width: 100%">
           <el-option
@@ -236,6 +246,24 @@
         </div>
         <div class="form-hint">仅改报告内展示名，不修改执行记录本身。例：瞬间峰值、常规持续。</div>
       </el-form-item>
+      <el-form-item label="记录排序">
+        <el-select v-model="createForm.recordSort" style="width: 100%">
+          <el-option value="selection" label="按勾选顺序" />
+          <el-option value="chapter_smart" label="智能分章（持续优先，瞬时并发递减）" />
+          <el-option value="concurrency_desc" label="并发数从高到低" />
+          <el-option value="concurrency_asc" label="并发数从低到高" />
+          <el-option value="started_at_desc" label="执行时间从新到旧" />
+        </el-select>
+        <div class="form-hint">汇总默认「智能分章」：持续压测在前，瞬时压测按 50→10 排列；对比模式默认按勾选顺序。</div>
+      </el-form-item>
+      <el-form-item label="报告版式">
+        <el-select v-model="createForm.reportStyle" style="width: 100%">
+          <el-option value="standard" label="标准（完整目录与附录）" />
+          <el-option value="brief" label="精简（结论+概览+核心指标，无目录/附录）" />
+          <el-option value="technical" label="详细（含接口明细与诊断附录）" />
+        </el-select>
+        <div class="form-hint">精简适合对外汇报；详细适合性能工程师深挖；导出 HTML 按创建时的版式渲染。</div>
+      </el-form-item>
       <el-form-item label="AI 补充提示">
         <el-input
           v-model="createForm.userExtraPrompt"
@@ -243,7 +271,7 @@
           :rows="3"
           maxlength="2000"
           show-word-limit
-          placeholder="可选。整份汇总一份报告即可。例：上传四档(500KB/1MB/5MB/10MB)组内对照；textin 四档组内对照；问答与状态查询单独画像；组间不要硬比。请在同一结论里写清各组数字与规格退化"
+          placeholder="可选。整份汇总一份报告即可。例：上传四档(500KB/1MB/5MB/10MB)组内对照；另一业务线四档组内对照；问答与状态查询单独画像；组间不要硬比。请在同一结论里写清各组数字与规格退化"
         />
         <div class="form-hint">
           是否自动分析取决于项目「压测 AI」开关；所用模型在
@@ -497,9 +525,12 @@ const createReportVisible = ref(false)
 const createForm = ref({
   kind: 'compare',
   title: '',
+  description: '',
   referenceId: null,
   displayNames: {},
-  userExtraPrompt: ''
+  userExtraPrompt: '',
+  recordSort: 'selection',
+  reportStyle: 'standard'
 })
 
 const openCreateReportDialog = () => {
@@ -519,9 +550,12 @@ const openCreateReportDialog = () => {
   createForm.value = {
     kind: selectedIsMerge.value ? 'merge' : 'compare',
     title: '',
+    description: '',
     referenceId: selectedRecords.value[0]?.id ?? null,
     displayNames: names,
-    userExtraPrompt: ''
+    userExtraPrompt: '',
+    recordSort: selectedIsMerge.value ? 'chapter_smart' : 'selection',
+    reportStyle: 'standard'
   }
   createReportVisible.value = true
 }
@@ -530,9 +564,12 @@ const resetCreateReportForm = () => {
   createForm.value = {
     kind: 'compare',
     title: '',
+    description: '',
     referenceId: null,
     displayNames: {},
-    userExtraPrompt: ''
+    userExtraPrompt: '',
+    recordSort: 'selection',
+    reportStyle: 'standard'
   }
 }
 
@@ -567,10 +604,15 @@ const submitCreateReport = async () => {
       reference_record_id: createForm.value.referenceId || ids[0],
       kind: createForm.value.kind,
       title: (createForm.value.title || '').trim() || undefined,
+      ...(createForm.value.description?.trim()
+        ? { description: createForm.value.description.trim() }
+        : {}),
       ...(Object.keys(displayNames).length ? { display_names: displayNames } : {}),
       ...(createForm.value.userExtraPrompt?.trim()
         ? { user_extra_prompt: createForm.value.userExtraPrompt.trim() }
         : {}),
+      ...(createForm.value.recordSort ? { record_sort: createForm.value.recordSort } : {}),
+      ...(createForm.value.reportStyle ? { report_style: createForm.value.reportStyle } : {}),
       ...(aiAnalyze !== undefined ? { ai_analyze: aiAnalyze } : {})
     })
     const created = res.data || res

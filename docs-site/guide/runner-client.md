@@ -96,9 +96,9 @@
 
 ## 版本与更新
 
-- 版本号：窗口旁 **vX.Y.Z** 与 `VERSION.txt`（当前推荐客户端 **1.6.2**）
+- 版本号：窗口旁 **vX.Y.Z** 与 `VERSION.txt`（当前推荐客户端 **1.8.0**）
 - **GUI / exe 变更**：关闭客户端后，用新 zip **整目录覆盖**（最稳妥）
-- **引擎**：平台 `RUNNER_ENGINE_VERSION` 建议 **1.6.2**（含慢站、页流、W-36、智能点击/输入、KW-1b、执行取消与超时加固、**接口经执行机 form-data 文件代发与套件整包**）；与客户端版本独立
+- **引擎**：平台 `RUNNER_ENGINE_VERSION` 建议 **1.8.0**（与客户端对齐；含 App `device_apm`、流式∩用例断言、真实负载窗、以及既有 form-data 代发 / 套件整包等）；与客户端版本独立配置但发版宜同号
 - **1.1.0+**：支持 UI 套件执行完成后自动触发后置 SQL / 库断言（需 Backend 配置 `INTERNAL_API_KEY`）
 - **当前主线**：另含 UI 用例步骤关键字 **「数据库断言」**（`kw_db_assert`），执行到该步时回调 `/internal/evaluate-assertion`
 - **1.1.1**：UI 执行中断 MQ 加固（计划/套件/单用例停止、状态「已停止」、精准 device 投递）
@@ -118,7 +118,8 @@
 
 | 现象 | 处理 |
 |------|------|
-| 双击 exe 闪退 | 确认 `_internal` 与 `runner` 目录完整；重新下载最新安装包解压 |
+| 双击 exe 闪退 | 确认 `_internal` 与 `runner` 目录完整；用 7-Zip 重新完整解压 |
+| `DLL load failed` / `QtCore` / 找不到指定的模块 | 装 **VC++ x64**：优先 [微软官网](https://aka.ms/vs/17/release/vc_redist.x64.exe)，或网盘官方镜像；详见 [执行器安装指南](runner-install-guide.md) |
 | 无法连接平台 / 登录报「无法访问服务器」 | 地址应为 `http://<IP>` **不带 :8000**；确认安全组 **80** 已开；`curl http://<IP>/runner/health` 应 200 |
 | MQ / Redis 连接失败 | 安全组对测试机 IP 放行 **25672**（MQ）、**26379**（Redis）；Backend 需配置 `RUNNER_MQ_PUBLIC_*` / `RUNNER_REDIS_PUBLIC_*` 或 `MINIO_PUBLIC_ENDPOINT` 推导公网 IP |
 | 截图/视频上传失败 | 放行 **9200**（MinIO）；确认 `MINIO_PUBLIC_ENDPOINT: <公网IP>:9200` |

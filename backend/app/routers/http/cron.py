@@ -18,6 +18,7 @@ from app.core.platform.auth import is_authenticated, require_permissions, get_cu
 from app.core.platform.permissions import API_CRON_VIEW, API_CRON_EDIT
 from app.core.platform import config as settings
 from app.core.infra.scheduler_lock import with_scheduler_lock
+from app.core.ops.notification import NotificationService
 
 # 配置APScheduler存储器
 job_stores = {
@@ -436,6 +437,8 @@ async def _execute_suite_cron(job: ApiCronJob, env) -> tuple:
         record.end_time = datetime.now()
         record.duration = round((time.time() - start_time) * 1000, 2)
         await record.save()
+        await NotificationService.maybe_alert_api_suite_failure(record.id)
+        await NotificationService.maybe_auto_push_api_suite_report(record.id)
         return "failed", record.id
 
     success_count = run_result["success_count"]
@@ -450,6 +453,10 @@ async def _execute_suite_cron(job: ApiCronJob, env) -> tuple:
     record.hooks_result = hooks_result
     await record.save()
     print(f"[定时任务] 套件执行完成: {exec_status}, 成功: {success_count}, 失败: {failed_count}, 耗时: {record.duration:.0f}ms")
+    # 与页面执行对齐：失败告警 + 自动推报告（NOTIFY-1 / BUG-N1）
+    if exec_status == "failed":
+        await NotificationService.maybe_alert_api_suite_failure(record.id)
+    await NotificationService.maybe_auto_push_api_suite_report(record.id)
     return exec_status, record.id
 
 
@@ -471,15 +478,10 @@ async def _execute_plan_cron(job: ApiCronJob, env) -> tuple:
             stop_on_failure=False,
             auto_validate_schema=False,
             worker_id=job.worker_id,
+            trigger_type="cron",
         )
+        # run_plan 落库后按 api_plan_auto_push_report 自动推报告 / 失败告警（NOTIFY-1）
         result = await run_plan(plan.id, req, username=job.create_by)
-        # 将执行记录的 trigger_type 改为 cron
-        if result.record_id:
-            from app.models.http import ApiPlanRunRecord
-            rec = await ApiPlanRunRecord.get_or_none(id=result.record_id)
-            if rec:
-                rec.trigger_type = "cron"
-                await rec.save()
         print(f"[定时任务] 计划执行完成: {result.status}, 成功: {result.success}, 失败: {result.failed}")
         return result.status, result.record_id
     except Exception as e:

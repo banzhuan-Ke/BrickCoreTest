@@ -18,7 +18,7 @@ import {
     perfSceneApi, perfExecApi, perfRecordApi, perfComparisonApi, perfCronApi, perfWorkerApi, perfJourneyTemplateApi,
     aiConfigApi, aiPromptApi, aiGenerateApi, aiRecordApi,
     appCaseApi, appSuiteApi, appPlanApi, appExecApi, appRecordApi, appElementApi, appInspectorApi,
-    appFragmentApi, appCronApi
+    appFragmentApi, appCronApi, appDeviceApmApi
 } from './modules'
 
 // 统一导出
@@ -30,7 +30,7 @@ export {
     perfSceneApi, perfExecApi, perfRecordApi, perfComparisonApi, perfCronApi, perfWorkerApi, perfJourneyTemplateApi,
     aiConfigApi, aiPromptApi, aiGenerateApi, aiRecordApi,
     appCaseApi, appSuiteApi, appPlanApi, appExecApi, appRecordApi, appElementApi, appInspectorApi,
-    appFragmentApi, appCronApi
+    appFragmentApi, appCronApi, appDeviceApmApi
 }
 
 // 兼容旧版导出格式

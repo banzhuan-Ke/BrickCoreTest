@@ -16,7 +16,6 @@ from app.modules.ui.ui_execution_status import (
     should_apply_suite_status_update,
 )
 from app.modules.ui.ui_suite_hooks import trigger_ui_suite_hooks_for_execution
-from app.models.sys import NotificationConfig
 from app.models.ui import Suite, Task, UiCaseExecution, UiPlanExecution, UiSuiteExecution
 
 logger = logging.getLogger(__name__)
@@ -238,6 +237,9 @@ async def _save_suite_result(suite_record_id: int, result: dict[str, Any]) -> No
 
     if status == "执行完成" and is_final:
         await trigger_ui_suite_hooks_for_execution(suite_record_id)
+        # 仅独立套件自动推报告；计划内套件走计划级开关
+        if not suite_data.plan_execution_id:
+            await NotificationService.maybe_auto_push_ui_suite_report(suite_record_id)
 
 
 async def _reaggregate_plan_execution(task_record_id: int) -> None:
@@ -329,20 +331,7 @@ async def _reaggregate_plan_execution(task_record_id: int) -> None:
         )
 
     if status == "执行完成" and project_id:
-        push_cfg = await NotificationConfig.filter(
-            project_id=project_id,
-            channel_type="email",
-            enabled=True,
-            ui_auto_push_report=True,
-        ).first()
-        if push_cfg:
-            try:
-                await NotificationService.send_ui_report(
-                    plan_execution_id=task_record_id,
-                    auto_push_only=True,
-                )
-            except Exception as exc:
-                logger.error("自动推送 UI 报告失败 plan=%s: %s", task_record_id, exc)
+        await NotificationService.maybe_auto_push_ui_plan_report(task_record_id)
 
 
 async def _save_task_result(

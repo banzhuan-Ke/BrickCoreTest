@@ -32,9 +32,10 @@
         <VarInsertButton
           v-if="selectedEnvId"
           :env-id="selectedEnvId"
-          hint-text="不含工厂标签；请用「数据工厂标签」或「插入工具」。"
+          :extra-groups="csvExtraGroups"
+          hint-text="不含工厂标签；请用「数据工厂标签」或「插入工具」。CSV 列来自「CSV 数据集」。"
         />
-        <ToolInsertButton v-if="selectedEnvId" :env-id="selectedEnvId" />
+        <ToolInsertButton v-if="selectedEnvId" :env-id="selectedEnvId" :extra-groups="csvExtraGroups" />
         <el-button
           v-if="selectedEnvId"
           type="info"
@@ -47,6 +48,19 @@
         v-if="selectedEnvId"
         :env-id="selectedEnvId"
         :samples="previewSamples"
+      />
+
+      <CsvPerfHint
+        v-if="!isWsApi"
+        :source="{ url: request.url, headers: request.headers, params: request.params, body: request.body, body_fields: request.body_fields, bodyText }"
+        :project-id="proStore.projectInfo?.id"
+        :api-id="api?.id"
+        show-try-run
+        v-model:enabled="csvTry.enabled"
+        v-model:try-source="csvTry.source"
+        v-model:csv-scene-id="csvTry.sceneId"
+        v-model:csv-dataset-id="csvTry.datasetId"
+        v-model:csv-row-index="csvTry.rowIndex"
       />
 
       <div v-if="!isWsApi" class="worker-selector">
@@ -347,7 +361,7 @@ import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
 import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
 import DataFactoryTagPicker from './DataFactoryTagPicker.vue'
-import { insertVarRef } from '@/utils/varInsert.js'
+import { insertFullVarRef } from '@/utils/varInsert.js'
 import VariablePreviewPanel from '@/components/VariablePreviewPanel.vue'
 import CopyTextButton from '@/components/CopyTextButton.vue'
 import CopyablePre from '@/components/CopyablePre.vue'
@@ -355,6 +369,8 @@ import JsonTextarea from '@/components/JsonTextarea.vue'
 import HeaderEditorPanel from '@/components/HeaderEditorPanel.vue'
 import WsStepsEditor from './WsStepsEditor.vue'
 import ApiTestFilePicker from '@/components/ApiTestFilePicker.vue'
+import CsvPerfHint from '@/components/CsvPerfHint.vue'
+import { useCsvInsertGroups } from '@/composables/useCsvInsertGroups.js'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -366,6 +382,7 @@ const emit = defineEmits(['update:modelValue'])
 const route = useRoute()
 const router = useRouter()
 const proStore = ProjectStore()
+const { csvExtraGroups } = useCsvInsertGroups(computed(() => proStore.projectInfo?.id))
 const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
 const activeTab = ref('params')
 const responseTab = ref('body')
@@ -375,6 +392,13 @@ const wsSteps = ref([])
 const customBaseUrl = ref('')
 const selectedEnvId = ref(null)
 const selectedWorkerId = ref(null)
+const csvTry = reactive({
+  enabled: false,
+  source: 'dataset',
+  sceneId: null,
+  datasetId: null,
+  rowIndex: 0,
+})
 const varEditVisible = ref(false)
 const tagPickerVisible = ref(false)
 const saveCaseVisible = ref(false)
@@ -646,11 +670,9 @@ const submitSaveAsCase = async () => {
 }
 
 async function onDfTagInsert(refStr) {
-  const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
-  const name = m ? m[1] : refStr
-  const result = await insertVarRef(name)
+  const result = await insertFullVarRef(refStr)
   if (result?.ok) {
-    ElMessage.success(result.mode === 'copy' ? `已复制 ${refStr}，请粘贴` : `已插入 ${refStr}`)
+    ElMessage.success(result.mode === 'copy' ? `已复制 ${result.display}，请粘贴` : `已插入 ${result.display}`)
   } else {
     ElMessage.warning('请先将光标放入请求参数输入框')
   }
@@ -903,6 +925,11 @@ const handleClosed = () => {
   request.body_fields = []
   bodyText.value = ''
   selectedWorkerId.value = null
+  csvTry.enabled = false
+  csvTry.source = 'dataset'
+  csvTry.sceneId = null
+  csvTry.datasetId = null
+  csvTry.rowIndex = 0
 }
 
 const headersToCaseDict = (headers) => {
@@ -1030,6 +1057,13 @@ const sendRequest = async () => {
     }
     if (selectedWorkerId.value) {
       payload.worker_id = selectedWorkerId.value
+    }
+    if (csvTry.enabled && csvTry.datasetId) {
+      payload.csv_dataset_id = csvTry.datasetId
+      payload.csv_row_index = csvTry.rowIndex ?? 0
+    } else if (csvTry.enabled && csvTry.sceneId) {
+      payload.csv_scene_id = csvTry.sceneId
+      payload.csv_row_index = csvTry.rowIndex ?? 0
     }
 
     const res = await http.apiModuleApi.debugApi(payload)

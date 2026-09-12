@@ -8,20 +8,13 @@
     </template>
     
     <template #main>
-      <div class="api-list-container">
-        <!-- 左侧测试目录 -->
-        <div class="category-tree">
-          <CatalogTree
-            :project-id="proStore.projectInfo.id"
-            v-model="currentCatalogId"
-            :show-manage="true"
-            all-node-label="全部接口"
-            @change="handleCatalogFilter"
-          />
-        </div>
-        
-        <!-- 右侧接口列表 -->
-        <div class="api-table">
+      <CatalogListLayout
+        :project-id="proStore.projectInfo.id"
+        v-model="currentCatalogId"
+        all-node-label="全部接口"
+        :show-manage="true"
+        @change="handleCatalogFilter"
+      >
           <div class="search-bar">
             <el-input
               v-model="searchForm.keyword"
@@ -146,8 +139,7 @@
             @current-change="getApiList"
             class="pagination"
           />
-        </div>
-      </div>
+      </CatalogListLayout>
     </template>
   </PageCard>
   
@@ -243,7 +235,7 @@ import http from '@/api/index'
 import { httpApi } from '@/api/modules/http'
 import dateTools from '@/tools/dateTools'
 import PageCard from '@/components/PageCard.vue'
-import CatalogTree from '@/components/CatalogTree.vue'
+import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import ApiEdit from './components/ApiEdit.vue'
 import ApiImport from './components/ApiImport.vue'
 import ApiDebug from './components/ApiDebug.vue'
@@ -654,88 +646,32 @@ watch(
 </script>
 
 <style scoped lang="scss">
-.api-list-container {
+.search-bar {
   display: flex;
-  gap: 20px;
-  height: calc(100vh - 250px);
+  gap: 10px;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
-.category-tree {
-  width: 250px;
-  min-width: 250px;
+.api-path-code {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  color: var(--el-color-primary);
   background: var(--el-fill-color-light);
-  border-radius: 8px;
-  padding: 15px;
-  overflow-y: auto;
-  
-  .tree-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 15px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--el-border-color-lighter);
-    
-    .tree-title {
-      font-weight: 600;
-      font-size: 14px;
-    }
-  }
-  
-  .tree-node {
-    display: flex;
-    align-items: center;
-    flex: 1;
-    
-    .el-icon {
-      margin-right: 5px;
-      color: var(--el-color-primary);
-    }
-    
-    .node-label {
-      flex: 1;
-    }
-    
-    .node-actions {
-      display: none;
-    }
-    
-    &:hover .node-actions {
-      display: flex;
-    }
-  }
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 
-.api-table {
-  flex: 1;
+.api-name-text {
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.pagination {
+  margin-top: 15px;
   display: flex;
-  flex-direction: column;
-  
-  .search-bar {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 15px;
-  }
-  
-  .api-path-code {
-    font-family: 'Consolas', 'Monaco', monospace;
-    font-size: 13px;
-    color: var(--el-color-primary);
-    background: var(--el-fill-color-light);
-    padding: 2px 6px;
-    border-radius: 4px;
-  }
-  
-  .api-name-text {
-    font-weight: 500;
-    color: var(--el-text-color-primary);
-  }
-  
-  .pagination {
-    margin-top: 15px;
-    display: flex;
-    justify-content: flex-end;
-  }
+  justify-content: flex-end;
 }
 
 .muted-text {

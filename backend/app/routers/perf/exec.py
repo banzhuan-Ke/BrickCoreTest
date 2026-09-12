@@ -41,9 +41,28 @@ router = APIRouter(prefix="/exec", tags=["性能测试执行"])
 
 
 class StartPerfOptions(BaseModel):
-    """启动可选 Body：覆盖场景性能验收目标。"""
+    """启动可选 Body：覆盖场景性能验收目标 / 报告描述 / 被测资源绑定。"""
     perf_targets: Optional[dict[str, Any]] = Field(
         None, description="本次覆盖的 perf_targets；缺省则用场景 config 快照"
+    )
+    description: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="本次压测描述，写入配置快照并展示在报告抬头",
+    )
+    sut_application_id: Optional[int] = Field(
+        None, description="覆盖场景绑定的被测应用 ID"
+    )
+    sut_roles: Optional[List[str]] = Field(
+        None, description="覆盖角色子集；null 表示用场景/应用默认"
+    )
+    sut_server_ids: Optional[List[int]] = Field(
+        None, description="显式覆盖采集器列表（最高优先级）"
+    )
+    sut_grafana_url_template: Optional[str] = Field(
+        None,
+        max_length=1024,
+        description="Grafana 深链模板，支持 {from_ms}/{to_ms}/{server_id}/{hostname}",
     )
 
 
@@ -125,14 +144,6 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
     use_workers 保留签名兼容，实际始终为 True。
     """
     from app.routers.perf.perf_state import _running_records
-    from app.routers.perf.workers import (
-        get_active_workers,
-        distribute_concurrent,
-        send_task_to_worker,
-        finalize_distributed_record,
-        resolve_worker_selection,
-    )
-    from app.routers.perf import worker_queue
 
     stop_event = asyncio.Event()
     _running_records[record_id] = stop_event
@@ -141,6 +152,32 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
     if not record:
         _running_records.pop(record_id, None)
         return
+
+    try:
+        await _run_perf_scene_body(record_id, record, stop_event)
+    finally:
+        # 未走到 finalize 的早退路径：立即清 force，避免 pause 日程被长时间强制采
+        try:
+            fresh = await PerfRecord.get_or_none(id=record_id) or record
+            bd = fresh.error_breakdown if isinstance(fresh.error_breakdown, dict) else {}
+            if not bd.get("_perf_finalized"):
+                from app.modules.perf.sut_force import release_sut_force_from_record
+
+                await release_sut_force_from_record(fresh, grace_ms=0)
+        except Exception:
+            pass
+
+
+async def _run_perf_scene_body(record_id: int, record: PerfRecord, stop_event: asyncio.Event):
+    """run_perf_scene 主体。"""
+    from app.routers.perf.workers import (
+        get_active_workers,
+        distribute_concurrent,
+        send_task_to_worker,
+        finalize_distributed_record,
+        resolve_worker_selection,
+    )
+    from app.routers.perf import worker_queue
 
     scene = await record.scene
     if not scene:
@@ -196,9 +233,13 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
 
     # CSV 参数化数据
     csv_config = scene.csv_config if scene else {}
-    csv_enabled = bool((csv_config or {}).get("enabled"))
-    csv_data = scene.csv_data if (scene and csv_enabled) else None
-    csv_strategy = csv_config.get("strategy", "round_robin") if csv_enabled else "round_robin"
+    from app.modules.perf.csv_dataset import resolve_scene_csv
+    resolved = await resolve_scene_csv(scene) if scene else {
+        "enabled": False, "data": None, "strategy": "round_robin"
+    }
+    csv_enabled = bool(resolved.get("enabled"))
+    csv_data = resolved.get("data") if csv_enabled else None
+    csv_strategy = resolved.get("strategy", "round_robin") if csv_enabled else "round_robin"
 
     config = dict(config)
     config["distribution_mode"] = normalize_distribution_mode(config.get("distribution_mode"))
@@ -207,6 +248,10 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
     # 每次执行均从 DB 重读用例；须把用例覆盖字段完整下发，避免回落到接口定义旧值
     from app.core.shared.header_merge import merge_request_headers
     from app.modules.http.http_utils import resolve_body_fields
+    from app.modules.http.worker_http_proxy import (
+        WorkerProxyError,
+        prepare_body_fields_for_worker,
+    )
 
     scene_items_for_worker = []
     for item in scene_items:
@@ -243,10 +288,25 @@ async def run_perf_scene(record_id: int, use_workers: bool = True):
             enriched["request_body_type"] = (
                 case.request_body_type or (api.body_type if api else None) or "json"
             )
-            enriched["request_body_fields"] = resolve_body_fields(
+            body_fields = resolve_body_fields(
                 case.request_body_fields,
                 (api.body_fields if api else None),
             )
+            # form-data 文件：启动时从 MinIO 读一次并嵌入 b64，施压阶段 Worker 不再回源平台
+            try:
+                enriched["request_body_fields"] = prepare_body_fields_for_worker(
+                    enriched["request_body_type"],
+                    body_fields,
+                )
+            except WorkerProxyError as exc:
+                record.status = "failed"
+                record.ended_at = datetime.now()
+                record.error_breakdown = {
+                    "stop_reason": f"压测准备 form-data 文件失败：{exc}",
+                }
+                await record.save()
+                _running_records.pop(record_id, None)
+                return
             # 供 Worker 判断：用例是否显式配置了覆盖
             # params：非空列表/字典才整表覆盖；body：只要 DB 非 null（含 {}）即覆盖接口
             enriched["case_params_override"] = bool(case.request_params)
@@ -532,6 +592,8 @@ async def start_perf(scene_id: int, env_id: int, background_tasks: BackgroundTas
 
     config = dict(config)
     config["env_id"] = env_id
+    config["env_name"] = getattr(env, "name", None) or ""
+    config["env_host"] = getattr(env, "host", None) or ""
     config["request_detail_level"] = (
         "full" if request_detail_level == "full" else "brief"
     )
@@ -551,6 +613,43 @@ async def start_perf(scene_id: int, env_id: int, background_tasks: BackgroundTas
     elif config.get("perf_targets") is not None:
         config["perf_targets"] = normalize_perf_targets(config.get("perf_targets"))
 
+    desc = ""
+    if options is not None and options.description is not None:
+        desc = str(options.description or "").strip()[:2000]
+    if desc:
+        config["run_description"] = desc
+    else:
+        config.pop("run_description", None)
+
+    if options is not None and options.sut_grafana_url_template is not None:
+        from app.modules.perf.sut_slice import validate_grafana_url_template
+
+        try:
+            tpl = validate_grafana_url_template(options.sut_grafana_url_template)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        if tpl:
+            config["sut_grafana_url_template"] = tpl
+        else:
+            config.pop("sut_grafana_url_template", None)
+
+    from app.modules.perf.sut_bind import apply_sut_binding_to_config
+    from app.modules.perf.sut_force import activate_sut_force_for_record
+
+    config = await apply_sut_binding_to_config(
+        config,
+        project_id=scene.project_id,
+        env_id=env_id,
+        override_application_id=options.sut_application_id if options else None,
+        override_roles=options.sut_roles if options else None,
+        override_server_ids=options.sut_server_ids if options else None,
+        apply_force=False,
+    )
+
+    from app.routers.perf.report_utils import resolve_user_nickname
+
+    config["run_by_nickname"] = await resolve_user_nickname(username)
+
     record = await PerfRecord.create(
         scene_id=scene.id,
         project_id=scene.project_id,
@@ -560,6 +659,7 @@ async def start_perf(scene_id: int, env_id: int, background_tasks: BackgroundTas
         scene_items_snapshot=await snapshot_scene_items_with_case_meta(scene.scene_items or []),
         run_by=username
     )
+    await activate_sut_force_for_record(record)
 
     # use_workers 参数保留兼容，实际始终走 Worker
     background_tasks.add_task(run_perf_scene, record.id, True)

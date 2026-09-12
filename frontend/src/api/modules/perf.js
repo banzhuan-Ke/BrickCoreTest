@@ -61,6 +61,14 @@ export const perfSceneApi = {
     async previewCSV(scene_id) {
         return await http.get(`/perf/scenes/${scene_id}/csv-preview`)
     },
+    // 接口/用例侧：关联场景 CSV 上下文（提示与试跑一行）
+    async listCsvContexts(params) {
+        return await http.get('/perf/scenes/csv-contexts', { params })
+    },
+    // 绑定/解绑 CSV 数据集
+    async bindCsvDataset(scene_id, data) {
+        return await http.put(`/perf/scenes/${scene_id}/csv-bind`, data)
+    },
     // 删除 CSV
     async deleteCSV(scene_id) {
         return await http.delete(`/perf/scenes/${scene_id}/csv`)
@@ -89,6 +97,41 @@ export const perfSceneApi = {
     async journeyFromSuite(data) {
         return await http.post('/perf/scenes/journey-from-suite', data)
     }
+}
+
+/** 项目级 CSV 数据集 */
+export const perfCsvDatasetApi = {
+    async getList(params) {
+        return await http.get('/perf/csv-datasets', { params })
+    },
+    async getDetail(id, params = {}) {
+        return await http.get(`/perf/csv-datasets/${id}`, { params })
+    },
+    async create(data) {
+        return await http.post('/perf/csv-datasets', data)
+    },
+    async update(id, data) {
+        return await http.put(`/perf/csv-datasets/${id}`, data)
+    },
+    async remove(id) {
+        return await http.delete(`/perf/csv-datasets/${id}`)
+    },
+    async upload(id, formData, { dryRun = false } = {}) {
+        const params = {}
+        if (dryRun) params.dry_run = true
+        return await http.post(`/perf/csv-datasets/${id}/upload`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            params,
+        })
+    },
+    async preview(id, params = {}) {
+        return await http.get(`/perf/csv-datasets/${id}/preview`, { params })
+    },
+    async migrateLegacy(project_id) {
+        return await http.post('/perf/csv-datasets/migrate-legacy', null, {
+            params: { project_id },
+        })
+    },
 }
 
 // ========== 业务链路模板 ==========
@@ -135,6 +178,22 @@ export const perfExecApi = {
         const body = {}
         if (options.perf_targets != null) {
             body.perf_targets = options.perf_targets
+        }
+        if (options.description != null && String(options.description).trim()) {
+            body.description = String(options.description).trim().slice(0, 2000)
+        }
+        if (options.sut_application_id != null) {
+            body.sut_application_id = Number(options.sut_application_id)
+        }
+        if (Array.isArray(options.sut_roles)) {
+            body.sut_roles = options.sut_roles
+        }
+        if (Array.isArray(options.sut_server_ids)) {
+            body.sut_server_ids = options.sut_server_ids.map((x) => Number(x)).filter((n) => Number.isFinite(n))
+        }
+        if (options.sut_grafana_url_template != null) {
+            // 空串表示本次清除模板；非空须为 http(s)
+            body.sut_grafana_url_template = String(options.sut_grafana_url_template).trim().slice(0, 1024)
         }
         const hasBody = Object.keys(body).length > 0
         return await http.post(
@@ -236,6 +295,71 @@ export const perfWorkerApi = {
     async delete(worker_id) {
         return await http.delete(`/perf/workers/${worker_id}`)
     }
+}
+
+// ========== 被测服务器监控（被测监控采集器）==========
+export const perfSutServerApi = {
+    async getList(params) {
+        return await http.get('/perf/sut-servers', { params })
+    },
+    async getOverview(params) {
+        return await http.get('/perf/sut-servers/overview', { params })
+    },
+    async create(data) {
+        return await http.post('/perf/sut-servers', data)
+    },
+    async getDetail(server_id) {
+        return await http.get(`/perf/sut-servers/${server_id}`)
+    },
+    async update(server_id, data) {
+        return await http.patch(`/perf/sut-servers/${server_id}`, data)
+    },
+    async rotateToken(server_id, data = {}) {
+        return await http.post(`/perf/sut-servers/${server_id}/rotate-token`, data)
+    },
+    async resetAgent(server_id) {
+        return await http.post(`/perf/sut-servers/${server_id}/reset-agent`)
+    },
+    async delete(server_id) {
+        return await http.delete(`/perf/sut-servers/${server_id}`)
+    },
+    async getMetrics(server_id, params) {
+        return await http.get(`/perf/sut-servers/${server_id}/metrics`, { params })
+    },
+    async getInstallSnippet(server_id) {
+        return await http.get(`/perf/sut-servers/${server_id}/install-snippet`)
+    },
+}
+
+// ========== 被测应用（应用 × 环境绑定）==========
+export const perfSutApplicationApi = {
+    async getList(params) {
+        return await http.get('/perf/sut-applications', { params })
+    },
+    async create(data) {
+        return await http.post('/perf/sut-applications', data)
+    },
+    async getDetail(app_id) {
+        return await http.get(`/perf/sut-applications/${app_id}`)
+    },
+    async update(app_id, data) {
+        return await http.patch(`/perf/sut-applications/${app_id}`, data)
+    },
+    async delete(app_id) {
+        return await http.delete(`/perf/sut-applications/${app_id}`)
+    },
+    async getEnvBindings(app_id) {
+        return await http.get(`/perf/sut-applications/${app_id}/env-bindings`)
+    },
+    async putEnvBinding(app_id, data) {
+        return await http.put(`/perf/sut-applications/${app_id}/env-bindings`, data)
+    },
+    async deleteEnvBinding(app_id, environment_id) {
+        return await http.delete(`/perf/sut-applications/${app_id}/env-bindings/${environment_id}`)
+    },
+    async resolve(app_id, params) {
+        return await http.get(`/perf/sut-applications/${app_id}/resolve`, { params })
+    },
 }
 
 // ========== 性能测试定时任务 ==========

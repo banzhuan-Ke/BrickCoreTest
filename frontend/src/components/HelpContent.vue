@@ -751,11 +751,15 @@
         </ol>
 
         <h4>调用地址格式：</h4>
-        <pre style="background:#f5f7fa;padding:10px;border-radius:4px;font-size:13px">{{ baseUrl }}/api-module/mock-call/你的匹配路径
+        <pre style="background:#f5f7fa;padding:10px;border-radius:4px;font-size:13px"># 推荐短别名：
+{{ baseUrl }}/mock/你的匹配路径
+
+# 兼容原路径：
+{{ baseUrl }}/api-module/mock-call/你的匹配路径
 
 # 示例：
-GET  {{ baseUrl }}/api-module/mock-call/api/users
-POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
+GET  {{ baseUrl }}/mock/api/users
+POST {{ baseUrl }}/mock/api/login</pre>
 
         <h4>高级匹配规则（可选）：</h4>
         <table class="help-table">
@@ -859,6 +863,7 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
           <li><strong>Ramp-up 时间</strong>：从 0 用户到目标并发数的渐进加压时间</li>
           <li><strong>用例权重</strong>：多个用例时，按权重比例随机选择执行</li>
           <li><strong>请求间隔</strong>：每次请求后的等待时间（毫秒），模拟真实用户思考时间</li>
+          <li><strong>CSV 数据集</strong>：在「性能测试 → CSV 数据集」维护项目级 CSV；场景绑定后可多场景共用。用例 Body 写 <code v-pre>${{csv.列名}}</code>；编辑页「插入变量」可快速插入。旧版写在场景内的 CSV 仍可用，建议点「迁出历史数据」</li>
         </ul>
 
         <h4>报告指标解读：</h4>
@@ -1007,7 +1012,7 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
         <p>A: 网络较慢时，在步骤前添加「等待」操作，或增加隐式等待时间。</p>
 
         <h4>Q3: 如何参数化测试数据？</h4>
-        <p>A: 在步骤参数或请求 URL/Header/Body 中使用 <code v-pre>${{变量名}}</code>；数据驱动场景在套件、数据集或 CSV 参数化中配置数据行。</p>
+        <p>A: 在步骤参数或请求 URL/Header/Body 中使用 <code v-pre>${{变量名}}</code>；压测 CSV 参数化在「CSV 数据集」维护并在场景绑定，用例中写 <code v-pre>${{csv.列名}}</code>（仅压测执行时注入；调试可展开「用 CSV 试跑一行」）。</p>
 
         <h4>Q4: 定时任务没执行？</h4>
         <p>A: 检查任务是否已启用，以及执行器服务是否正常运行。</p>
@@ -1050,7 +1055,7 @@ POST {{ baseUrl }}/api-module/mock-call/api/login</pre>
 
       <div class="help-footer">
         <p>📧 遇到问题？请联系系统管理员或查看接口文档获取更多技术支持。</p>
-        <p style="color: #999; font-size: 12px;">版本：v1.7.0 | 更新日期：2026-08-28</p>
+        <p style="color: #999; font-size: 12px;">版本：v1.8.0 | 更新日期：2026-09-10</p>
       </div>
     </el-scrollbar>
   </div>

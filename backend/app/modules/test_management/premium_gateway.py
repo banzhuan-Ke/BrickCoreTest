@@ -33,6 +33,45 @@ def _disabled_by_env() -> bool:
     return raw in ("1", "true", "on", "yes")
 
 
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _pack_meets_compat_min(pack_version: str | None) -> bool:
+    """BRICKCORE_TM_COMPAT_MIN_PACK：扩展包版本 ≥ 该值时，跳过与平台大版本的不兼容提示。
+
+    适用：扩展包功能未随平台升版重打，但仍可继续用旧包（如平台 1.8 + 包 1.7）。
+    例：BRICKCORE_TM_COMPAT_MIN_PACK=1.7.0
+    """
+    floor = (os.getenv("BRICKCORE_TM_COMPAT_MIN_PACK") or "").strip()
+    if not floor or not pack_version:
+        return False
+    try:
+        from app.core.runner.runner_version import compare_version
+
+        return compare_version(str(pack_version), floor) >= 0
+    except Exception:
+        return False
+
+
+def _resolve_tm_compatible(brickcore_tm: Any, platform_ver: str | None, pack_version: str | None) -> bool:
+    """包内声明优先；可用环境变量放宽（不必重打包）。"""
+    if _truthy_env("BRICKCORE_TM_SKIP_COMPAT_CHECK"):
+        return True
+    if bool(brickcore_tm.is_compatible(platform_ver)):
+        return True
+    if _pack_meets_compat_min(pack_version):
+        return True
+    # 额外兼容前缀，逗号分隔，如 1.8,1.9
+    extra = (os.getenv("BRICKCORE_TM_EXTRA_COMPAT_PREFIXES") or "").strip()
+    if extra and platform_ver:
+        ver = str(platform_ver).split("+")[0].split("-")[0].strip()
+        for p in (x.strip() for x in extra.split(",")):
+            if p and (ver == p or ver.startswith(p + ".")):
+                return True
+    return False
+
+
 @lru_cache(maxsize=1)
 def tm_premium_available() -> bool:
     """扩展包是否可导入（Pro 内置或 CE 已安装）。"""
@@ -73,8 +112,8 @@ def get_tm_premium_info() -> dict[str, Any]:
     except Exception:
         platform_ver = os.getenv("PLATFORM_VERSION") or None
 
-    compatible = bool(brickcore_tm.is_compatible(platform_ver))
     info = brickcore_tm.package_info()
+    compatible = _resolve_tm_compatible(brickcore_tm, platform_ver, info.get("version"))
     if not compatible:
         return {
             "installed": True,

@@ -31,9 +31,17 @@ class NotificationConfigItem(BaseModel):
     perf_alert_on_failure: bool = True
     app_alert_on_failure: bool = True
     config: dict = Field(default_factory=dict)
+    # 细分开关（主）
+    api_suite_auto_push_report: bool = False
+    api_plan_auto_push_report: bool = False
+    ui_suite_auto_push_report: bool = False
+    ui_plan_auto_push_report: bool = False
+    app_suite_auto_push_report: bool = False
+    app_plan_auto_push_report: bool = False
+    perf_auto_push_report: bool = False
+    # 兼容旧前端：若细分全关且兼容字段为真，则回填到对应细分
     api_auto_push_report: bool = False
     ui_auto_push_report: bool = False
-    perf_auto_push_report: bool = False
     app_auto_push_report: bool = False
     tm_assignment_notify: bool = True
 
@@ -48,9 +56,16 @@ class NotificationConfigOut(BaseModel):
     perf_alert_on_failure: bool = True
     app_alert_on_failure: bool = True
     config: dict
-    api_auto_push_report: bool
-    ui_auto_push_report: bool
+    api_suite_auto_push_report: bool = False
+    api_plan_auto_push_report: bool = False
+    ui_suite_auto_push_report: bool = False
+    ui_plan_auto_push_report: bool = False
+    app_suite_auto_push_report: bool = False
+    app_plan_auto_push_report: bool = False
     perf_auto_push_report: bool = False
+    # 兼容：套件或计划任一开启
+    api_auto_push_report: bool = False
+    ui_auto_push_report: bool = False
     app_auto_push_report: bool = False
     tm_assignment_notify: bool = True
 
@@ -58,7 +73,51 @@ class NotificationConfigOut(BaseModel):
         from_attributes = True
 
 
+def _resolve_split_push(item: NotificationConfigItem) -> dict:
+    """解析套件/计划细分开关；旧合并字段仅在细分均未传开时回填。"""
+    api_suite = bool(item.api_suite_auto_push_report)
+    api_plan = bool(item.api_plan_auto_push_report)
+    if not api_suite and not api_plan and item.api_auto_push_report:
+        api_suite = api_plan = True
+
+    ui_suite = bool(item.ui_suite_auto_push_report)
+    ui_plan = bool(item.ui_plan_auto_push_report)
+    if not ui_suite and not ui_plan and item.ui_auto_push_report:
+        ui_plan = True
+
+    app_suite = bool(item.app_suite_auto_push_report)
+    app_plan = bool(item.app_plan_auto_push_report)
+    if not app_suite and not app_plan and item.app_auto_push_report:
+        app_suite = app_plan = True
+
+    return {
+        "api_suite_auto_push_report": api_suite,
+        "api_plan_auto_push_report": api_plan,
+        "ui_suite_auto_push_report": ui_suite,
+        "ui_plan_auto_push_report": ui_plan,
+        "app_suite_auto_push_report": app_suite,
+        "app_plan_auto_push_report": app_plan,
+        "api_auto_push_report": api_suite or api_plan,
+        "ui_auto_push_report": ui_suite or ui_plan,
+        "app_auto_push_report": app_suite or app_plan,
+        "perf_auto_push_report": bool(item.perf_auto_push_report),
+    }
+
+
 def _config_out(cfg: NotificationConfig) -> NotificationConfigOut:
+    api_suite = bool(getattr(cfg, "api_suite_auto_push_report", False))
+    api_plan = bool(getattr(cfg, "api_plan_auto_push_report", False))
+    ui_suite = bool(getattr(cfg, "ui_suite_auto_push_report", False))
+    ui_plan = bool(getattr(cfg, "ui_plan_auto_push_report", False))
+    app_suite = bool(getattr(cfg, "app_suite_auto_push_report", False))
+    app_plan = bool(getattr(cfg, "app_plan_auto_push_report", False))
+    # 迁移前库仅有旧字段时兜底
+    if not api_suite and not api_plan and getattr(cfg, "api_auto_push_report", False):
+        api_suite = api_plan = True
+    if not ui_suite and not ui_plan and getattr(cfg, "ui_auto_push_report", False):
+        ui_plan = True
+    if not app_suite and not app_plan and getattr(cfg, "app_auto_push_report", False):
+        app_suite = app_plan = True
     return NotificationConfigOut(
         id=cfg.id,
         project_id=cfg.project_id,
@@ -69,10 +128,16 @@ def _config_out(cfg: NotificationConfig) -> NotificationConfigOut:
         perf_alert_on_failure=getattr(cfg, "perf_alert_on_failure", True),
         app_alert_on_failure=getattr(cfg, "app_alert_on_failure", True),
         config=cfg.config,
-        api_auto_push_report=cfg.api_auto_push_report,
-        ui_auto_push_report=cfg.ui_auto_push_report,
+        api_suite_auto_push_report=api_suite,
+        api_plan_auto_push_report=api_plan,
+        ui_suite_auto_push_report=ui_suite,
+        ui_plan_auto_push_report=ui_plan,
+        app_suite_auto_push_report=app_suite,
+        app_plan_auto_push_report=app_plan,
         perf_auto_push_report=getattr(cfg, "perf_auto_push_report", False),
-        app_auto_push_report=getattr(cfg, "app_auto_push_report", False),
+        api_auto_push_report=api_suite or api_plan,
+        ui_auto_push_report=ui_suite or ui_plan,
+        app_auto_push_report=app_suite or app_plan,
         tm_assignment_notify=getattr(cfg, "tm_assignment_notify", True),
     )
 
@@ -194,11 +259,8 @@ async def create_notification_config(item: NotificationConfigItem, project_id: i
         perf_alert_on_failure=item.perf_alert_on_failure,
         app_alert_on_failure=item.app_alert_on_failure,
         config=item.config,
-        api_auto_push_report=item.api_auto_push_report,
-        ui_auto_push_report=item.ui_auto_push_report,
-        perf_auto_push_report=item.perf_auto_push_report,
-        app_auto_push_report=item.app_auto_push_report,
         tm_assignment_notify=item.tm_assignment_notify,
+        **_resolve_split_push(item),
     )
     return _config_out(cfg)
 
@@ -223,10 +285,8 @@ async def update_notification_config(config_id: int, item: NotificationConfigIte
     cfg.perf_alert_on_failure = item.perf_alert_on_failure
     cfg.app_alert_on_failure = item.app_alert_on_failure
     cfg.config = item.config
-    cfg.api_auto_push_report = item.api_auto_push_report
-    cfg.ui_auto_push_report = item.ui_auto_push_report
-    cfg.perf_auto_push_report = item.perf_auto_push_report
-    cfg.app_auto_push_report = item.app_auto_push_report
+    for key, val in _resolve_split_push(item).items():
+        setattr(cfg, key, val)
     cfg.tm_assignment_notify = item.tm_assignment_notify
     await cfg.save()
 

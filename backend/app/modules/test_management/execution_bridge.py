@@ -326,6 +326,15 @@ async def dispatch_perf_scene(
             result_status="blocked",
             result_message=f"Worker 容量不足：需要并发 {needed}，当前 {capacity}",
         )
+    from app.modules.perf.sut_bind import apply_sut_binding_to_config
+    from app.modules.perf.sut_force import activate_sut_force_for_record
+
+    config = await apply_sut_binding_to_config(
+        config,
+        project_id=scene.project_id,
+        env_id=environment_id,
+        apply_force=False,
+    )
     record = await PerfRecord.create(
         scene_id=scene.id,
         project_id=scene.project_id,
@@ -335,6 +344,7 @@ async def dispatch_perf_scene(
         scene_items_snapshot=await snapshot_scene_items_with_case_meta(scene.scene_items or []),
         run_by=username,
     )
+    await activate_sut_force_for_record(record)
     evidence = norm.build_report_paths("perf_record", record.id, asset_id=asset_id)
     return DispatchResult(
         ok=True,

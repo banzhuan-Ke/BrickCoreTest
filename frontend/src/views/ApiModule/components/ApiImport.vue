@@ -209,12 +209,55 @@ curl --location --request POST 'http://api.example.com/users' \\
             </el-radio-group>
           </div>
           <JsonTextarea
+            v-if="previewData.body_type !== 'form-data'"
             v-model="previewData.body"
             :rows="6"
             :placeholder="bodyPlaceholder"
             :json-mode="previewData.body_type === 'json'"
             show-compact
           />
+          <div v-else class="form-data-editor">
+            <div class="section-title compact">
+              <span>Form Data 字段</span>
+              <el-button type="primary" link size="small" @click="addPreviewFormField">添加</el-button>
+            </div>
+            <el-table :data="previewData.body_fields || []" size="small" border>
+              <el-table-column label="字段名" width="160">
+                <template #default="{ $index }">
+                  <el-input v-model="previewData.body_fields[$index].name" size="small" placeholder="file" />
+                </template>
+              </el-table-column>
+              <el-table-column label="类型" width="110">
+                <template #default="{ $index }">
+                  <el-select v-model="previewData.body_fields[$index].field_type" size="small">
+                    <el-option label="文本" value="text" />
+                    <el-option label="文件" value="file" />
+                  </el-select>
+                </template>
+              </el-table-column>
+              <el-table-column label="值 / 文件" min-width="240">
+                <template #default="{ $index }">
+                  <ApiTestFilePicker
+                    v-if="previewData.body_fields[$index].field_type === 'file'"
+                    :model-value="previewData.body_fields[$index]"
+                    @update:model-value="(v) => onPreviewFormFieldFileUpdate($index, v)"
+                  />
+                  <el-input v-else v-model="previewData.body_fields[$index].value" size="small" placeholder="文本值" />
+                </template>
+              </el-table-column>
+              <el-table-column label="MIME" width="160">
+                <template #default="{ $index }">
+                  <el-input v-model="previewData.body_fields[$index].mime_type" size="small" placeholder="application/octet-stream" />
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="60">
+                <template #default="{ $index }">
+                  <el-button type="danger" link size="small" @click="removePreviewFormField($index)">删</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-if="!(previewData.body_fields || []).length" :image-size="40" description="暂无 form-data 字段" />
+          </div>
         </el-form>
         
         <!-- 测试结果展示 -->
@@ -482,6 +525,7 @@ import http from '@/api/index'
 
 import { catalogApi, buildCatalogTree } from '@/api/modules/catalog'
 import JsonTextarea from '@/components/JsonTextarea.vue'
+import ApiTestFilePicker from '@/components/ApiTestFilePicker.vue'
 
 const props = defineProps({
   modelValue: Boolean
@@ -567,10 +611,43 @@ watch(() => props.modelValue, (visible) => {
 
 watch(() => previewData.value?.body_type, (newType) => {
   if (!previewData.value) return
-  if (newType === 'json' && !previewData.value.body) {
+  if (newType === 'form-data') {
+    if (!Array.isArray(previewData.value.body_fields)) {
+      previewData.value.body_fields = []
+    }
+    previewData.value.body = '{}'
+  } else if (newType === 'json' && !previewData.value.body) {
     previewData.value.body = '{}'
   }
 })
+
+const emptyFormField = () => ({
+  name: '',
+  value: '',
+  field_type: 'text',
+  file_name: '',
+  mime_type: 'application/octet-stream',
+  file_key: '',
+  file_bucket: '',
+  description: '',
+})
+
+const addPreviewFormField = () => {
+  if (!previewData.value) return
+  if (!Array.isArray(previewData.value.body_fields)) {
+    previewData.value.body_fields = []
+  }
+  previewData.value.body_fields.push(emptyFormField())
+}
+
+const removePreviewFormField = (index) => {
+  previewData.value?.body_fields?.splice(index, 1)
+}
+
+const onPreviewFormFieldFileUpdate = (index, patch) => {
+  if (!previewData.value?.body_fields?.[index]) return
+  Object.assign(previewData.value.body_fields[index], patch)
+}
 
 const getMethodType = (method) => {
   const map = {
@@ -674,13 +751,19 @@ const parseCurlCommand = async () => {
     })
     
     if (res.status === 200 && res.data.success) {
-      previewData.value = { ...res.data.api }
+      previewData.value = { ...res.data.api, body_fields: res.data.api?.body_fields || [] }
       // 将 none 映射为 raw（新选项中没有 none）
       if (previewData.value.body_type === 'none') {
         previewData.value.body_type = 'raw'
       }
       // 设置 body 文本 - 将对象转为字符串便于编辑
-      if (previewData.value.body) {
+      if (previewData.value.body_type === 'form-data') {
+        if (!previewData.value.body_fields?.length && previewData.value.body && typeof previewData.value.body === 'object') {
+          // 兼容旧解析：误把 multipart 塞进 body 对象
+          previewData.value.body_fields = []
+        }
+        previewData.value.body = '{}'
+      } else if (previewData.value.body) {
         if (typeof previewData.value.body === 'object') {
           previewData.value.body = JSON.stringify(previewData.value.body, null, 2)
         }
@@ -791,7 +874,8 @@ const confirmTest = async () => {
         testData.body = {}
       }
     } else if (testData.body_type === 'form-data') {
-      testData.body = null
+      testData.body = {}
+      testData.body_fields = (previewData.value.body_fields || []).map(f => ({ ...f }))
     } else {
       // x-www-form-urlencoded / xml / raw
       testData.body = text || null
@@ -841,6 +925,13 @@ const handleSave = async () => {
       }
     } else if (data.body_type === 'form-data') {
       data.body = {}
+      data.body_fields = (previewData.value.body_fields || []).map(f => ({ ...f }))
+      const invalidField = data.body_fields.find(f => f.field_type === 'file' && !f.file_key)
+      if (invalidField) {
+        ElMessage.error(`字段 ${invalidField.name || '未命名'} 需要先上传文件`)
+        importing.value = false
+        return
+      }
     } else {
       // x-www-form-urlencoded / xml / raw
       data.body = bodyText || {}

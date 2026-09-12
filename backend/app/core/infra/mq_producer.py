@@ -41,11 +41,12 @@ class MQProducer:
                 # 等待5秒后重试连接
                 time.sleep(5)
 
-    def send_test_task(self, env_config, run_case, device_id):
+    def send_test_task(self, env_config, run_case, device_id, *, expiration_ms: int | None = None):
         """
         :param env_config: 运行用例的环境数据
         :param run_case: 运行用例的套件数据
         :param device_id: 指定执行的设备
+        :param expiration_ms: 可选，消息过期毫秒（RabbitMQ expiration）；超时未消费则丢弃，避免僵尸任务
         :return:
         """
         data = {
@@ -60,9 +61,17 @@ class MQProducer:
         self.channel = self.connection.channel()
         # 声明队列device_id
         self.channel.queue_declare(queue=device_id, durable=True)
+        props = {"delivery_mode": 2}
+        if expiration_ms is not None and int(expiration_ms) > 0:
+            # pika 要求字符串毫秒
+            props["expiration"] = str(int(expiration_ms))
         # 提交消息到队列device_id中
-        self.channel.basic_publish(exchange='', routing_key=device_id, body=msg,
-                                   properties=pika.BasicProperties(delivery_mode=2))
+        self.channel.basic_publish(
+            exchange='',
+            routing_key=device_id,
+            body=msg,
+            properties=pika.BasicProperties(**props),
+        )
 
     def send_stop_task(
         self,

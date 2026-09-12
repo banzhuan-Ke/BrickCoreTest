@@ -562,7 +562,7 @@ _BUILDERS: dict[str, Callable[[], bytes]] = {
 def build_generic_quality_review_pptx_template() -> bytes:
     """通用质量回顾内置模板（程序化生成）。"""
     try:
-        from app.modules.knowledge.packs.digitech.quality_pptx_builder import build_quality_review_pptx
+        from app.modules.knowledge.packs._industry.quality_pptx_builder import build_quality_review_pptx
     except ImportError as ex:
         raise RuntimeError("质量回顾 pptx 生成依赖行业扩展包，当前环境未安装") from ex
 

@@ -4,26 +4,50 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from app.modules.perf.compare_report import REPORT_KIND_COMPARE, REPORT_KIND_HYBRID, REPORT_KIND_MERGE
+from app.modules.perf.compare_report import (
+    REPORT_KIND_COMPARE,
+    REPORT_KIND_HYBRID,
+    REPORT_KIND_MERGE,
+    overview_phase_highlights,
+    think_time_phrase,
+)
 from app.modules.perf.perf_html_theme import (
+    PLATFORM_TOOL_NAME,
     case_note_map,
     chart_notes_by_label,
     colorize_pct_in_text,
+    env_label_from_config,
     err_tag,
+    exec_summary_heading,
     h,
     metric_lower_is_better,
     metric_note,
     pct_span,
     pct_tone,
     render_conclusion_box,
+    render_exec_summary_section,
     render_metric_glossary,
     render_overview_para,
     render_percentile_table,
+    render_throughput_error_table,
+    should_render_case_detail_for_style,
+    render_report_hero,
     render_rt_bars,
     report_css,
     report_edit_chrome,
+    REPORT_STYLE_STANDARD,
+    report_style_flags,
+    report_style_label,
+    report_toc_script,
+    rt_visualization_heading_html,
+    wrap_report_layout,
 )
-from app.routers.perf.report_utils import render_perf_html_chart_parts, render_compare_overlay_charts
+from app.routers.perf.report_utils import (
+    delay_row_label,
+    render_compare_overlay_charts,
+    render_ladder_charts,
+    render_perf_html_chart_parts,
+)
 
 
 def _ai_conclusion(ai: dict, *, fallback_html: str = "", kind: str | None = None) -> str:
@@ -36,6 +60,216 @@ def _rec_label(r: dict) -> str:
 
 def _ch_label(c: dict) -> str:
     return str(c.get("display_name") or c.get("scene_name") or f"#{c.get('record_id')}")
+
+
+def _cn_num(n: int) -> str:
+    mapping = {
+        1: "一", 2: "二", 3: "三", 4: "四", 5: "五",
+        6: "六", 7: "七", 8: "八", 9: "九", 10: "十",
+        11: "十一", 12: "十二", 13: "十三", 14: "十四", 15: "十五",
+        16: "十六", 17: "十七", 18: "十八", 19: "十九", 20: "二十",
+    }
+    return mapping.get(n, str(n))
+
+
+def _chapter_toc_label(c: dict, scene_prefix: str) -> str:
+    """分章目录子项：如 3.1 场景名。"""
+    label = _ch_label(c)
+    if len(label) > 28:
+        label = label[:26] + "…"
+    return f"{scene_prefix} {label}"
+
+
+def _merge_toc_items(
+    chapters: list,
+    *,
+    include_conclusion: bool = True,
+    include_appendix: bool = True,
+    chapters_parent_idx: int = 3,
+    chapters_parent_title: str = "各轮压测详情",
+    ladder_heading: str | None = None,
+) -> list:
+    """汇总目录：各轮收在同一顶级下，子项默认收起。"""
+    items: list = []
+    if include_conclusion:
+        items.append(("sec-conclusion", "一、核心结论与建议"))
+    items.append(("sec-overview", "二、测试概览"))
+    if ladder_heading:
+        items.append(("sec-ladder", ladder_heading))
+    children = []
+    for i, c in enumerate(chapters):
+        rid = c.get("record_id")
+        if rid is None:
+            continue
+        prefix = f"{chapters_parent_idx}.{i + 1}"
+        children.append((f"sec-ch-{rid}", _chapter_toc_label(c, prefix)))
+    if children:
+        items.append((
+            "sec-chapters",
+            f"{_cn_num(chapters_parent_idx)}、{chapters_parent_title}",
+            children,
+        ))
+    if include_appendix:
+        items.append(("sec-appendix", "附录：指标说明"))
+    return items
+
+
+def _fmt_ladder_num(v: Any, *, digits: int = 2) -> str:
+    if v is None or v == "":
+        return "—"
+    try:
+        f = float(v)
+        if abs(f - int(f)) < 1e-9:
+            return str(int(f))
+        return f"{f:.{digits}f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return h(v)
+
+
+def _render_ladder_summary_section(
+    snap: dict,
+    *,
+    heading: str,
+    include_charts: bool = True,
+    include_echarts: bool = True,
+) -> tuple[str, str]:
+    """阶梯并发专章：汇总表 + 区间观察 + 横轴=并发趋势图。返回 (html, scripts)。"""
+    block = snap.get("ladder_summary")
+    if not isinstance(block, dict) or not block.get("eligible"):
+        return "", ""
+    levels = [lv for lv in (block.get("levels") or []) if isinstance(lv, dict)]
+    if len(levels) < 2:
+        return "", ""
+
+    has_first = bool(block.get("has_phase_first"))
+    has_total = bool(block.get("has_phase_total"))
+    first_label = block.get("phase_first_label") or "首字均值(s)"
+    total_label = block.get("phase_total_label") or "流式总耗时均值(s)"
+    note = block.get("note") or ""
+
+    head_cols = ["并发", "成功数", "失败率(%)", "Avg(ms)", "P95(ms)"]
+    if has_first:
+        head_cols.append(str(first_label))
+    if has_total:
+        head_cols.append(str(total_label))
+    head_cols.extend(["QPS", "总请求"])
+    thead = "".join(f"<th>{h(c)}</th>" for c in head_cols)
+
+    rows = []
+    for lv in levels:
+        er = float(lv.get("error_rate") or 0)
+        er_cls = "tag-red" if er >= 20 else ("tag-green" if er < 5 else "")
+        er_html = (
+            f'<span class="tag {er_cls}">{_fmt_ladder_num(er)}</span>'
+            if er_cls
+            else _fmt_ladder_num(er)
+        )
+        cells = [
+            f'<td class="num">{_fmt_ladder_num(lv.get("concurrent_users"), digits=0)}</td>',
+            f'<td class="num">{_fmt_ladder_num(lv.get("success_count"), digits=0)}</td>',
+            f'<td class="num">{er_html}</td>',
+            f'<td class="num">{_fmt_ladder_num(lv.get("avg_response_time"))}</td>',
+            f'<td class="num">{_fmt_ladder_num(lv.get("p95_response_time"))}</td>',
+        ]
+        if has_first:
+            cells.append(f'<td class="num">{_fmt_ladder_num(lv.get("phase_first_mean"))}</td>')
+        if has_total:
+            cells.append(f'<td class="num">{_fmt_ladder_num(lv.get("phase_total_mean"))}</td>')
+        cells.extend([
+            f'<td class="num">{_fmt_ladder_num(lv.get("qps"))}</td>',
+            f'<td class="num">{_fmt_ladder_num(lv.get("total_requests"), digits=0)}</td>',
+        ])
+        rows.append(f"<tr>{''.join(cells)}</tr>")
+
+    zone_cards = []
+    for z in block.get("zones") or []:
+        if not isinstance(z, dict):
+            continue
+        kind = str(z.get("kind") or "flat")
+        zone_cards.append(
+            f'<div class="stage-summary-card {h(kind)}">'
+            f'<div class="stage-sum-title">{h(z.get("title") or "")}</div>'
+            f'<div class="stage-sum-line">{h(z.get("summary") or "")}</div>'
+            f"</div>"
+        )
+    zones_html = ""
+    if zone_cards:
+        zones_html = (
+            '<div class="stage-summary-block" style="margin-top:14px">'
+            '<div class="stage-summary-label">区间观察（按失败率变化）</div>'
+            f'<div class="stage-summary-list">{"".join(zone_cards)}</div>'
+            "</div>"
+        )
+
+    charts_html, charts_scripts = "", ""
+    if include_charts:
+        charts_html, charts_scripts = render_ladder_charts(
+            block,
+            heading="趋势图（横轴=并发）",
+            include_echarts=include_echarts,
+        )
+
+    note_html = f'<p class="compare-intro">{h(note)}</p>' if note else ""
+    html = (
+        f'<div class="section" id="sec-ladder">'
+        f"<h2>{h(heading)}</h2>"
+        f"{note_html}"
+        f'<div style="overflow-x:auto"><table>'
+        f"<thead><tr>{thead}</tr></thead>"
+        f'<tbody>{"".join(rows)}</tbody>'
+        f"</table></div>"
+        f"{zones_html}"
+        f"{charts_html}"
+        f"</div>"
+    )
+    return html, charts_scripts
+
+
+def _toc_item_id(item) -> str:
+    if isinstance(item, dict):
+        return str(item.get("id") or "")
+    if isinstance(item, (list, tuple)) and item:
+        return str(item[0] or "")
+    return ""
+
+
+def _style_from_snap(snap: dict) -> str:
+    return str(snap.get("report_style") or REPORT_STYLE_STANDARD)
+
+
+def _style_flags_from_snap(snap: dict) -> dict:
+    return report_style_flags(_style_from_snap(snap))
+
+
+def _assemble_export_html(
+    *,
+    title: str,
+    hero_html: str,
+    body_html: str,
+    chart_scripts: str,
+    toc_items: list,
+    footer_html: str,
+    include_toc: bool = True,
+) -> str:
+    toc_list = toc_items if include_toc else []
+    layout_inner = wrap_report_layout(hero_html=hero_html, body_html=body_html + footer_html, toc_items=toc_list)
+    toc_script = report_toc_script() if include_toc and toc_list else ""
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>{h(title)}</title>
+{report_css()}
+</head>
+<body>
+{report_edit_chrome()}
+<div class="report-layout">
+{layout_inner}
+</div>
+{chart_scripts}
+{toc_script}
+</body>
+</html>"""
 
 
 def _short_time(ts: Any) -> str:
@@ -191,6 +425,72 @@ def _round_heading(r: dict, *, ref_id: Any, baseline: bool) -> str:
     return " · ".join(bits) + f" · {name}"
 
 
+def _render_overview_panels_html(
+    records: list,
+    *,
+    ref_id: Any = None,
+    baseline: bool = False,
+) -> str:
+    """左右分卡概览（配置 + 核心结果），汇总/对比共用。"""
+    if not records:
+        return ""
+    ref_rec = next((x for x in records if baseline and x.get("id") == ref_id), None)
+    bits: list[str] = []
+    for r in records:
+        role = _round_role(r, ref_id=ref_id, baseline=baseline)
+        tag_cls = "round-ref" if (baseline and r.get("id") == ref_id) else ("round-cmp" if baseline else "tag-blue")
+        cfg = r.get("config_snapshot") or {}
+        dur_cfg_html = _duration_config_cell_html(cfg)
+        dur_row = (
+            f"<tr><td>时长配置</td><td>{dur_cfg_html}</td></tr>"
+            if dur_cfg_html is not None
+            else ""
+        )
+        delay_row = _delay_row_html(r)
+        is_ref = baseline and ref_rec is not None and r.get("id") == ref_id
+        if baseline and ref_rec is not None and not is_ref:
+            dur_cls = _metric_tone_cls(r.get("duration"), ref_rec.get("duration"), lower_is_better=True)
+            avg_cls = _metric_tone_cls(r.get("avg_response_time"), ref_rec.get("avg_response_time"), lower_is_better=True)
+            p95_cls = _metric_tone_cls(r.get("p95_response_time"), ref_rec.get("p95_response_time"), lower_is_better=True)
+        else:
+            dur_cls = avg_cls = p95_cls = ""
+        panel_cls = "is-ref" if (baseline and r.get("id") == ref_id) else ("is-cmp" if baseline else "")
+        phase_rows_html = ""
+        for ph in overview_phase_highlights(r.get("phase_metrics")):
+            mean_v = ph.get("mean")
+            mean_txt = (
+                f"{round(float(mean_v), 3)} s"
+                if mean_v is not None
+                else "—"
+            )
+            phase_rows_html += (
+                f"<tr><td>{h(ph.get('label') or ph.get('key'))}</td>"
+                f"<td>{h(mean_txt)}</td></tr>"
+            )
+        bits.append(f"""
+        <div class="overview-panel {panel_cls}">
+          <p style="margin-bottom:8px"><span class="tag {tag_cls}">{h(role)}</span>
+            <strong style="margin-left:8px">{h(_rec_label(r))}</strong>
+            <span style="color:#666;font-size:12px;margin-left:6px">#{h(r.get('id'))}
+            · {_short_time(r.get('started_at')) or '-'}</span>
+          </p>
+          <table class="config-table">
+            <tr><td>并发用户</td><td>{_concurrent_config_cell_html(cfg)}</td></tr>
+            <tr><td>模式</td><td>{h(_mode_label(cfg.get('mode')))}</td></tr>
+            <tr><td>Ramp-up <span title="从 0 到目标并发的爬升时间；0 表示立即达到目标并发" style="cursor:help;color:#94a3b8">(?)</span></td><td>{h(cfg.get('ramp_up_seconds') or 0)}s</td></tr>
+            {dur_row}
+            {delay_row}
+            <tr><td>预热 <span title="统计 Avg/P95 时剔除开始一段时间的样本，降低冷启动噪声" style="cursor:help;color:#94a3b8">(?)</span></td><td>{h(cfg.get('warmup_seconds') or 0)}s</td></tr>
+            <tr><td>实际时长</td><td><span class="{dur_cls}">{h(r.get('duration'))}s</span></td></tr>
+            <tr><td>开始 / 结束</td><td>{h(r.get('started_at'))} ~ {h(r.get('ended_at') or '-')}</td></tr>
+            <tr><td>请求 / 成功 / 失败</td><td>{h(r.get('total_requests'))} / {h(r.get('success_count'))} / {h(r.get('fail_count'))}</td></tr>
+            <tr><td>Avg / P95</td><td><span class="{avg_cls}">{h(r.get('avg_response_time'))} ms</span> / <span class="{p95_cls}">{h(r.get('p95_response_time'))} ms</span></td></tr>
+            {phase_rows_html}
+          </table>
+        </div>""")
+    return f'<div class="overview-panels">{"".join(bits)}</div>'
+
+
 def _kind_title(kind: str) -> str:
     return {
         REPORT_KIND_MERGE: "汇总报告",
@@ -284,6 +584,7 @@ def _render_record_charts(
     ai: dict,
     label: str,
     include_echarts: bool,
+    wrapper_class: str = "section",
 ) -> tuple[str, str]:
     note = _chart_note_for(ai, label)
     return render_perf_html_chart_parts(
@@ -294,6 +595,7 @@ def _render_record_charts(
         include_echarts=include_echarts,
         ai_trend_note=note.get("trend") or "",
         ai_dist_note=note.get("distribution") or "",
+        wrapper_class=wrapper_class,
     )
 
 
@@ -322,13 +624,40 @@ def _render_chapters_html(
     *,
     start_idx: int = 1,
     include_echarts: bool = True,
+    report_style: Optional[str] = None,
+    nest_under_parent: bool = True,
+    parent_title: str = "各轮压测详情",
 ) -> tuple[str, str]:
+    """渲染各轮分章。
+
+    nest_under_parent=True（默认）：收进同一顶级章节（如「三、各轮压测详情」），
+    场景为 3.1 / 3.2…，避免场景多时目录膨胀。
+    """
     notes_by_case = case_note_map(ai)
+    flags = report_style_flags(report_style)
     parts: list[str] = []
     scripts: list[str] = []
-    echarts_once = include_echarts
+    echarts_once = include_echarts and bool(flags.get("include_charts", True))
+    parent_idx = start_idx if nest_under_parent else None
+
     for i, c in enumerate(chapters):
-        idx = start_idx + i
+        if nest_under_parent:
+            scene_ord = i + 1
+            prefix = f"{parent_idx}.{scene_ord}"
+            title_tag = "h3"
+            title_cls = ' class="chapter-scene-title"'
+            title_text = f"{prefix} {h(_ch_label(c))}"
+            wrap_open = f'<div class="chapter-scene" id="sec-ch-{h(c.get("record_id"))}">'
+            wrap_close = "</div>"
+        else:
+            idx = start_idx + i
+            prefix = str(idx)
+            title_tag = "h2"
+            title_cls = ""
+            title_text = f"{_cn_num(idx)}、{h(_ch_label(c))}"
+            wrap_open = f'<div class="section" id="sec-ch-{h(c.get("record_id"))}">'
+            wrap_close = "</div>"
+
         cases = c.get("top_cases") or []
         case_rows = []
         for x in cases:
@@ -346,19 +675,21 @@ def _render_chapters_html(
         case_body = "".join(case_rows) or '<tr><td colspan="7" style="color:#999">无用例数据</td></tr>'
         err = c.get("error_summary") or {}
         err_note = ""
-        if err.get("failed_sample_count"):
+        if flags.get("include_error_detail") and err.get("failed_sample_count"):
             err_note = (
                 f"<p style='font-size:13px;color:#666;margin-top:8px'>"
                 f"失败采样 {h(err.get('failed_sample_count'))} 条</p>"
             )
-        bars = render_rt_bars(
-            min_rt=c.get("min_response_time"),
-            median_rt=c.get("median_response_time"),
-            avg_rt=c.get("avg_response_time"),
-            p90_rt=c.get("p90_response_time"),
-            p95_rt=c.get("p95_response_time"),
-            max_rt=c.get("max_response_time"),
-        )
+        bars = ""
+        if flags.get("include_rt_bars"):
+            bars = render_rt_bars(
+                min_rt=c.get("min_response_time"),
+                median_rt=c.get("median_response_time"),
+                avg_rt=c.get("avg_response_time"),
+                p90_rt=c.get("p90_response_time"),
+                p95_rt=c.get("p95_response_time"),
+                max_rt=c.get("max_response_time"),
+            )
         pct_table = render_percentile_table(
             min_rt=c.get("min_response_time"),
             median_rt=c.get("median_response_time"),
@@ -367,49 +698,78 @@ def _render_chapters_html(
             p95_rt=c.get("p95_response_time"),
             p99_rt=c.get("p99_response_time"),
             max_rt=c.get("max_response_time"),
+            include_lead=bool(flags.get("include_percentile_lead", True)),
+        )
+        throughput_table = render_throughput_error_table(
+            qps=c.get("qps"),
+            success_qps=c.get("success_qps"),
+            avg_rt=c.get("avg_response_time"),
+            p95_rt=c.get("p95_response_time"),
+            error_rate=c.get("error_rate"),
+            total_requests=c.get("total_requests"),
         )
         label = _ch_label(c)
         rid = c.get("record_id")
         rec = records_by_id.get(rid) or records_by_id.get(str(rid)) or {}
         load_line = _chapter_load_line(c.get("config") or (rec.get("config_snapshot") if isinstance(rec, dict) else {}) or {})
         load_html = f" · {h(load_line)}" if load_line else ""
+        delay_lab = c.get("request_delay_label") or (rec.get("request_delay_label") if isinstance(rec, dict) else None)
+        delay_html = f" · {h(delay_row_label(delay_lab))} {h(delay_lab)}" if delay_lab and delay_lab != "无" else ""
+        cfg_mode = str((c.get("config") or {}).get("mode") or "")
+        think_phrase = think_time_phrase(delay_lab)
+        think_html = ""
+        if think_phrase and cfg_mode not in ("loop", "journey_loop"):
+            think_html = f" · 用例配置 <strong>{h(think_phrase)}</strong>以模拟真实用户思考节奏"
+
+        phase_items = c.get("phase_metrics") or []
+        if not phase_items and isinstance(rec, dict):
+            pm = rec.get("phase_metrics") or {}
+            if isinstance(pm, dict):
+                phase_items = pm.get("metrics") or []
+            elif isinstance(pm, list):
+                phase_items = pm
+        phase_html = ""
+        if flags.get("include_phase_metrics") and phase_items:
+            cards = []
+            for pm in phase_items[:12]:
+                if not isinstance(pm, dict):
+                    continue
+                mean_v = pm.get("mean")
+                p95_v = pm.get("p95")
+                cards.append(
+                    f'<div class="summary-card phase-metric-card">'
+                    f'<div class="label">{h(pm.get("label") or pm.get("key"))}</div>'
+                    f'<div class="value" style="font-size:16px">'
+                    f'{h(round(float(mean_v), 3) if mean_v is not None else "-")}'
+                    f'<span class="unit">s</span></div>'
+                    f'<div class="note">P95 '
+                    f'{h(round(float(p95_v), 3) if p95_v is not None else "-")}s</div></div>'
+                )
+            if cards:
+                phase_html = f"""
+    <h3>{prefix}.4b 流式阶段耗时</h3>
+    <div class="summary-grid">{''.join(cards)}</div>"""
+
         chart_sec, chart_scr = "", ""
-        if rec:
+        if rec and flags.get("include_charts"):
             chart_sec, chart_scr = _render_record_charts(
                 rec,
                 prefix=f"ch{rid}",
-                trend_heading=f"{idx}.5 性能趋势",
-                hist_heading=f"{idx}.6 响应时间分布",
+                trend_heading=f"{prefix}.5 性能趋势",
+                hist_heading=f"{prefix}.6 响应时间分布",
                 ai=ai,
                 label=label,
                 include_echarts=echarts_once,
+                wrapper_class="chapter-block",
             )
             if chart_sec:
                 echarts_once = False
                 scripts.append(chart_scr)
 
-        parts.append(f"""
-  <div class="section">
-    <h2>{idx}. {h(label)}</h2>
-    <p style="font-size:13px;color:#666;margin-bottom:12px">
-      场景 {h(c.get('scene_name'))} · 执行 #{h(c.get('record_id'))}
-      {load_html} ·
-      开始 {h(c.get('started_at'))} · 时长 {h(c.get('duration'))}s
-    </p>
-    <h3>{idx}.1 核心指标</h3>
-    <div class="summary-grid">
-      <div class="summary-card"><div class="label">QPS</div><div class="value">{_fmt_qps(c.get('qps'))}</div></div>
-      <div class="summary-card"><div class="label">平均 RT</div><div class="value">{_fmt_ms(c.get('avg_response_time'))}</div></div>
-      <div class="summary-card"><div class="label">P95</div><div class="value">{_fmt_ms(c.get('p95_response_time'))}</div></div>
-      <div class="summary-card"><div class="label">错误率</div><div class="value">{h(c.get('error_rate'))}<span class="unit">%</span></div></div>
-      <div class="summary-card"><div class="label">总请求</div><div class="value">{h(c.get('total_requests'))}<span class="unit">次</span></div></div>
-    </div>
-    <h3>{idx}.2 响应时间分位</h3>
-    {pct_table}
-    <h3>{idx}.3 响应时间可视化</h3>
-    {bars or '<p style="color:#999;font-size:13px">暂无分位数据</p>'}
-    {err_note}
-    <h3>{idx}.4 接口明细</h3>
+        case_detail_html = ""
+        if should_render_case_detail_for_style(cases, notes_by_case, report_style):
+            case_detail_html = f"""
+    <h3>{prefix}.4 接口明细</h3>
     <table>
       <thead><tr>
         <th>接口</th><th>请求数</th><th>失败</th><th>失败率</th>
@@ -418,10 +778,51 @@ def _render_chapters_html(
         <th>Max <span class="unit">(ms)</span></th>
       </tr></thead>
       <tbody>{case_body}</tbody>
-    </table>
-  </div>
-  {chart_sec}""")
-    return "".join(parts), "".join(scripts)
+    </table>"""
+
+        rt_section_html = ""
+        if flags.get("include_rt_bars"):
+            rt_section_html = f"""
+    <h3>{prefix}.3 {rt_visualization_heading_html()}</h3>
+    {bars or '<p style="color:#999;font-size:13px">暂无分位数据</p>'}"""
+
+        parts.append(f"""
+  {wrap_open}
+    <{title_tag}{title_cls}>{title_text}</{title_tag}>
+    <p style="font-size:13px;color:#666;margin-bottom:12px">
+      场景 {h(c.get('scene_name'))} · 执行 #{h(c.get('record_id'))}
+      {load_html}{delay_html}{think_html} ·
+      开始 {h(c.get('started_at'))} · 从开始到结束实际 {h(c.get('duration'))}s
+    </p>
+    <h3>{prefix}.1 核心指标</h3>
+    <div class="summary-grid">
+      <div class="summary-card"><div class="label">QPS</div><div class="value">{_fmt_qps(c.get('qps'))}</div></div>
+      <div class="summary-card"><div class="label">平均 RT</div><div class="value">{_fmt_ms(c.get('avg_response_time'))}</div></div>
+      <div class="summary-card"><div class="label">P95</div><div class="value">{_fmt_ms(c.get('p95_response_time'))}</div></div>
+      <div class="summary-card"><div class="label">错误率</div><div class="value">{h(c.get('error_rate'))}<span class="unit">%</span></div></div>
+      <div class="summary-card"><div class="label">总请求</div><div class="value">{h(c.get('total_requests'))}<span class="unit">次</span></div></div>
+    </div>
+    <h3>{prefix}.2 响应时间分位</h3>
+    {pct_table}
+    {throughput_table}
+    {rt_section_html}
+    {err_note}
+    {case_detail_html}
+    {phase_html}
+    {chart_sec}
+  {wrap_close}""")
+
+    if not parts:
+        return "", ""
+
+    body = "".join(parts)
+    if nest_under_parent:
+        body = f"""
+  <div class="section" id="sec-chapters">
+    <h2>{_cn_num(start_idx)}、{h(parent_title)}</h2>
+    {body}
+  </div>"""
+    return body, "".join(scripts)
 
 
 def _render_records_charts_section(
@@ -431,7 +832,7 @@ def _render_records_charts_section(
     heading: str,
     include_echarts: bool = True,
 ) -> tuple[str, str]:
-    """纯对比模式：各轮趋势与分布。"""
+    """纯对比模式：各轮趋势与分布（嵌在同一章节内，避免碎白卡）。"""
     parts: list[str] = []
     scripts: list[str] = []
     echarts_once = include_echarts
@@ -448,6 +849,7 @@ def _render_records_charts_section(
             ai=ai,
             label=label,
             include_echarts=echarts_once,
+            wrapper_class="chapter-block",
         )
         if not sec:
             continue
@@ -456,7 +858,35 @@ def _render_records_charts_section(
         parts.append(sec)
     if not parts:
         return "", ""
-    return f'<div class="section"><h2>{h(heading)}</h2></div>' + "".join(parts), "".join(scripts)
+    return (
+        f'<div class="section"><h2>{h(heading)}</h2>{"".join(parts)}</div>',
+        "".join(scripts),
+    )
+
+
+def _env_label_from_records(records: list) -> str:
+    labels = []
+    for r in records or []:
+        if not isinstance(r, dict):
+            continue
+        lab = str(r.get("env_label") or "").strip()
+        if not lab or lab == "—":
+            lab = env_label_from_config(r.get("config_snapshot") or {})
+        if lab and lab != "—":
+            labels.append(lab)
+    uniq = list(dict.fromkeys(labels))
+    if not uniq:
+        return "—"
+    if len(uniq) == 1:
+        return uniq[0]
+    return "；".join(uniq[:3]) + ("…" if len(uniq) > 3 else "")
+
+
+def _delay_row_html(r: dict) -> str:
+    lab = str(r.get("request_delay_label") or "").strip()
+    if not lab or lab == "无":
+        return ""
+    return f"<tr><td>{h(delay_row_label(lab))}</td><td>{h(lab)}</td></tr>"
 
 
 def _fmt_stage_metric_val(key: str, val: Any) -> str:
@@ -1116,6 +1546,8 @@ def _scrub_ai_for_snap(ai: Any, snap: dict) -> dict:
 
 def _render_merge_html(report: Any) -> str:
     snap = report.snapshot or {}
+    style = _style_from_snap(snap)
+    flags = _style_flags_from_snap(snap)
     records = snap.get("records") or []
     chapters = snap.get("chapters") or []
     overview = snap.get("overview_table") or []
@@ -1123,77 +1555,152 @@ def _render_merge_html(report: Any) -> str:
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     note = snap.get("note") or "各场景分章展示；顶层指标并排，不计算变化率。"
 
-    overview_header = "".join(
-        f"<th>{h(_rec_label(r))}<br/><span style='font-weight:400;font-size:12px'>#{h(r.get('id'))}</span></th>"
-        for r in records
-    )
-    overview_rows = []
-    for m in overview:
-        key = m.get("key") or ""
-        note_key = {
-            "qps": "qps", "avg_response_time": "avg_rt", "p95_response_time": "p95",
-            "error_rate": "error_rate", "total_requests": "total_requests", "success_qps": "success_qps",
-        }.get(key, "")
-        mnote = metric_note(ai, note_key) if note_key else ""
-        if not mnote and str(key).startswith("phase_"):
-            mnote = metric_note(ai, key)
-        cells = "".join(f"<td class='num'>{h((m.get('values') or {}).get(str(r.get('id')), '-'))}</td>" for r in records)
-        overview_rows.append(
-            f"<tr><td>{h(m.get('label'))}</td>{cells}"
-            f"<td class='metric-note-cell'>{h(mnote) if mnote else '—'}</td></tr>"
-        )
+    overview_panels = _render_overview_panels_html(records, baseline=False)
 
-    conclusion = _ai_conclusion(
+    # 精简：只保留左右分卡；标准/详细：分卡后再给指标并排（含解读列）
+    metrics_table_html = ""
+    if style != "brief" and (overview or records):
+        overview_header = "".join(
+            f"<th>{h(_rec_label(r))}<br/><span style='font-weight:400;font-size:12px'>#{h(r.get('id'))}</span></th>"
+            for r in records
+        )
+        overview_rows = []
+        for m in overview:
+            key = m.get("key") or ""
+            note_key = {
+                "qps": "qps", "avg_response_time": "avg_rt", "p95_response_time": "p95",
+                "error_rate": "error_rate", "total_requests": "total_requests", "success_qps": "success_qps",
+            }.get(key, "")
+            mnote = metric_note(ai, note_key) if note_key else ""
+            if not mnote and str(key).startswith("phase_"):
+                mnote = metric_note(ai, key)
+            cells = "".join(
+                f"<td class='num'>{h((m.get('values') or {}).get(str(r.get('id')), '-'))}</td>"
+                for r in records
+            )
+            overview_rows.append(
+                f"<tr><td>{h(m.get('label'))}</td>{cells}"
+                f"<td class='metric-note-cell'>{h(mnote) if mnote else '—'}</td></tr>"
+            )
+        metrics_table_html = f"""
+    <h3 style="margin-top:18px">指标并排</h3>
+    <p class="compare-intro">{h(note)}</p>
+    <table>
+      <thead><tr><th>指标</th>{overview_header}<th>解读</th></tr></thead>
+      <tbody>{''.join(overview_rows) or '<tr><td colspan="99">无数据</td></tr>'}</tbody>
+    </table>"""
+
+    conclusion = render_exec_summary_section(
         ai,
         kind=REPORT_KIND_MERGE,
         fallback_html=(
             f"<p>共汇总 {len(chapters)} 个章节，请按章节查看各轮表现。</p>"
         ) if records else "",
+        heading=exec_summary_heading(ai),
     )
     by_id = _records_by_id(snap)
-    chapters_html, chart_scripts = _render_chapters_html(chapters, ai, by_id, start_idx=2)
+    ladder_html, ladder_scripts = "", ""
+    chapter_start = 3
+    ladder_heading = None
+    if flags.get("include_ladder"):
+        ladder_html, ladder_scripts = _render_ladder_summary_section(
+            snap,
+            heading="三、阶梯并发对照",
+            include_charts=True,
+            include_echarts=True,
+        )
+        if ladder_html:
+            ladder_heading = "三、阶梯并发对照"
+            chapter_start = 4
 
-    return f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<title>{h(report.title)}</title>
-{report_css()}
-</head>
-<body>
-{report_edit_chrome()}
-<div class="container" id="reportRoot" contenteditable="true">
-  <div class="header">
-    <h1>{h(report.title)}</h1>
-    <div class="meta">
-      <span>汇总报告</span>
-      <span>导出时间：{h(generated)}</span>
-    </div>
-  </div>
-  <div class="section">
-    <h2>一、测试概览</h2>
+    chapters_html, chart_scripts = _render_chapters_html(
+        chapters,
+        ai,
+        by_id,
+        start_idx=chapter_start,
+        report_style=style,
+        nest_under_parent=True,
+        include_echarts=not bool(ladder_scripts),
+    )
+    if ladder_scripts:
+        chart_scripts = (ladder_scripts or "") + (chart_scripts or "")
+
+    overlay_html, overlay_scripts = "", ""
+    # 一结论、二概览、（三阶梯）、各轮、统计图对比…
+    sec_n = chapter_start + (1 if chapters else 0)
+    if flags.get("include_overlay_charts") and len(records) >= 2:
+        overlay_labels = [_rec_label(r) for r in records]
+        overlay_html, overlay_scripts = render_compare_overlay_charts(
+            records,
+            labels=overlay_labels,
+            heading=f"{_cn_num(sec_n)}、统计图对比",
+            include_echarts=not bool(chart_scripts),
+        )
+        if overlay_html:
+            chart_scripts = (chart_scripts or "") + (overlay_scripts or "")
+
+    eval_time = generated[:10] if generated else ""
+    if records and records[0].get("started_at"):
+        eval_time = str(records[0].get("started_at"))[:10]
+    hero_html = render_report_hero(
+        title=str(report.title or "汇总报告"),
+        description=str(snap.get("description") or ""),
+        eval_time=eval_time,
+        env_label=_env_label_from_records(records),
+        tool_name=PLATFORM_TOOL_NAME,
+        executor=str(snap.get("create_by_nickname") or getattr(report, "create_by", None) or "—"),
+        extra_items=[("类型", "汇总报告"), ("版式", report_style_label(style))],
+    )
+
+    glossary_html = render_metric_glossary() if flags.get("include_appendix") else ""
+    brief_note = ""
+    if style == "brief":
+        brief_note = f'<p class="compare-intro">{h(note)}</p>' if note else ""
+    body_main = f"""  {conclusion}
+  <div class="section" id="sec-overview">
+    <h2>二、测试概览</h2>
     {render_overview_para(ai)}
-    <p class="compare-intro">{h(note)}</p>
-    <table>
-      <thead><tr><th>指标</th>{overview_header}<th>解读</th></tr></thead>
-      <tbody>{''.join(overview_rows) or '<tr><td colspan="99">无数据</td></tr>'}</tbody>
-    </table>
+    {brief_note}
+    {overview_panels}
+    {metrics_table_html}
   </div>
+  {ladder_html}
   {chapters_html}
-  <div class="section">
-    <h2>总结论与建议</h2>
-    {conclusion}
-  </div>
-  {render_metric_glossary()}
-  <div class="footer">BrickCore 性能测试汇总报告 — {h(generated)}</div>
-</div>
-{chart_scripts}
-</body>
-</html>"""
+  {overlay_html}
+  {glossary_html}
+  <div class="footer">BrickCore 性能测试汇总报告 — {h(generated)}</div>"""
+
+    toc_items = _merge_toc_items(
+        chapters,
+        include_conclusion=bool(conclusion),
+        include_appendix=bool(flags.get("include_appendix")),
+        chapters_parent_idx=chapter_start,
+        ladder_heading=ladder_heading,
+    )
+    if overlay_html:
+        # 插在附录前；无附录则追加到末尾
+        insert_at = len(toc_items)
+        for i, item in enumerate(toc_items):
+            if _toc_item_id(item) == "sec-appendix":
+                insert_at = i
+                break
+        toc_items.insert(insert_at, ("overlayCompareSection", f"{_cn_num(sec_n)}、统计图对比"))
+
+    return _assemble_export_html(
+        title=str(report.title or "汇总报告"),
+        hero_html=hero_html,
+        body_html=body_main,
+        chart_scripts=chart_scripts,
+        toc_items=toc_items,
+        footer_html="",
+        include_toc=bool(flags.get("include_toc")),
+    )
 
 
 def _render_compare_html(report: Any, *, hybrid: bool = False) -> str:
     snap = report.snapshot or {}
+    style = _style_from_snap(snap)
+    flags = _style_flags_from_snap(snap)
     records = snap.get("records") or []
     ref_id = snap.get("reference_record_id")
     baseline = bool(snap.get("baseline_enabled", True))
@@ -1202,54 +1709,18 @@ def _render_compare_html(report: Any, *, hybrid: bool = False) -> str:
     kind_label = _kind_title(REPORT_KIND_HYBRID if hybrid else REPORT_KIND_COMPARE)
     note = snap.get("note") or ""
 
-    overview_bits = []
-    ref_rec = next((x for x in records if baseline and x.get("id") == ref_id), None)
-    for r in records:
-        role = _round_role(r, ref_id=ref_id, baseline=baseline)
-        tag_cls = "round-ref" if (baseline and r.get("id") == ref_id) else ("round-cmp" if baseline else "tag-blue")
-        cfg = r.get("config_snapshot") or {}
-        dur_cfg_html = _duration_config_cell_html(cfg)
-        dur_row = (
-            f"<tr><td>时长配置</td><td>{dur_cfg_html}</td></tr>"
-            if dur_cfg_html is not None
-            else ""
-        )
-        is_ref = baseline and ref_rec is not None and r.get("id") == ref_id
-        if baseline and ref_rec is not None and not is_ref:
-            dur_cls = _metric_tone_cls(r.get("duration"), ref_rec.get("duration"), lower_is_better=True)
-            avg_cls = _metric_tone_cls(r.get("avg_response_time"), ref_rec.get("avg_response_time"), lower_is_better=True)
-            p95_cls = _metric_tone_cls(r.get("p95_response_time"), ref_rec.get("p95_response_time"), lower_is_better=True)
-        else:
-            dur_cls = avg_cls = p95_cls = ""
-        panel_cls = "is-ref" if (baseline and r.get("id") == ref_id) else ("is-cmp" if baseline else "")
-        overview_bits.append(f"""
-        <div class="overview-panel {panel_cls}">
-          <p style="margin-bottom:8px"><span class="tag {tag_cls}">{h(role)}</span>
-            <strong style="margin-left:8px">{h(_rec_label(r))}</strong>
-            <span style="color:#666;font-size:12px;margin-left:6px">#{h(r.get('id'))}
-            · {_short_time(r.get('started_at')) or '-'}</span>
-          </p>
-          <table class="config-table">
-            <tr><td>并发用户</td><td>{_concurrent_config_cell_html(cfg)}</td></tr>
-            <tr><td>模式</td><td>{h(_mode_label(cfg.get('mode')))}</td></tr>
-            <tr><td>Ramp-up <span title="从 0 到目标并发的爬升时间；0 表示立即达到目标并发" style="cursor:help;color:#94a3b8">(?)</span></td><td>{h(cfg.get('ramp_up_seconds') or 0)}s</td></tr>
-            {dur_row}
-            <tr><td>预热 <span title="统计 Avg/P95 时剔除开始一段时间的样本，降低冷启动噪声" style="cursor:help;color:#94a3b8">(?)</span></td><td>{h(cfg.get('warmup_seconds') or 0)}s</td></tr>
-            <tr><td>实际时长</td><td><span class="{dur_cls}">{h(r.get('duration'))}s</span></td></tr>
-            <tr><td>开始 / 结束</td><td>{h(r.get('started_at'))} ~ {h(r.get('ended_at') or '-')}</td></tr>
-            <tr><td>请求 / 成功 / 失败</td><td>{h(r.get('total_requests'))} / {h(r.get('success_count'))} / {h(r.get('fail_count'))}</td></tr>
-            <tr><td>Avg / P95</td><td><span class="{avg_cls}">{h(r.get('avg_response_time'))} ms</span> / <span class="{p95_cls}">{h(r.get('p95_response_time'))} ms</span></td></tr>
-          </table>
-        </div>""")
+    overview_panels = _render_overview_panels_html(
+        records, ref_id=ref_id, baseline=baseline
+    )
 
     by_id = _records_by_id(snap)
     chapters = list(snap.get("chapters") or [])
     if not chapters:
         chapters = _chapters_from_snap_records(records)
 
-    # 对比主体前置：差异 → 指标表 → 用例表；各轮详细画像后置；叠图对比 → 结论
+    # 结论置顶为「一」；正文从「二、测试概览」起顺延
     has_delta = baseline and len(records) >= 2 and bool(snap.get("metric_compare"))
-    sec_n = 2
+    sec_n = 3  # 一=结论，二=概览，三起为差异/指标…
     delta_html = ""
     if has_delta:
         delta_html = _render_delta_highlight(snap, heading=f"{_cn_num(sec_n)}、差异速览")
@@ -1264,133 +1735,175 @@ def _render_compare_html(report: Any, *, hybrid: bool = False) -> str:
 
     stage_html = ""
     stage_block = snap.get("stepping_stage_compare")
-    if isinstance(stage_block, dict) and (stage_block.get("stages") or []):
+    if flags.get("include_stepping_stage") and isinstance(stage_block, dict) and (stage_block.get("stages") or []):
         sec_stage = f"{_cn_num(sec_n)}、梯度阶段对照"
         stage_html = _render_stepping_stage_compare_section(snap, heading=sec_stage)
         if stage_html:
             sec_n += 1
 
+    ladder_html, ladder_scripts = "", ""
+    if flags.get("include_ladder"):
+        sec_ladder = f"{_cn_num(sec_n)}、阶梯并发对照"
+        ladder_html, ladder_scripts = _render_ladder_summary_section(
+            snap,
+            heading=sec_ladder,
+            include_charts=True,
+            include_echarts=True,
+        )
+        if ladder_html:
+            sec_n += 1
+
     sec_case = f"{_cn_num(sec_n)}、{'用例维度对照' if hybrid else '用例维度对比'}"
-    case_html = _render_case_compare_section(snap, ai, heading=sec_case)
-    if case_html:
-        sec_n += 1
+    case_html = ""
+    if flags.get("include_case_compare"):
+        case_html = _render_case_compare_section(snap, ai, heading=sec_case)
+        if case_html:
+            sec_n += 1
 
     chapters_html = ""
-    chart_scripts = ""
+    chart_scripts = ladder_scripts or ""
     records_charts_html = ""
     n_ch = len(chapters)
     chapter_start = sec_n
     if hybrid and (snap.get("chapters") or []):
-        chapters_html, chart_scripts = _render_chapters_html(
-            snap.get("chapters") or [], ai, by_id, start_idx=chapter_start
+        chapters_html, ch_scripts = _render_chapters_html(
+            snap.get("chapters") or [],
+            ai,
+            by_id,
+            start_idx=chapter_start,
+            report_style=style,
+            nest_under_parent=True,
         )
-        sec_n += n_ch
-    elif not hybrid and chapters:
-        chapters_html, chart_scripts = _render_chapters_html(
-            chapters, ai, by_id, start_idx=chapter_start
-        )
-        sec_n += n_ch
-    else:
-        records_charts_html, chart_scripts = _render_records_charts_section(
-            records, ai, heading=f"{_cn_num(sec_n)}、各轮趋势与分布"
-        )
-        if records_charts_html:
+        if chapters_html:
+            chart_scripts = (chart_scripts or "") + (ch_scripts or "")
             sec_n += 1
+    elif not hybrid and chapters:
+        chapters_html, ch_scripts = _render_chapters_html(
+            chapters,
+            ai,
+            by_id,
+            start_idx=chapter_start,
+            report_style=style,
+            nest_under_parent=True,
+        )
+        if chapters_html:
+            chart_scripts = (chart_scripts or "") + (ch_scripts or "")
+            sec_n += 1
+    else:
+        records_charts_html = ""
+        if flags.get("include_charts"):
+            records_charts_html, ch_scripts = _render_records_charts_section(
+                records, ai, heading=f"{_cn_num(sec_n)}、各轮趋势与分布"
+            )
+            if records_charts_html:
+                chart_scripts = (chart_scripts or "") + (ch_scripts or "")
+                sec_n += 1
 
-    # 多轮叠图对比（同图直观对照）
-    overlay_labels = [
-        _round_heading(r, ref_id=ref_id, baseline=baseline) for r in records
-    ]
-    overlay_html, overlay_scripts = render_compare_overlay_charts(
-        records,
-        labels=overlay_labels,
-        heading=f"{_cn_num(sec_n)}、统计图对比",
-        include_echarts=not bool(chart_scripts),
-    )
-    if overlay_html:
-        chart_scripts = (chart_scripts or "") + (overlay_scripts or "")
-        sec_n += 1
-
-    sec_conclusion = f"{_cn_num(sec_n)}、结论与建议"
+    overlay_html, overlay_scripts = "", ""
+    if flags.get("include_overlay_charts"):
+        overlay_labels = [
+            _round_heading(r, ref_id=ref_id, baseline=baseline) for r in records
+        ]
+        overlay_html, overlay_scripts = render_compare_overlay_charts(
+            records,
+            labels=overlay_labels,
+            heading=f"{_cn_num(sec_n)}、统计图对比",
+            include_echarts=not bool(chart_scripts),
+        )
+        if overlay_html:
+            chart_scripts = (chart_scripts or "") + (overlay_scripts or "")
+            sec_n += 1
 
     metric_html = _render_metric_compare_section(snap, ai, heading=sec_metric)
 
-    conclusion = _ai_conclusion(
-        ai,
-        kind=REPORT_KIND_HYBRID if hybrid else REPORT_KIND_COMPARE,
-    )
-    if not conclusion and len(records) >= 2:
+    fallback = ""
+    if len(records) >= 2:
         best_qps = max(records, key=lambda x: float(x.get("qps") or 0))
         ref_label = next((_round_heading(r, ref_id=ref_id, baseline=baseline) for r in records if r.get("id") == ref_id), f"#{ref_id}")
         if baseline:
             extra = f"参照轮为 {h(ref_label)}。"
         else:
             extra = "本报告未计算相对变化率，请结合各轮画像阅读。"
-        conclusion = f"""<div class="conclusion-box">
-          <p><strong>规则摘要（未跑 AI）</strong></p>
-          <p>QPS 最高：{h(_rec_label(best_qps))}（{h(best_qps.get('qps'))}）。{extra}</p>
-        </div>"""
+        fallback = (
+            f"<p><strong>规则摘要（未跑 AI）</strong></p>"
+            f"<p>QPS 最高：{h(_rec_label(best_qps))}（{h(best_qps.get('qps'))}）。{extra}</p>"
+        )
+    conclusion = render_exec_summary_section(
+        ai,
+        kind=REPORT_KIND_HYBRID if hybrid else REPORT_KIND_COMPARE,
+        fallback_html=fallback,
+        heading=exec_summary_heading(ai),
+    )
 
     ref_rec = next((r for r in records if r.get("id") == ref_id), None)
     if baseline and ref_rec:
-        meta_ref = f"<span>参照轮：#{h(ref_rec.get('id'))} · {_short_time(ref_rec.get('started_at')) or h(_rec_label(ref_rec))}</span>"
+        meta_extra = [("参照轮", f"#{ref_rec.get('id')} · {_short_time(ref_rec.get('started_at')) or _rec_label(ref_rec)}")]
     else:
-        meta_ref = "<span>模式：并排（无相对变化率）</span>"
+        meta_extra = [("模式", "并排（无相对变化率）")]
 
-    return f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<title>{h(report.title)}</title>
-{report_css()}
-</head>
-<body>
-{report_edit_chrome()}
-<div class="container" id="reportRoot" contenteditable="true">
-  <div class="header">
-    <h1>{h(report.title)}</h1>
-    <div class="meta">
-      <span>{h(kind_label)}</span>
-      {meta_ref}
-      <span>导出时间：{h(generated)}</span>
-    </div>
-  </div>
-  <div class="section">
-    <h2>一、测试概览</h2>
+    eval_time = generated[:10] if generated else ""
+    if records and records[0].get("started_at"):
+        eval_time = str(records[0].get("started_at"))[:10]
+    hero_html = render_report_hero(
+        title=str(report.title or kind_label),
+        description=str(snap.get("description") or ""),
+        eval_time=eval_time,
+        env_label=_env_label_from_records(records),
+        tool_name=PLATFORM_TOOL_NAME,
+        executor=str(snap.get("create_by_nickname") or getattr(report, "create_by", None) or "—"),
+        extra_items=[("类型", kind_label), ("版式", report_style_label(style)), *meta_extra],
+    )
+
+    compare_toc: list = []
+    if flags.get("include_toc"):
+        compare_toc = [("sec-conclusion", "一、核心结论与建议"), ("sec-overview", "二、测试概览")]
+        if chapters_html:
+            ch_list = list(snap.get("chapters") or chapters)
+            children = []
+            for i, c in enumerate(ch_list):
+                rid = c.get("record_id")
+                if rid is not None:
+                    children.append((f"sec-ch-{rid}", _chapter_toc_label(c, f"{chapter_start}.{i + 1}")))
+            if children:
+                compare_toc.append((
+                    "sec-chapters",
+                    f"{_cn_num(chapter_start)}、各轮压测详情",
+                    children,
+                ))
+        if flags.get("include_appendix"):
+            compare_toc.append(("sec-appendix", "附录：指标说明"))
+
+    glossary_html = render_metric_glossary() if flags.get("include_appendix") else ""
+    body_main = f"""  {conclusion}
+  <div class="section" id="sec-overview">
+    <h2>二、测试概览</h2>
     {render_overview_para(ai)}
     {f'<p class="compare-intro">{h(note)}</p>' if note else ''}
     <p style="color:#64748b;font-size:13px;margin-bottom:12px">
       <span class="pct-better">绿色偏好转</span>，<span class="pct-worse">红色偏变差</span>。
     </p>
-    <div class="overview-panels">{''.join(overview_bits)}</div>
+    {overview_panels}
   </div>
   {delta_html}
   {metric_html}
   {stage_html}
+  {ladder_html}
   {case_html}
   {chapters_html}
   {records_charts_html}
   {overlay_html}
-  <div class="section">
-    <h2>{h(sec_conclusion)}</h2>
-    {conclusion}
-  </div>
-  {render_metric_glossary()}
-  <div class="footer">BrickCore 性能测试{h(kind_label)} — {h(generated)}</div>
-</div>
-{chart_scripts}
-</body>
-</html>"""
+  {glossary_html}
+  <div class="footer">BrickCore 性能测试{h(kind_label)} — {h(generated)}</div>"""
 
-
-def _cn_num(n: int) -> str:
-    mapping = {
-        1: "一", 2: "二", 3: "三", 4: "四", 5: "五",
-        6: "六", 7: "七", 8: "八", 9: "九", 10: "十",
-        11: "十一", 12: "十二", 13: "十三", 14: "十四", 15: "十五",
-        16: "十六", 17: "十七", 18: "十八", 19: "十九", 20: "二十",
-    }
-    return mapping.get(n, str(n))
+    return _assemble_export_html(
+        title=str(report.title or kind_label),
+        hero_html=hero_html,
+        body_html=body_main,
+        chart_scripts=chart_scripts or "",
+        toc_items=compare_toc,
+        footer_html="",
+        include_toc=bool(flags.get("include_toc")),
+    )
 
 
 def render_comparison_html(report: Any) -> str:

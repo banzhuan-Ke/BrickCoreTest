@@ -782,13 +782,13 @@ async def retry_iteration_report(report_id: int, project_id: int) -> dict[str, A
     report.config_json = cfg
     await report.save()
     kind = report.report_kind or ""
-    if kind.startswith("digitech_") or kind == "quality_review":
+    if kind.startswith("industry_") or kind == "quality_review":
         try:
-            from app.modules.knowledge.packs.digitech.digitech_task_runner import run_digitech_report_task
+            from app.modules.knowledge.packs._industry.industry_task_runner import run_industry_report_task
         except ImportError as ex:
             raise HTTPException(status_code=400, detail="行业定制报告能力未开通，请联系管理员") from ex
 
-        asyncio.create_task(run_digitech_report_task(report.id))
+        asyncio.create_task(run_industry_report_task(report.id))
     else:
         asyncio.create_task(_run_iteration_report_task(report.id))
     return {
@@ -862,7 +862,7 @@ async def _run_iteration_report_task(report_id: int) -> None:
         return
     if report.report_kind == "quality_review":
         try:
-            from app.modules.knowledge.packs.digitech.digitech_task_runner import run_digitech_report_task
+            from app.modules.knowledge.packs._industry.industry_task_runner import run_industry_report_task
         except ImportError:
             cfg = report.config_json if isinstance(report.config_json, dict) else {}
             report.status = "failed"
@@ -870,7 +870,7 @@ async def _run_iteration_report_task(report_id: int) -> None:
             await report.save()
             return
 
-        await run_digitech_report_task(report.id)
+        await run_industry_report_task(report.id)
         return
     cfg = report.config_json if isinstance(report.config_json, dict) else {}
     try:
@@ -934,9 +934,9 @@ def load_report_attachment_bytes(report: AiIterationReport, attachment: str = "m
     file_name = cfg.get("output_file_name")
     if not file_name:
         kind = report.report_kind or ""
-        if kind in ("digitech_quality", "quality_review"):
+        if kind in ("industry_quality", "quality_review"):
             ext = ".pptx"
-        elif kind == "digitech_bug_workbook":
+        elif kind == "industry_bug_workbook":
             ext = ".xlsx"
         else:
             ext = ".docx"

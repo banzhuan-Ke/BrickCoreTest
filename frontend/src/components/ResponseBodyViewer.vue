@@ -38,7 +38,7 @@ import {
 const props = defineProps({
   body: { type: [String, Number, Object, Array], default: null },
   highlightText: { type: String, default: '' },
-  maxHeight: { type: String, default: '480px' },
+  maxHeight: { type: String, default: '' },
   minHeight: { type: String, default: '' },
   fill: { type: Boolean, default: false },
   defaultMode: { type: String, default: 'pretty' },

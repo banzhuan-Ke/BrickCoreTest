@@ -153,6 +153,7 @@ import { snapshotInsertTarget } from '@/utils/varInsert.js'
 const props = defineProps({
   envId: { type: Number, default: null },
   extraVars: { type: Array, default: () => [] },
+  extraGroups: { type: Array, default: () => [] },
   label: { type: String, default: '插入工具' },
   size: { type: String, default: 'small' },
   type: { type: String, default: 'success' },
@@ -193,6 +194,7 @@ const variableGroups = computed(() => {
     envGlobalVars: envId ? (env?.global_vars || {}) : undefined,
     authItems: envId ? (authPreview.value.items || []) : [],
     extraVars: props.extraVars,
+    extraGroups: props.extraGroups,
   })
 })
 

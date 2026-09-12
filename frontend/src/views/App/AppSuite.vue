@@ -35,7 +35,13 @@
       <el-pagination v-model:current-page="page.page" v-model:page-size="page.size" :total="page.total" layout="total, prev, pager, next" @current-change="loadList" @size-change="loadList" />
     </template>
   </PageCard>
-  <AppRunDialog v-model="runDlg" :loading="running" show-include-quarantine @submit="runSuite" />
+  <AppRunDialog
+    v-model="runDlg"
+    :loading="running"
+    :package-hints="runPackageHints"
+    show-include-quarantine
+    @submit="runSuite"
+  />
 
   <el-dialog v-model="recordDlg" width="90%" destroy-on-close title="套件执行报告">
     <AppSuiteRecord v-if="recordSuite.id" :suite-id="recordSuite.id" :project-id="proStore.projectInfo.id" />
@@ -50,9 +56,10 @@ import PageCard from '@/components/PageCard.vue'
 import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import AppRunDialog from '@/components/AppRunDialog.vue'
 import AppSuiteRecord from '@/views/App/components/AppSuiteRecord.vue'
-import { appSuiteApi, appExecApi } from '@/api'
+import { appSuiteApi, appCaseApi, appExecApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
+import { collectAppPackageIdsFromSteps } from '@/utils/appStepMeta.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -67,6 +74,7 @@ const searchForm = reactive({ name: '', catalog_id: null })
 const runDlg = ref(false)
 const running = ref(false)
 const runSuiteId = ref(null)
+const runPackageHints = ref([])
 const recordDlg = ref(false)
 const recordSuite = ref({ id: null })
 
@@ -87,8 +95,31 @@ async function loadList() {
   page.total = res.data?.total || 0
 }
 
-function openRun(id) {
+async function openRun(id) {
   runSuiteId.value = id
+  runPackageHints.value = []
+  try {
+    const listRes = await appSuiteApi.listCases(id)
+    const rows = listRes.data?.data || listRes.data || []
+    const caseIds = (Array.isArray(rows) ? rows : [])
+      .map((r) => r.case_id)
+      .filter(Boolean)
+      .slice(0, 8)
+    const pkgs = []
+    await Promise.all(
+      caseIds.map(async (caseId) => {
+        try {
+          const res = await appCaseApi.detail(caseId)
+          pkgs.push(...collectAppPackageIdsFromSteps(res.data?.steps || res.data?.data?.steps || []))
+        } catch {
+          /* ignore single case */
+        }
+      })
+    )
+    runPackageHints.value = [...new Set(pkgs)]
+  } catch {
+    runPackageHints.value = []
+  }
   runDlg.value = true
 }
 

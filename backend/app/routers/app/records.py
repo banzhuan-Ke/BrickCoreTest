@@ -22,7 +22,7 @@ from app.core.platform.platform_settings_service import (
 from app.modules.app.app_execution_env import enrich_app_env_for_display
 from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppCaseExecution, AppPlanExecution, AppSuiteExecution
-
+from app.routers.perf.report_utils import apply_display_nicknames, resolve_user_nickname
 router = APIRouter(
     prefix="/records",
     dependencies=[Depends(is_authenticated), Depends(require_permissions(APP_RECORD_VIEW))],
@@ -140,6 +140,7 @@ async def _build_report_context(
             "env": _display_env(record.env, cronjob_id=record.cronjob_id),
             "device_id": record.device_id,
             "execution_log": record.execution_log,
+            "device_apm_summary": getattr(record, "device_apm_summary", None),
         }
         filename = f"App测试报告-计划-{plan.name if plan else record.id}-{record.id}.html"
 
@@ -204,6 +205,7 @@ async def _build_report_context(
             "env": _display_env(record.env, cronjob_id=record.cronjob_id),
             "device_id": record.device_id,
             "execution_log": record.execution_log,
+            "device_apm_summary": getattr(record, "device_apm_summary", None),
         }
         filename = f"App测试报告-套件-{suite.name if suite else record.id}-{record.id}.html"
         suite_records = [{
@@ -270,6 +272,7 @@ async def _build_report_context(
             ),
             "device_id": (record.env or {}).get("device_udid") if isinstance(record.env, dict) else None,
             "execution_log": (result_data or {}).get("log_data", []) if isinstance(result_data, dict) else [],
+            "device_apm_summary": getattr(record, "device_apm_summary", None),
         }
         filename = f"App测试报告-用例-{case.name}-{record.id}.html"
         suite_records = []
@@ -344,6 +347,7 @@ async def list_plan_records(
             "start_time": row.start_time,
             "username": row.username,
         })
+    await apply_display_nicknames(data)
     return {"data": data, "total": total}
 
 
@@ -386,6 +390,7 @@ async def list_suite_records(
             "start_time": row.start_time,
             "username": row.username,
         })
+    await apply_display_nicknames(data)
     return {"data": data, "total": total}
 
 
@@ -425,6 +430,7 @@ async def list_case_records(
             "env": row.env,
             "is_del": row.is_del,
         })
+    await apply_display_nicknames(data)
     return {"data": data, "total": total, "delete_mode": delete_mode}
 
 
@@ -465,11 +471,13 @@ async def get_plan_record(
         "error": record.error,
         "skip": record.skip,
         "quarantine_skip": getattr(record, "quarantine_skip", 0) or 0,
-        "username": record.username,
+        "username": await resolve_user_nickname(record.username),
         "start_time": record.start_time,
         "device_id": record.device_id,
         "env": _display_env(record.env, cronjob_id=record.cronjob_id),
         "execution_log": record.execution_log,
+        "device_apm_summary": getattr(record, "device_apm_summary", None),
+        "device_apm_series": getattr(record, "device_apm_series", None),
         "suites": suite_rows,
     }
 
@@ -511,11 +519,13 @@ async def get_suite_record(
         "error": record.error,
         "skip": record.skip,
         "quarantine_skip": getattr(record, "quarantine_skip", 0) or 0,
-        "username": record.username,
+        "username": await resolve_user_nickname(record.username),
         "start_time": record.start_time,
         "device_id": record.device_id,
         "env": _display_env(record.env, cronjob_id=record.cronjob_id),
         "execution_log": record.execution_log,
+        "device_apm_summary": getattr(record, "device_apm_summary", None),
+        "device_apm_series": getattr(record, "device_apm_series", None),
         "cases": case_rows,
     }
 
@@ -541,8 +551,59 @@ async def get_case_record(
         "result_data": _presign_media_urls(record.result_data),
         "env": _display_env(record.env, case=case, cronjob_id=cronjob_id),
         "start_time": record.start_time,
-        "username": record.username,
+        "username": await resolve_user_nickname(record.username),
+        "device_apm_summary": getattr(record, "device_apm_summary", None),
+        "device_apm_series": getattr(record, "device_apm_series", None),
     }
+
+
+async def _device_apm_payload(record) -> dict:
+    return {
+        "summary": getattr(record, "device_apm_summary", None),
+        "series": getattr(record, "device_apm_series", None) or [],
+    }
+
+
+@router.get("/suites/{record_id}/device-apm", summary="App 套件设备性能")
+async def get_suite_device_apm(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(APP_RECORD_VIEW)),
+):
+    record = await AppSuiteExecution.get_or_none(id=record_id, is_del=False).prefetch_related("suite")
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    suite = await record.suite
+    if not suite:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    await assert_user_project_viewer(user_info, suite.project_id)
+    return await _device_apm_payload(record)
+
+
+@router.get("/cases/{record_id}/device-apm", summary="App 用例设备性能")
+async def get_case_device_apm(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(APP_RECORD_VIEW)),
+):
+    record = await AppCaseExecution.get_or_none(id=record_id, is_del=False).prefetch_related("case")
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    case = await record.case
+    if not case:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    await assert_user_project_viewer(user_info, case.project_id)
+    return await _device_apm_payload(record)
+
+
+@router.get("/plans/{record_id}/device-apm", summary="App 计划设备性能")
+async def get_plan_device_apm(
+    record_id: int,
+    user_info: dict = Depends(require_permissions(APP_RECORD_VIEW)),
+):
+    record = await AppPlanExecution.get_or_none(id=record_id, is_del=False)
+    if not record:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    await assert_user_project_viewer(user_info, record.project_id)
+    return await _device_apm_payload(record)
 
 
 @router.delete("/plans/{record_id}", summary="删除 App 计划执行记录", status_code=status.HTTP_204_NO_CONTENT)

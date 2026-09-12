@@ -17,6 +17,187 @@ def _format_case_update_time(dt) -> Optional[str]:
     return str(dt)
 
 
+async def resolve_user_nickname(username: Optional[str]) -> str:
+    """账号昵称优先，无昵称则回退用户名。"""
+    u = str(username or "").strip()
+    if not u:
+        return ""
+    mapping = await resolve_user_nicknames([u])
+    return mapping.get(u, u)
+
+
+async def resolve_user_nicknames(usernames) -> Dict[str, str]:
+    """批量：username → 展示名（昵称优先，否则用户名）。"""
+    from app.models.sys import User
+
+    names = {str(u or "").strip() for u in (usernames or []) if str(u or "").strip()}
+    if not names:
+        return {}
+    out = {name: name for name in names}
+    rows = await User.filter(username__in=list(names), is_del=False).all()
+    for row in rows:
+        nick = str(getattr(row, "nickname", None) or "").strip()
+        out[row.username] = nick or row.username
+    return out
+
+
+async def apply_display_nicknames(items: List[dict], key: str = "username") -> List[dict]:
+    """就地把列表项中的 username 换成昵称展示（库内仍存登录名）。"""
+    if not items:
+        return items
+    mapping = await resolve_user_nicknames([it.get(key) for it in items if isinstance(it, dict)])
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        u = str(it.get(key) or "").strip()
+        if u:
+            it[key] = mapping.get(u, u)
+    return items
+
+
+async def resolve_env_label(config: Optional[dict]) -> str:
+    """受测环境文案；快照缺 env_name/host 时按 env_id 回查。"""
+    from app.modules.perf.perf_html_theme import env_label_from_config
+
+    cfg = config if isinstance(config, dict) else {}
+    lab = env_label_from_config(cfg)
+    if lab not in ("", "—"):
+        return lab
+    env_id = cfg.get("env_id")
+    if env_id is None or env_id == "":
+        return "—"
+    try:
+        from app.models.sys import Environment
+
+        env = await Environment.get_or_none(id=int(env_id), is_del=False)
+        if not env:
+            return "—"
+        return env_label_from_config(
+            {
+                "env_host": getattr(env, "host", None),
+                "env_name": getattr(env, "name", None),
+                "target_host": cfg.get("target_host"),
+            }
+        )
+    except Exception:
+        return "—"
+
+
+async def stamp_env_fields_on_config(config: Optional[dict]) -> dict:
+    """返回带 env_name/env_host 的配置副本（缺省时按 env_id 回填，不写库）。"""
+    cfg = dict(config) if isinstance(config, dict) else {}
+    if str(cfg.get("env_name") or "").strip() or str(cfg.get("env_host") or "").strip():
+        return cfg
+    env_id = cfg.get("env_id")
+    if env_id is None or env_id == "":
+        return cfg
+    try:
+        from app.models.sys import Environment
+
+        env = await Environment.get_or_none(id=int(env_id), is_del=False)
+        if env:
+            cfg["env_name"] = getattr(env, "name", None) or ""
+            cfg["env_host"] = getattr(env, "host", None) or ""
+    except Exception:
+        pass
+    return cfg
+
+
+def _ms_to_s_label(ms: int) -> str:
+    """毫秒 → 秒展示：1000→1s，1500→1.5s。"""
+    try:
+        n = max(0, int(ms))
+    except (TypeError, ValueError):
+        n = 0
+    if n % 1000 == 0:
+        return f"{n // 1000}s"
+    return f"{n / 1000:.1f}".rstrip("0").rstrip(".") + "s"
+
+
+def format_delay_label(item: Any) -> str:
+    """单条场景项/链路步骤的间隔文案：随机 1～3s / 固定 1s / 无。"""
+    if not isinstance(item, dict):
+        return "无"
+    mode = str(item.get("delay_mode") or "fixed").strip().lower()
+    if mode == "random":
+        try:
+            lo = max(0, int(item.get("delay_ms_min") or 0))
+        except (TypeError, ValueError):
+            lo = 0
+        try:
+            hi = max(0, int(item.get("delay_ms_max") or 0))
+        except (TypeError, ValueError):
+            hi = 0
+        if hi < lo:
+            lo, hi = hi, lo
+        if hi <= 0:
+            return "无"
+        if lo == hi:
+            return f"随机 {_ms_to_s_label(lo)}"
+        return f"随机 {_ms_to_s_label(lo)}～{_ms_to_s_label(hi)}"
+    try:
+        ms = max(0, int(item.get("delay_ms") or 0))
+    except (TypeError, ValueError):
+        ms = 0
+    if ms <= 0:
+        return "无"
+    return f"固定 {_ms_to_s_label(ms)}"
+
+
+def _iter_delay_sources(scene_items: Optional[list], config: Optional[dict] = None) -> list[dict]:
+    """从 scene_items 与 journey（扁平 steps / phases[].steps）收集间隔配置项。"""
+    out: list[dict] = []
+    for it in scene_items or []:
+        if isinstance(it, dict):
+            out.append(it)
+    cfg = config if isinstance(config, dict) else {}
+    journey = cfg.get("journey") if isinstance(cfg.get("journey"), dict) else {}
+    for step in journey.get("steps") or []:
+        if isinstance(step, dict):
+            out.append(step)
+    for phase in journey.get("phases") or []:
+        if not isinstance(phase, dict):
+            continue
+        for step in phase.get("steps") or []:
+            if isinstance(step, dict):
+                out.append(step)
+    return out
+
+
+def summarize_request_delays(
+    scene_items: Optional[list] = None,
+    config: Optional[dict] = None,
+) -> str:
+    """汇总请求等待文案：一致则直接展示；多项不同则「多项不同」并附主要项。"""
+    labels: list[str] = []
+    for it in _iter_delay_sources(scene_items, config):
+        lab = format_delay_label(it)
+        if lab and lab != "无":
+            labels.append(lab)
+    if not labels:
+        return "无"
+    uniq = list(dict.fromkeys(labels))
+    if len(uniq) == 1:
+        return uniq[0]
+    # 多项不同：列前几个主要项
+    head = "、".join(uniq[:3])
+    if len(uniq) > 3:
+        head += "…"
+    return f"多项不同（{head}）"
+
+
+def delay_row_label(summary_label: Optional[str]) -> str:
+    """报告表格左侧字段名：随机等待时间 / 固定等待 / 请求间隔。"""
+    lab = str(summary_label or "").strip()
+    if lab.startswith("随机"):
+        return "随机等待时间"
+    if lab.startswith("固定"):
+        return "固定等待"
+    if lab and lab != "无":
+        return "请求间隔"
+    return "请求间隔"
+
+
 async def build_case_drift(scene_items_snapshot: Optional[list]) -> dict:
     """对比执行快照中的 case_update_time 与当前用例，返回漂移列表。"""
     from app.models.http import ApiTestCase
@@ -661,7 +842,11 @@ def format_stepping_stages_narrative(stages: Optional[list] = None) -> str:
     return text
 
 
-def build_config_summary(config: Optional[dict], distribution_info: Optional[dict]) -> dict:
+def build_config_summary(
+    config: Optional[dict],
+    distribution_info: Optional[dict],
+    scene_items: Optional[list] = None,
+) -> dict:
     """压测配置摘要（供报告展示）"""
     from app.routers.perf.case_agg_utils import MAX_CASE_RT_SAMPLES
     from app.modules.perf.metrics_accuracy import resolve_warmup_seconds
@@ -714,6 +899,7 @@ def build_config_summary(config: Optional[dict], distribution_info: Optional[dic
 
     detail_level = cfg.get("request_detail_level", "brief")
     detail_label = "详细（含成功请求接口信息）" if detail_level == "full" else "简略（失败仍含接口详情）"
+    request_delay_label = summarize_request_delays(scene_items, cfg)
 
     return {
         "mode": mode,
@@ -729,6 +915,7 @@ def build_config_summary(config: Optional[dict], distribution_info: Optional[dic
         "warmup_seconds": resolve_warmup_seconds(cfg),
         "target_host": cfg.get("target_host") or "使用环境默认 Host",
         "duration_label": duration_label,
+        "request_delay_label": request_delay_label,
         "error_rate_threshold": cfg.get("error_rate_threshold") or 0,
         "execution_type": execution_type,
         "worker_count": len(workers),
@@ -833,12 +1020,25 @@ async def build_report_payload(
     baseline_policy = getattr(scene, "baseline_policy", None) if scene else None
     pinned_id = getattr(scene, "baseline_record_id", None) if scene else None
     case_drift = await build_case_drift(record.scene_items_snapshot)
-    cfg_summary = build_config_summary(config, dist_info)
+    cfg_summary = build_config_summary(config, dist_info, record.scene_items_snapshot)
     stepping_stages = (
         summarize_stepping_stages(config, raw_time_series)
         if str(cfg_summary.get("mode") or mode) == "stepping"
         else []
     )
+
+    from app.modules.perf.perf_html_theme import (
+        PLATFORM_TOOL_NAME,
+        env_label_from_config,
+        executor_display_from_config,
+        run_description_from_config,
+    )
+
+    run_description = run_description_from_config(config)
+    env_label = await resolve_env_label(config)
+    executor_display = executor_display_from_config(config, record.run_by)
+    if executor_display in ("", "—") and record.run_by:
+        executor_display = await resolve_user_nickname(record.run_by) or record.run_by
 
     payload = {
         "id": record.id,
@@ -849,6 +1049,10 @@ async def build_report_payload(
         "trigger_type": record.trigger_type,
         "trigger_type_label": {"manual": "手动", "cron": "定时"}.get(record.trigger_type, record.trigger_type),
         "mode": mode,
+        "run_description": run_description,
+        "env_label": env_label,
+        "executor_display": executor_display,
+        "tool_name": PLATFORM_TOOL_NAME,
         "config_snapshot": config,
         "config_summary": cfg_summary,
         "stepping_stages": stepping_stages,
@@ -904,7 +1108,160 @@ async def build_report_payload(
         "ai_analysis": getattr(record, "ai_analysis", None),
         "target_evaluation": evaluate_perf_targets(record),
     }
+    # 被测资源快照（M3）；若仍在延迟再切窗口内则先刷新
+    try:
+        from app.modules.perf.sut_slice import load_sut_resource_series, maybe_reslice_sut_metrics
+
+        await maybe_reslice_sut_metrics(record, force=False)
+        config = record.config_snapshot if isinstance(record.config_snapshot, dict) else (config or {})
+
+        sut_series = await load_sut_resource_series(record.id)
+        sut_status = (config.get("sut_metrics_status") if isinstance(config, dict) else None) or (
+            "none" if not sut_series else "partial"
+        )
+        payload["sut_metrics"] = {
+            "status": sut_status,
+            "pressure_window": (config.get("sut_pressure_window") if isinstance(config, dict) else None),
+            "binding": (config.get("sut_binding_snapshot") if isinstance(config, dict) else None),
+            "series": sut_series,
+            "error": (config.get("sut_metrics_error") if isinstance(config, dict) else None),
+        }
+        payload["sut_resource_series"] = sut_series  # 契约别名
+    except Exception:
+        payload["sut_metrics"] = {
+            "status": "failed",
+            "series": [],
+            "pressure_window": (config.get("sut_pressure_window") if isinstance(config, dict) else None),
+            "binding": (config.get("sut_binding_snapshot") if isinstance(config, dict) else None),
+            "error": "load_failed",
+        }
+        payload["sut_resource_series"] = []
     return payload
+
+
+def render_sut_metrics_html_section(record: Any, *, heading: str = "被测资源") -> str:
+    """HTML 导出：被测资源简表（无图亦可对照）。"""
+    cfg = getattr(record, "config_snapshot", None) or {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    status = cfg.get("sut_metrics_status") or "none"
+    if status == "none" and not cfg.get("sut_server_ids"):
+        return ""
+    window = cfg.get("sut_pressure_window") if isinstance(cfg.get("sut_pressure_window"), dict) else {}
+    note = window.get("note") or ""
+    # 同步读库可能在导出路径里已有 snapshot；这里用轻量摘要
+    # 调用方若已挂 _sut_series_cache 则复用
+    rows = getattr(record, "_sut_series_cache", None)
+    if rows is None:
+        return (
+            f'<div class="section"><h2>{_escape_html(heading)}</h2>'
+            f'<p>状态：{_escape_html(status)}'
+            f'{(" · " + _escape_html(note)) if note else ""}</p>'
+            f'<p style="color:#666;font-size:13px">详细曲线请在平台报告页查看。</p></div>'
+        )
+    if not rows:
+        return (
+            f'<div class="section"><h2>{_escape_html(heading)}</h2>'
+            f'<p>本记录未绑定被测服务器，或切片无数据（status={_escape_html(status)}）。</p></div>'
+        )
+    body = ""
+    quality_tips: list[str] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sm = r.get("summary") or {}
+        cpu = sm.get("cpu_pct") or {}
+        mem = sm.get("mem_pct") or {}
+        load = sm.get("load1") or {}
+        dio_r = sm.get("disk_read_kbps") or {}
+        dio_w = sm.get("disk_write_kbps") or {}
+        quality = sm.get("quality") if isinstance(sm.get("quality"), dict) else {}
+        phases = sm.get("phases") if isinstance(sm.get("phases"), dict) else {}
+        base = phases.get("baseline") if isinstance(phases.get("baseline"), dict) else {}
+        during = phases.get("during") if isinstance(phases.get("during"), dict) else {}
+        b_cpu = (base.get("cpu_pct") or {}) if isinstance(base.get("cpu_pct"), dict) else {}
+        d_cpu = (during.get("cpu_pct") or {}) if isinstance(during.get("cpu_pct"), dict) else {}
+        cov = r.get("coverage")
+        cov_s = f"{round(float(cov) * 100, 1)}%" if cov is not None else "—"
+        bucket = quality.get("bucket_coverage")
+        bucket_s = f"{round(float(bucket) * 100, 1)}%" if bucket is not None else "—"
+        gap = quality.get("max_gap_sec")
+        gap_s = f"{gap}s" if gap is not None else "—"
+        res = quality.get("resolution_level") or "—"
+        delay = quality.get("first_point_delay_sec")
+        delay_s = f"{delay}s" if delay is not None else "—"
+        name = r.get("display_name") or f"server-{r.get('server_id')}"
+        if r.get("status") == "low_resolution" or quality.get("resolution_level") == "low":
+            quality_tips.append(f"{name}：采样分辨率偏低")
+        try:
+            if delay is not None and float(delay) >= 15:
+                quality_tips.append(f"{name}：首点延迟约 {delay}s")
+        except (TypeError, ValueError):
+            pass
+        try:
+            if bucket is not None and float(bucket) < 0.7:
+                quality_tips.append(f"{name}：时间桶覆盖偏低（{bucket_s}）")
+        except (TypeError, ValueError):
+            pass
+        try:
+            if gap is not None and float(gap) >= 30:
+                quality_tips.append(f"{name}：最大空洞约 {gap}s")
+        except (TypeError, ValueError):
+            pass
+        base_during = (
+            f"CPU {b_cpu.get('max')}/{d_cpu.get('max')}"
+            if (b_cpu.get("max") is not None or d_cpu.get("max") is not None)
+            else "—"
+        )
+        gurl = r.get("grafana_url") or ""
+        if gurl:
+            from app.modules.perf.sut_slice import is_safe_http_url
+
+            if not is_safe_http_url(gurl):
+                gurl = ""
+        gcell = f'<a href="{_escape_html(gurl)}" target="_blank" rel="noopener">打开</a>' if gurl else "—"
+        body += (
+            f"<tr><td>{_escape_html(r.get('display_name'))}</td>"
+            f"<td>{_escape_html(r.get('role') or '—')}</td>"
+            f"<td>{_escape_html(r.get('status'))}</td>"
+            f"<td>{_escape_html(cov_s)} / {_escape_html(bucket_s)}</td>"
+            f"<td>{_escape_html(res)} · gap {_escape_html(gap_s)} · 首点延迟 {_escape_html(delay_s)}</td>"
+            f"<td>{_escape_html(base_during)}</td>"
+            f"<td>{_escape_html(cpu.get('avg'))} / {_escape_html(cpu.get('max'))}</td>"
+            f"<td>{_escape_html(mem.get('avg'))} / {_escape_html(mem.get('max'))}</td>"
+            f"<td>{_escape_html(load.get('avg'))} / {_escape_html(load.get('max'))}</td>"
+            f"<td>{_escape_html(dio_r.get('max'))} / {_escape_html(dio_w.get('max'))}</td>"
+            f"<td>{gcell}</td></tr>"
+        )
+    src = window.get("source") or ""
+    src_map = {"load": "真实负载时间", "qps": "QPS 推断", "record": "记录起止时间"}
+    src_label = src_map.get(str(src), "")
+    note_line = note or "与 QPS 趋势同轴的被测机资源快照（施压窗切片；方向性观察，非根因结论）。"
+    if src_label:
+        note_line = f"{note_line}（来源：{src_label}）"
+    tips_html = ""
+    if quality_tips:
+        uniq = list(dict.fromkeys(quality_tips))[:6]
+        tips_html = (
+            '<ul style="color:#b88230;font-size:13px;margin:8px 0 12px;padding-left:18px">'
+            + "".join(f"<li>{_escape_html(t)}</li>" for t in uniq)
+            + "</ul>"
+        )
+    return f"""
+  <div class="section">
+    <h2>{_escape_html(heading)}</h2>
+    <p style="color:#666;font-size:13px">{_escape_html(note_line)}</p>
+    {tips_html}
+    <table>
+      <thead><tr>
+        <th>服务器</th><th>角色</th><th>状态</th><th>覆盖/桶覆盖</th><th>数据质量</th>
+        <th>基线→施压 CPU max</th>
+        <th>CPU avg/max %</th><th>内存 avg/max %</th><th>load1 avg/max</th>
+        <th>磁盘读/写 max kbps</th><th>Grafana</th>
+      </tr></thead>
+      <tbody>{body}</tbody>
+    </table>
+  </div>"""
 
 
 def _count_http_trace_items(record: Any) -> int:
@@ -1355,6 +1712,7 @@ def render_perf_html_chart_parts(
     embed_echarts: bool = True,
     ai_trend_note: str = "",
     ai_dist_note: str = "",
+    wrapper_class: str = "section",
 ) -> tuple[str, str]:
     """导出 HTML 报告用：ECharts 趋势图 + RT 分布图。
 
@@ -1364,6 +1722,7 @@ def render_perf_html_chart_parts(
     prefix: 多记录同页时用于区分 DOM id（如 ``rec37``）。
     include_echarts: 同页多个图表时仅第一次为 True，避免重复内嵌库。
     embed_echarts: False 时用 CDN，显著减小邮件附件体积。
+    wrapper_class: 外层容器 class；分章内嵌时用 ``chapter-block`` 避免多余白卡。
     """
     from types import SimpleNamespace
 
@@ -1397,6 +1756,7 @@ def render_perf_html_chart_parts(
     trend_id = f"perfTrendChart{sid}"
     hist_wrap_id = f"histogramSectionWrap{sid}"
     hist_id = f"perfHistogramChart{sid}"
+    wrap_cls = (wrapper_class or "section").strip() or "section"
 
     chart_payload = _json_for_html_script({
         "timeSeries": time_series,
@@ -1420,7 +1780,7 @@ def render_perf_html_chart_parts(
     trend_section = ""
     if time_series:
         trend_section = f"""
-  <div class="section" id="perfTrendSection{sid}" contenteditable="false">
+  <div class="{wrap_cls}" id="perfTrendSection{sid}" contenteditable="false">
     <h2>{_escape_html(trend_heading)}</h2>
     {trend_note_html}
     <div class="chart-toolbar">
@@ -1433,7 +1793,7 @@ def render_perf_html_chart_parts(
     hist_section = ""
     if rt_histogram:
         hist_section = f"""
-  <div class="section" id="{hist_wrap_id}" contenteditable="false">
+  <div class="{wrap_cls}" id="{hist_wrap_id}" contenteditable="false">
     <h2>{_escape_html(hist_heading)}</h2>
     {dist_note_html}
     <div id="histogramSection{sid}">
@@ -2000,6 +2360,154 @@ def render_compare_overlay_charts(
   }})();
   </script>"""
     return sections, scripts
+
+
+def render_ladder_charts(
+    ladder: dict,
+    *,
+    heading: str = "",
+    include_echarts: bool = True,
+    embed_echarts: bool = True,
+    chart_id_prefix: str = "ladder",
+) -> tuple[str, str]:
+    """阶梯并发趋势图：横轴=并发。返回 (HTML, scripts)。"""
+    if not isinstance(ladder, dict):
+        return "", ""
+    series = ladder.get("chart_series") or {}
+    x = series.get("x") or []
+    if len(x) < 2:
+        return "", ""
+
+    import json as _json
+
+    payload = {
+        "x": x,
+        "error_rate": series.get("error_rate") or [],
+        "success_rate": series.get("success_rate") or [],
+        "avg_rt_ms": series.get("avg_rt_ms") or [],
+        "p95_rt_ms": series.get("p95_rt_ms") or [],
+        "qps": series.get("qps") or [],
+        "phase_first_mean": series.get("phase_first_mean") or [],
+        "phase_total_mean": series.get("phase_total_mean") or [],
+        "phase_first_label": ladder.get("phase_first_label") or "首字/首 token",
+        "phase_total_label": ladder.get("phase_total_label") or "整体流式耗时",
+    }
+    # 兼容旧快照：无 success_rate 时由失败率反推
+    if not payload["success_rate"] and payload["error_rate"]:
+        payload["success_rate"] = [
+            round(max(0.0, min(100.0, 100.0 - float(v or 0))), 2)
+            for v in payload["error_rate"]
+        ]
+    data_json = _json.dumps(payload, ensure_ascii=False)
+    pid = chart_id_prefix
+    blocks = [
+        ("ok", "请求成功率随并发变化", "ok"),
+        ("rt", "平均 / P95 响应时间随并发变化", "rt"),
+        ("qps", "QPS 随并发变化", "qps"),
+    ]
+    if payload["phase_first_mean"] and any(v is not None for v in payload["phase_first_mean"]):
+        blocks.append(("first", payload["phase_first_label"] + "随并发变化", "first"))
+    if payload["phase_total_mean"] and any(v is not None for v in payload["phase_total_mean"]):
+        blocks.append(("total", payload["phase_total_label"] + "随并发变化", "total"))
+
+    charts_html = []
+    for suffix, label, _kind in blocks:
+        charts_html.append(
+            f'<div class="ladder-chart-block">'
+            f'<div class="ladder-chart-label">{_escape_html(label)}</div>'
+            f'<div id="{pid}Chart-{suffix}" class="ladder-chart-box"></div>'
+            f"</div>"
+        )
+    head = f"<h3>{_escape_html(heading)}</h3>" if heading else ""
+    html = (
+        f'<div class="ladder-charts" id="{pid}ChartsSection">'
+        f"{head}"
+        f'{"".join(charts_html)}'
+        f'<script type="application/json" id="{pid}ChartData">{data_json}</script>'
+        f"</div>"
+    )
+    echarts_tag = _render_echarts_script_tag(embed=embed_echarts) if include_echarts else ""
+    scripts = f"""{echarts_tag}
+  <script>
+  (function() {{
+    function readData() {{
+      var el = document.getElementById('{pid}ChartData');
+      if (!el) return null;
+      try {{ return JSON.parse(el.textContent || '{{}}'); }} catch (e) {{ return null; }}
+    }}
+    function initBar(id, x, data, name, colorFn) {{
+      var el = document.getElementById(id);
+      if (!el || !window.echarts || !x || !x.length) return;
+      var colors = (data || []).map(function(v, i) {{
+        return colorFn ? colorFn(v, i) : '#3182ce';
+      }});
+      var chart = echarts.init(el);
+      chart.setOption({{
+        tooltip: {{ trigger: 'axis' }},
+        grid: {{ left: 48, right: 24, top: 36, bottom: 40 }},
+        xAxis: {{ type: 'category', name: '并发', data: x.map(String) }},
+        yAxis: {{ type: 'value', name: name, min: 0, max: 100 }},
+        series: [{{
+          name: name, type: 'bar', data: data,
+          itemStyle: {{ color: function(p) {{ return colors[p.dataIndex]; }} }},
+          barMaxWidth: 36
+        }}]
+      }});
+    }}
+    function initLine(id, x, seriesList, yName) {{
+      var el = document.getElementById(id);
+      if (!el || !window.echarts || !x || !x.length) return;
+      var chart = echarts.init(el);
+      chart.setOption({{
+        tooltip: {{ trigger: 'axis' }},
+        legend: {{ top: 0 }},
+        grid: {{ left: 56, right: 24, top: 40, bottom: 40 }},
+        xAxis: {{ type: 'category', name: '并发', data: x.map(String) }},
+        yAxis: {{ type: 'value', name: yName || '', min: 0 }},
+        series: seriesList.map(function(s) {{
+          return {{
+            name: s.name, type: 'line', data: s.data, smooth: true,
+            showSymbol: true, symbolSize: 8,
+            itemStyle: {{ color: s.color }}, lineStyle: {{ width: 2.5, color: s.color }}
+          }};
+        }})
+      }});
+    }}
+    function boot() {{
+      try {{
+        if (!window.echarts) return;
+        var d = readData();
+        if (!d) return;
+        initBar('{pid}Chart-ok', d.x, d.success_rate, '成功率(%)', function(v) {{
+          var n = Number(v) || 0;
+          if (n >= 95) return '#38a169';
+          if (n < 80) return '#e53e3e';
+          return '#dd6b20';
+        }});
+        initLine('{pid}Chart-rt', d.x, [
+          {{ name: 'Avg (ms)', data: d.avg_rt_ms, color: '#3182ce' }},
+          {{ name: 'P95 (ms)', data: d.p95_rt_ms, color: '#dd6b20' }}
+        ], 'ms');
+        initLine('{pid}Chart-qps', d.x, [
+          {{ name: 'QPS', data: d.qps, color: '#805ad5' }}
+        ], 'QPS');
+        if (d.phase_first_mean && d.phase_first_mean.length) {{
+          initLine('{pid}Chart-first', d.x, [
+            {{ name: d.phase_first_label || '首字', data: d.phase_first_mean, color: '#e53e3e' }}
+          ], 's');
+        }}
+        if (d.phase_total_mean && d.phase_total_mean.length) {{
+          initLine('{pid}Chart-total', d.x, [
+            {{ name: d.phase_total_label || '整体流式', data: d.phase_total_mean, color: '#9b59b6' }}
+          ], 's');
+        }}
+      }} catch (e) {{}}
+    }}
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+  }})();
+  </script>"""
+    return html, scripts
 
 
 def _escape_html(v: Any) -> str:

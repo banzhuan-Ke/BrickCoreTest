@@ -16,27 +16,39 @@
 
 | 平台版本 | 扩展包版本 |
 |----------|------------|
-| 1.6.x / 1.7.x | 1.7.0 |
+| 1.8.x | **1.8.0**（兼容声明含 1.6～1.8） |
+| 1.6.x / 1.7.x | 1.7.0（升平台到 1.8 后须升扩展包或使用内置 1.8.0） |
 
 安装后可访问：`GET /test-management/premium-status`，应返回 `installed: true` 且 `compatible: true`。
+
+> **常见误判**：`./restart.sh backend` 后提示「扩展包与平台不兼容」，多数是平台 `PLATFORM_VERSION` 已升到 1.8，而扩展包仍声明只兼容 1.6/1.7——**不是脚本删了包**。请安装与当前平台对齐的 `.bcpack` 到 `backend/ext_packages`（compose 已挂载该目录时重建不丢），或使用已内置扩展包的官方镜像后重建 backend。
+>
+> **扩展包功能未改、暂不想重打包**时，可在 `.env` / compose 放宽校验（装上包且达到门槛即视为兼容，不再弹黄条）：
+> - `BRICKCORE_TM_COMPAT_MIN_PACK=1.7.0` — 扩展包版本 ≥ 1.7.0 时跳过与平台大版本的不兼容提示  
+> - `BRICKCORE_TM_EXTRA_COMPAT_PREFIXES=1.8` — 额外把当前平台前缀算作兼容  
+> - `BRICKCORE_TM_SKIP_COMPAT_CHECK=1` — 只要已安装就不做版本兼容检查（演示机可用，生产慎用）
 
 ## 获取安装包
 
 1. Gitee Release 附件，或官方网盘（与执行器包同渠道维护）
 2. 正式包文件名示例：
-   - `brickcore_tm-1.7.0-linux-amd64-cp311.bcpack`（Docker / Linux）
-   - `brickcore_tm-1.7.0-win-amd64-cp311.bcpack`（Windows 本机）
-   - `brickcore_tm-1.7.0-macos-arm64-cp311.bcpack`（Apple Silicon 本机）
-   - `brickcore_tm-1.7.0-macos-amd64-cp311.bcpack`（Intel Mac 本机）
+   - `brickcore_tm-1.8.0-linux-amd64-cp311.bcpack`（Docker / Linux）
+   - `brickcore_tm-1.8.0-win-amd64-cp311.bcpack`（Windows 本机）
+   - `brickcore_tm-1.8.0-macos-arm64-cp311.bcpack`（Apple Silicon 本机）
+   - `brickcore_tm-1.8.0-macos-amd64-cp311.bcpack`（Intel Mac 本机）
 3. 请选择与 backend **Python 主次版本**一致的包（官方镜像为 **3.11** → 选 `cp311`）
 
-## Docker 安装（CE 自建）
+## Docker 安装（源码自建）
 
 ```bash
-docker cp brickcore_tm-1.7.0-linux-amd64-cp311.bcpack <backend容器名>:/tmp/
-docker exec <backend容器名> python tools/install_brickcore_tm.py /tmp/brickcore_tm-1.7.0-linux-amd64-cp311.bcpack
+# 推荐装到持久目录（compose 已挂载 ./backend/ext_packages → /app/ext_packages）
+docker cp brickcore_tm-1.8.0-linux-amd64-cp311.bcpack <backend容器名>:/tmp/
+docker exec <backend容器名> python tools/install_brickcore_tm.py /tmp/brickcore_tm-1.8.0-linux-amd64-cp311.bcpack
+# 默认会优先写入 /app/ext_packages；然后：
 docker compose restart backend
 ```
+
+> **手装扩展包**：compose 挂载 `backend/ext_packages`。仅当镜像**没有** `/app/brickcore_tm` 时才会把该目录加入 `PYTHONPATH`，避免旧手装包盖住镜像内置包。
 
 ## Windows / 本机中间件
 
@@ -44,7 +56,7 @@ docker compose restart backend
 
 ```powershell
 cd backend
-python tools/install_brickcore_tm.py D:\downloads\brickcore_tm-1.7.0-win-amd64-cp311.bcpack
+python tools/install_brickcore_tm.py D:\downloads\brickcore_tm-1.8.0-win-amd64-cp311.bcpack
 # 然后重启 uvicorn / 服务
 ```
 
@@ -53,7 +65,7 @@ python tools/install_brickcore_tm.py D:\downloads\brickcore_tm-1.7.0-win-amd64-c
 ```bash
 cd backend
 # Apple Silicon
-python3.11 tools/install_brickcore_tm.py ~/Downloads/brickcore_tm-1.7.0-macos-arm64-cp311.bcpack
+python3.11 tools/install_brickcore_tm.py ~/Downloads/brickcore_tm-1.8.0-macos-arm64-cp311.bcpack
 # Intel Mac 用 macos-amd64 包
 # 然后重启 uvicorn / 服务
 ```

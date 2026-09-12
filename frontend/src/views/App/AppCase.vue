@@ -56,7 +56,7 @@
       />
     </template>
   </PageCard>
-  <AppRunDialog v-model="runDlg" :loading="running" @submit="runCase" />
+  <AppRunDialog v-model="runDlg" :loading="running" :package-hints="runPackageHints" @submit="runCase" />
 
   <el-dialog v-model="recordDlg" width="90%" destroy-on-close title="用例执行报告">
     <AppCaseRecord v-if="recordCase.id" :case-id="recordCase.id" :project-id="proStore.projectInfo.id" />
@@ -78,7 +78,7 @@ import { appCaseApi, appExecApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
 
-import { appDriverModeLabel } from '@/utils/appStepMeta.js'
+import { appDriverModeLabel, collectAppPackageIdsFromSteps } from '@/utils/appStepMeta.js'
 
 const driverModeLabel = appDriverModeLabel
 const router = useRouter()
@@ -92,6 +92,7 @@ const canExecute = computed(() => uStore.hasPermission('app_case:execute'))
 const caseList = ref([])
 const stabilityMap = ref({})
 const page = reactive({ page: 1, size: 10, total: 0 })
+const runPackageHints = ref([])
 
 async function loadStabilityMap(rows) {
   const ids = (rows || []).map((r) => r.id).filter(Boolean)
@@ -140,19 +141,26 @@ async function loadList() {
 
 function openRun(id) {
   const row = caseList.value.find((c) => c.id === id)
+  const start = async () => {
+    runCaseId.value = id
+    runPackageHints.value = []
+    try {
+      const res = await appCaseApi.detail(id)
+      runPackageHints.value = collectAppPackageIdsFromSteps(res.data?.steps || res.data?.data?.steps || [])
+    } catch {
+      runPackageHints.value = []
+    }
+    runDlg.value = true
+  }
   if (row && hasQuarantineTag(row.tags)) {
     ElMessageBox.confirm(
       '该用例已隔离，单条调试仍会执行。确认继续？',
       '已隔离用例',
       { type: 'warning', confirmButtonText: '继续执行', cancelButtonText: '取消' }
-    ).then(() => {
-      runCaseId.value = id
-      runDlg.value = true
-    }).catch(() => {})
+    ).then(() => start()).catch(() => {})
     return
   }
-  runCaseId.value = id
-  runDlg.value = true
+  start()
 }
 
 function openRecords(row) {

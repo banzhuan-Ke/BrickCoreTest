@@ -54,6 +54,10 @@ DEFAULT_AI_PROJECT_SETTINGS: dict[str, Any] = {
     "stability_unstable_switch_min_n": 5,
     "stability_unstable_switch_min": 3,
     "apm_trace_base_url": "",
+    # None = 跟随平台 SUT_METRICS_RETAIN_DAYS
+    "sut_metrics_retain_days": None,
+    # None = 跟随平台 SUT_METRICS_BASELINE_SEC（默认 300）
+    "sut_metrics_baseline_sec": None,
 }
 
 _STRING_SETTINGS_KEYS = frozenset({
@@ -277,6 +281,22 @@ def normalize_ai_project_settings(raw: Any) -> dict[str, Any]:
                     base[key] = DEFAULT_AI_PROJECT_SETTINGS["ai_act_max_per_case"]
             elif key == "debug_max_step_timeout_seconds":
                 base[key] = normalize_debug_max_step_timeout_seconds(raw[key])
+            elif key == "sut_metrics_retain_days":
+                if raw[key] in (None, ""):
+                    base[key] = None
+                else:
+                    try:
+                        base[key] = max(1, min(90, int(raw[key])))
+                    except (TypeError, ValueError):
+                        base[key] = None
+            elif key == "sut_metrics_baseline_sec":
+                if raw[key] in (None, ""):
+                    base[key] = None
+                else:
+                    try:
+                        base[key] = max(60, min(1800, int(raw[key])))
+                    except (TypeError, ValueError):
+                        base[key] = None
             elif key in _STABILITY_INT_KEYS or key in _STABILITY_RATE_KEYS:
                 _apply_stability_setting(base, key, raw[key])
             elif key == "recording_locator_strategy":
@@ -332,6 +352,22 @@ async def save_ai_project_settings(project_id: int, updates: dict[str, Any]) -> 
                 pass
         elif key == "debug_max_step_timeout_seconds":
             current[key] = normalize_debug_max_step_timeout_seconds(updates[key])
+        elif key == "sut_metrics_retain_days":
+            if updates[key] in (None, ""):
+                current[key] = None
+            else:
+                try:
+                    current[key] = max(1, min(90, int(updates[key])))
+                except (TypeError, ValueError):
+                    pass
+        elif key == "sut_metrics_baseline_sec":
+            if updates[key] in (None, ""):
+                current[key] = None
+            else:
+                try:
+                    current[key] = max(60, min(1800, int(updates[key])))
+                except (TypeError, ValueError):
+                    pass
         elif key in _STABILITY_INT_KEYS or key in _STABILITY_RATE_KEYS:
             _apply_stability_setting(current, key, updates[key])
         elif key == "recording_locator_strategy":

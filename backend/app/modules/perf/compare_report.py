@@ -1,12 +1,17 @@
 """压测多记录对比 / 异场景合订报告构建（2–20 条）。"""
 from __future__ import annotations
 
+import json
 from typing import Any, Optional, Sequence
 
 from fastapi import HTTPException
 
 from app.modules.perf.metrics_accuracy import build_comparison_trust
-from app.modules.perf.perf_html_theme import metric_lower_is_better
+from app.modules.perf.perf_html_theme import (
+    REPORT_STYLES,
+    REPORT_STYLE_STANDARD,
+    metric_lower_is_better,
+)
 
 MAX_COMPARE_RECORDS = 20
 MIN_COMPARE_RECORDS = 2
@@ -16,6 +21,23 @@ REPORT_KIND_MERGE = "merge"
 REPORT_KIND_HYBRID = "hybrid"
 
 REPORT_KINDS = (REPORT_KIND_COMPARE, REPORT_KIND_MERGE, REPORT_KIND_HYBRID)
+
+RECORD_SORT_SELECTION = "selection"
+RECORD_SORT_CONCURRENCY_DESC = "concurrency_desc"
+RECORD_SORT_CONCURRENCY_ASC = "concurrency_asc"
+RECORD_SORT_CHAPTER_SMART = "chapter_smart"
+RECORD_SORT_STARTED_DESC = "started_at_desc"
+RECORD_SORT_MODES = (
+    RECORD_SORT_SELECTION,
+    RECORD_SORT_CONCURRENCY_DESC,
+    RECORD_SORT_CONCURRENCY_ASC,
+    RECORD_SORT_CHAPTER_SMART,
+    RECORD_SORT_STARTED_DESC,
+)
+
+_LOOP_MODES = frozenset({"loop", "journey_loop"})
+_LADDER_PHASE_FIRST_KEYS = ("first_char", "first_token", "ttft", "time_to_first_token")
+_LADDER_PHASE_TOTAL_KEYS = ("total_time", "full_stream", "overall", "e2e")
 
 _METRIC_KEYS = (
     ("qps", "QPS"),
@@ -35,10 +57,106 @@ def detect_report_kind(records: Sequence[Any]) -> str:
     return REPORT_KIND_MERGE
 
 
+def _record_config(record: Any) -> dict:
+    if isinstance(record, dict):
+        return record.get("config_snapshot") or record.get("config") or {}
+    return getattr(record, "config_snapshot", None) or {}
+
+
+def _record_started_ts(record: Any) -> float:
+    if isinstance(record, dict):
+        raw = record.get("started_at")
+    else:
+        dt = getattr(record, "started_at", None)
+        raw = dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
+    if not raw:
+        return 0.0
+    try:
+        from datetime import datetime
+
+        return datetime.strptime(str(raw)[:19], "%Y-%m-%d %H:%M:%S").timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def think_time_phrase(delay_label: Optional[str]) -> str:
+    """将 request_delay_label 转为汇报用语，如「1～3 秒随机间隔」。"""
+    lab = str(delay_label or "").strip()
+    if not lab or lab == "无":
+        return ""
+    import re
+
+    if "随机" in lab:
+        m = re.search(r"(\d+(?:\.\d+)?)\s*s?\s*[～~\-—]\s*(\d+(?:\.\d+)?)\s*s?", lab, re.I)
+        if m:
+            a, b = m.group(1), m.group(2)
+            if "." in a or "." in b:
+                return f"{a}～{b} 秒随机间隔"
+            return f"{int(float(a))}～{int(float(b))} 秒随机间隔"
+    m = re.search(r"(\d+(?:\.\d+)?)\s*s", lab, re.I)
+    if m:
+        return f"{m.group(1)} 秒固定间隔"
+    return lab
+
+
+def sort_report_records(records: Sequence[Any], sort_mode: Optional[str]) -> list[Any]:
+    """多记录报告排序：勾选顺序 / 并发 / 智能分章（持续优先，瞬时并发递减）。"""
+    rows = list(records)
+    mode = (sort_mode or RECORD_SORT_SELECTION).strip().lower()
+    if mode == RECORD_SORT_SELECTION or len(rows) < 2:
+        return rows
+    if mode not in RECORD_SORT_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的 record_sort: {sort_mode}（可选 {', '.join(RECORD_SORT_MODES)}）",
+        )
+
+    def _cu(rec: Any) -> int:
+        try:
+            return int(_record_config(rec).get("concurrent_users") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    if mode == RECORD_SORT_CONCURRENCY_DESC:
+        return sorted(rows, key=lambda r: (-_cu(r), -_record_started_ts(r), getattr(r, "id", 0)))
+    if mode == RECORD_SORT_CONCURRENCY_ASC:
+        return sorted(rows, key=lambda r: (_cu(r), -_record_started_ts(r), getattr(r, "id", 0)))
+    if mode == RECORD_SORT_STARTED_DESC:
+        return sorted(rows, key=lambda r: (-_record_started_ts(r), getattr(r, "id", 0)))
+
+    # chapter_smart：固定时长模式（持续压测）在前，循环/瞬时在后；同组内并发从高到低
+    def _smart_key(rec: Any) -> tuple:
+        cfg = _record_config(rec)
+        mode_name = str(cfg.get("mode") or "fixed")
+        tier = 1 if mode_name in _LOOP_MODES else 0
+        return (tier, -_cu(rec), -_record_started_ts(rec), getattr(rec, "id", 0) if not isinstance(rec, dict) else rec.get("id", 0))
+
+    return sorted(rows, key=_smart_key)
+
+
+def default_record_sort_for_kind(kind: Optional[str]) -> str:
+    k = (kind or "").strip().lower()
+    if k == REPORT_KIND_MERGE:
+        return RECORD_SORT_CHAPTER_SMART
+    return RECORD_SORT_SELECTION
+
+
+def normalize_report_style_or_raise(style: Optional[str]) -> str:
+    s = (style or "").strip().lower() or REPORT_STYLE_STANDARD
+    if s not in REPORT_STYLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的 report_style: {style}（可选 {', '.join(REPORT_STYLES)}）",
+        )
+    return s
+
+
 def _record_summary(record: Any, scene_name: str = "") -> dict:
     # 延迟导入，避免 routers.perf.__init__ ↔ compare_report 循环依赖
-    from app.routers.perf.report_utils import _success_qps
+    from app.routers.perf.report_utils import _success_qps, summarize_request_delays
 
+    cfg = record.config_snapshot or {}
+    items = getattr(record, "scene_items_snapshot", None) or []
     return {
         "id": record.id,
         "scene_id": getattr(record, "scene_id", None),
@@ -60,7 +178,8 @@ def _record_summary(record: Any, scene_name: str = "") -> dict:
         "p95_response_time": record.p95_response_time,
         "p99_response_time": record.p99_response_time,
         "error_rate": record.error_rate,
-        "config_snapshot": record.config_snapshot or {},
+        "config_snapshot": cfg,
+        "request_delay_label": summarize_request_delays(items, cfg),
         "case_aggregations": record.case_aggregations or {},
         "phase_metrics": getattr(record, "phase_metrics", None) or {},
         "time_series_data": record.time_series_data or [],
@@ -581,6 +700,277 @@ def build_compare_snapshot(
     }
 
 
+def _phase_rows_for_chapter(phase_metrics: Any, *, limit: int = 12) -> list[dict]:
+    """分章用精简阶段指标（均值 / P95）。"""
+    rows: list[dict] = []
+    if not isinstance(phase_metrics, dict):
+        return rows
+    for item in (phase_metrics.get("metrics") or [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key")
+        if not key:
+            continue
+        rows.append({
+            "key": key,
+            "label": item.get("label") or key,
+            "mean": item.get("mean"),
+            "p95": item.get("p95"),
+        })
+    return rows
+
+
+def overview_phase_highlights(phase_metrics: Any, *, limit: int = 3) -> list[dict]:
+    """概览分卡用：优先首字/整体流式，最多 limit 条。"""
+    rows = _phase_rows_for_chapter(phase_metrics, limit=12)
+    if not rows:
+        return []
+    picked: list[dict] = []
+    used: set[str] = set()
+    for keys in (_LADDER_PHASE_FIRST_KEYS, _LADDER_PHASE_TOTAL_KEYS):
+        hit = _ladder_pick_phase(rows, keys)
+        if hit and str(hit.get("key")) not in used:
+            picked.append(hit)
+            used.add(str(hit.get("key")))
+    for r in rows:
+        if len(picked) >= limit:
+            break
+        k = str(r.get("key") or "")
+        if k and k not in used and (r.get("mean") is not None or r.get("p95") is not None):
+            picked.append(r)
+            used.add(k)
+    return picked[:limit]
+
+
+def _ladder_pick_phase(phase_rows: list[dict], preferred_keys: tuple[str, ...]) -> Optional[dict]:
+    by_key = {str(p.get("key") or ""): p for p in phase_rows if isinstance(p, dict)}
+    for k in preferred_keys:
+        if k in by_key:
+            return by_key[k]
+    return None
+
+
+def _ladder_case_fingerprint(record: Any, summary: Optional[dict] = None) -> str:
+    """阶梯可比性：优先用例名集合；无聚合时回退同场景。"""
+    ag = None
+    if isinstance(summary, dict):
+        ag = summary.get("case_aggregations")
+    if not isinstance(ag, dict) or not ag:
+        ag = getattr(record, "case_aggregations", None) or {}
+    keys: list[str] = []
+    if isinstance(ag, dict):
+        for cid, info in ag.items():
+            if isinstance(info, dict):
+                keys.append(_case_align_key(cid, info))
+    if keys:
+        return "cases:" + "|".join(sorted(set(keys)))
+    sid = None
+    if isinstance(summary, dict):
+        sid = summary.get("scene_id")
+    if sid is None:
+        sid = getattr(record, "scene_id", None)
+    if sid is not None:
+        return f"scene:{sid}"
+    return "unknown"
+
+
+def _ladder_infer_zones(levels: list[dict]) -> list[dict]:
+    """按失败率断崖划分区间（仅陈述实测，不做 SLA 判定）。"""
+    if len(levels) < 2:
+        return []
+    zones: list[dict] = []
+    cliff_idx: Optional[int] = None
+    for i in range(1, len(levels)):
+        prev_er = float(levels[i - 1].get("error_rate") or 0)
+        cur_er = float(levels[i].get("error_rate") or 0)
+        # 从接近零失败跳到明显失败，或绝对跳变 ≥15pp
+        if (prev_er < 5 and cur_er >= 20) or (cur_er - prev_er >= 15):
+            cliff_idx = i
+            break
+
+    if cliff_idx is None:
+        max_er = max(float(lv.get("error_rate") or 0) for lv in levels)
+        kind = "stable" if max_er < 5 else "mixed"
+        first_u = levels[0].get("concurrent_users")
+        last_u = levels[-1].get("concurrent_users")
+        zones.append({
+            "kind": kind,
+            "from_users": first_u,
+            "to_users": last_u,
+            "title": f"并发 {first_u}～{last_u}",
+            "summary": (
+                f"各档失败率最高约 {max_er:g}%。"
+                if max_er >= 0.01
+                else "各档失败率接近 0%，未观察到明显失败率断崖。"
+            ),
+        })
+        return zones
+
+    stable = levels[:cliff_idx]
+    after = levels[cliff_idx:]
+    if stable:
+        last_ok = stable[-1]
+        zones.append({
+            "kind": "stable",
+            "from_users": stable[0].get("concurrent_users"),
+            "to_users": last_ok.get("concurrent_users"),
+            "title": f"相对平稳区间（{stable[0].get('concurrent_users')}～{last_ok.get('concurrent_users')} 并发）",
+            "summary": (
+                f"失败率约 {float(last_ok.get('error_rate') or 0):g}%，"
+                f"成功 {last_ok.get('success_count')} / {last_ok.get('total_requests')}。"
+            ),
+        })
+    cliff = levels[cliff_idx]
+    prev = levels[cliff_idx - 1]
+    zones.append({
+        "kind": "inflection",
+        "from_users": cliff.get("concurrent_users"),
+        "to_users": cliff.get("concurrent_users"),
+        "title": f"失败率拐点（{cliff.get('concurrent_users')} 并发）",
+        "summary": (
+            f"失败率由 {float(prev.get('error_rate') or 0):g}% 升至 "
+            f"{float(cliff.get('error_rate') or 0):g}% "
+            f"（失败 {cliff.get('fail_count')} / {cliff.get('total_requests')}）。"
+        ),
+    })
+    if len(after) > 1:
+        last = after[-1]
+        zones.append({
+            "kind": "saturated",
+            "from_users": after[0].get("concurrent_users"),
+            "to_users": last.get("concurrent_users"),
+            "title": f"高失败区间（{after[0].get('concurrent_users')}～{last.get('concurrent_users')} 并发）",
+            "summary": (
+                f"末档失败率约 {float(last.get('error_rate') or 0):g}%，"
+                f"成功 {last.get('success_count')} / {last.get('total_requests')}。"
+            ),
+        })
+    return zones
+
+
+def build_ladder_summary(
+    records: Sequence[Any],
+    summaries: Sequence[dict],
+) -> Optional[dict]:
+    """多档不同并发的阶梯汇总。
+
+    仅当「压测模式相同 + 用例集合相同（或同场景）+ 至少 2 档不同并发」时生成，
+    避免跨接口/跨场景硬比。梯度单跑不进阶梯。
+    """
+    candidates: list[dict] = []
+    for r, s in zip(records, summaries):
+        if not isinstance(s, dict):
+            continue
+        cfg = s.get("config_snapshot") or {}
+        mode = str(cfg.get("mode") or "").strip()
+        if not mode or mode == "stepping":
+            continue
+        try:
+            cu = int(cfg.get("concurrent_users") or 0)
+        except (TypeError, ValueError):
+            cu = 0
+        if cu <= 0:
+            continue
+        phase_rows = _phase_rows_for_chapter(s.get("phase_metrics"))
+        first_ph = _ladder_pick_phase(phase_rows, _LADDER_PHASE_FIRST_KEYS)
+        total_ph = _ladder_pick_phase(phase_rows, _LADDER_PHASE_TOTAL_KEYS)
+        candidates.append({
+            "mode": mode,
+            "case_fp": _ladder_case_fingerprint(r, s),
+            "scene_id": s.get("scene_id") if s.get("scene_id") is not None else getattr(r, "scene_id", None),
+            "concurrent_users": cu,
+            "record_id": s.get("id") if s.get("id") is not None else getattr(r, "id", None),
+            "label": s.get("display_name") or s.get("scene_name") or f"执行#{s.get('id')}",
+            "started_at": s.get("started_at"),
+            "success_count": int(s.get("success_count") or 0),
+            "fail_count": int(s.get("fail_count") or 0),
+            "error_rate": float(s.get("error_rate") or 0),
+            "total_requests": int(s.get("total_requests") or 0),
+            "avg_response_time": s.get("avg_response_time"),
+            "p95_response_time": s.get("p95_response_time"),
+            "qps": s.get("qps"),
+            "success_qps": s.get("success_qps"),
+            "duration": s.get("duration"),
+            "phase_first_mean": first_ph.get("mean") if first_ph else None,
+            "phase_first_label": (first_ph.get("label") if first_ph else None) or "首字/首 token",
+            "phase_total_mean": total_ph.get("mean") if total_ph else None,
+            "phase_total_label": (total_ph.get("label") if total_ph else None) or "整体流式耗时",
+            "phase_metrics": phase_rows,
+        })
+
+    # 按（模式, 用例指纹）分组；只取可比组里并发档位最多的一组
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for c in candidates:
+        if c.get("case_fp") in (None, "", "unknown"):
+            continue
+        key = (str(c.get("mode") or ""), str(c.get("case_fp")))
+        groups.setdefault(key, []).append(c)
+
+    best: list[dict] = []
+    best_cu_n = 0
+    for (_mode, _fp), members in groups.items():
+        by_cu: dict[int, dict] = {}
+        for c in members:
+            cu = c["concurrent_users"]
+            prev = by_cu.get(cu)
+            if prev is None or str(c.get("started_at") or "") >= str(prev.get("started_at") or ""):
+                by_cu[cu] = c
+        if len(by_cu) > best_cu_n:
+            best_cu_n = len(by_cu)
+            best = [by_cu[k] for k in sorted(by_cu.keys())]
+
+    levels = best
+    if len(levels) < 2:
+        return None
+
+    has_first = any(lv.get("phase_first_mean") is not None for lv in levels)
+    has_total_phase = any(lv.get("phase_total_mean") is not None for lv in levels)
+    modes = sorted({lv.get("mode") or "" for lv in levels if lv.get("mode")})
+    chart_series = {
+        "x": [lv["concurrent_users"] for lv in levels],
+        "error_rate": [float(lv.get("error_rate") or 0) for lv in levels],
+        "success_rate": [
+            round(max(0.0, min(100.0, 100.0 - float(lv.get("error_rate") or 0))), 2)
+            for lv in levels
+        ],
+        "avg_rt_ms": [lv.get("avg_response_time") for lv in levels],
+        "p95_rt_ms": [lv.get("p95_response_time") for lv in levels],
+        "qps": [lv.get("qps") for lv in levels],
+        "phase_first_mean": [lv.get("phase_first_mean") for lv in levels] if has_first else [],
+        "phase_total_mean": [lv.get("phase_total_mean") for lv in levels] if has_total_phase else [],
+    }
+    # 展示用别删内部指纹字段
+    public_levels = []
+    for lv in levels:
+        row = dict(lv)
+        row.pop("case_fp", None)
+        row.pop("phase_metrics", None)
+        public_levels.append(row)
+    return {
+        "eligible": True,
+        "mode_hint": modes[0] if len(modes) == 1 else "mixed",
+        "modes": modes,
+        "same_cases": True,
+        "has_phase_first": has_first,
+        "has_phase_total": has_total_phase,
+        "phase_first_label": next(
+            (lv.get("phase_first_label") for lv in levels if lv.get("phase_first_mean") is not None),
+            "首字/首 token",
+        ),
+        "phase_total_label": next(
+            (lv.get("phase_total_label") for lv in levels if lv.get("phase_total_mean") is not None),
+            "整体流式耗时",
+        ),
+        "levels": public_levels,
+        "chart_series": chart_series,
+        "zones": _ladder_infer_zones(public_levels),
+        "note": (
+            "仅汇总「压测模式相同、用例集合相同」且并发档位 ≥2 的轮次；横轴为并发用户数。"
+            "区间观察依据失败率变化；趋势图用成功率。均为实测观察，非验收达标结论。"
+        ),
+    }
+
+
 def build_merge_snapshot(
     records: Sequence[Any],
     *,
@@ -595,6 +985,7 @@ def build_merge_snapshot(
     chapters = []
     for r, s in zip(records, summaries):
         cfg = s.get("config_snapshot") or {}
+        phase_rows = _phase_rows_for_chapter(s.get("phase_metrics"))
         chapters.append({
             "record_id": r.id,
             "scene_id": s.get("scene_id"),
@@ -619,6 +1010,9 @@ def build_merge_snapshot(
                 k: cfg.get(k)
                 for k in ("mode", "concurrent_users", "ramp_up_seconds", "duration_seconds", "steps")
             },
+            "request_delay_label": s.get("request_delay_label") or "无",
+            "think_time_phrase": think_time_phrase(s.get("request_delay_label")),
+            "phase_metrics": phase_rows,
             "top_cases": _top_cases(r),
             "error_summary": _error_summary(r),
         })
@@ -630,6 +1024,22 @@ def build_merge_snapshot(
             row["values"][str(s["id"])] = float(s.get(key) or 0)
         overview_table.append(row)
 
+    # 共有流式阶段指标并排（无变化率）
+    phase_compare = _build_phase_metric_compare(
+        records, summaries, ref_id=ordered_ids[0]
+    )
+    for p in phase_compare:
+        if isinstance(p, dict):
+            p["change_pct"] = {}
+            overview_table.append({
+                "key": p.get("key"),
+                "label": p.get("label"),
+                "values": dict(p.get("values") or {}),
+                "group": "phase",
+            })
+
+    ladder_summary = build_ladder_summary(records, summaries)
+
     return {
         "kind": REPORT_KIND_MERGE,
         "record_ids": ordered_ids,
@@ -637,7 +1047,7 @@ def build_merge_snapshot(
         "records": summaries,
         "chapters": chapters,
         "overview_table": overview_table,
-        "metric_compare": [],
+        "metric_compare": phase_compare,
         "case_compare": [],
         "case_common_count": 0,
         "same_scene": len({getattr(r, "scene_id", None) for r in records}) <= 1,
@@ -645,6 +1055,7 @@ def build_merge_snapshot(
         "trust_by_record": {},
         "changes": None,
         "trust": None,
+        "ladder_summary": ladder_summary,
         "note": "各场景分章展示；顶层指标并排，不计算变化率。",
     }
 
@@ -701,6 +1112,7 @@ def build_hybrid_snapshot(
         "metric_compare": metric_compare,
         "case_compare": case_rows,
         "stepping_stage_compare": stepping_stage_compare,
+        "ladder_summary": merge.get("ladder_summary"),
         "case_common_count": common_n,
         "same_scene": same_scene,
         "baseline_enabled": baseline_enabled,
@@ -716,8 +1128,9 @@ def apply_report_labels(
     *,
     display_names: Optional[dict] = None,
     user_extra_prompt: Optional[str] = None,
+    description: Optional[str] = None,
 ) -> dict:
-    """为报告内记录/章节写入 display_name；可选附加用户提示词（仅存快照，供 AI 使用）。"""
+    """为报告内记录/章节写入 display_name；可选附加用户提示词与报告描述。"""
     names: dict[str, str] = {}
     for k, v in (display_names or {}).items():
         label = str(v or "").strip()
@@ -736,11 +1149,26 @@ def apply_report_labels(
         rid = str(c.get("record_id"))
         c["display_name"] = names.get(rid) or (c.get("scene_name") or f"执行#{rid}")
 
+    ladder = snapshot.get("ladder_summary")
+    if isinstance(ladder, dict):
+        for lv in ladder.get("levels") or []:
+            if not isinstance(lv, dict):
+                continue
+            rid = str(lv.get("record_id"))
+            if rid in names:
+                lv["label"] = names[rid]
+
     extra = (user_extra_prompt or "").strip()
     if extra:
         snapshot["user_extra_prompt"] = extra[:2000]
     elif "user_extra_prompt" in snapshot:
         snapshot.pop("user_extra_prompt", None)
+
+    desc = (description or "").strip()
+    if desc:
+        snapshot["description"] = desc[:2000]
+    elif description is not None:
+        snapshot.pop("description", None)
     return snapshot
 
 
@@ -752,6 +1180,9 @@ def build_report_snapshot(
     kind: Optional[str] = None,
     display_names: Optional[dict] = None,
     user_extra_prompt: Optional[str] = None,
+    description: Optional[str] = None,
+    record_sort: Optional[str] = None,
+    report_style: Optional[str] = None,
 ) -> dict:
     """构建快照。kind 可显式指定 compare / merge / hybrid；空则按场景自动选择。"""
     requested = (kind or "").strip().lower() or None
@@ -761,41 +1192,86 @@ def build_report_snapshot(
             detail=f"不支持的报告类型: {kind}（可选 compare / merge / hybrid）",
         )
 
+    sort_mode = (record_sort or "").strip().lower() or default_record_sort_for_kind(requested)
+    style_mode = normalize_report_style_or_raise(report_style)
+    ordered_records = sort_report_records(records, sort_mode)
+
     if requested == REPORT_KIND_HYBRID:
         snap = build_hybrid_snapshot(
-            records,
+            ordered_records,
             reference_record_id=reference_record_id,
             scene_names=scene_names,
         )
     elif requested == REPORT_KIND_MERGE:
-        snap = build_merge_snapshot(records, scene_names=scene_names)
+        snap = build_merge_snapshot(ordered_records, scene_names=scene_names)
     elif requested == REPORT_KIND_COMPARE:
         snap = build_compare_snapshot(
-            records,
+            ordered_records,
             reference_record_id=reference_record_id,
             scene_names=scene_names,
         )
     else:
-        auto = detect_report_kind(records)
+        auto = detect_report_kind(ordered_records)
         if auto == REPORT_KIND_MERGE:
-            snap = build_merge_snapshot(records, scene_names=scene_names)
+            snap = build_merge_snapshot(ordered_records, scene_names=scene_names)
         else:
             snap = build_compare_snapshot(
-                records,
+                ordered_records,
                 reference_record_id=reference_record_id,
                 scene_names=scene_names,
             )
 
-    return apply_report_labels(
+    snap = apply_report_labels(
         snap,
         display_names=display_names,
         user_extra_prompt=user_extra_prompt,
+        description=description,
     )
+    snap["record_sort"] = sort_mode
+    snap["report_style"] = style_mode
+    return snap
 
 
 def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
-    """缩减 token：去掉冗长时序细节；对外分析上下文不含 case_id。"""
+    """缩减 token：去掉冗长时序细节；对外分析上下文不含 case_id。
+
+    多章节时优先保留 ladder_summary / chapter_roster（全档并发），再放精简 scenes，
+    避免 JSON 尾部截断导致低并发档（如 10～30）进不了 AI 结论。
+    """
     kind = snapshot.get("kind") or REPORT_KIND_COMPARE
+
+    def _perf_targets_enabled(cfg: Any) -> bool:
+        if not isinstance(cfg, dict):
+            return False
+        pt = cfg.get("perf_targets")
+        return isinstance(pt, dict) and bool(pt.get("enabled"))
+
+    def _acceptance_targets_meta() -> dict:
+        flags: list[bool] = []
+        for r in snapshot.get("records") or []:
+            if isinstance(r, dict):
+                flags.append(_perf_targets_enabled(r.get("config_snapshot")))
+        for c in snapshot.get("chapters") or []:
+            if isinstance(c, dict):
+                flags.append(_perf_targets_enabled(c.get("config") or c.get("config_snapshot")))
+        any_on = any(flags) if flags else False
+        if any_on:
+            return {
+                "any_enabled": True,
+                "overall_status": "configured",
+                "guidance": (
+                    "部分或全部轮次启用了性能验收目标；达标表述须依据已配置目标，不得改写 pass/fail。"
+                    "未启用目标的轮次仍禁止写「未达预期」。"
+                ),
+            }
+        return {
+            "any_enabled": False,
+            "overall_status": "unknown",
+            "guidance": (
+                "本报告未启用性能验收目标。结论只笼统陈述实测数字（并发、请求数、QPS、平均RT、P95、错误率）"
+                "与稳定性/长尾/阶段耗时观察；禁止「未达预期/不达标/未达SLA/理论最大请求量」等无配置依据的判定。"
+            ),
+        }
 
     def _hist_summary(hist: list, top_n: int = 5) -> list:
         if not isinstance(hist, list) or not hist:
@@ -806,13 +1282,35 @@ def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
         )[:top_n]
         return [{"label": h.get("label"), "count": h.get("count")} for h in ranked]
 
+    n_chapters = max(
+        len([c for c in (snapshot.get("chapters") or []) if isinstance(c, dict)]),
+        len([r for r in (snapshot.get("records") or []) if isinstance(r, dict)]),
+    )
+    # 章节多时压缩时序，把额度留给「全档 roster / ladder」
+    if n_chapters >= 8:
+        ts_cap = 0
+        hist_top = 0
+        cases_cap = 2
+    elif n_chapters >= 6:
+        ts_cap = min(6, max_ts_points)
+        hist_top = 3
+        cases_cap = 3
+    elif n_chapters >= 4:
+        ts_cap = min(12, max_ts_points)
+        hist_top = 4
+        cases_cap = 4
+    else:
+        ts_cap = max_ts_points
+        hist_top = 5
+        cases_cap = 40
+
     def _ts_sample(ts: list) -> list:
-        if not isinstance(ts, list):
+        if ts_cap <= 0 or not isinstance(ts, list):
             return []
         pts = ts
-        if len(pts) > max_ts_points:
-            step = max(1, len(pts) // max_ts_points)
-            pts = pts[::step][:max_ts_points]
+        if len(pts) > ts_cap:
+            step = max(1, len(pts) // ts_cap)
+            pts = pts[::step][:ts_cap]
         return [
             {
                 "t": p.get("timestamp"),
@@ -828,7 +1326,7 @@ def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
 
     def _cases_public(cases: list) -> list:
         out = []
-        for c in (cases or [])[:40]:
+        for c in (cases or [])[:cases_cap]:
             if not isinstance(c, dict):
                 continue
             item = {
@@ -871,7 +1369,7 @@ def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
             k: raw.get(k)
             for k in (
                 "mode", "concurrent_users", "ramp_up_seconds", "duration_seconds",
-                "warmup_seconds", "steps",
+                "warmup_seconds", "steps", "loop_count",
             )
         }
         try:
@@ -915,6 +1413,63 @@ def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
             "config_snapshot": _public_config(r.get("config_snapshot") or {}),
         }
 
+    def _compact_ladder(raw: Any) -> Any:
+        if not isinstance(raw, dict):
+            return raw
+        levels = []
+        for lv in raw.get("levels") or []:
+            if not isinstance(lv, dict):
+                continue
+            levels.append({
+                "concurrent_users": lv.get("concurrent_users"),
+                "label": lv.get("label"),
+                "success_count": lv.get("success_count"),
+                "fail_count": lv.get("fail_count"),
+                "error_rate": lv.get("error_rate"),
+                "total_requests": lv.get("total_requests"),
+                "avg_response_time": lv.get("avg_response_time"),
+                "p95_response_time": lv.get("p95_response_time"),
+                "qps": lv.get("qps"),
+                "phase_first_mean": lv.get("phase_first_mean"),
+                "phase_first_label": lv.get("phase_first_label"),
+                "phase_total_mean": lv.get("phase_total_mean"),
+                "phase_total_label": lv.get("phase_total_label"),
+            })
+        chart = raw.get("chart_series") if isinstance(raw.get("chart_series"), dict) else {}
+        return {
+            "eligible": raw.get("eligible"),
+            "levels": levels,
+            "chart_series": {
+                "x": chart.get("x") or [lv.get("concurrent_users") for lv in levels],
+                "avg_rt_ms": chart.get("avg_rt_ms"),
+                "p95_rt_ms": chart.get("p95_rt_ms"),
+                "qps": chart.get("qps"),
+                "error_rate": chart.get("error_rate"),
+                "success_rate": chart.get("success_rate"),
+            },
+            "guidance": (
+                "阶梯并发全档必须写入核心结论与分章要点；禁止只写高并发档而漏掉低并发档。"
+            ),
+        }
+
+    def _chapter_roster_from_scenes(scenes: list) -> list:
+        roster = []
+        for s in scenes:
+            if not isinstance(s, dict):
+                continue
+            cfg = s.get("config") if isinstance(s.get("config"), dict) else {}
+            roster.append({
+                "label": s.get("label") or s.get("scene_name"),
+                "concurrent_users": cfg.get("concurrent_users"),
+                "mode_label": cfg.get("mode_label") or cfg.get("mode"),
+                "qps": s.get("qps"),
+                "avg_response_time": s.get("avg_response_time"),
+                "p95_response_time": s.get("p95_response_time"),
+                "error_rate": s.get("error_rate"),
+                "total_requests": s.get("total_requests"),
+            })
+        return roster
+
     base = {
         "kind": kind,
         "note": snapshot.get("note"),
@@ -922,6 +1477,8 @@ def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
         "baseline_enabled": bool(snapshot.get("baseline_enabled", kind == REPORT_KIND_COMPARE)),
         "same_scene": snapshot.get("same_scene"),
         "case_common_count": snapshot.get("case_common_count"),
+        "acceptance_targets": _acceptance_targets_meta(),
+        "chapter_count": n_chapters,
     }
     # 给 AI 的显式分析模式，避免 merge 误用「指标对照」话术
     if kind == REPORT_KIND_MERGE or (
@@ -942,6 +1499,7 @@ def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
             if not isinstance(c, dict):
                 continue
             rec = records_by_id.get(c.get("record_id")) or {}
+            cfg = c.get("config") if isinstance(c.get("config"), dict) else {}
             scenes.append({
                 "label": c.get("display_name") or c.get("scene_name"),
                 "scene_name": c.get("scene_name"),
@@ -950,14 +1508,20 @@ def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
                 "p95_response_time": c.get("p95_response_time"),
                 "error_rate": c.get("error_rate"),
                 "total_requests": c.get("total_requests"),
-                "config": c.get("config"),
+                "config": _public_config(cfg),
+                "request_delay_label": c.get("request_delay_label"),
+                "think_time_phrase": think_time_phrase(c.get("request_delay_label")),
+                "phase_metrics": (c.get("phase_metrics") or [])[:8],
                 "top_cases": _cases_public(c.get("top_cases") or []),
                 "error_summary": c.get("error_summary"),
                 "time_series_sample": _ts_sample(rec.get("time_series_data") or []),
-                "rt_histogram_summary": _hist_summary(rec.get("rt_histogram") or []),
+                "rt_histogram_summary": _hist_summary(rec.get("rt_histogram") or [], top_n=hist_top),
             })
+        # 关键字段顺序：ladder / roster 在前，避免截断时丢掉低并发档
         return {
             **base,
+            "ladder_summary": _compact_ladder(snapshot.get("ladder_summary")),
+            "chapter_roster": _chapter_roster_from_scenes(scenes),
             "scenes": scenes,
             "overview_table": snapshot.get("overview_table"),
         }
@@ -973,6 +1537,7 @@ def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
             ),
             "基准",
         ),
+        "ladder_summary": _compact_ladder(snapshot.get("ladder_summary")),
         "metric_compare": snapshot.get("metric_compare"),
         "trust_by_record": snapshot.get("trust_by_record"),
         "stepping_stage_compare": snapshot.get("stepping_stage_compare"),
@@ -980,48 +1545,217 @@ def trim_snapshot_for_ai(snapshot: dict, *, max_ts_points: int = 30) -> dict:
         "case_compare": _cases_public(snapshot.get("case_compare") or []),
     }
     if kind == REPORT_KIND_HYBRID:
-        out["chapters"] = [
-            {
+        chapters_compact = []
+        for c in snapshot.get("chapters") or []:
+            if not isinstance(c, dict):
+                continue
+            cfg = c.get("config") if isinstance(c.get("config"), dict) else {}
+            chapters_compact.append({
                 "label": c.get("display_name") or c.get("scene_name"),
                 "scene_name": c.get("scene_name"),
                 "qps": c.get("qps"),
+                "avg_response_time": c.get("avg_response_time"),
                 "p95_response_time": c.get("p95_response_time"),
                 "error_rate": c.get("error_rate"),
                 "total_requests": c.get("total_requests"),
-                "config": c.get("config"),
-                "top_cases": _cases_public(c.get("top_cases") or [])[:6],
-            }
-            for c in (snapshot.get("chapters") or [])
-        ]
+                "config": _public_config(cfg),
+                "top_cases": _cases_public(c.get("top_cases") or [])[:cases_cap],
+            })
+        out["chapter_roster"] = _chapter_roster_from_scenes(chapters_compact)
+        out["chapters"] = chapters_compact
 
     for r in snapshot.get("records") or []:
         if not isinstance(r, dict):
             continue
         item = _record_public(r)
         item["time_series_sample"] = _ts_sample(r.get("time_series_data") or [])
-        item["rt_histogram_summary"] = _hist_summary(r.get("rt_histogram") or [])
+        item["rt_histogram_summary"] = _hist_summary(r.get("rt_histogram") or [], top_n=hist_top)
         out["records"].append(item)
     return out
 
 
+def pack_snapshot_json_for_ai(ctx: dict, *, max_chars: int = 48000) -> str:
+    """序列化 AI 快照：优先完整保留 ladder / roster，再追加 scenes 等大字段。"""
+    must_keys = (
+        "kind",
+        "analysis_mode",
+        "chapter_count",
+        "ladder_summary",
+        "chapter_roster",
+        "acceptance_targets",
+        "baseline_enabled",
+        "user_extra_prompt",
+    )
+    soft_keys = (
+        "same_scene",
+        "note",
+        "case_common_count",
+        "reference_label",
+        # L0：每章资源一行，优先于 scenes 时序；预算紧时可丢但优先于 L1
+        "sut_metrics_l0",
+    )
+
+    def _dumps(obj: dict) -> str:
+        return json.dumps(obj, ensure_ascii=False, indent=2)
+
+    def _slim_ladder(raw: Any) -> Any:
+        if not isinstance(raw, dict):
+            return raw
+        levels = []
+        for lv in raw.get("levels") or []:
+            if not isinstance(lv, dict):
+                continue
+            levels.append({
+                "concurrent_users": lv.get("concurrent_users"),
+                "label": lv.get("label"),
+                "avg_response_time": lv.get("avg_response_time"),
+                "p95_response_time": lv.get("p95_response_time"),
+                "qps": lv.get("qps"),
+                "error_rate": lv.get("error_rate"),
+                "total_requests": lv.get("total_requests"),
+            })
+        return {
+            "eligible": raw.get("eligible"),
+            "levels": levels,
+            "guidance": raw.get("guidance") or "阶梯并发全档必须写入核心结论。",
+        }
+
+    def _slim_roster(raw: Any) -> list:
+        out = []
+        for r in raw or []:
+            if not isinstance(r, dict):
+                continue
+            out.append({
+                "label": r.get("label"),
+                "concurrent_users": r.get("concurrent_users"),
+                "avg_response_time": r.get("avg_response_time"),
+                "p95_response_time": r.get("p95_response_time"),
+                "qps": r.get("qps"),
+                "error_rate": r.get("error_rate"),
+            })
+        return out
+
+    must = {k: ctx[k] for k in must_keys if k in ctx and ctx[k] is not None}
+    soft = {k: ctx[k] for k in soft_keys if k in ctx and ctx[k] is not None}
+    rest = {k: v for k, v in ctx.items() if k not in must and k not in soft}
+
+    packed = dict(must)
+    blob = _dumps(packed)
+    if len(blob) > max_chars:
+        # 预算极紧：再压 ladder/roster 字段
+        if "ladder_summary" in packed:
+            packed["ladder_summary"] = _slim_ladder(packed["ladder_summary"])
+        if "chapter_roster" in packed:
+            packed["chapter_roster"] = _slim_roster(packed["chapter_roster"])
+        blob = _dumps(packed)
+        if len(blob) > max_chars:
+            # 仍超限则至少保住 ladder levels 的并发数字
+            emergency = {
+                "kind": packed.get("kind"),
+                "analysis_mode": packed.get("analysis_mode"),
+                "chapter_count": packed.get("chapter_count"),
+                "ladder_summary": _slim_ladder(packed.get("ladder_summary")),
+                "chapter_roster": _slim_roster(packed.get("chapter_roster")),
+            }
+            return _dumps(emergency)[:max_chars]
+
+    for k, v in soft.items():
+        trial = dict(packed)
+        trial[k] = v
+        if len(_dumps(trial)) <= max_chars:
+            packed = trial
+
+    # rest：小字段优先 → scenes/chapters/records → sut_metrics_l1 最后（最可裁）
+    rest_items = list(rest.items())
+
+    def _rest_rank(key: str) -> int:
+        if key == "sut_metrics_l1":
+            return 90
+        if key in ("scenes", "chapters", "records"):
+            return 50
+        if key in ("case_compare", "metric_compare", "overview_table"):
+            return 30
+        return 10
+
+    rest_items.sort(key=lambda kv: (_rest_rank(kv[0]), kv[0]))
+
+    for k, v in rest_items:
+        trial = dict(packed)
+        trial[k] = v
+        blob = _dumps(trial)
+        if len(blob) > max_chars:
+            if k in ("scenes", "chapters", "records", "sut_metrics_l1") and isinstance(v, (list, dict)):
+                if isinstance(v, list):
+                    partial = []
+                    for item in v:
+                        trial2 = dict(packed)
+                        trial2[k] = partial + [item]
+                        if len(_dumps(trial2)) > max_chars:
+                            break
+                        partial.append(item)
+                    if partial:
+                        packed[k] = partial
+                elif isinstance(v, dict) and isinstance(v.get("chapters"), list):
+                    # L1 结构：按 chapters 逐条塞
+                    partial_ch = []
+                    base_obj = {kk: vv for kk, vv in v.items() if kk != "chapters"}
+                    for item in v.get("chapters") or []:
+                        trial2 = dict(packed)
+                        trial2[k] = {**base_obj, "chapters": partial_ch + [item], "truncated": True}
+                        if len(_dumps(trial2)) > max_chars:
+                            break
+                        partial_ch.append(item)
+                    if partial_ch:
+                        packed[k] = {
+                            **base_obj,
+                            "chapters": partial_ch,
+                            "truncated": True,
+                        }
+            continue
+        packed = trial
+    return _dumps(packed)
+
+
 async def hydrate_snapshot_chart_fields(snapshot: Optional[dict]) -> dict:
-    """为旧增强报告补齐 rt_histogram / 缺失时序（不落库，仅内存）。"""
+    """为旧增强报告补齐 rt_histogram / 缺失时序 / 受测环境字段（不落库，仅内存）。"""
+    from app.modules.perf.perf_html_theme import env_label_from_config
+
     snap = dict(snapshot or {})
     records = list(snap.get("records") or [])
     if not records:
         return snap
-    need_ids = []
+
+    need_chart_ids = []
+    need_env_ids: list[int] = []
     for r in records:
         if not isinstance(r, dict) or r.get("id") is None:
             continue
         if not r.get("rt_histogram") or not r.get("time_series_data"):
-            need_ids.append(r["id"])
-    if not need_ids:
-        return snap
-    from app.models.perf import PerfRecord
+            need_chart_ids.append(r["id"])
+        cfg = r.get("config_snapshot") if isinstance(r.get("config_snapshot"), dict) else {}
+        has_env = bool(str(cfg.get("env_name") or "").strip() or str(cfg.get("env_host") or "").strip())
+        if not has_env and not str(r.get("env_label") or "").strip():
+            try:
+                eid = int(cfg.get("env_id")) if cfg.get("env_id") is not None else None
+            except (TypeError, ValueError):
+                eid = None
+            if eid is not None:
+                need_env_ids.append(eid)
 
-    rows = await PerfRecord.filter(id__in=list(dict.fromkeys(need_ids))).all()
-    by_id = {r.id: r for r in rows}
+    by_id = {}
+    if need_chart_ids:
+        from app.models.perf import PerfRecord
+
+        rows = await PerfRecord.filter(id__in=list(dict.fromkeys(need_chart_ids))).all()
+        by_id = {r.id: r for r in rows}
+
+    env_by_id = {}
+    if need_env_ids:
+        from app.models.sys import Environment
+
+        envs = await Environment.filter(id__in=list(dict.fromkeys(need_env_ids)), is_del=False).all()
+        env_by_id = {e.id: e for e in envs}
+
     hydrated = []
     for r in records:
         if not isinstance(r, dict):
@@ -1034,6 +1768,21 @@ async def hydrate_snapshot_chart_fields(snapshot: Optional[dict]) -> dict:
                 item["rt_histogram"] = eb.get("rt_histogram") or []
             if not item.get("time_series_data"):
                 item["time_series_data"] = src.time_series_data or []
+
+        cfg = dict(item.get("config_snapshot") or {}) if isinstance(item.get("config_snapshot"), dict) else {}
+        if not (str(cfg.get("env_name") or "").strip() or str(cfg.get("env_host") or "").strip()):
+            try:
+                eid = int(cfg.get("env_id")) if cfg.get("env_id") is not None else None
+            except (TypeError, ValueError):
+                eid = None
+            env = env_by_id.get(eid) if eid is not None else None
+            if env:
+                cfg["env_name"] = getattr(env, "name", None) or ""
+                cfg["env_host"] = getattr(env, "host", None) or ""
+                item["config_snapshot"] = cfg
+        lab = env_label_from_config(item.get("config_snapshot") or {})
+        if lab and lab != "—":
+            item["env_label"] = lab
         hydrated.append(item)
     snap["records"] = hydrated
     return snap

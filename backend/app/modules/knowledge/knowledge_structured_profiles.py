@@ -7,8 +7,8 @@ from typing import Any, Optional
 from app.modules.knowledge.parsers.zentao_bug import parse_zentao_bug_export
 
 try:
-    from app.modules.knowledge.packs.digitech.iteration_plan import parse_iteration_plan
-except ImportError:  # CE / 未打包行业扩展时
+    from app.modules.knowledge.packs._industry.iteration_plan import parse_iteration_plan
+except ImportError:  # 未打包行业扩展时
     def parse_iteration_plan(content: bytes, file_name: str = "") -> dict[str, Any]:  # type: ignore[misc]
         return {
             "requirements": [],

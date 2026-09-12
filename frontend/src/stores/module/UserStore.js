@@ -24,6 +24,54 @@ export function readUiThemeFromStorage() {
     return UI_THEMES.pro
 }
 
+const UI_ZOOM_KEY = 'uiZoom'
+const UI_ZOOM_MIN = 80
+const UI_ZOOM_MAX = 110
+const UI_ZOOM_STEP = 5
+
+export function clampUiZoom(percent) {
+    const n = Math.round(Number(percent))
+    if (!Number.isFinite(n)) return 100
+    return Math.min(UI_ZOOM_MAX, Math.max(UI_ZOOM_MIN, n))
+}
+
+export function readUiZoomFromStorage() {
+    try {
+        const n = Number(localStorage.getItem(UI_ZOOM_KEY))
+        if (Number.isFinite(n) && n >= UI_ZOOM_MIN && n <= UI_ZOOM_MAX) {
+            return clampUiZoom(n)
+        }
+    } catch {
+        // ignore
+    }
+    return 100
+}
+
+export function applyUiZoom(percent) {
+    const p = clampUiZoom(percent)
+    const ratio = p / 100
+    const el = document.documentElement
+    // 供布局用：100vh / zoom，抵消 zoom 后底部/侧边留白
+    el.style.setProperty('--ui-zoom', String(ratio))
+    // Chromium / Safari：zoom 等比缩放布局与弹层；Firefox 不支持则退回 font-size
+    if ('zoom' in el.style) {
+        el.style.zoom = String(ratio)
+        el.style.removeProperty('font-size')
+    } else {
+        el.style.zoom = ''
+        el.style.fontSize = `${ratio * 16}px`
+    }
+    // 触发布局重算（侧栏 100vh、图表等）
+    try {
+        window.dispatchEvent(new Event('resize'))
+    } catch {
+        // ignore
+    }
+    return p
+}
+
+export { UI_ZOOM_MIN, UI_ZOOM_MAX, UI_ZOOM_STEP }
+
 export const UserStore = defineStore('uStore', {
     // 全局的状态(数据)
     state: () => {
@@ -45,6 +93,8 @@ export const UserStore = defineStore('uStore', {
             darkMode: useDark().value,
             // 界面风格：classic 经典 | pro 清新简约
             uiTheme: readUiThemeFromStorage(),
+            // 界面缩放百分比（类似浏览器缩放），默认 100
+            uiZoom: readUiZoomFromStorage(),
         }
     },
     actions: {
@@ -126,8 +176,23 @@ export const UserStore = defineStore('uStore', {
         // 应用当前主题到 document（启动时调用）
         syncThemeToDocument() {
             applyUiTheme(this.uiTheme, this.darkMode)
+            this.syncUiZoomToDocument()
         },
-        /** 退出登录：清会话数据，保留界面风格/暗黑模式 */
+        syncUiZoomToDocument() {
+            this.uiZoom = applyUiZoom(this.uiZoom)
+        },
+        setUiZoom(percent) {
+            this.uiZoom = applyUiZoom(percent)
+            try {
+                localStorage.setItem(UI_ZOOM_KEY, String(this.uiZoom))
+            } catch {
+                // ignore
+            }
+        },
+        bumpUiZoom(delta) {
+            this.setUiZoom(this.uiZoom + delta)
+        },
+        /** 退出登录：清会话数据，保留界面风格/暗黑模式/缩放 */
         clearSession() {
             this.token = ""
             this.username = ""

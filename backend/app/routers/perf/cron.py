@@ -370,15 +370,29 @@ async def execute_perf_cron_job(job_id: str):
             print(f"[PerfCron] 环境不存在: {job.env_id}")
             return
 
-        # 复用 exec.py 中的 start_perf 逻辑
+        # 复用 exec.py 中的 start_perf 逻辑（环境/昵称字段与手动启动对齐，供报告抬头）
         from .exec import run_perf_scene, snapshot_scene_items_with_case_meta
         from app.modules.perf.perf_target_eval import normalize_perf_targets
+        from app.routers.perf.report_utils import resolve_user_nickname
 
         config = dict(scene.config or {})
         config["env_id"] = job.env_id
+        config["env_name"] = getattr(env, "name", None) or ""
+        config["env_host"] = getattr(env, "host", None) or ""
         config.setdefault("request_detail_level", "brief")
         if config.get("perf_targets") is not None:
             config["perf_targets"] = normalize_perf_targets(config.get("perf_targets"))
+        config["run_by_nickname"] = await resolve_user_nickname(job.create_by)
+
+        from app.modules.perf.sut_bind import apply_sut_binding_to_config
+        from app.modules.perf.sut_force import activate_sut_force_for_record
+
+        config = await apply_sut_binding_to_config(
+            config,
+            project_id=job.project_id,
+            env_id=job.env_id,
+            apply_force=False,
+        )
 
         record = await PerfRecord.create(
             scene_id=job.scene_id,
@@ -390,6 +404,7 @@ async def execute_perf_cron_job(job_id: str):
             run_by=job.create_by,
             cron_job_id=job_id
         )
+        await activate_sut_force_for_record(record)
 
         # 施压一律走 Runner Worker；无在线 Worker 时 run_perf_scene 会失败落库
         await run_perf_scene(record.id, use_workers=True)

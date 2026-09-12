@@ -52,6 +52,11 @@
         :start-time="runInfo.start_time"
         :driver-mode="runInfo.env?.driver_mode"
       />
+      <AppDeviceApmPanel
+        :summary="runInfo.device_apm_summary"
+        :series="runInfo.device_apm_series || []"
+        :show-empty="Boolean(runInfo.env?.device_apm?.enabled || runInfo.env?.enable_device_apm)"
+      />
       <el-table :data="suites" stripe row-key="id" class="app-report-table">
         <el-table-column type="expand">
           <template #default="{ row }">
@@ -123,6 +128,7 @@ import PageCard from '@/components/PageCard.vue'
 import CaseReportTimeline from '@/components/Report/CaseReportTimeline.vue'
 import AppReportOverview from '@/views/App/components/AppReportOverview.vue'
 import AppReportEnvSummary from '@/views/App/components/AppReportEnvSummary.vue'
+import AppDeviceApmPanel from '@/views/App/components/AppDeviceApmPanel.vue'
 import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
 import ReportSummaryPanel from '@/views/AI/components/ReportSummaryPanel.vue'
 import ReportFailureBatchBar from '@/components/ReportFailureBatchBar.vue'

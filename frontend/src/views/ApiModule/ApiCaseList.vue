@@ -5,16 +5,13 @@
     </template>
     
     <template #main>
-      <div class="case-list-layout">
-        <div class="case-sidebar">
-          <CatalogTree
-            :project-id="proStore.projectInfo.id"
-            v-model="searchForm.catalog_id"
-            all-node-label="全部用例"
-            :show-manage="true"
-            @change="handleCatalogFilter"
-          />
-        </div>
+      <CatalogListLayout
+        :project-id="proStore.projectInfo.id"
+        v-model="searchForm.catalog_id"
+        all-node-label="全部用例"
+        :show-manage="true"
+        @change="handleCatalogFilter"
+      >
         <div class="case-list">
           <el-input
             v-model="searchForm.api_keyword"
@@ -145,13 +142,14 @@
               v-else-if="col.key === 'api_info'"
               label="关联接口"
               :min-width="col.minWidth || 220"
+              show-overflow-tooltip
             >
               <template #default="{ row }">
                 <div class="api-info">
-                  <div class="api-name-row">{{ row.api_name }}</div>
+                  <div class="api-name-row" :title="row.api_name || ''">{{ row.api_name }}</div>
                   <div class="api-path-row">
                     <el-tag :type="getMethodType(row.api_method)" size="small">{{ row.api_method }}</el-tag>
-                    <span class="api-path-text">{{ row.api_path }}</span>
+                    <span class="api-path-text" :title="row.api_path || ''">{{ row.api_path }}</span>
                   </div>
                 </div>
               </template>
@@ -271,7 +269,7 @@
           class="pagination"
         />
         </div>
-      </div>
+      </CatalogListLayout>
     </template>
   </PageCard>
   
@@ -351,6 +349,19 @@
             </div>
           </el-form-item>
         </el-form>
+        <CsvPerfHint
+          v-if="!envDialog.isBatch && envDialog.case"
+          :source="envDialog.case"
+          :project-id="proStore.projectInfo?.id"
+          :case-id="envDialog.case?.id"
+          :api-id="envDialog.case?.api_id"
+          show-try-run
+          v-model:enabled="csvTry.enabled"
+          v-model:try-source="csvTry.source"
+          v-model:csv-scene-id="csvTry.sceneId"
+          v-model:csv-dataset-id="csvTry.datasetId"
+          v-model:csv-row-index="csvTry.rowIndex"
+        />
       </section>
 
       <section v-if="envDialog.env_id" class="bc-dialog-section bc-dialog-section--muted">
@@ -488,18 +499,17 @@
                       </el-descriptions-item>
                     </el-descriptions>
                   </div>
-                  <div class="detail-block" v-if="hasRunResponseHeaders">
+                  <div class="detail-block detail-block--headers" v-if="hasRunResponseHeaders">
                     <div class="detail-title">响应 Headers</div>
-                    <CopyablePre :text="runResponseDetail.headers" max-height="280px" wrap />
+                    <CopyablePre :text="runResponseDetail.headers" max-height="160px" wrap />
                   </div>
-                  <div class="detail-block">
+                  <div class="detail-block detail-block--body">
                     <div class="detail-title">响应 Body</div>
                     <ResponseBodyViewer
                       :body="runResponseDetail.body"
                       :highlight-text="runDialog.responseHighlight"
                       fill
-                      min-height="360px"
-                      max-height="72vh"
+                      min-height="200px"
                     />
                   </div>
                 </div>
@@ -715,18 +725,17 @@
                 </el-descriptions-item>
               </el-descriptions>
             </div>
-            <div class="detail-block" v-if="hasRunResponseHeaders">
+            <div class="detail-block detail-block--headers" v-if="hasRunResponseHeaders">
               <div class="detail-title">响应 Headers</div>
-              <CopyablePre :text="runResponseDetail.headers" max-height="280px" wrap />
+              <CopyablePre :text="runResponseDetail.headers" max-height="160px" wrap />
             </div>
-            <div class="detail-block">
+            <div class="detail-block detail-block--body">
               <div class="detail-title">响应 Body</div>
               <ResponseBodyViewer
                 :body="runResponseDetail.body"
                 :highlight-text="runDialog.responseHighlight"
                 fill
-                min-height="360px"
-                max-height="72vh"
+                min-height="200px"
               />
             </div>
           </div>
@@ -913,7 +922,7 @@ import { httpCaseApi } from '@/api/modules/http'
 import dateTools from '@/tools/dateTools'
 import PageCard from '@/components/PageCard.vue'
 import TableColumnPicker from '@/components/TableColumnPicker.vue'
-import CatalogTree from '@/components/CatalogTree.vue'
+import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import { useTableColumns } from '@/composables/useTableColumns.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 import CaseEdit from './components/CaseEdit.vue'
@@ -921,6 +930,7 @@ import ApiCaseGenerator from '@/views/AI/components/ApiCaseGenerator.vue'
 import EnvVarQuickEdit from '@/components/EnvVarQuickEdit.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import VariablePreviewPanel from '@/components/VariablePreviewPanel.vue'
+import CsvPerfHint from '@/components/CsvPerfHint.vue'
 import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
 import CaseNameCell from '@/components/CaseNameCell.vue'
 import { stabilityApi } from '@/api/modules/stability.js'
@@ -1136,6 +1146,13 @@ const envDialog = reactive({
   isBatch: false,
   auto_validate_schema: false,
   propagate_extracted: true,
+})
+const csvTry = reactive({
+  enabled: false,
+  source: 'dataset',
+  sceneId: null,
+  datasetId: null,
+  rowIndex: 0,
 })
 const authConfigsByEnv = ref({}) // environment_id -> { name, is_enabled, vars }
 const envAuthHint = computed(() => {
@@ -1475,6 +1492,11 @@ const handleBatchRun = async () => {
   envDialog.worker_id = null
   envDialog.auto_validate_schema = false
   envDialog.propagate_extracted = true
+  csvTry.enabled = false
+  csvTry.source = 'dataset'
+  csvTry.sceneId = null
+  csvTry.datasetId = null
+  csvTry.rowIndex = 0
   envDialog.visible = true
 }
 
@@ -1505,6 +1527,11 @@ const handleRun = async (row) => {
   envDialog.worker_id = null
   envDialog.auto_validate_schema = false
   envDialog.propagate_extracted = true
+  csvTry.enabled = false
+  csvTry.source = 'dataset'
+  csvTry.sceneId = null
+  csvTry.datasetId = null
+  csvTry.rowIndex = 0
   envDialog.visible = true
 }
 
@@ -1559,6 +1586,11 @@ const confirmRun = async () => {
         auto_validate_schema: envDialog.auto_validate_schema,
         propagate_extracted: envDialog.propagate_extracted,
         ...(envDialog.worker_id ? { worker_id: envDialog.worker_id } : {}),
+        ...(csvTry.enabled && csvTry.datasetId
+          ? { csv_dataset_id: csvTry.datasetId, csv_row_index: csvTry.rowIndex ?? 0 }
+          : csvTry.enabled && csvTry.sceneId
+            ? { csv_scene_id: csvTry.sceneId, csv_row_index: csvTry.rowIndex ?? 0 }
+            : {}),
       })
       if (res.status >= 200 && res.status < 300) {
         envDialog.visible = false
@@ -1633,17 +1665,6 @@ watch(
   cursor: help;
 }
 
-.case-list-layout {
-  display: flex;
-  gap: 20px;
-  min-height: calc(100vh - 250px);
-}
-
-.case-sidebar {
-  width: 260px;
-  min-width: 260px;
-}
-
 .case-list {
   .search-bar {
     display: flex;
@@ -1668,17 +1689,25 @@ watch(
       font-weight: 500;
       color: var(--el-text-color-primary);
       margin-bottom: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     
     .api-path-row {
       display: flex;
       align-items: center;
       gap: 8px;
+      min-width: 0;
       
       .api-path-text {
         color: var(--el-text-color-secondary);
         font-size: 12px;
         font-family: 'Consolas', monospace;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
       }
     }
   }
@@ -2062,14 +2091,46 @@ watch(
   flex-direction: column;
   gap: 0;
   max-height: min(720px, calc(92vh - 180px));
+  min-height: 0;
 }
 
 .run-result-dialog .detail-block {
   margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 .run-result-dialog .detail-block:last-child {
   margin-bottom: 0;
+}
+
+/* 响应 Body 吃掉剩余高度，内部 CopyablePre 出现滚动条 */
+.run-result-dialog .run-tab-panel--response > .detail-block--body {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.run-result-dialog .run-tab-panel--response > .detail-block--body .detail-title {
+  flex-shrink: 0;
+}
+
+.run-result-dialog .run-tab-panel--response > .detail-block--body .response-body-viewer,
+.run-result-dialog .run-tab-panel--response > .detail-block--body .copyable-pre {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-result-dialog .run-tab-panel--response > .detail-block--body .copyable-pre__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* 由父级 flex 限高，避免 480px/72vh 撑破弹窗后被 overflow:hidden 裁切 */
+  max-height: none !important;
+  overflow: auto;
 }
 
 .run-result-dialog .detail-title-row {

@@ -16,7 +16,8 @@
 
     <div class="mock-tip">
       <div class="mock-tip__main">
-        调用地址：<code>{平台}/api-module/mock-call/{匹配路径}</code>
+        调用地址：优先 <code>{平台}/mock/{匹配路径}</code>；
+        亦可用 <code>/api-module/mock-call/{匹配路径}</code>
         · 方法须与配置一致 · 响应 Body 填什么就返回什么
       </div>
       <div class="mock-tip__sub">

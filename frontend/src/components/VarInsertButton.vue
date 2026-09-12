@@ -83,6 +83,8 @@ import EnvVarQuickEdit from '@/components/EnvVarQuickEdit.vue'
 const props = defineProps({
   envId: { type: Number, default: null },
   extraVars: { type: Array, default: () => [] },
+  /** 额外分组：[{ group, items: [{ key, preview?, description? }] }] */
+  extraGroups: { type: Array, default: () => [] },
   label: { type: String, default: '插入变量' },
   size: { type: String, default: 'small' },
   type: { type: String, default: 'primary' },
@@ -216,6 +218,23 @@ const allItems = computed(() => {
   for (const key of props.extraVars) {
     if (key) items.push(makeItem('本用例变量', key, key, ''))
   }
+  for (const block of props.extraGroups || []) {
+    const group = block.group || '其他'
+    for (const it of block.items || []) {
+      const key = typeof it === 'string' ? it : it.key
+      if (!key) continue
+      items.push(
+        makeItem(
+          group,
+          key,
+          key,
+          typeof it === 'object' ? (it.preview || '') : '',
+          false,
+          typeof it === 'object' ? (it.description || '') : ''
+        )
+      )
+    }
+  }
   return items
 })
 
@@ -252,10 +271,11 @@ function onListClick(e) {
 async function onInsert(command) {
   const result = await insertVarRef(command)
   if (result?.ok) {
+    const display = result.text || formatDisplay(command)
     const tip =
       result.mode === 'copy'
-        ? `已复制 ${formatDisplay(command)}，请粘贴到输入框`
-        : `已插入 ${formatDisplay(command)}`
+        ? `已复制 ${display}，请粘贴到输入框`
+        : `已插入 ${display}`
     ElMessage.success(tip)
   } else {
     ElMessage.warning('请先将光标放入输入框')

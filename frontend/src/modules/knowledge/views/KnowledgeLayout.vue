@@ -15,7 +15,7 @@
           <el-menu-item index="/ai-knowledge/reports">报告向导</el-menu-item>
           <el-menu-item index="/ai-knowledge/records">生成记录</el-menu-item>
           <el-menu-item index="/ai-knowledge/settings">生成配置</el-menu-item>
-          <el-menu-item index="/ai-knowledge/pro-custom">定制文档</el-menu-item>
+          <el-menu-item index="/ai-knowledge/custom-docs">定制文档</el-menu-item>
         </el-menu>
       </div>
     </template>
@@ -35,7 +35,9 @@ const route = useRoute()
 const packEnabled = ref(false)
 
 const activePath = computed(() => {
-  if (route.path.startsWith('/ai-knowledge/pro-custom')) return '/ai-knowledge/pro-custom'
+  if (route.path.startsWith('/ai-knowledge/custom-docs') || route.path.startsWith('/ai-knowledge/pro-custom')) {
+    return '/ai-knowledge/custom-docs'
+  }
   if (route.path.startsWith('/ai-knowledge/qa')) return '/ai-knowledge/qa'
   if (route.path.startsWith('/ai-knowledge/search')) return '/ai-knowledge/search'
   if (route.path.startsWith('/ai-knowledge/records')) return '/ai-knowledge/records'
@@ -58,7 +60,9 @@ const hubSubText = computed(() => {
   if (p.startsWith('/ai-knowledge/reports')) return '报告向导 — 选择资料与执行记录，生成迭代测试报告'
   if (p.startsWith('/ai-knowledge/records')) return '生成记录 — 查看报告生成进度与下载'
   if (p.startsWith('/ai-knowledge/settings')) return '生成配置 — RAG、摘要、项目级设置'
-  if (p.startsWith('/ai-knowledge/pro-custom')) return '定制文档 — 行业定制报告与方案（需开通）'
+  if (p.startsWith('/ai-knowledge/custom-docs') || p.startsWith('/ai-knowledge/pro-custom')) {
+    return '定制文档 — 行业定制报告与方案（需开通）'
+  }
   return ''
 })
 

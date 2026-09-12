@@ -166,6 +166,116 @@
               />
             </el-select>
           </el-form-item>
+          <el-form-item label="描述">
+            <el-input
+              v-model="runForm.description"
+              type="textarea"
+              :rows="2"
+              maxlength="2000"
+              show-word-limit
+              placeholder="可选。写入本次执行报告抬头，如：晚高峰基线 / 扩容后复测"
+            />
+          </el-form-item>
+          <el-form-item label="被测资源">
+            <div class="config-preview" style="width:100%">
+              <el-radio-group v-model="runSutMode" size="small" class="sut-run-mode">
+                <el-radio-button value="scene">沿用场景</el-radio-button>
+                <el-radio-button value="override">本次覆盖</el-radio-button>
+                <el-radio-button value="none">本次不采集</el-radio-button>
+              </el-radio-group>
+              <div v-if="runSutMode === 'none'" class="detail-level-hint" style="margin-top:8px">
+                本次不写入被测资源曲线（仍可正常压测）。
+              </div>
+              <template v-else-if="runSutMode === 'override'">
+                <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+                  <el-select
+                    v-model="runSutAppId"
+                    clearable
+                    filterable
+                    placeholder="被测应用（可空=仅按下方机器）"
+                    style="width:100%"
+                    @change="onRunSutAppChange"
+                  >
+                    <el-option
+                      v-for="app in runSutAppList"
+                      :key="app.id"
+                      :label="app.name"
+                      :value="app.id"
+                    />
+                  </el-select>
+                  <el-select
+                    v-model="runSutRoles"
+                    multiple
+                    clearable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    placeholder="角色子集（空=应用全部角色）"
+                    style="width:100%"
+                    :disabled="!runSutAppId"
+                  >
+                    <el-option v-for="r in runSutAppRoles" :key="r" :label="r" :value="r" />
+                  </el-select>
+                  <el-checkbox v-model="runSutPickServers">
+                    显式指定机器（最高优先级；勾选后空列表=本次解绑）
+                  </el-checkbox>
+                  <el-select
+                    v-if="runSutPickServers"
+                    v-model="runSutServerIds"
+                    multiple
+                    filterable
+                    clearable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    placeholder="勾选装了被测监控采集器的机器"
+                    style="width:100%"
+                  >
+                    <el-option
+                      v-for="s in runSutServerOptions"
+                      :key="s.id"
+                      :label="`${s.name}${s.role ? ' · ' + s.role : ''}${s.hostname ? ' (' + s.hostname + ')' : ''}`"
+                      :value="s.id"
+                    />
+                  </el-select>
+                  <el-input
+                    v-model="runSutGrafanaTpl"
+                    clearable
+                    maxlength="1024"
+                    show-word-limit
+                    placeholder="可选：本次 Grafana 深链（http/https；留空=沿用场景模板，不会清除）"
+                  />
+                </div>
+              </template>
+              <template v-if="runSutMode !== 'none'">
+                <div v-if="runSutResolveLoading" class="detail-level-hint" style="margin-top:8px">正在解析采集器…</div>
+                <template v-else-if="runSutResolve">
+                  <div v-if="runSutResolve.error" class="detail-level-hint" style="color:#e6a23c;margin-top:8px">
+                    解析提示：{{ runSutResolve.error }}（仍可启动；报告可能无资源曲线）
+                  </div>
+                  <div class="detail-level-hint" style="margin-top:8px">
+                    将切片 {{ (runSutResolve.server_ids || []).length }} 台机器
+                    <span v-if="runSutResolve.application_name">（{{ runSutResolve.application_name }}）</span>
+                  </div>
+                  <ul v-if="(runSutResolve.servers || []).length" class="sut-resolve-list">
+                    <li v-for="s in runSutResolve.servers" :key="s.id">
+                      {{ s.name }}
+                      <span v-if="s.role"> · {{ s.role }}</span>
+                      <span v-if="s.status && s.status !== 'ok'"> · {{ sutResolveStatusLabel(s.status) }}</span>
+                    </li>
+                  </ul>
+                </template>
+                <div
+                  v-else-if="runSutMode === 'scene' && !runForm.config?.sut_application_id"
+                  class="detail-level-hint"
+                  style="margin-top:8px"
+                >
+                  场景未绑定被测应用。可选「本次覆盖」临时指定，或到场景编辑里绑定。
+                </div>
+                <div v-else-if="runSutMode === 'override' && !runSutAppId && !runSutPickServers" class="detail-level-hint" style="margin-top:8px">
+                  请选择被测应用，或勾选「显式指定机器」。
+                </div>
+              </template>
+            </div>
+          </el-form-item>
           <el-form-item label="配置">
             <div class="config-preview">
               <div class="config-row">
@@ -678,6 +788,7 @@ import CatalogListLayout from '@/components/CatalogListLayout.vue'
 import { perfSceneApi, perfExecApi, perfWorkerApi, httpSuiteApi, httpCaseApi } from '@/api'
 import { parseWorkerList, filterOnlineWorkers, agentKindShort, distributeByWeights, neededConcurrentFromConfig } from './perfWorkerUtils'
 import { envApi } from '@/api'
+import { perfSutApplicationApi, perfSutServerApi } from '@/api/modules/perf'
 import { aiConfigApi, aiGenerateApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { UserStore } from '@/stores/module/UserStore'
@@ -725,11 +836,157 @@ const runForm = ref({
   config: {},
   useWorkers: false,
   requestDetailLevel: 'brief',
-  aiAnalyze: false
+  aiAnalyze: false,
+  description: ''
 })
 const runOverridePerfTargets = ref(false)
 const runPerfTargets = ref(defaultPerfTargets())
 ensureGlobalTargetItems(runPerfTargets.value)
+const runSutResolve = ref(null)
+const runSutResolveLoading = ref(false)
+let runSutResolveSeq = 0
+const runSutMode = ref('scene') // scene | override | none
+const runSutAppId = ref(null)
+const runSutRoles = ref([])
+const runSutPickServers = ref(false)
+const runSutServerIds = ref([])
+const runSutGrafanaTpl = ref('')
+const runSutAppList = ref([])
+const runSutServerList = ref([])
+
+const runSutAppRoles = computed(() => {
+  const app = runSutAppList.value.find((a) => a.id === runSutAppId.value)
+  const roles = app?.roles
+  return Array.isArray(roles) ? roles.filter(Boolean) : []
+})
+
+const runSutServerOptions = computed(() => {
+  const fromResolve = (runSutResolve.value?.servers || []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    role: s.role || '',
+    hostname: s.hostname || '',
+  }))
+  const byId = new Map(fromResolve.map((s) => [s.id, s]))
+  for (const s of runSutServerList.value) {
+    if (!byId.has(s.id)) {
+      byId.set(s.id, {
+        id: s.id,
+        name: s.name,
+        role: s.role || '',
+        hostname: s.hostname || '',
+      })
+    }
+  }
+  return [...byId.values()]
+})
+
+const sutResolveStatusLabel = (st) => ({
+  monitoring_disabled: '监控已关闭',
+  schedule_paused: '日程暂停',
+  schedule_paused_will_force: '日常暂停，压测将强制采集',
+  offline: '采集器离线',
+  server_deleted: '服务器已删除',
+  server_project_mismatch: '项目不匹配',
+  ok: '正常',
+}[st] || st || '')
+
+const loadRunSutCatalog = async () => {
+  const pid = proStore.projectInfo?.id
+  if (!pid) return
+  try {
+    const [appsRes, serversRes] = await Promise.all([
+      perfSutApplicationApi.getList({ project_id: pid, size: 200 }),
+      perfSutServerApi.getList({ project_id: pid, size: 200 }),
+    ])
+    const apps = appsRes?.data ?? appsRes
+    runSutAppList.value = Array.isArray(apps) ? apps : (apps?.data || [])
+    const servers = serversRes?.data ?? serversRes
+    runSutServerList.value = Array.isArray(servers) ? servers : (servers?.data || [])
+  } catch (e) {
+    console.error(e)
+    runSutAppList.value = []
+    runSutServerList.value = []
+  }
+}
+
+const refreshRunSutResolve = async () => {
+  // 任意路径都抬序号，避免异步 resolve 写回覆盖「本次不采集 / 显式机器」预览
+  const seq = ++runSutResolveSeq
+  if (runSutMode.value === 'none') {
+    if (seq !== runSutResolveSeq) return
+    runSutResolve.value = { server_ids: [], servers: [], application_name: '' }
+    runSutResolveLoading.value = false
+    return
+  }
+  if (runSutMode.value === 'override' && runSutPickServers.value) {
+    const ids = runSutServerIds.value || []
+    const byId = new Map(runSutServerOptions.value.map((s) => [s.id, s]))
+    if (seq !== runSutResolveSeq) return
+    runSutResolve.value = {
+      server_ids: ids,
+      servers: ids.map((id) => byId.get(id) || { id, name: `server-${id}`, status: 'ok' }),
+      application_name: runSutAppList.value.find((a) => a.id === runSutAppId.value)?.name || '',
+    }
+    runSutResolveLoading.value = false
+    return
+  }
+
+  const appId =
+    runSutMode.value === 'override'
+      ? runSutAppId.value
+      : runForm.value?.config?.sut_application_id
+  const envId = runForm.value?.envId
+  if (!appId || !envId) {
+    if (seq !== runSutResolveSeq) return
+    runSutResolve.value = null
+    runSutResolveLoading.value = false
+    return
+  }
+  runSutResolveLoading.value = true
+  try {
+    const roles =
+      runSutMode.value === 'override'
+        ? runSutRoles.value
+        : runForm.value?.config?.sut_roles
+    const params = { environment_id: envId }
+    if (Array.isArray(roles) && roles.length) params.roles = roles.join(',')
+    const res = await perfSutApplicationApi.resolve(appId, params)
+    if (seq !== runSutResolveSeq) return
+    runSutResolve.value = res?.data || res || null
+  } catch (e) {
+    console.warn(e)
+    if (seq !== runSutResolveSeq) return
+    runSutResolve.value = { error: 'resolve_failed', server_ids: [], servers: [] }
+  } finally {
+    if (seq === runSutResolveSeq) runSutResolveLoading.value = false
+  }
+}
+
+const onRunSutAppChange = () => {
+  // 用户换应用时清空角色；打开弹窗预填不走此回调
+  runSutRoles.value = []
+}
+
+watch(
+  () => [
+    runForm.value?.envId,
+    runForm.value?.config?.sut_application_id,
+    runDialogVisible.value,
+    runSutMode.value,
+    runSutAppId.value,
+    (runSutRoles.value || []).join(','),
+    runSutPickServers.value,
+    (runSutServerIds.value || []).join(','),
+  ],
+  ([, , visible]) => {
+    if (!visible) {
+      runSutResolve.value = null
+      return
+    }
+    refreshRunSutResolve()
+  }
+)
 watch(
   () => [runPerfTargets.value?.enabled, (runPerfTargets.value?.items || []).map((i) => i && i.key).join(',')],
   () => {
@@ -1306,11 +1563,19 @@ const handleRun = async (row) => {
     config: row.config || {},
     useWorkers: true,
     requestDetailLevel: 'brief',
-    aiAnalyze: aiCfg.enabled && aiCfg.defaultOn
+    aiAnalyze: aiCfg.enabled && aiCfg.defaultOn,
+    description: ''
   }
   runOverridePerfTargets.value = false
   runPerfTargets.value = normalizePerfTargetsLocal(row.config?.perf_targets)
   ensureGlobalTargetItems(runPerfTargets.value)
+  runSutMode.value = 'scene'
+  runSutAppId.value = row.config?.sut_application_id || null
+  runSutRoles.value = Array.isArray(row.config?.sut_roles) ? [...row.config.sut_roles] : []
+  runSutPickServers.value = false
+  runSutServerIds.value = Array.isArray(row.config?.sut_server_ids) ? [...row.config.sut_server_ids] : []
+  runSutGrafanaTpl.value = ''
+  runSutResolve.value = null
   // 加载环境列表
   try {
     const res = await envApi.getEnvList({ project_id: proStore.projectInfo.id })
@@ -1331,7 +1596,9 @@ const handleRun = async (row) => {
     console.error(e)
     workerList.value = []
   }
+  await loadRunSutCatalog()
   runDialogVisible.value = true
+  refreshRunSutResolve()
 }
 
 const getDurationTip = (config) => {
@@ -1377,6 +1644,10 @@ const confirmRun = async () => {
     )
     return
   }
+  if (runSutMode.value === 'override' && runSutAppId.value == null && !runSutPickServers.value) {
+    ElMessage.warning('本次覆盖请选择被测应用，或勾选「显式指定机器」')
+    return
+  }
   runLoading.value = true
   try {
     const worker_ids = selected.map((w) => w.id)
@@ -1387,6 +1658,23 @@ const confirmRun = async () => {
     const startOpts = { worker_ids, worker_weights }
     if (runOverridePerfTargets.value) {
       startOpts.perf_targets = normalizePerfTargetsLocal(runPerfTargets.value)
+    }
+    const desc = (runForm.value.description || '').trim()
+    if (desc) startOpts.description = desc
+    if (runSutMode.value === 'none') {
+      startOpts.sut_server_ids = []
+    } else if (runSutMode.value === 'override') {
+      if (runSutAppId.value != null) {
+        startOpts.sut_application_id = Number(runSutAppId.value)
+        // 显式传角色（含空数组=该应用全部角色），避免回落场景旧角色
+        startOpts.sut_roles = [...(runSutRoles.value || [])]
+      }
+      if (runSutPickServers.value) {
+        startOpts.sut_server_ids = [...(runSutServerIds.value || [])]
+      }
+      if (runSutGrafanaTpl.value != null && String(runSutGrafanaTpl.value).trim() !== '') {
+        startOpts.sut_grafana_url_template = String(runSutGrafanaTpl.value).trim()
+      }
     }
     await perfExecApi.start(
       runForm.value.sceneId,
@@ -1445,6 +1733,16 @@ onMounted(() => {
 .scene-guide-extra .label {
   font-weight: 600;
   color: #606266;
+}
+.sut-resolve-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.6;
+}
+.sut-run-mode {
+  margin-bottom: 4px;
 }
 .toolbar {
   display: flex;

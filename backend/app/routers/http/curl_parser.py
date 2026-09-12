@@ -72,25 +72,205 @@ _OPTS_WITH_VALUE = {
 }
 
 
-def _normalize_curl_text(curl_command: str) -> str:
+_DATA_PLACEHOLDER_PREFIX = "__CURL_BODY_"
+
+
+def _unescape_bash_ansi_c(inner: str) -> str:
+    out: list[str] = []
+    i = 0
+    while i < len(inner):
+        ch = inner[i]
+        if ch != "\\" or i + 1 >= len(inner):
+            out.append(ch)
+            i += 1
+            continue
+        nxt = inner[i + 1]
+        if nxt == "n":
+            out.append("\n")
+            i += 2
+        elif nxt == "r":
+            out.append("\r")
+            i += 2
+        elif nxt == "t":
+            out.append("\t")
+            i += 2
+        elif nxt == "\\":
+            out.append("\\")
+            i += 2
+        elif nxt == "'":
+            out.append("'")
+            i += 2
+        elif nxt == "a":
+            out.append("\a")
+            i += 2
+        elif nxt == "b":
+            out.append("\b")
+            i += 2
+        elif nxt in "01234567":
+            j = i + 1
+            while j < min(i + 4, len(inner)) and inner[j] in "01234567":
+                j += 1
+            try:
+                out.append(chr(int(inner[i + 1 : j], 8)))
+            except ValueError:
+                out.append(nxt)
+            i = j
+        else:
+            out.append(nxt)
+            i += 2
+    return "".join(out)
+
+
+def _protect_multiline_data_args(text: str) -> tuple[str, dict[str, str]]:
+    """把 --data-raw / --data 的多行内容换成占位符，避免 shlex 拆碎 multipart。"""
+    bodies: dict[str, str] = {}
+
+    def stash(raw: str) -> str:
+        key = f"{_DATA_PLACEHOLDER_PREFIX}{len(bodies)}__"
+        bodies[key] = raw
+        return key
+
+    text = re.sub(
+        r"--data-raw\s+\$'((?:\\.|[^'\\])*)'",
+        lambda m: f"--data-raw {stash(_unescape_bash_ansi_c(m.group(1)))}",
+        text,
+    )
+    text = re.sub(
+        r"--data(?:-raw|-binary|-ascii)?\s+'([^']*)'",
+        lambda m: f"--data-raw {stash(m.group(1))}",
+        text,
+        flags=re.DOTALL,
+    )
+    text = re.sub(
+        r'--data(?:-raw|-binary|-ascii)?\s+"([^"]*)"',
+        lambda m: f"--data-raw {stash(m.group(1))}",
+        text,
+        flags=re.DOTALL,
+    )
+    return text, bodies
+
+
+def _normalize_curl_text(curl_command: str) -> tuple[str, dict[str, str]]:
     """合并续行、统一空白。"""
     text = curl_command.replace("\r\n", "\n").replace("\r", "\n")
     # bash 风格续行：反斜杠 + 换行
     text = re.sub(r"\\\s*\n", " ", text)
-    # 去掉首尾空白，压缩多空格但保留引号内内容由 shlex 处理
-    return text.strip()
+    text, body_map = _protect_multiline_data_args(text)
+    text = _expand_bash_dollar_quotes(text)
+    return text.strip(), body_map
 
 
-def _tokenize(curl_command: str) -> List[str]:
-    text = _normalize_curl_text(curl_command)
-    if not text:
+def _expand_bash_dollar_quotes(text: str) -> str:
+    """展开 bash $'\\r\\n' 等 ANSI-C 引号，便于 shlex 解析 --data-raw。"""
+
+    def repl(m: re.Match[str]) -> str:
+        return _unescape_bash_ansi_c(m.group(1))
+
+    return re.sub(r"\$'((?:\\.|[^'\\])*)'", repl, text)
+
+
+def _extract_multipart_boundary(content_type: str) -> Optional[str]:
+    if not content_type:
+        return None
+    m = re.search(r"boundary=([^;\s]+)", content_type, flags=re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1).strip().strip('"')
+
+
+def _empty_body_field(
+    *,
+    name: str,
+    value: str = "",
+    field_type: str = "text",
+    file_name: str = "",
+    mime_type: str = "application/octet-stream",
+) -> dict:
+    return {
+        "name": name,
+        "value": value,
+        "field_type": field_type,
+        "file_name": file_name,
+        "mime_type": mime_type,
+        "file_key": "",
+        "file_bucket": "",
+        "description": "",
+    }
+
+
+def _multipart_delimiter(boundary: str) -> str:
+    """multipart body 分隔线 = '--' + Content-Type 里的 boundary 参数值。"""
+    return "--" + boundary.strip().strip('"')
+
+
+def _parse_multipart_form_data(body: str, boundary: str) -> list[dict]:
+    """解析 multipart/form-data 原始 body 为 form-data 字段列表。"""
+    if not body or not boundary:
         return []
+    delim = _multipart_delimiter(boundary)
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    chunks = normalized.split(delim)
+    fields: list[dict] = []
+    for chunk in chunks:
+        if not chunk or chunk.strip("- \r\n") == "":
+            continue
+        part = chunk.lstrip("\r\n")
+        if part.endswith("--"):
+            part = part[:-2].rstrip("\r\n")
+        if "\n\n" not in part:
+            continue
+        header_block, content = part.split("\n\n", 1)
+        content = content.rstrip("\r\n")
+        name: Optional[str] = None
+        filename: Optional[str] = None
+        mime_type = "application/octet-stream"
+        for line in header_block.split("\n"):
+            line = line.strip()
+            low = line.lower()
+            if low.startswith("content-disposition:"):
+                nm = re.search(r'name="([^"]*)"', line, flags=re.IGNORECASE)
+                fn = re.search(r'filename="([^"]*)"', line, flags=re.IGNORECASE)
+                if nm:
+                    name = nm.group(1)
+                if fn:
+                    filename = fn.group(1)
+            elif low.startswith("content-type:"):
+                mime_type = line.split(":", 1)[1].strip() or mime_type
+        if not name:
+            continue
+        if filename is not None:
+            fields.append(_empty_body_field(
+                name=name,
+                field_type="file",
+                file_name=filename,
+                mime_type=mime_type,
+            ))
+        else:
+            fields.append(_empty_body_field(
+                name=name,
+                value=content,
+                field_type="text",
+                mime_type=mime_type,
+            ))
+    return fields
+
+
+def _tokenize(curl_command: str) -> tuple[list[str], dict[str, str]]:
+    text, body_map = _normalize_curl_text(curl_command)
+    if not text:
+        return [], body_map
     # Windows 粘贴可能用双引号包裹整段；优先 POSIX 风格（单引号常见于 Apifox）
     try:
-        return shlex.split(text, posix=True)
+        return shlex.split(text, posix=True), body_map
     except ValueError:
         # 未闭合引号等：退化为粗略按空白切分
-        return text.split()
+        return text.split(), body_map
+
+
+def _resolve_body_token(val: str, body_map: dict[str, str]) -> str:
+    if val in body_map:
+        return body_map[val]
+    return val
 
 
 def _looks_like_url(token: str) -> bool:
@@ -134,9 +314,10 @@ def parse_curl(curl_command: str) -> Dict[str, Any]:
         "params": [],
         "body": None,
         "body_type": "none",
+        "body_fields": [],
     }
 
-    tokens = _tokenize(curl_command)
+    tokens, body_map = _tokenize(curl_command)
     if not tokens:
         raise ValueError("无法从 curl 命令中提取 URL")
 
@@ -176,7 +357,7 @@ def parse_curl(curl_command: str) -> Dict[str, Any]:
                     "--data-ascii",
                     "--data-urlencode",
                 ):
-                    body_parts.append(val)
+                    body_parts.append(_resolve_body_token(val, body_map))
                 elif opt_name == "--url":
                     url = val
                 elif opt_name in ("-A", "--user-agent"):
@@ -215,7 +396,7 @@ def parse_curl(curl_command: str) -> Dict[str, Any]:
                 "--data-ascii",
                 "--data-urlencode",
             ):
-                body_parts.append(val)
+                body_parts.append(_resolve_body_token(val, body_map))
             elif opt_name == "--url":
                 url = val
             elif opt_name in ("-A", "--user-agent"):
@@ -291,14 +472,26 @@ def parse_curl(curl_command: str) -> Dict[str, Any]:
 
     result["headers"] = headers
 
-    body = "&".join(body_parts) if body_parts else None
+    body = "&".join(body_parts) if len(body_parts) > 1 else (body_parts[0] if body_parts else None)
+    content_type = headers.get("Content-Type", "") or headers.get("content-type", "")
+    ct_lower = content_type.lower()
+
+    if body and "multipart/form-data" in ct_lower:
+        boundary = _extract_multipart_boundary(content_type)
+        fields = _parse_multipart_form_data(body, boundary or "")
+        if fields:
+            result["body_fields"] = fields
+            result["body"] = {}
+            result["body_type"] = "form-data"
+            return result
+
     if body:
         try:
             json_body = json.loads(body)
             result["body"] = json_body
             result["body_type"] = "json"
         except json.JSONDecodeError:
-            if "&" in body or "=" in body:
+            if "&" in body:
                 form_data: Dict[str, str] = {}
                 for pair in body.split("&"):
                     if "=" in pair:
@@ -310,14 +503,19 @@ def parse_curl(curl_command: str) -> Dict[str, Any]:
                 result["body"] = body
                 result["body_type"] = "raw"
 
-    content_type = result["headers"].get("Content-Type", "") or result["headers"].get("content-type", "")
-    if "application/json" in content_type:
+    if "application/json" in ct_lower and result["body_type"] != "form-data":
         result["body_type"] = "json"
-    elif "application/x-www-form-urlencoded" in content_type:
+    elif "application/x-www-form-urlencoded" in ct_lower:
         result["body_type"] = "x-www-form-urlencoded"
-    elif "multipart/form-data" in content_type:
+    elif "multipart/form-data" in ct_lower:
         result["body_type"] = "form-data"
-    elif "text/xml" in content_type or "application/xml" in content_type:
+        if not result["body_fields"] and body:
+            boundary = _extract_multipart_boundary(content_type)
+            fields = _parse_multipart_form_data(body, boundary or "")
+            if fields:
+                result["body_fields"] = fields
+                result["body"] = {}
+    elif "text/xml" in ct_lower or "application/xml" in ct_lower:
         result["body_type"] = "xml"
 
     return result
@@ -345,6 +543,7 @@ def curl_to_api_definition(curl_command: str, project_id: int) -> Dict[str, Any]
         )
 
     body = parsed["body"] if parsed["body"] else {}
+    body_fields = parsed.get("body_fields") or []
 
     return {
         "name": parsed["name"],
@@ -355,6 +554,7 @@ def curl_to_api_definition(curl_command: str, project_id: int) -> Dict[str, Any]
         "params": params,
         "body": body,
         "body_type": parsed["body_type"],
+        "body_fields": body_fields,
         "project_id": project_id,
         "description": f"从 curl 命令导入: {parsed['method']} {parsed['path']}",
     }

@@ -24,19 +24,40 @@
 
 ## 一、Windows 安装
 
-### 1. 解压
+### 1. 系统要求
 
-1. 下载 `BrickCoreRunner.zip` 并解压（路径尽量不含中文与空格）
-2. 确认目录包含 `BrickCoreRunner.exe`、`_internal/`、`runner/`、`VERSION.txt`
+- Windows 10 / 11（**64 位**）
+- 建议已安装 **Visual C++ 2015–2022 x64**（多数电脑已有；新机 / 精简系统常缺）
 
-### 2. 连接平台
+**VC++ 运行库怎么下（二选一，内容相同）：**
+
+| 来源 | 说明 |
+|------|------|
+| **微软官网（推荐）** | [Visual C++ 2015–2022 x64](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
+| **网盘镜像** | 同目录下的 `VC_redist.x64.exe`（**微软官方安装包镜像**，非第三方修改版；不放心请走官网） |
+
+### 2. 解压
+
+1. 下载 `BrickCoreRunner.zip` 并解压（路径尽量不含中文与空格；体积大，推荐 **7-Zip**）
+2. 确认目录包含 `BrickCoreRunner.exe`、`_internal/`、`runner/`、`VERSION.txt`（**不可只复制 exe**）
+
+### 2.1 若启动报 Qt / DLL 错误
+
+出现 `DLL load failed while importing QtCore` /「找不到指定的模块」时：
+
+1. 安装上表 **VC++ x64** 后**重启电脑**
+2. 用 7-Zip **重新完整解压**，确认存在 `_internal\PySide6\Qt6Core.dll`
+3. 将解压目录加入杀软白名单后再试
+4. 若仍失败：在本机执行 `dir C:\Windows\System32\icuuc.dll`；若提示找不到文件，说明系统缺少 ICU，请升级到较新的 Win10/11，或向管理员索取已打入 ICU 的执行器包
+
+### 3. 连接平台
 
 1. 双击 **`BrickCoreRunner.exe`**
 2. **管理服务器环境** 添加平台地址：`http://<公网IP>` 或域名（**勿写 `:8000`**）
 3. **登录** → 填写设备名称 → **上线**
 4. 在 **设备管理** 确认 **在线**
 
-### 3. 修改平台地址
+### 4. 修改平台地址
 
 在客户端切换服务器环境 → **下线** → 重新 **登录 / 上线**。
 
@@ -93,7 +114,8 @@ chmod +x connect-mac.sh start-mac.sh
 
 ## 四、常见问题
 
-- **Windows 闪退**：确认 `_internal/`、`runner/` 完整，重新解压
+- **Windows 闪退**：确认 `_internal/`、`runner/` 完整；用 7-Zip 重新解压
+- **`DLL load failed` / `QtCore` / 找不到指定的模块**：安装 **VC++ x64**（优先[微软官网](https://aka.ms/vs/17/release/vc_redist.x64.exe)）后重启；仍失败查杀软与 `C:\Windows\System32\icuuc.dll`（见上文 §2.1）
 - **Mac 无 `.env`**：先执行 `./connect-mac.sh`
 - **登录失败**：平台地址不要加 `:8000`；检查 `http://<IP>/runner/health`
 - **浏览器**：使用包内 Chromium，无需单独安装 Chrome

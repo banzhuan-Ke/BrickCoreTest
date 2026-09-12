@@ -161,6 +161,10 @@ class WorkerFinalReport(BaseModel):
     success_avg_response_time: float = 0
     success_p95_response_time: float = 0
     success_rt_samples: list = []
+    # 真实负载窗（执行机上报；旧客户端可缺省）
+    load_started_ms: Optional[int] = None
+    load_stopped_ms: Optional[int] = None
+    drain_until_ms: Optional[int] = None
 
 
 # ========== 分布式聚合（秒级点列存 Redis，见 worker_reports；进程锁仅本机） ==========
@@ -1026,6 +1030,25 @@ def _merge_worker_final_into_record(record: PerfRecord, data: WorkerFinalReport)
     if new_meta and not existing_errors.get("metrics_meta"):
         existing_errors["metrics_meta"] = new_meta
 
+    # 收集各 Worker 真实负载窗，finalize 时写入 config_snapshot
+    tl: dict[str, int] = {}
+    for key in ("load_started_ms", "load_stopped_ms", "drain_until_ms"):
+        raw = getattr(data, key, None)
+        if raw is None and isinstance(new_meta, dict):
+            raw = new_meta.get(key)
+        if raw is None:
+            continue
+        try:
+            tl[key] = int(raw)
+        except (TypeError, ValueError):
+            continue
+    if tl:
+        timelines = existing_errors.get("_load_timelines") or []
+        if not isinstance(timelines, list):
+            timelines = []
+        timelines.append(tl)
+        existing_errors["_load_timelines"] = timelines
+
     record.error_breakdown = existing_errors
 
     existing_cases = record.case_aggregations or {}
@@ -1488,6 +1511,30 @@ async def _finalize_distributed_record_locked(record_id: int):
     total_sent = bd.pop("_total_bytes_sent", 0)
     bd.pop("_worker_final_count", None)
     bd.pop("_merged_worker_ids", None)
+    # 真实负载窗：多 Worker 取最早开始 / 最晚停止 / 最晚 drain，写入 config_snapshot 供切片
+    timelines = bd.pop("_load_timelines", None) or []
+    if isinstance(timelines, list) and timelines:
+        starts, stops, drains = [], [], []
+        for t in timelines:
+            if not isinstance(t, dict):
+                continue
+            try:
+                if t.get("load_started_ms") is not None:
+                    starts.append(int(t["load_started_ms"]))
+                if t.get("load_stopped_ms") is not None:
+                    stops.append(int(t["load_stopped_ms"]))
+                if t.get("drain_until_ms") is not None:
+                    drains.append(int(t["drain_until_ms"]))
+            except (TypeError, ValueError):
+                continue
+        cfg = dict(record.config_snapshot or {}) if isinstance(record.config_snapshot, dict) else {}
+        if starts:
+            cfg["load_started_ms"] = min(starts)
+        if stops:
+            cfg["load_stopped_ms"] = max(stops)
+        if drains:
+            cfg["drain_until_ms"] = max(drains)
+        record.config_snapshot = cfg
     dur = record.duration or 0
     if dur > 0:
         record.received_kb_per_sec = round(total_recv / 1024 / dur, 2)
@@ -1497,6 +1544,33 @@ async def _finalize_distributed_record_locked(record_id: int):
 
     record.ended_at = record.ended_at or datetime.now()
     await record.save()
+
+    # 被测资源：先切片；登记延迟再切；force 清理放 finally（切片失败也不能泄漏 force）
+    try:
+        from app.modules.perf.sut_slice import (
+            mark_sut_reslice_deadline,
+            mark_sut_slice_failed,
+            slice_and_persist_sut_metrics,
+        )
+
+        await slice_and_persist_sut_metrics(record)
+        await mark_sut_reslice_deadline(record, grace_ms=120_000)
+    except Exception:
+        logger.exception("压测被测资源切片失败 record_id=%s", record_id)
+        try:
+            from app.modules.perf.sut_slice import mark_sut_slice_failed
+
+            await mark_sut_slice_failed(record, error="slice_exception")
+        except Exception:
+            logger.exception("标记被测资源切片失败状态异常 record_id=%s", record_id)
+    finally:
+        try:
+            from app.modules.perf.sut_force import release_sut_force_from_record
+
+            # grace 仅用于补传接收与 pause 下采样；pressure_active 在记录结束后为 false，不阻塞上报
+            await release_sut_force_from_record(record, grace_ms=120_000)
+        except Exception:
+            logger.exception("清理被测 force 失败 record_id=%s", record_id)
 
     # 清理共享上报缓存
     await _clear_worker_reports(record_id)

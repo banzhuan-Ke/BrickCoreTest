@@ -19,7 +19,7 @@ from app.core.platform.project_access import PROJECT_ROLE_VIEWER, assert_project
 from app.core.platform.permissions import API_CASE_EXECUTE
 from app.core.ops.notification import NotificationService
 from app.modules.data_tools.inline_tools import ensure_dt_cache
-from app.models.sys import Environment, NotificationConfig, Project
+from app.models.sys import Environment, Project
 
 router = APIRouter(prefix="/exec", tags=["接口测试执行"], dependencies=[Depends(is_authenticated), Depends(require_permissions(API_CASE_EXECUTE))])
 
@@ -134,45 +134,10 @@ async def batch_run(request: ApiBatchRunRequest, background_tasks: BackgroundTas
         suite_record.hooks_result = hooks_result
         await suite_record.save()
 
-        # 触发失败告警
-        if failed_count > 0 or not hooks_result.get("success", True):
-            suite_obj = await ApiTestSuite.get_or_none(id=suite_record.suite_id, is_del=False)
-            await NotificationService.send_alert(
-                project_id=suite_record.project_id,
-                title=f"API套件执行失败：{suite_obj.name if suite_obj else '未知套件'}",
-                content={
-                    "execution_type": "API套件",
-                    "name": suite_obj.name if suite_obj else "未知套件",
-                    "status": "failed",
-                    "total": suite_record.total_cases,
-                    "success": success_count,
-                    "failed": failed_count,
-                    "pass_rate": round(success_count / suite_record.total_cases * 100, 2) if suite_record.total_cases > 0 else 0,
-                    "duration": round(suite_record.duration / 1000, 2),  # 告警通知中转为秒展示
-                    "run_by": suite_record.run_by,
-                    "link": ""
-                },
-                related_id=suite_record.id,
-                related_type="api_suite_run_record",
-                alert_scope="api",
-            )
-
-        # 自动推送报告（执行完成后无论成功/失败都推送，便于查看详细结果）
-        email_cfg = await NotificationConfig.filter(
-            project_id=suite_record.project_id,
-            channel_type="email",
-            enabled=True,
-            api_auto_push_report=True
-        ).first()
-        if email_cfg:
-            try:
-                await NotificationService.send_api_report(
-                    project_id=suite_record.project_id,
-                    record_id=suite_record.id,
-                    auto_push_only=True,
-                )
-            except Exception as e:
-                print(f"[AutoReport] API 报告自动推送失败: {e}")
+        # 失败告警 + 自动推报告（与定时任务共用钩子，NOTIFY-1）
+        if suite_record.status == "failed":
+            await NotificationService.maybe_alert_api_suite_failure(suite_record.id)
+        await NotificationService.maybe_auto_push_api_suite_report(suite_record.id)
 
     batch_end_time = time.time()
     return ApiBatchRunResult(
@@ -306,6 +271,8 @@ async def run_suite_async(suite_id: int, request: ApiSuiteRunRequest, background
             suite_record.end_time = time.strftime("%Y-%m-%d %H:%M:%S")
             suite_record.duration = round((time.time() - start_time) * 1000, 2)
             await suite_record.save()
+            await NotificationService.maybe_alert_api_suite_failure(suite_record.id)
+            await NotificationService.maybe_auto_push_api_suite_report(suite_record.id)
             return
 
         success_count = run_result["success_count"]
@@ -321,46 +288,9 @@ async def run_suite_async(suite_id: int, request: ApiSuiteRunRequest, background
         suite_record.hooks_result = hooks_result
         await suite_record.save()
 
-        # 触发失败告警
-        if failed_count > 0 or not hooks_result.get("success", True):
-            suite_obj = await ApiTestSuite.get_or_none(id=suite_id, is_del=False)
-            await NotificationService.send_alert(
-                project_id=suite_record.project_id,
-                title=f"API套件执行失败：{suite_obj.name if suite_obj else '未知套件'}",
-                content={
-                    "execution_type": "API套件",
-                    "name": suite_obj.name if suite_obj else "未知套件",
-                    "status": "failed",
-                    "total": suite_record.total_cases,
-                    "success": success_count,
-                    "failed": failed_count,
-                    "pass_rate": round(success_count / suite_record.total_cases * 100, 2) if suite_record.total_cases > 0 else 0,
-                    "duration": round(suite_record.duration / 1000, 2),  # 告警通知中转为秒展示
-                    "run_by": suite_record.run_by,
-                    "link": ""
-                },
-                related_id=suite_record.id,
-                related_type="api_suite_run_record",
-                alert_scope="api",
-            )
-
-        # 自动推送报告
-        from app.models.sys import NotificationConfig
-        email_cfg = await NotificationConfig.filter(
-            project_id=suite_record.project_id,
-            channel_type="email",
-            enabled=True,
-            api_auto_push_report=True
-        ).first()
-        if email_cfg:
-            try:
-                await NotificationService.send_api_report(
-                    project_id=suite_record.project_id,
-                    record_id=suite_record.id,
-                    auto_push_only=True,
-                )
-            except Exception as e:
-                print(f"[AutoReport] API 报告自动推送失败: {e}")
+        if suite_record.status == "failed":
+            await NotificationService.maybe_alert_api_suite_failure(suite_record.id)
+        await NotificationService.maybe_auto_push_api_suite_report(suite_record.id)
 
     background_tasks.add_task(_run_in_background)
     return AsyncRunResponse(record_id=suite_record.id)

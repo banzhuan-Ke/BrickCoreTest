@@ -508,6 +508,16 @@ const routes = [
                 }
             },
             {
+                path: '/app-device-apm',
+                name: 'appDeviceApm',
+                component: () => import('../views/App/AppDeviceApm.vue'),
+                meta: {
+                    title: '设备性能监控',
+                    icon: 'TrendCharts',
+                    anyPermissions: ['app_case:view']
+                }
+            },
+            {
                 path: '/app-suite',
                 name: 'appSuiteList',
                 component: () => import('../views/App/AppSuite.vue'),
@@ -949,6 +959,16 @@ const routes = [
                 }
             },
             {
+                path: '/perf-csv-datasets',
+                name: 'perfCsvDatasetList',
+                component: () => import('../views/Perf/PerfCsvDatasetList.vue'),
+                meta: {
+                    title: 'CSV 数据集',
+                    icon: 'Document',
+                    permission: 'perf_scene:view'
+                }
+            },
+            {
                 path: '/perf-scene/add',
                 name: 'perfSceneAdd',
                 component: () => import('../views/Perf/PerfSceneEdit.vue'),
@@ -985,6 +1005,48 @@ const routes = [
                 meta: {
                     title: '执行机',
                     icon: 'Monitor',
+                    permission: 'perf_scene:view'
+                }
+            },
+            {
+                path: '/perf-sut-servers',
+                name: 'perfSutServerList',
+                component: () => import('../views/Perf/SutServerList.vue'),
+                meta: {
+                    title: '被测服务器',
+                    icon: 'Coin',
+                    permission: 'perf_scene:view'
+                }
+            },
+            {
+                path: '/perf-sut-servers/overview',
+                name: 'perfSutServerOverview',
+                component: () => import('../views/Perf/SutServerOverview.vue'),
+                meta: {
+                    title: '被测服务器总览',
+                    icon: 'Coin',
+                    permission: 'perf_scene:view',
+                    hidden: true
+                }
+            },
+            {
+                path: '/perf-sut-servers/:serverId',
+                name: 'perfSutServerDetail',
+                component: () => import('../views/Perf/SutServerDetail.vue'),
+                meta: {
+                    title: '被测服务器详情',
+                    icon: 'Coin',
+                    permission: 'perf_scene:view',
+                    hidden: true
+                }
+            },
+            {
+                path: '/perf-sut-applications',
+                name: 'perfSutApplicationList',
+                component: () => import('../views/Perf/SutApplicationList.vue'),
+                meta: {
+                    title: '被测应用',
+                    icon: 'Box',
                     permission: 'perf_scene:view'
                 }
             },

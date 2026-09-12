@@ -30,6 +30,7 @@ export const APP_STEP_PARAM_ORDER = {
   assert_image_not_exists: ['locator', 'locator_ref', 'timeout'],
   assert_text: ['locator', 'locator_ref', 'text', 'timeout'],
   assert_text_contains: ['locator', 'locator_ref', 'text', 'timeout'],
+  assert_device_metric: ['metric', 'operator', 'expected', 'agg'],
   extract_text: ['locator', 'locator_ref', 'var_name', 'timeout'],
   press_key: ['key'],
   open_url: ['url'],
@@ -60,6 +61,7 @@ export const APP_REQUIRED_PARAMS = {
   assert_image_not_exists: ['locator'],
   assert_text: ['locator', 'text'],
   assert_text_contains: ['locator', 'text'],
+  assert_device_metric: ['metric', 'expected'],
   extract_text: ['locator', 'var_name'],
   press_key: ['key'],
   open_url: ['url'],
@@ -70,6 +72,12 @@ export const APP_REQUIRED_PARAMS = {
 export const APP_STEP_PARAM_LABELS = {
   locator: '元素定位',
   locator_ref: '元素库引用',
+  text: '文本',
+  timeout: '超时(秒)',
+  metric: '性能指标',
+  operator: '比较符',
+  expected: '期望值',
+  agg: '聚合(current/max/min/avg)',
   seconds: '等待时间(秒)',
   timeout: '超时时间(秒)',
   app_id: '应用包名',
@@ -88,7 +96,7 @@ export const APP_STEP_PARAM_LABELS = {
 
 export const APP_STEP_PARAM_TOOLTIPS = {
   locator_ref: '选择后自动同步到「元素定位」，仍可手动修改；保存时若已改定位则仅保留定位内容。',
-  stop: '勾选后启动前会先 force-stop 该应用',
+  stop: '选择「是」时启动前会先 force-stop 该应用',
   timeout: '等待元素出现/点击等操作的最长秒数',
   seconds: '固定休眠秒数，不做元素检测',
   direction: '在屏幕上滑动，常用于翻页或下拉刷新',
@@ -110,6 +118,10 @@ export const APP_SELECT_OPTIONS = {
     { label: '菜单', value: 'menu' },
     { label: '电源', value: 'power' },
   ],
+  stop: [
+    { label: '否', value: false },
+    { label: '是（启动前先 force-stop）', value: true },
+  ],
 }
 
 /** App 条件分支支持的条件类型（与 Runner _eval_branch_condition 对齐） */
@@ -125,6 +137,47 @@ export function isAppMethod(method) {
 export const APP_LOCATOR_CONTEXT_NATIVE = 'native'
 
 const APP_ID_PARAM_METHODS = new Set(['launch_app', 'terminate_app', 'clear_app', 'uninstall_app'])
+
+/** 将步骤里可能写成字符串的布尔值规范为 boolean */
+export function coerceAppBool(value) {
+  if (typeof value === 'boolean') return value
+  if (value === 1 || value === '1' || value === 'true' || value === 'True') return true
+  if (value === 0 || value === '0' || value === 'false' || value === 'False' || value == null || value === '') {
+    return false
+  }
+  return Boolean(value)
+}
+
+/** 收集用例步骤中的应用包名（launch/terminate/clear/uninstall），去重保序 */
+export function collectAppPackageIdsFromSteps(steps = []) {
+  const out = []
+  const seen = new Set()
+
+  const add = (raw) => {
+    const id = String(raw ?? '').trim()
+    if (!id || seen.has(id)) return
+    seen.add(id)
+    out.push(id)
+  }
+
+  const walk = (list) => {
+    if (!Array.isArray(list)) return
+    for (const step of list) {
+      if (APP_ID_PARAM_METHODS.has(step?.method)) {
+        add(step?.params?.app_id)
+      }
+      const branches = step?.branches || step?.params?.branches
+      if (Array.isArray(branches)) {
+        for (const branch of branches) {
+          walk(branch?.steps)
+        }
+      }
+    }
+  }
+
+  walk(steps)
+  return out
+}
 
 /** 从项目全局变量 / 用例步骤 / 本地缓存解析默认应用包名 */
 export function getProjectDefaultAppId(projectInfo, steps = []) {
@@ -277,7 +330,7 @@ export function getAppOrderedVisibleParams(method, params = {}) {
     } else if (key === 'name' && method === 'screenshot') {
       result[key] = params[key] || 'screenshot'
     } else if (key === 'stop' && (method === 'launch_app' || method === 'launch_wechat')) {
-      result[key] = !!params[key]
+      result[key] = coerceAppBool(params[key])
     } else if (key === 'app_id' && APP_ID_PARAM_METHODS.has(method)) {
       result[key] = params[key] ?? ''
     }

@@ -5,17 +5,18 @@
 <script setup>
 import {reactive, watch} from 'vue'
 import http from '@/api/index'
-import {UserStore, readUiThemeFromStorage} from '@/stores/module/UserStore'
+import {UserStore, readUiThemeFromStorage, readUiZoomFromStorage} from '@/stores/module/UserStore'
 import {RouterView} from 'vue-router'
 
 const uStore = UserStore()
 
-// 持久化插件 rehydrate 后，以独立 uiTheme 键为准（避免旧 userInfo 覆盖）
+// 持久化插件 rehydrate 后，以独立 uiTheme / uiZoom 键为准（避免旧 userInfo 覆盖）
 uStore.uiTheme = readUiThemeFromStorage()
+uStore.uiZoom = readUiZoomFromStorage()
 
-// 同步界面风格与暗黑模式
+// 同步界面风格与暗黑模式 / 缩放
 watch(
-  () => [uStore.uiTheme, uStore.darkMode],
+  () => [uStore.uiTheme, uStore.darkMode, uStore.uiZoom],
   () => uStore.syncThemeToDocument(),
   { immediate: true }
 )

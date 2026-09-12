@@ -3,11 +3,186 @@ from __future__ import annotations
 
 import re
 from html import escape
-from typing import Any, Optional
+from typing import Any, Optional, Sequence, Tuple
+
+# 报告页脚 / 执行工具展示名（与平台品牌一致）
+PLATFORM_TOOL_NAME = "BrickCore"
 
 
 def h(v: Any) -> str:
     return escape("" if v is None else str(v))
+
+
+def env_label_from_config(config: Optional[dict]) -> str:
+    """从执行快照解析受测环境展示文案（优先 host，兼容旧记录）。"""
+    cfg = config if isinstance(config, dict) else {}
+    host = str(cfg.get("env_host") or "").strip()
+    name = str(cfg.get("env_name") or "").strip()
+    if host and name and host != name:
+        return f"{name}（{host}）"
+    return host or name or str(cfg.get("target_host") or "").strip() or "—"
+
+
+# HTTP 分位条形图标题旁注（与流式阶段耗时区分）
+RT_VISUALIZATION_HINT = (
+    "HTTP 响应时间分位（Min / Median / Avg / P90 / P95 / P99 / Max），非流式阶段耗时"
+)
+
+PERCENTILE_TABLE_LEAD = (
+    "下列 Min / P50 / Avg / P90 / P95 / P99 / Max 均统计<strong>整体耗时</strong>"
+    "（请求从发起到结束的端到端耗时）。"
+)
+
+THROUGHPUT_ERROR_CAPTION = "吞吐与错误"
+
+REPORT_STYLE_BRIEF = "brief"
+REPORT_STYLE_STANDARD = "standard"
+REPORT_STYLE_TECHNICAL = "technical"
+REPORT_STYLES = (REPORT_STYLE_BRIEF, REPORT_STYLE_STANDARD, REPORT_STYLE_TECHNICAL)
+REPORT_STYLE_LABELS = {
+    REPORT_STYLE_BRIEF: "精简",
+    REPORT_STYLE_STANDARD: "标准",
+    REPORT_STYLE_TECHNICAL: "详细",
+}
+
+
+def normalize_report_style(style: Optional[str]) -> str:
+    s = (style or "").strip().lower() or REPORT_STYLE_STANDARD
+    return s if s in REPORT_STYLES else REPORT_STYLE_STANDARD
+
+
+def report_style_label(style: Optional[str]) -> str:
+    return REPORT_STYLE_LABELS.get(normalize_report_style(style), "标准")
+
+
+def report_style_flags(style: Optional[str]) -> dict[str, bool | str]:
+    """导出 HTML 版式开关：精简 / 标准 / 详细。"""
+    s = normalize_report_style(style)
+    if s == REPORT_STYLE_BRIEF:
+        return {
+            "include_toc": False,
+            "include_appendix": False,
+            "case_detail_mode": "never",
+            "include_phase_metrics": False,
+            "include_rt_bars": False,
+            "include_charts": True,
+            "include_error_detail": False,
+            "include_percentile_lead": True,
+            "include_overlay_charts": False,
+            "include_case_compare": False,
+            "include_stepping_stage": False,
+            "include_ladder": True,
+            "include_stream_appendix": False,
+            "include_target_detail": False,
+        }
+    if s == REPORT_STYLE_TECHNICAL:
+        return {
+            "include_toc": True,
+            "include_appendix": True,
+            "case_detail_mode": "always",
+            "include_phase_metrics": True,
+            "include_rt_bars": True,
+            "include_charts": True,
+            "include_error_detail": True,
+            "include_percentile_lead": True,
+            "include_overlay_charts": True,
+            "include_case_compare": True,
+            "include_stepping_stage": True,
+            "include_ladder": True,
+            "include_stream_appendix": True,
+            "include_target_detail": True,
+        }
+    return {
+        "include_toc": True,
+        "include_appendix": True,
+        "case_detail_mode": "smart",
+        "include_phase_metrics": True,
+        "include_rt_bars": True,
+        "include_charts": True,
+        "include_error_detail": True,
+        "include_percentile_lead": True,
+        "include_overlay_charts": True,
+        "include_case_compare": True,
+        "include_stepping_stage": True,
+        "include_ladder": True,
+        "include_stream_appendix": True,
+        "include_target_detail": True,
+    }
+
+
+def rt_visualization_heading_html(title: str = "响应时间可视化") -> str:
+    """导出 HTML：响应时间可视化标题 + 指标说明。"""
+    return (
+        f'{h(title)}'
+        f' <span style="font-size:12px;font-weight:400;color:#888;margin-left:8px">'
+        f'{h(RT_VISUALIZATION_HINT)}</span>'
+    )
+
+
+def exec_summary_heading(ai: Optional[dict], *, section_no: str = "一") -> str:
+    """有「建议」时用完整标题；仅统计摘要时用「数据摘要」。"""
+    data = ai if isinstance(ai, dict) else {}
+    has_rec = bool(data.get("recommendations"))
+    if has_rec:
+        return f"{section_no}、管理层核心结论与技术建议"
+    if ai_is_done(data) and (
+        data.get("summary")
+        or data.get("content")
+        or data.get("markdown")
+        or data.get("overview")
+        or data.get("conclusion_points")
+        or data.get("metric_deltas")
+    ):
+        return f"{section_no}、数据摘要"
+    return f"{section_no}、管理层核心结论与技术建议"
+
+
+def run_description_from_config(config: Optional[dict]) -> str:
+    cfg = config if isinstance(config, dict) else {}
+    return str(cfg.get("run_description") or "").strip()
+
+
+def executor_display_from_config(config: Optional[dict], run_by: Optional[str] = None) -> str:
+    cfg = config if isinstance(config, dict) else {}
+    nick = str(cfg.get("run_by_nickname") or "").strip()
+    if nick:
+        return nick
+    return str(run_by or "").strip() or "—"
+
+
+def render_report_hero(
+    *,
+    title: str,
+    description: str = "",
+    eval_time: str = "",
+    env_label: str = "",
+    tool_name: str = PLATFORM_TOOL_NAME,
+    executor: str = "",
+    extra_items: Optional[Sequence[Tuple[str, str]]] = None,
+) -> str:
+    """深蓝渐变汇报头：标题 + 描述 + 评估时间/环境/工具/执行人。"""
+    desc = (description or "").strip()
+    desc_html = f'<p class="subtitle">{h(desc)}</p>' if desc else ""
+    items: list[Tuple[str, str]] = [
+        ("评估时间", (eval_time or "").strip() or "—"),
+        ("受测环境", (env_label or "").strip() or "—"),
+        ("执行工具", (tool_name or PLATFORM_TOOL_NAME).strip() or PLATFORM_TOOL_NAME),
+        ("执行人", (executor or "").strip() or "—"),
+    ]
+    for k, v in extra_items or []:
+        kk = str(k or "").strip()
+        if kk:
+            items.append((kk, str(v if v is not None else "—")))
+    meta_html = "".join(
+        f'<div class="meta-item"><span class="k">{h(k)}</span><span class="v">{h(v)}</span></div>'
+        for k, v in items
+    )
+    return f"""<div class="header">
+    <h1>{h(title)}</h1>
+    {desc_html}
+    <hr class="meta-divider" />
+    <div class="meta-row">{meta_html}</div>
+  </div>"""
 
 
 def report_css() -> str:
@@ -15,10 +190,24 @@ def report_css() -> str:
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; background:#f5f7fa; color:#333; line-height:1.6; }
 .container { max-width:1100px; margin:0 auto; padding:24px; }
-.header { background:linear-gradient(135deg,#1a73e8,#0d47a1); color:#fff; padding:40px 48px; border-radius:12px; margin-bottom:28px; }
-.header h1 { font-size:26px; margin-bottom:8px; }
-.header .meta { opacity:.85; font-size:14px; }
-.header .meta span { margin-right:20px; }
+.header {
+  background:linear-gradient(105deg,#0a1628 0%,#0f2744 38%,#163a5f 72%,#1a4a6e 100%);
+  color:#fff; padding:36px 40px 28px; border-radius:14px; margin-bottom:28px;
+  box-shadow:0 8px 28px rgba(15,39,68,.22);
+}
+.header h1 { font-size:26px; font-weight:700; letter-spacing:.02em; margin:0; line-height:1.35; }
+.header .subtitle {
+  margin:12px 0 0; font-size:14px; line-height:1.6; color:rgba(226,232,240,.82); max-width:92%;
+}
+.header .meta-divider {
+  border:none; border-top:1px solid rgba(148,180,212,.28); margin:20px 0 16px;
+}
+.header .meta-row { display:flex; flex-wrap:wrap; gap:10px 28px; align-items:baseline; }
+.header .meta-item { font-size:13px; line-height:1.45; }
+.header .meta-item .k { color:#7eb8e8; margin-right:8px; font-weight:500; }
+.header .meta-item .v { color:#fff; font-weight:500; word-break:break-all; }
+.header .meta { opacity:.9; font-size:13px; margin-top:10px; }
+.header .meta span { margin-right:18px; }
 .section { background:#fff; border-radius:10px; padding:28px 32px; margin-bottom:22px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
 .section h2 { font-size:18px; color:#1a73e8; margin-bottom:14px; padding-bottom:8px; border-bottom:2px solid #e8edf3; }
 .section h3 { font-size:15px; color:#444; margin:18px 0 10px; }
@@ -48,6 +237,98 @@ tr:hover td { background:#f8fafc; }
 .conclusion-box ul { margin:8px 0 0 18px; }
 .conclusion-box p { margin-bottom:8px; }
 .conclusion-box p:last-child { margin-bottom:0; }
+#sec-conclusion > h2 {
+  padding-left:12px; border-left:4px solid #1a73e8; border-bottom:none;
+  margin-bottom:16px; padding-bottom:0;
+}
+.mgmt-dual-stack { display:flex; flex-direction:column; gap:16px; margin-top:4px; }
+.conclusion-box.mgmt-conclusion,
+.conclusion-box.mgmt-recommendation {
+  border-radius:8px; padding:16px 20px; margin:0;
+  border:1px solid #e2e8f0; border-left-width:5px;
+}
+.conclusion-box.mgmt-conclusion {
+  background:#f0fdf4; border-color:#bbf7d0; border-left-color:#16a34a;
+}
+.conclusion-box.mgmt-recommendation {
+  background:#fffbeb; border-color:#fcd34d; border-left-color:#d97706;
+}
+.mgmt-block-title {
+  font-size:15px; color:#1e293b; margin:0 0 10px; line-height:1.55;
+}
+.conclusion-box.mgmt-conclusion .summary-lead,
+.conclusion-box.mgmt-conclusion ul,
+.conclusion-box.mgmt-recommendation ul {
+  font-size:14px; color:#334155; line-height:1.65;
+}
+.conclusion-box.mgmt-conclusion ul,
+.conclusion-box.mgmt-recommendation ul { margin:8px 0 0 20px; padding:0; }
+.conclusion-box.mgmt-conclusion li,
+.conclusion-box.mgmt-recommendation li { margin-bottom:8px; }
+.report-layout { display:flex; align-items:flex-start; max-width:1440px; margin:0 auto; padding:0 12px 24px; gap:18px; }
+.report-main { flex:1; min-width:0; max-width:1100px; margin:0 !important; }
+.report-toc {
+  position:sticky; top:52px; width:210px; flex-shrink:0;
+  background:#fff; border:1px solid #e2e8f0; border-radius:10px;
+  padding:14px 12px 16px; box-shadow:0 1px 4px rgba(0,0,0,.06);
+  max-height:calc(100vh - 64px); overflow-y:auto; font-size:13px;
+}
+.report-toc .toc-title { font-size:14px; font-weight:700; color:#1a73e8; margin:0 0 10px; padding-bottom:8px; border-bottom:2px solid #e8edf3; }
+.report-toc ul { list-style:none; margin:0; padding:0; }
+.report-toc a {
+  display:block; padding:5px 8px; color:#475569; text-decoration:none;
+  border-radius:6px; line-height:1.4; border-left:3px solid transparent;
+}
+.report-toc a:hover { background:#f1f5f9; color:#1a73e8; }
+.report-toc a.active { background:#eff6ff; color:#1a73e8; border-left-color:#1a73e8; font-weight:600; }
+.report-toc .toc-row {
+  display:flex; align-items:flex-start; gap:2px;
+}
+.report-toc .toc-row > a { flex:1; min-width:0; }
+.report-toc .toc-toggle {
+  flex-shrink:0; width:22px; height:22px; margin-top:2px; padding:0;
+  border:0; border-radius:4px; background:transparent; color:#64748b;
+  cursor:pointer; font-size:10px; line-height:22px; text-align:center;
+}
+.report-toc .toc-toggle:hover { background:#f1f5f9; color:#1a73e8; }
+.report-toc .toc-toggle .toc-caret { display:inline-block; transition:transform .15s ease; }
+.report-toc .toc-item.is-open > .toc-row .toc-caret { transform:rotate(90deg); }
+.report-toc .toc-children {
+  display:none; list-style:none; margin:0 0 4px; padding:0 0 0 14px;
+}
+.report-toc .toc-item.is-open > .toc-children { display:block; }
+.report-toc .toc-children a {
+  font-size:12px; padding:4px 8px; color:#64748b;
+}
+.section h3.chapter-scene-title {
+  font-size:17px; color:#1a73e8; font-weight:700; margin:22px 0 12px;
+  padding-bottom:6px; border-bottom:1px solid #e8edf3;
+}
+.section .chapter-scene:first-of-type h3.chapter-scene-title { margin-top:8px; }
+.chapter-scene + .chapter-scene {
+  margin-top:28px; padding-top:18px; border-top:1px dashed #e2e8f0;
+}
+@media (max-width:1024px) {
+  .report-layout { flex-direction:column; }
+  .report-toc { position:relative; top:0; width:100%; max-height:none; }
+}
+.exec-summary-box {
+  background:linear-gradient(180deg,#f0fdf4 0%,#fff 48px); border:1px solid #bbf7d0;
+  border-left:5px solid #16a34a; padding:18px 20px; border-radius:10px; margin-top:4px;
+  box-shadow:0 1px 3px rgba(22,163,74,.08);
+}
+.exec-summary-box.warn {
+  background:linear-gradient(180deg,#fffbeb 0%,#fff 48px); border-color:#fcd34d;
+  border-left-color:#d97706; box-shadow:0 1px 3px rgba(217,119,6,.08);
+}
+.exec-summary-box ul { margin:8px 0 0 18px; }
+.exec-summary-box p { margin-bottom:8px; }
+.exec-summary-box p:last-child { margin-bottom:0; }
+.chapter-block {
+  margin:16px 0 0; padding:14px 16px; border:1px solid #e8edf3; border-radius:10px;
+  background:#fafbfd;
+}
+.chapter-block h2, .chapter-block h3 { font-size:15px; color:#334155; margin:0 0 10px; padding:0; border:none; }
 .chart-bar { display:flex; align-items:center; margin:6px 0; }
 .chart-bar .bar-label { width:160px; font-size:13px; color:#555; flex-shrink:0; }
 .chart-bar .bar-track { flex:1; background:#edf2f7; border-radius:4px; height:22px; overflow:hidden; }
@@ -112,6 +393,14 @@ tr:hover td { background:#f8fafc; }
 .stage-summary-card.better { border-left-color:#22c55e; background:#f0fdf4; }
 .stage-summary-card.worse { border-left-color:#ef4444; background:#fef2f2; }
 .stage-summary-card.flat { border-left-color:#94a3b8; background:#f8fafc; }
+.stage-summary-card.stable { border-left-color:#22c55e; background:#f0fdf4; }
+.stage-summary-card.inflection { border-left-color:#f59e0b; background:#fffbeb; }
+.stage-summary-card.saturated { border-left-color:#ef4444; background:#fef2f2; }
+.stage-summary-card.mixed { border-left-color:#94a3b8; background:#f8fafc; }
+.ladder-charts { margin-top: 16px; }
+.ladder-chart-block { margin: 14px 0; padding: 12px 14px; background:#fafbfc; border:1px solid #e9ecef; border-radius:8px; }
+.ladder-chart-label { font-size:13px; font-weight:600; color:#334155; margin-bottom:8px; }
+.ladder-chart-box { width:100%; height:300px; }
 .stage-summary-card .stage-sum-title {
   font-size:13px; font-weight:700; color:#1e293b; margin-bottom:8px;
   display:flex; align-items:center; gap:8px; flex-wrap:wrap;
@@ -226,6 +515,8 @@ body.editing #reportRoot { outline:2px dashed rgba(59,130,246,.35); outline-offs
 @media (max-width:768px) { .two-col { grid-template-columns:1fr; } .container { padding:12px; } }
 @media print {
   body { background:#fff; }
+  .report-toc { display:none !important; }
+  .report-layout { display:block; padding:0; }
   .section { box-shadow:none; border:1px solid #eee; }
   .edit-toolbar { display:none !important; }
   body.editing #reportRoot { outline:none; }
@@ -486,7 +777,12 @@ def chart_notes_by_label(ai: Optional[dict]) -> dict[str, dict[str, str]]:
     return out
 
 
-def render_ai_lists(ai: dict, *, kind: Optional[str] = None) -> str:
+def render_ai_lists(
+    ai: dict,
+    *,
+    kind: Optional[str] = None,
+    include_recommendations: bool = True,
+) -> str:
     parts = []
     points = ai.get("conclusion_points") or ai.get("metric_deltas") or []
     points_title = (
@@ -523,12 +819,11 @@ def render_ai_lists(ai: dict, *, kind: Optional[str] = None) -> str:
                 lis.append(f"<li>{body}</li>")
         if lis:
             parts.append(f"<p><strong>{points_title}</strong></p><ul>" + "".join(lis) + "</ul>")
-    for label, key in (
-        ("关注要点", "highlights"),
-        ("风险", "risks"),
-        ("瓶颈", "bottleneck_notes"),
-        ("建议", "recommendations"),
-    ):
+    tail_keys = (
+        [("关注要点", "highlights"), ("风险", "risks"), ("瓶颈", "bottleneck_notes"), ("资源观察", "resource_notes")]
+        + ([("建议", "recommendations")] if include_recommendations else [])
+    )
+    for label, key in tail_keys:
         items = ai.get(key) or []
         if items:
             parts.append(
@@ -539,13 +834,91 @@ def render_ai_lists(ai: dict, *, kind: Optional[str] = None) -> str:
     return "".join(parts)
 
 
+def _exec_summary_lead(ai: dict) -> str:
+    overview = str(ai.get("overview") or "").strip()
+    if overview:
+        return overview
+    text = str(ai.get("summary") or ai.get("content") or ai.get("markdown") or "").strip()
+    if not text:
+        return ""
+    first = text.split("。")[0].strip()
+    return first + "。" if first and not first.endswith("。") else first
+
+
+def _exec_conclusion_title(ai: dict) -> str:
+    text = str(ai.get("summary") or ai.get("content") or ai.get("markdown") or "").strip()
+    if text:
+        lead = text.split("。")[0].strip()
+        if lead:
+            return lead if lead.endswith("。") else lead + "。"
+    overview = str(ai.get("overview") or "").strip()
+    if overview:
+        lead = overview.split("。")[0].strip()
+        if lead:
+            return lead if lead.endswith("。") else lead + "。"
+    return "详见下列分章要点与指标。"
+
+
+def _exec_recommendations_title(ai: dict) -> str:
+    recs = ai.get("recommendations") or []
+    if isinstance(recs, list) and recs:
+        first = str(recs[0] or "").strip()
+        if first:
+            return first.rstrip("。") + "。" if not first.endswith("。") else first
+    return "综合吞吐、响应时延与资源利用，给出如下优化建议。"
+
+
+def render_recommendations_box(ai: Optional[dict]) -> str:
+    ai = ai if isinstance(ai, dict) else {}
+    recs = ai.get("recommendations") or []
+    if not isinstance(recs, list) or not recs:
+        return ""
+    items = [str(x).strip() for x in recs if str(x or "").strip()]
+    if not items:
+        return ""
+    title = _exec_recommendations_title(ai)
+    lis = "".join(f"<li>{colorize_pct_in_text(x)}</li>" for x in items)
+    return f"""<div class="conclusion-box warn mgmt-recommendation">
+      <p class="mgmt-block-title">✨ <strong>建议：{h(title.rstrip('。'))}</strong></p>
+      <ul>{lis}</ul>
+    </div>"""
+
+
+def render_mgmt_conclusion_box(
+    ai: Optional[dict],
+    *,
+    kind: Optional[str] = None,
+    fallback_html: str = "",
+) -> str:
+    ai = ai if isinstance(ai, dict) else {}
+    if ai_is_done(ai) and (
+        ai.get("summary") or ai.get("content") or ai.get("markdown") or ai.get("conclusion_points")
+    ):
+        title = _exec_conclusion_title(ai)
+        lead = _exec_summary_lead(ai)
+        body = render_ai_lists(ai, kind=kind, include_recommendations=False)
+        lead_html = f'<p class="summary-lead">{h(lead)}</p>' if lead else ""
+        return f"""<div class="conclusion-box mgmt-conclusion">
+      <p class="mgmt-block-title">💡 <strong>核心结论：{h(title.rstrip('。'))}</strong></p>
+      {lead_html}
+      {body}
+    </div>"""
+    if ai.get("status") in ("running", "pending"):
+        return '<div class="conclusion-box mgmt-conclusion"><p>AI 分析进行中，请稍后重新导出。</p></div>'
+    if fallback_html:
+        return f'<div class="conclusion-box mgmt-conclusion">{fallback_html}</div>'
+    return ""
+
+
 def render_conclusion_box(
     ai: Optional[dict],
     *,
     fallback_html: str = "",
     kind: Optional[str] = None,
+    box_class: str = "conclusion-box",
 ) -> str:
     ai = ai if isinstance(ai, dict) else {}
+    base_cls = (box_class or "conclusion-box").strip() or "conclusion-box"
     if ai_is_done(ai) and (ai.get("summary") or ai.get("content") or ai.get("markdown") or ai.get("conclusion_points")):
         text = ai.get("summary") or ai.get("content") or ai.get("markdown") or ""
         overview = str(ai.get("overview") or "").strip()
@@ -564,13 +937,39 @@ def render_conclusion_box(
             for p in (ai.get("conclusion_points") or ai.get("metric_deltas") or []):
                 if isinstance(p, dict):
                     tones.append(str(p.get("tone") or "").lower())
-        box_cls = "conclusion-box warn" if any(t in ("worse", "degraded") for t in tones) else "conclusion-box"
-        return f'<div class="{box_cls}">{body}</div>'
+        warn = any(t in ("worse", "degraded") for t in tones)
+        cls = f"{base_cls} warn" if warn else base_cls
+        return f'<div class="{cls}">{body}</div>'
     if ai.get("status") in ("running", "pending"):
-        return '<div class="conclusion-box warn"><p>AI 分析进行中，请稍后重新导出。</p></div>'
+        return f'<div class="{base_cls} warn"><p>AI 分析进行中，请稍后重新导出。</p></div>'
     if fallback_html:
-        return f'<div class="conclusion-box">{fallback_html}</div>'
+        return f'<div class="{base_cls}">{fallback_html}</div>'
     return ""
+
+
+def render_exec_summary_section(
+    ai: Optional[dict],
+    *,
+    fallback_html: str = "",
+    kind: Optional[str] = None,
+    heading: str = "一、管理层核心结论与技术建议",
+) -> str:
+    """导出 HTML 置顶结论块：结论与建议分两色块。"""
+    ai = ai if isinstance(ai, dict) else {}
+    rec_box = render_recommendations_box(ai) if ai_is_done(ai) else ""
+    con_box = render_mgmt_conclusion_box(ai, kind=kind, fallback_html=fallback_html)
+    if not con_box and not rec_box:
+        return ""
+    if rec_box and con_box:
+        inner = f'<div class="mgmt-dual-stack">{con_box}{rec_box}</div>'
+    elif con_box:
+        inner = con_box
+    else:
+        inner = rec_box
+    return f"""  <div class="section" id="sec-conclusion">
+    <h2>{h(heading)}</h2>
+    {inner}
+  </div>"""
 
 
 def render_overview_para(ai: Optional[dict]) -> str:
@@ -598,7 +997,8 @@ def render_metric_glossary(*, heading: str = "附录：指标说明") -> str:
         ("并发用户数", "压测配置的虚拟用户（VU）数量。"),
         ("Ramp-up", "从 0 爬升到目标并发所需秒数，用于缓和加压。"),
         ("预热", "正式计时前的预热秒数，预热期间的请求通常不计入正式指标。"),
-        ("实际时长", "压测从开始到结束的墙钟耗时（秒）。"),
+        ("实际时长", "压测从开始到结束实际经过的秒数。"),
+        ("请求等待 / 随机等待", "用例或链路步骤之间的 think time：固定间隔或随机区间（如随机 1～3s）。"),
         ("阶段耗时（整体/回答/检索等）", "流式或链路场景下各阶段耗时均值/P95，单位秒；越低通常越好。"),
         ("参照轮 / 对比轮", "参照轮是计算变化率时的参照对象；对比轮相对它计算百分比。同名场景请结合执行时间 / 记录号区分。"),
         ("变化率", "（对比轮 − 参照轮）÷ 参照轮 × 100%。QPS/请求数升高通常更好；RT/错误率/阶段耗时升高通常更差。"),
@@ -609,7 +1009,7 @@ def render_metric_glossary(*, heading: str = "附录：指标说明") -> str:
     )
     body = "".join(f"<tr><td>{h(k)}</td><td>{h(v)}</td></tr>" for k, v in rows)
     return f"""
-  <div class="section" contenteditable="false">
+  <div class="section" id="sec-appendix" contenteditable="false">
     <h2>{h(heading)}</h2>
     <p style="font-size:13px;color:#64748b;margin-bottom:10px">下列释义适用于本报告中的同名指标；若某节未出现对应字段可忽略。</p>
     <table class="glossary-table">
@@ -617,6 +1017,119 @@ def render_metric_glossary(*, heading: str = "附录：指标说明") -> str:
       <tbody>{body}</tbody>
     </table>
   </div>"""
+
+
+def _normalize_toc_item(item: Any) -> dict:
+    """支持 (id, label) 或 (id, label, children) 或 dict。"""
+    if isinstance(item, dict):
+        kids = item.get("children") or []
+        return {
+            "id": str(item.get("id") or ""),
+            "label": str(item.get("label") or ""),
+            "children": [_normalize_toc_item(c) for c in kids],
+        }
+    if isinstance(item, (list, tuple)):
+        if len(item) >= 3 and item[2]:
+            kids_raw = item[2]
+            kids = [_normalize_toc_item(c) for c in kids_raw]
+            return {"id": str(item[0] or ""), "label": str(item[1] or ""), "children": kids}
+        if len(item) >= 2:
+            return {"id": str(item[0] or ""), "label": str(item[1] or ""), "children": []}
+    return {"id": "", "label": "", "children": []}
+
+
+def render_report_toc(items: Sequence[Any]) -> str:
+    """左侧目录导航；含子项时默认收起，点击可展开并跳转。"""
+    if not items:
+        return ""
+
+    def _li(node: dict) -> str:
+        aid = node.get("id") or ""
+        label = node.get("label") or ""
+        if not aid or not label:
+            return ""
+        kids = [c for c in (node.get("children") or []) if c.get("id") and c.get("label")]
+        link = f'<a href="#{h(aid)}">{h(label)}</a>'
+        if not kids:
+            return f"<li>{link}</li>"
+        child_html = "".join(
+            f'<li><a href="#{h(c["id"])}">{h(c["label"])}</a></li>' for c in kids
+        )
+        return (
+            f'<li class="toc-item" data-toc-parent="1">'
+            f'<div class="toc-row">'
+            f'<button type="button" class="toc-toggle" aria-expanded="false" title="展开/收起">'
+            f'<span class="toc-caret">▶</span></button>'
+            f"{link}</div>"
+            f'<ul class="toc-children">{child_html}</ul></li>'
+        )
+
+    links = "".join(_li(_normalize_toc_item(it)) for it in items)
+    if not links:
+        return ""
+    return f"""<nav class="report-toc" id="reportToc" contenteditable="false">
+  <div class="toc-title">目录</div>
+  <ul>{links}</ul>
+</nav>"""
+
+
+def report_toc_script() -> str:
+    return """
+<script id="reportTocScript">
+(function () {
+  var root = document.getElementById('reportToc');
+  if (!root) return;
+  root.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('.toc-toggle') : null;
+    if (!btn || !root.contains(btn)) return;
+    e.preventDefault();
+    var item = btn.closest('.toc-item');
+    if (!item) return;
+    var open = item.classList.toggle('is-open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  var links = root.querySelectorAll('a[href^="#"]');
+  if (!links.length) return;
+  var sections = [];
+  links.forEach(function (a) {
+    var id = a.getAttribute('href').slice(1);
+    var el = document.getElementById(id);
+    if (el) sections.push({ el: el, link: a });
+  });
+  function onScroll() {
+    var y = window.scrollY + 80;
+    var current = sections[0];
+    sections.forEach(function (s) {
+      if (s.el.offsetTop <= y) current = s;
+    });
+    sections.forEach(function (s) {
+      s.link.classList.toggle('active', s === current);
+    });
+    if (current && current.link) {
+      var parentItem = current.link.closest('.toc-item[data-toc-parent]');
+      if (!parentItem) {
+        var childLi = current.link.closest('.toc-children');
+        if (childLi) parentItem = childLi.closest('.toc-item[data-toc-parent]');
+      }
+      if (parentItem && current.link.closest('.toc-children')) {
+        parentItem.classList.add('is-open');
+        var t = parentItem.querySelector('.toc-toggle');
+        if (t) t.setAttribute('aria-expanded', 'true');
+      }
+    }
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
+</script>"""
+
+
+def wrap_report_layout(*, hero_html: str, body_html: str, toc_items: Sequence[Any]) -> str:
+    toc = render_report_toc(toc_items)
+    return f"""{toc}<div class="container report-main" id="reportRoot" contenteditable="true">
+  {hero_html}
+  {body_html}
+</div>"""
 
 
 def _bar_width(val: float, max_val: float) -> float:
@@ -677,6 +1190,7 @@ def render_percentile_table(
     max_rt: Any = None,
     min_rt: Any = None,
     avg_rt: Any = None,
+    include_lead: bool = True,
 ) -> str:
     cells = [
         ("Min", min_rt),
@@ -693,7 +1207,109 @@ def render_percentile_table(
         if v is not None else "<td>-</td>"
         for _, v in cells
     )
-    return f"<table><thead><tr>{th}</tr></thead><tbody><tr>{td}</tr></tbody></table>"
+    table = f"<table><thead><tr>{th}</tr></thead><tbody><tr>{td}</tr></tbody></table>"
+    if not include_lead:
+        return table
+    return (
+        f'<p style="font-size:13px;color:#64748b;margin:0 0 10px">{PERCENTILE_TABLE_LEAD}</p>'
+        f"{table}"
+    )
+
+
+def _fmt_throughput_cell(v: Any, *, unit: str) -> str:
+    if v is None or v == "":
+        return "<td>-</td>"
+    try:
+        num = round(float(v), 2)
+    except (TypeError, ValueError):
+        return f"<td class='num'>{h(v)}</td>"
+    return f"<td class='num'>{h(num)} <span class='unit'>{h(unit)}</span></td>"
+
+
+def render_throughput_error_table(
+    *,
+    qps: Any = None,
+    success_qps: Any = None,
+    avg_rt: Any = None,
+    p95_rt: Any = None,
+    error_rate: Any = None,
+    total_requests: Any = None,
+    include_caption: bool = True,
+) -> str:
+    """横向「吞吐与错误」表：与分位表分开展示，避免和接口明细挤在一块。"""
+    sq = success_qps if success_qps is not None else qps
+    th = (
+        "<th>QPS</th><th>成功 QPS</th>"
+        "<th>平均响应时间 <span class='unit'>(ms)</span></th>"
+        "<th>P95 <span class='unit'>(ms)</span></th>"
+        "<th>错误率</th><th>总请求数</th>"
+    )
+    err_cell = "<td>-</td>"
+    if error_rate is not None and error_rate != "":
+        try:
+            err_cell = f"<td class='num'>{h(round(float(error_rate), 2))}<span class='unit'>%</span></td>"
+        except (TypeError, ValueError):
+            err_cell = f"<td class='num'>{h(error_rate)}</td>"
+    total_cell = "<td>-</td>"
+    if total_requests is not None and total_requests != "":
+        try:
+            total_cell = f"<td class='num'>{h(int(float(total_requests)))}<span class='unit'>次</span></td>"
+        except (TypeError, ValueError):
+            total_cell = f"<td class='num'>{h(total_requests)}</td>"
+    td = (
+        f"{_fmt_throughput_cell(qps, unit='/s')}"
+        f"{_fmt_throughput_cell(sq, unit='/s')}"
+        f"{_fmt_throughput_cell(avg_rt, unit='ms')}"
+        f"{_fmt_throughput_cell(p95_rt, unit='ms')}"
+        f"{err_cell}{total_cell}"
+    )
+    table = f"<table><thead><tr>{th}</tr></thead><tbody><tr>{td}</tr></tbody></table>"
+    if not include_caption:
+        return table
+    return (
+        f'<p style="font-size:13px;color:#64748b;margin:16px 0 8px">{h(THROUGHPUT_ERROR_CAPTION)}</p>'
+        f"{table}"
+    )
+
+
+def should_render_case_detail_table(
+    cases: Sequence[Any],
+    notes_by_case: Optional[dict[str, str]] = None,
+) -> bool:
+    """多接口/链路展示接口明细；单接口且无 AI 用例旁注时省略（与章节核心指标重复）。"""
+    notes = notes_by_case or {}
+    items = [c for c in (cases or []) if isinstance(c, dict)]
+    if len(items) >= 2:
+        return True
+    if len(items) == 1:
+        name = str(items[0].get("name") or "未命名")
+        return bool(str(notes.get(name) or "").strip())
+    return False
+
+
+def should_render_case_detail_for_style(
+    cases: Sequence[Any],
+    notes_by_case: Optional[dict[str, str]],
+    style: Optional[str],
+) -> bool:
+    """按报告版式决定是否展示接口明细表。
+
+    单接口场景用「吞吐与错误」横表承载核心吞吐，不再重复接口明细行；
+    多接口/链路才出接口明细。detailed 对多接口强制展示。
+    """
+    flags = report_style_flags(style)
+    mode = str(flags.get("case_detail_mode") or "smart")
+    items = [c for c in (cases or []) if isinstance(c, dict)]
+    if mode == "never":
+        return False
+    if len(items) < 2:
+        # 单接口：有 AI 旁注时仍可出明细承载旁注；否则省略
+        if mode == "always":
+            return False
+        return should_render_case_detail_table(items, notes_by_case)
+    if mode == "always":
+        return True
+    return should_render_case_detail_table(items, notes_by_case)
 
 
 def metric_lower_is_better(metric_key: str) -> Optional[bool]:

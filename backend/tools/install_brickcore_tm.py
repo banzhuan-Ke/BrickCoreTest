@@ -46,6 +46,16 @@ def decrypt_bcpack_to_zip(blob: bytes) -> bytes:
 
 
 def default_target() -> Path:
+    # Docker 持久目录：挂载 ./backend/ext_packages → /app/ext_packages，重建容器不丢 CE 手装包
+    for preferred in (Path("/app/ext_packages"), Path("ext_packages")):
+        try:
+            preferred.mkdir(parents=True, exist_ok=True)
+            probe = preferred / ".tm_write_probe"
+            probe.write_text("1", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return preferred
+        except OSError:
+            continue
     for p in list(site.getsitepackages()) + [Path(site.getusersitepackages())]:
         c = Path(p)
         try:
@@ -56,7 +66,7 @@ def default_target() -> Path:
             return c
         except OSError:
             continue
-    raise SystemExit("无可用 site-packages，请传 --target")
+    raise SystemExit("无可用安装目录，请传 --target（Docker 建议 /app/ext_packages）")
 
 
 def main() -> int:

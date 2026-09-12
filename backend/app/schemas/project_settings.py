@@ -59,6 +59,14 @@ class AiExecutionSettingsBody(BaseModel):
         max_length=500,
         description="可选 APM 外链前缀（须 http/https；可用 {rid} 占位），与 request_id 拼接；空则仅可复制",
     )
+    sut_metrics_retain_days: Optional[int] = Field(
+        None, ge=1, le=90,
+        description="被测指标平台保留天数；空则跟随平台 SUT_METRICS_RETAIN_DAYS",
+    )
+    sut_metrics_baseline_sec: Optional[int] = Field(
+        None, ge=60, le=1800,
+        description="压测报告施压前基线回看秒数；空则跟随平台默认 300",
+    )
 
 
 def payload_from_execution_settings_body(body: AiExecutionSettingsBody) -> dict:

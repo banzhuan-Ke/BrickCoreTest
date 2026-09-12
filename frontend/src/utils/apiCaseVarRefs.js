@@ -30,7 +30,12 @@ function scanString(map, text, fieldLabel) {
   PLACEHOLDER_PATTERN.lastIndex = 0
   let match
   while ((match = PLACEHOLDER_PATTERN.exec(text)) !== null) {
-    addRef(map, match[1], fieldLabel)
+    const inner = (match[1] || '').trim()
+    addRef(map, inner, fieldLabel)
+    if (inner.startsWith('dt:')) {
+      const atMatch = /@([a-zA-Z_][\w.]*)/.exec(inner)
+      if (atMatch?.[1]) addRef(map, atMatch[1], fieldLabel)
+    }
   }
 }
 

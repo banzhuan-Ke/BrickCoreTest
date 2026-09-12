@@ -9,7 +9,7 @@
 |------|------|
 | **安装包（测试机）** | Windows 10/11 x64；完整解压 zip（exe + `_internal` + `runner`）；**无需本机 Python** |
 | **开发模式（研发）** | Python 3.11；执行 `runner_client\start-client.bat` 自动创建双 venv |
-| **运行库** | 打包版已内置 MSVCP140 / VCRUNTIME140；`greenlet` DLL 报错请重下最新 zip |
+| **运行库** | 打包版已内置部分 `MSVCP140` / `VCRUNTIME140`；若启动报 **`QtCore` / DLL load failed / 找不到指定的模块**，请安装 **VC++ 2015–2022 x64** 后重启：优先 [微软官网](https://aka.ms/vs/17/release/vc_redist.x64.exe)，不便时用网盘 **`VC_redist.x64.exe`**（官方安装包镜像） |
 | **Playwright** | 打包版内置 Chromium；开发模式在 `runner\venv` 内执行 `playwright install chromium` |
 | **网络** | 平台 80；MQ 25672；Redis 26379；MinIO 9200（按环境放行） |
 
@@ -62,7 +62,7 @@ cd <平台仓库>\runner
 
 ## 六、客户端版本过低
 
-平台 `.env` 可设 `RUNNER_CLIENT_VERSION_MIN`。设备管理列表会标「需升级」。请下载与 `RUNNER_CLIENT_VERSION_LATEST` 一致的 zip（当前推荐见页脚 / 版本更新记录，建议执行器 **1.7.0**）。
+平台 `.env` 可设 `RUNNER_CLIENT_VERSION_MIN`。设备管理列表会标「需升级」。请下载与 `RUNNER_CLIENT_VERSION_LATEST` 一致的 zip（当前推荐见页脚 / 版本更新记录，建议执行器 **1.8.0**）。
 
 ## 七、App adb（WiFi / 模拟器）
 

@@ -33,11 +33,14 @@ async def _project_id_from_json_body(request: Request) -> str | None:
 
 
 def is_mock_call_path(path: str) -> bool:
-    """Mock 调用作假 SUT：仅 /api-module/mock-call（及子路径），不含 CRUD /mock。"""
+    """Mock 调用作假 SUT：/api-module/mock-call 与短别名 /mock（及子路径）；不含 CRUD /api-module/mock。"""
     normalized = (path or "").rstrip("/")
-    return normalized == "/api-module/mock-call" or normalized.startswith(
+    if normalized == "/api-module/mock-call" or normalized.startswith(
         "/api-module/mock-call/"
-    )
+    ):
+        return True
+    # 全站短别名（与 mock-call 双活）；勿匹配 /api-module/mock CRUD
+    return normalized == "/mock" or normalized.startswith("/mock/")
 
 
 async def optional_project_access_check(

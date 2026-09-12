@@ -1,12 +1,14 @@
 # BrickCore 自动化测试平台
 
-> **当前版本 v1.7.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
+> **当前版本 v1.8.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
 
 覆盖 **Web UI、App、接口、性能、AI** 等测试能力，支持私有化部署、文档中心与执行器网盘分发。平台源码见本仓库；Web / App / 压测执行请配合下方 **BrickCoreRunner** 安装包使用。
 
 ## 核心亮点
 
 - **一站式**：Web / App / 接口 / 性能 / AI / **测试管理** 统一入口，资产与权限集中管理
+- **资源与设备监控**：支持 **被测服务器** 与 **手机端（Android）** 采集——服务器侧看 CPU / 内存 / 磁盘 / 网络，手机侧看 CPU / 内存 / FPS / Jank / 电池等；压测报告可同屏对照资源曲线，App 可随执行采集或独立监控，便于判断瓶颈在业务还是机器/端侧
+- **压测增强报告**：精简 / 标准 / 详细版式、阶梯并发对照、CSV 项目级数据集
 - **测试管理**：版本范围 → 评审 → 计划 → 缺陷 → 质量门禁 / 追溯；高级能力见扩展包
 - **AI 辅助**：需求→功能用例、接口用例生成、失败分析、平台助手「小测」、MCP 外部接入
 - **迭代资料库**：文件夹、检索/问答、通用报告向导与 Embedding（可选）
@@ -36,9 +38,9 @@
 | 模块 | 说明 |
 |------|------|
 | **Web 自动化** | 用例/套件/计划、录制回放、步骤片段、测试文件库、定位器自愈 / 定位助手、定时任务、HTML 报告 |
-| **App 自动化** | 用例/元素库/元素探查/套件/计划/定时任务/片段；真机调度需 Runner 勾选 **App 自动化** |
-| **接口自动化** | Swagger/Postman 导入、测试计划、WebSocket、数据工厂、Mock（同路径多场景）、定时执行 |
-| **性能测试** | 流式/SSE 阶段、业务链路、CSV 参数化、分布式 Worker、HTML 报告 |
+| **App 自动化** | 用例/元素库/元素探查/套件/计划/定时任务/片段；**设备性能监控**（Android）；真机调度需 Runner 勾选 **App 自动化** |
+| **接口自动化** | Swagger/Postman 导入、测试计划、WebSocket、数据工厂、Mock（同路径多场景 / 短别名 `/mock/`）、定时执行 |
+| **性能测试** | 流式/SSE、业务链路、**CSV 数据集**、分布式 Worker、增强报告；**被测服务器 / 被测应用** 资源监控 |
 | **测试管理** | 版本范围、评审、计划运行、缺陷、质量门禁 / 敏捷向导、追溯矩阵；高级能力见扩展包 |
 | **AI 测试** | 需求→功能用例、智能浏览器、失败分析、平台助手「小测」、MCP 外部接入、**迭代资料库** |
 | **平台能力** | 统一测试目录、数据看板、RBAC、文档中心、邮件/钉钉/企微通知 |
@@ -59,6 +61,10 @@
 
 ![亮点功能](assets/readme/collage-highlights.png)
 
+资源与设备监控（左：被测服务器 · 右：App 设备性能）。
+
+![资源与设备监控](assets/readme/collage-resource-monitor.png)
+
 ## 功能演示
 
 功能录屏与完整说明见**在线演示站**（大体积视频不进开源仓）：
@@ -75,13 +81,14 @@
 | Web 录制 + 定位器自愈 / 定位助手 | MCP/助手录制；自愈与 DevTools 定位辅助 |
 | 接口 AI 生成 · Mock | 基于 Swagger 生成用例；Mock 同路径多场景 |
 | **App 自动化** | 元素探查、用例/计划/片段；真机执行需 App Runner |
+| **资源与设备监控** | 被测服务器（CPU/内存/磁盘/网络）+ Android 设备性能（FPS/Jank 等）；可与压测/执行对照 |
 | **测试管理** | 版本范围 → 评审 → 计划 → 缺陷 → 门禁 / 追溯 |
 
 ---
 
 ## 执行器下载（BrickCoreRunner）
 
-**Web 录制、UI 执行、App 真机、分布式压测 Worker** 需安装 **BrickCoreRunner** 客户端（建议 **v1.7.0**，引擎 **1.7.0**）。
+**Web 录制、UI 执行、App 真机、分布式压测 Worker** 需安装 **BrickCoreRunner** 客户端（建议 **v1.8.0**，引擎 **1.8.0**）。
 
 **百度网盘**（提取码 **`9gbi`**）：
 
@@ -109,9 +116,9 @@
 
 ### 测试管理扩展包（可选）
 
-质量门禁、指派通知、版本智能化、导出版本包等高级能力由 **brickcore_tm** 扩展包提供。从源码自建且提示未安装扩展包时，请按 [测试管理扩展包](docs-site/guide/brickcore-tm-pack.md) 下载 `.bcpack` 并安装。
+质量门禁、指派通知、版本智能化、导出版本包等高级能力由 **brickcore_tm** 扩展包提供。从源码自建且提示未安装扩展包时，请从与执行器**同一百度网盘**（提取码 **`9gbi`**）下载 `.bcpack` 并安装；步骤见 [测试管理扩展包](docs-site/guide/brickcore-tm-pack.md)。
 
-> 维护者：更新网盘后请同步本 README，并在 **系统管理 → 执行器发布** 填写相同外链。
+👉 [百度网盘下载](https://pan.baidu.com/s/1pObFpG-Mt7-Pxo58hklOlg?pwd=9gbi)
 
 ---
 
@@ -154,7 +161,7 @@ docker exec -it fastapi_backend aerich upgrade
 | 平台 | admin | BrickCore123456 |
 | MySQL | admin | BrickCore123456 |
 
-升级至 **v1.7.0** 时务必执行 `aerich upgrade`，并重新构建前端；执行器请同步更新至 **1.7.0**。
+升级至 **v1.8.0** 时务必执行 `aerich upgrade`，并重新构建前端；执行器请同步更新至 **1.8.0**。
 
 ---
 
@@ -175,12 +182,12 @@ docker exec -it fastapi_backend aerich upgrade
 | 文档 | 说明 |
 |------|------|
 | [docs-site/](docs-site/) | 平台使用说明（与登录后「文档中心」内置文档同源） |
-| [版本更新记录](docs-site/guide/release-notes.md) | **v1.7.0** 变更与升级指引 |
+| [版本更新记录](docs-site/guide/release-notes.md) | **v1.8.0** 变更与升级指引 |
 | [亮点功能](docs-site/guide/highlights.md) | 能力总览与快速跳转 |
 | [Docker 部署](docs-site/guide/docker-deploy.md) | 云服务器自建（Linux） |
 | [Windows 部署](docs-site/guide/windows-deploy.md) | Windows 本机 Docker / 无 Docker 开发 |
 
-当前公开仓为 **v1.7.0**。通用迭代资料库已开放；定制文档页签预留，需联系管理员开通定制开发。
+当前公开仓为 **v1.8.0**。通用迭代资料库已开放；定制文档页签预留，需联系管理员开通定制开发。
 
 问题与建议：[Gitee Issues](https://gitee.com/BanZhuanKeOrz/BrickCore/issues) · [GitHub](https://github.com/banzhuan-Ke/BrickCoreTest) 或下方交流群。
 
@@ -200,7 +207,7 @@ BrickCoreRunner 安装包为配套客户端（网盘 / 平台内下载），使�
 
 <p align="center">
   <img src="assets/readme/image-wechat-group-brickcore.png" width="260" alt="BrickCoreAI 测试平台交流群" /><br />
-  <sub>微信扫码加入 · 交流部署、用例编写与版本动态 · 二维码约 7 天有效（当前至 9 月 13 日前）</sub>
+  <sub>微信扫码加入 · 交流部署、用例编写与版本动态 · 二维码约 7 天有效（当前至 8 月 29 日前）</sub>
 </p>
 
 ---

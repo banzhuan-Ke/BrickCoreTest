@@ -1,11 +1,13 @@
 # README 配图（CE 公开仓）
 
-README 正文只嵌 **2 张拼图**（外加微信二维码）：
+README 正文嵌拼图与 v1.8 亮点单图（外加微信二维码）：
 
 | 文件 | 内容 |
 |------|------|
 | `collage-overview.png` | 旧四图 2×2：看板 / 文档中心 / 压测·小测 / 菜单 |
 | `collage-highlights.png` | 亮点 2×2：AI 需求 / Web 录制 / 定位助手 / Mock |
+| `collage-resource-monitor.png` | 资源监控拼图：被测服务器 + App 设备性能 |
+| `perf-sut-server-detail.png` / `app-device-apm.png` | 拼图源图（可保留；README 只嵌拼图） |
 
 源图可保留：`image.png`～`image4.png`（拼总览）、`preview-*.png` 或 `docs-site/public/demo/`（拼亮点，仅 Pro）。需要重做拼图时在 Pro 用 Pillow 再生成并拷到 CE `assets/readme/`。
 

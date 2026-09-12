@@ -167,7 +167,10 @@ async def create_case(item: AddCaseForm):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="创建用例失败，传入的项目不存在")
     if item.catalog_id is not None:
         await resolve_catalog(item.project_id, item.catalog_id)
-    cases = await Case.create(**item.model_dump(exclude_unset=True), is_del=False, update_by=item.username)
+    payload = item.model_dump(exclude_unset=True)
+    # JSONField(default=list) 非空：显式 null / 未传时落成 []
+    payload["tags"] = list(payload.get("tags") or [])
+    cases = await Case.create(**payload, is_del=False, update_by=item.username)
     return cases
 
 
@@ -187,7 +190,10 @@ async def update_case(
     await assert_user_project_member(user_info, cases.project_id)
     if item.catalog_id is not None:
         await resolve_catalog(cases.project_id, item.catalog_id)
-    await cases.update_from_dict(item.model_dump(exclude_unset=True))
+    data = item.model_dump(exclude_unset=True)
+    if "tags" in data:
+        data["tags"] = list(data.get("tags") or [])
+    await cases.update_from_dict(data)
     cases.update_by = user_info.get("username") or cases.username
     await cases.save()
     return cases

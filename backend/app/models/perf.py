@@ -28,11 +28,11 @@ class PerfScene(models.Model):
     # }
     config = fields.JSONField(default=dict, description="压测配置")
 
-    # CSV 参数化数据
+    # CSV 参数化数据（历史兼容：优先 csv_dataset_id；无绑定时回退本字段）
     # 结构: [{"username":"user1","password":"pass1"}, {...}]
-    csv_data = fields.JSONField(default=list, null=True, description="CSV数据(JSON数组)")
+    csv_data = fields.JSONField(default=list, null=True, description="CSV数据(JSON数组，遗留)")
 
-    # CSV 配置
+    # CSV 配置（场景级策略；数据本体在 CsvDataset）
     # {
     #   "enabled": false,
     #   "strategy": "round_robin",  # round_robin / unique / random
@@ -41,6 +41,9 @@ class PerfScene(models.Model):
     #   "row_count": 1000
     # }
     csv_config = fields.JSONField(default=dict, description="CSV配置")
+
+    # 绑定的项目级 CSV 数据集（可多场景共用）
+    csv_dataset_id = fields.IntField(null=True, description="绑定的 CSV 数据集ID")
 
     # 基线钉选：报告自动对比该记录，并可按阈值告警
     baseline_record_id = fields.IntField(null=True, description="钉选基线执行记录ID")
@@ -186,6 +189,31 @@ class PerfJourneyTemplate(models.Model):
         table_description = "性能测试业务链路模板"
 
 
+class CsvDataset(models.Model):
+    """项目级 CSV 参数化数据集（可被多个压测场景绑定）。"""
+    id = fields.IntField(pk=True, description="数据集ID")
+    project = fields.ForeignKeyField(
+        "models.Project", related_name="csv_datasets", description="所属项目"
+    )
+    name = fields.CharField(max_length=100, description="数据集名称")
+    description = fields.TextField(null=True, description="描述")
+    # 行数据: [{"col":"v"}, ...]
+    row_data = fields.JSONField(default=list, null=True, description="CSV行数据")
+    columns = fields.JSONField(default=list, description="列名列表")
+    file_name = fields.CharField(max_length=255, default="", description="来源文件名")
+    row_count = fields.IntField(default=0, description="行数")
+    # 从场景遗留字段迁出时记录来源场景
+    source_scene_id = fields.IntField(null=True, description="迁出来源场景ID")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+    create_by = fields.CharField(max_length=50, default="", description="创建人")
+
+    class Meta:
+        table = "perf_csv_dataset"
+        table_description = "性能测试 CSV 数据集"
+
+
 class PerfComparisonReport(models.Model):
     """性能测试增强报告（对比 / 汇总，2–20 条）"""
     id = fields.IntField(pk=True, description="增强报告ID")
@@ -246,3 +274,120 @@ class PerfCronJob(models.Model):
     class Meta:
         table = "perf_cron_job"
         table_description = "性能测试定时任务"
+
+
+class SutServer(models.Model):
+    """被测服务器（被测监控采集器端）"""
+    id = fields.IntField(pk=True, description="服务器ID")
+    project = fields.ForeignKeyField(
+        "models.Project", related_name="sut_servers", description="所属项目"
+    )
+    agent_uid = fields.CharField(max_length=64, null=True, description="采集器本地稳定身份")
+    name = fields.CharField(max_length=100, description="展示名称")
+    hostname = fields.CharField(max_length=255, default="", description="主机名")
+    role = fields.CharField(max_length=64, default="", description="角色标签")
+    token_hash = fields.CharField(max_length=128, description="Token 哈希")
+    monitoring_enabled = fields.BooleanField(default=True, description="是否启用监控采样")
+    schedule_json = fields.JSONField(null=True, description="免监控/仅监控时段配置")
+    agent_settings_json = fields.JSONField(
+        null=True,
+        description="采集器运行参数（interval_sec/upload_every_sec/buffer_hours）；空=本机配置",
+    )
+    config_rev = fields.IntField(default=1, description="监控配置版本（日程/开关变更递增）")
+    force_from_ms = fields.BigIntField(
+        null=True, description="压测强制采集起始 epoch ms（补传按窗口判定）"
+    )
+    force_until_ms = fields.BigIntField(
+        null=True, description="压测强制采集截止 epoch ms（覆盖 pause 日程）"
+    )
+    last_heartbeat_at = fields.DatetimeField(null=True, description="最近心跳")
+    last_metrics_at = fields.DatetimeField(null=True, description="最近成功接收指标")
+    host_info = fields.JSONField(default=dict, description="主机探测摘要")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+    create_by = fields.CharField(max_length=50, default="", description="创建人")
+
+    class Meta:
+        table = "sut_server"
+        table_description = "被测服务器"
+
+
+class SutApplication(models.Model):
+    """被测应用（业务系统边界；压测选目标入口）"""
+    id = fields.IntField(pk=True, description="应用ID")
+    project = fields.ForeignKeyField(
+        "models.Project", related_name="sut_applications", description="所属项目"
+    )
+    name = fields.CharField(max_length=100, description="应用名称")
+    roles_json = fields.JSONField(default=list, description="角色清单，如 [esp, mysql]")
+    remark = fields.CharField(max_length=500, default="", description="备注")
+    is_del = fields.BooleanField(default=False, description="是否删除")
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+    create_by = fields.CharField(max_length=50, default="", description="创建人")
+
+    class Meta:
+        table = "sut_application"
+        table_description = "被测应用"
+
+
+class SutAppEnvBinding(models.Model):
+    """被测应用 × 环境 → 角色→采集器绑定"""
+    id = fields.IntField(pk=True, description="绑定ID")
+    application = fields.ForeignKeyField(
+        "models.SutApplication", related_name="env_bindings", description="被测应用"
+    )
+    environment = fields.ForeignKeyField(
+        "models.Environment", related_name="sut_app_bindings", description="环境"
+    )
+    bindings_json = fields.JSONField(
+        default=list, description='[{role, server_ids: []}, ...]'
+    )
+    update_time = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "sut_app_env_binding"
+        table_description = "被测应用环境绑定"
+        unique_together = (("application", "environment"),)
+
+
+class SutMetricChunk(models.Model):
+    """被测服务器近实时指标批次"""
+    id = fields.IntField(pk=True, description="批次ID")
+    server = fields.ForeignKeyField(
+        "models.SutServer", related_name="metric_chunks", description="被测服务器"
+    )
+    start_ms = fields.BigIntField(description="批次起始 epoch ms")
+    end_ms = fields.BigIntField(description="批次结束 epoch ms")
+    points_json = fields.JSONField(default=list, description="采样点数组")
+    received_at = fields.DatetimeField(auto_now_add=True, description="入库时间")
+
+    class Meta:
+        table = "sut_metric_chunk"
+        table_description = "被测服务器指标 chunk"
+        unique_together = (("server", "start_ms"),)
+
+
+class PerfRecordSutMetric(models.Model):
+    """压测记录的被测资源快照（M3 写入；M1 占位建表）"""
+    id = fields.IntField(pk=True, description="ID")
+    record = fields.ForeignKeyField(
+        "models.PerfRecord", related_name="sut_metrics", description="压测记录"
+    )
+    server = fields.ForeignKeyField(
+        "models.SutServer", related_name="record_snapshots", null=True, description="被测服务器"
+    )
+    server_snapshot_json = fields.JSONField(default=dict, description="当时服务器快照")
+    series_json = fields.JSONField(default=list, description="降采样曲线")
+    summary_json = fields.JSONField(default=dict, description="汇总指标")
+    source = fields.CharField(max_length=32, default="agent", description="agent|vm|grafana_link")
+    status = fields.CharField(max_length=32, default="no_data", description="complete|partial|no_data|offline|failed")
+    coverage = fields.FloatField(null=True, description="覆盖率 0~1")
+    grafana_url = fields.CharField(max_length=1024, null=True, description="Grafana 深链")
+    create_time = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "perf_record_sut_metric"
+        table_description = "压测记录被测资源快照"
+        unique_together = (("record", "server"),)

@@ -177,6 +177,16 @@ const assertSteps = [
             timeout: 10,
         },
     },
+    {
+        keyword: '断言设备性能',
+        method: 'assert_device_metric',
+        params: {
+            metric: 'cpu_pct',
+            operator: 'lt',
+            expected: 80,
+            agg: 'current',
+        },
+    },
 ]
 
 const contextSteps = [

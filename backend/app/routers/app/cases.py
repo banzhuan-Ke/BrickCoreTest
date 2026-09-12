@@ -12,6 +12,7 @@ from app.core.case.case_execution_hints import build_execution_hints_response, r
 from app.modules.app.app_locator_validate import validate_case_steps_driver_mode_for_project
 from app.models.app import AppCase, AppCaseExecution
 from app.models.sys import Project
+from app.routers.perf.report_utils import apply_display_nicknames, resolve_user_nickname
 from app.schemas.app import AddAppCaseForm, AppCaseSchemas, UpdateAppCaseForm
 
 router = APIRouter(prefix="/cases", dependencies=[Depends(is_authenticated)], tags=["App用例"])
@@ -39,6 +40,9 @@ async def create_case(
     payload = item.model_dump()
     payload["driver_mode"] = driver_mode
     payload["username"] = username
+    # Tortoise JSONField(default=list) 非空；表单未传 tags 时 model_dump 会带 null
+    payload["tags"] = list(payload.get("tags") or [])
+    payload["steps"] = list(payload.get("steps") or [])
     return await AppCase.create(**payload, is_del=False, update_by=username)
 
 
@@ -61,7 +65,9 @@ async def list_cases(
         query = await apply_catalog_filter(query, project_id, catalog_id, include_children=include_children)
     total = await query.count()
     rows = await query.offset((page - 1) * size).limit(size)
-    return {"data": [AppCaseSchemas.model_validate(r) for r in rows], "total": total}
+    data = [AppCaseSchemas.model_validate(r).model_dump(mode="json") for r in rows]
+    await apply_display_nicknames(data)
+    return {"data": data, "total": total}
 
 
 @router.get("/{case_id}", response_model=AppCaseSchemas, dependencies=[Depends(require_permissions(APP_CASE_VIEW))])
@@ -70,7 +76,9 @@ async def get_case(case_id: int, user_info: dict = Depends(require_permissions(A
     if not case:
         raise HTTPException(status_code=422, detail="用例不存在")
     await assert_user_project_viewer(user_info, case.project_id)
-    return case
+    data = AppCaseSchemas.model_validate(case).model_dump(mode="json")
+    data["username"] = await resolve_user_nickname(case.username)
+    return data
 
 
 @router.get(
@@ -115,6 +123,10 @@ async def update_case(
     if item.catalog_id is not None:
         await resolve_catalog(case.project_id, item.catalog_id)
     data = item.model_dump(exclude_unset=True)
+    if "tags" in data:
+        data["tags"] = list(data.get("tags") or [])
+    if "steps" in data and data["steps"] is None:
+        data["steps"] = []
     driver_mode = data.get("driver_mode", case.driver_mode)
     steps = data.get("steps", case.steps)
     if "driver_mode" in data or "steps" in data:
@@ -163,6 +175,7 @@ async def copy_app_case(
         driver_mode=driver_mode,
         description=case.description or "",
         steps=copy.deepcopy(case.steps or []),
+        tags=list(case.tags or []),
         username=username,
         is_del=False,
         update_by=username,

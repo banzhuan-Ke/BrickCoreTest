@@ -1,7 +1,7 @@
 /** CE：定制文档页签可见，实现由 stub 锁定（无行业包 API） */
 export const knowledgePackChildRoutes = [
   {
-    path: 'pro-custom',
+    path: 'custom-docs',
     name: 'knowledgePackWizard',
     component: () => import('./views/KnowledgePackWizard.vue'),
     meta: { title: '定制文档', permission: 'knowledge:view' }
