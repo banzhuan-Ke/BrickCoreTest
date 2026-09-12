@@ -71,10 +71,15 @@ const highlightHint = computed(() => {
 })
 
 const scrollStyle = computed(() => {
-  const style = {}
+  const style = { overflow: 'auto' }
   if (props.maxHeight) style.maxHeight = props.maxHeight
   if (props.minHeight) style.minHeight = props.minHeight
-  if (props.fill) style.flex = '1'
+  if (props.fill) {
+    style.flex = '1 1 auto'
+    style.minHeight = props.minHeight || '0'
+    // 父级未限高时仍给兜底，避免长 JSON 撑破弹窗且不出滚动条
+    if (!props.maxHeight) style.maxHeight = 'min(480px, calc(92vh - 280px))'
+  }
   return style
 })
 
@@ -139,8 +144,9 @@ defineExpose({ scrollToFirstHighlight })
 }
 
 .copyable-pre--fill .copyable-pre__scroll {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
+  overflow: auto;
 }
 
 .copyable-pre__content {

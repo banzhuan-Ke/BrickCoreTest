@@ -142,6 +142,12 @@ export const MenuGroups = [
                 anyPermissions: ['app_element:view', 'app_case:view']
             },
             {
+                name: '设备性能监控',
+                path: '/app-device-apm',
+                icon: 'TrendCharts',
+                anyPermissions: ['app_case:view']
+            },
+            {
                 name: '套件管理',
                 path: '/app-suite',
                 icon: 'Collection',
@@ -401,6 +407,12 @@ export const MenuGroups = [
                 permission: 'perf_scene:view'
             },
             {
+                name: 'CSV 数据集',
+                path: '/perf-csv-datasets',
+                icon: 'Document',
+                permission: 'perf_scene:view'
+            },
+            {
                 name: '定时压测',
                 path: '/perf-cron',
                 icon: 'AlarmClock',
@@ -410,6 +422,18 @@ export const MenuGroups = [
                 name: '执行机',
                 path: '/perf-workers',
                 icon: 'Monitor',
+                permission: 'perf_scene:view'
+            },
+            {
+                name: '被测服务器',
+                path: '/perf-sut-servers',
+                icon: 'Coin',
+                permission: 'perf_scene:view'
+            },
+            {
+                name: '被测应用',
+                path: '/perf-sut-applications',
+                icon: 'Box',
                 permission: 'perf_scene:view'
             },
             {

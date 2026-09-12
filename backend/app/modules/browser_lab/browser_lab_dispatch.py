@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # 桌面执行机（Windows/macOS 有头调试）只保留语言；勿无条件下发 Docker/Linux 沙箱参数，
 # 否则 Chromium 会提示「不受支持的命令行标记: --disable-gpu-sandbox」等。
-# Linux 云主机 / 平台本机起浏览器（历史 local、未来付费版服务器模式）所需参数由
+# Linux 云主机 / 平台本机起浏览器（历史 local、未来服务器模式）所需参数由
 # Runner 侧按 OS 追加（见 browser_lab_worker + run_env.chromium_launch_args）。
 _BROWSER_LAB_CHROME_ARGS = [
     "--lang=zh-CN",

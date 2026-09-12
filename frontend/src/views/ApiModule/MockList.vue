@@ -8,7 +8,8 @@
         <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
           <template #title>
             <span>
-              调用：<code>{平台}/api-module/mock-call/{匹配路径}</code>。
+              调用：优先 <code>{平台}/mock/{匹配路径}</code>（短别名）；
+              兼容 <code>/api-module/mock-call/{匹配路径}</code>。
               同路径不同返回 → 用「复制为新场景」改匹配规则/Body（方法+路径保留）。
             </span>
             <el-button

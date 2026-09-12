@@ -104,7 +104,7 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
 import DataFactoryTagPicker from '@/views/ApiModule/components/DataFactoryTagPicker.vue'
-import { insertVarRef, snapshotInsertTarget } from '@/utils/varInsert.js'
+import { insertFullVarRef, snapshotInsertTarget } from '@/utils/varInsert.js'
 
 const props = defineProps({
   modelValue: {
@@ -218,12 +218,10 @@ function openTagPicker() {
 }
 
 async function onDfTagInsert(refStr) {
-  const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
-  const name = m ? m[1] : refStr
-  const result = await insertVarRef(name)
+  const result = await insertFullVarRef(refStr)
   if (result?.ok) {
     syncFromTable()
-    ElMessage.success(result.mode === 'copy' ? `已复制 ${refStr}，请粘贴到输入框` : `已插入 ${refStr}`)
+    ElMessage.success(result.mode === 'copy' ? `已复制 ${result.display}，请粘贴到输入框` : `已插入 ${result.display}`)
   } else {
     ElMessage.warning('请先将光标放入「Header 值」输入框')
   }

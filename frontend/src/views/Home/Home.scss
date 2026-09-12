@@ -1,10 +1,13 @@
 // 页面整体布局：固定视口高度，仅内容区滚动，底栏始终完整可见
+// 高度按 --ui-zoom 补偿，避免 html{zoom} 缩小后底部留白
 .el-container {
-  height: 100vh;
+  height: calc(100vh / var(--ui-zoom, 1));
+  max-height: calc(100vh / var(--ui-zoom, 1));
   overflow: hidden;
 
   > .el-container {
-    height: 100vh;
+    height: 100%;
+    max-height: 100%;
     min-height: 0;
     overflow: hidden;
     display: flex;

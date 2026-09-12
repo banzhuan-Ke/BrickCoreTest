@@ -7,6 +7,7 @@ from app.core.platform.permissions import APP_PLAN_EDIT, APP_PLAN_VIEW
 from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppPlan, AppPlanExecution, AppSuite
 from app.models.sys import Project
+from app.routers.perf.report_utils import apply_display_nicknames, resolve_user_nickname
 from app.schemas.app import AddAppPlanForm, AppPlanSchemas, UpdateAppPlanForm, UpdateAppPlanSuitesForm
 
 router = APIRouter(prefix="/plans", dependencies=[Depends(is_authenticated)], tags=["App计划"])
@@ -60,6 +61,7 @@ async def list_plans(
             "status": last.status if last else "等待执行",
             "create_time": plan.create_time,
         })
+    await apply_display_nicknames(data)
     return {"data": data, "total": total}
 
 
@@ -69,7 +71,9 @@ async def get_plan(plan_id: int, user_info: dict = Depends(require_permissions(A
     if not plan:
         raise HTTPException(status_code=422, detail="计划不存在")
     await assert_user_project_viewer(user_info, plan.project_id)
-    return plan
+    data = AppPlanSchemas.model_validate(plan).model_dump(mode="json")
+    data["username"] = await resolve_user_nickname(plan.username)
+    return data
 
 
 @router.put("/{plan_id}", response_model=AppPlanSchemas, dependencies=[Depends(require_permissions(APP_PLAN_EDIT))])

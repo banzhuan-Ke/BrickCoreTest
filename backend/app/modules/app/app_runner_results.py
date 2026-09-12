@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from app.modules.app.device_apm import apply_device_apm_to_execution, slice_device_apm_for_case
 from app.modules.app.app_suite_hooks import trigger_app_suite_hooks_for_execution
 from app.modules.app.app_device_lock import release_device_locks_for_holder
 from app.core.ops.notification import NotificationService
@@ -51,7 +52,7 @@ async def _maybe_notify_app_suite_complete(suite_record: AppSuiteExecution) -> N
         project_id=project_id,
         channel_type="email",
         enabled=True,
-        app_auto_push_report=True,
+        app_suite_auto_push_report=True,
     ).first()
     if push_cfg:
         try:
@@ -94,7 +95,7 @@ async def _maybe_notify_app_plan_complete(plan_record: AppPlanExecution) -> None
         project_id=project_id,
         channel_type="email",
         enabled=True,
-        app_auto_push_report=True,
+        app_plan_auto_push_report=True,
     ).first()
     if push_cfg:
         try:
@@ -129,13 +130,22 @@ async def save_app_runner_results(run_suite: dict[str, Any], result: dict[str, A
     else:
         if result.get("executed_cases"):
             case_data = result["executed_cases"][0]
-            await _save_app_case_result(case_data, case_data.get("execution_id"))
+            await _save_app_case_result(
+                case_data,
+                case_data.get("execution_id"),
+                device_apm_result=result,
+            )
         elif result.get("pending_cases"):
             case_data = result["pending_cases"][0]
             await _save_app_case_result(case_data, case_data.get("execution_id"))
 
 
-async def _save_app_case_result(case_result: dict[str, Any], case_execution_id: Optional[int]) -> None:
+async def _save_app_case_result(
+    case_result: dict[str, Any],
+    case_execution_id: Optional[int],
+    *,
+    device_apm_result: Optional[dict[str, Any]] = None,
+) -> None:
     if not case_execution_id:
         logger.error("缺少 execution_id，无法保存 App 用例结果")
         return
@@ -145,6 +155,8 @@ async def _save_app_case_result(case_result: dict[str, Any], case_execution_id: 
         return
     record.status = normalize_ui_case_status(case_result.get("status")) or record.status
     record.result_data = case_result
+    # 独立用例执行：APM 在套件级 result 根上
+    apply_device_apm_to_execution(record, device_apm_result if device_apm_result is not None else case_result)
     await record.save()
     status = str(record.status or "").lower()
     if status not in ("running", "pending") and not record.suite_execution_id:
@@ -189,10 +201,17 @@ async def _save_app_suite_result(suite_record_id: int, result: dict[str, Any]) -
     suite_data.duration = result.get("duration", 0)
     suite_data.execution_log = result.get("execution_log", [])
     suite_data.pass_rate = pass_rate
+    apply_device_apm_to_execution(suite_data, result)
     await suite_data.save()
 
     for case in result.get("executed_cases", []):
-        await _save_app_case_result(case, case.get("execution_id"))
+        case_key = str(case.get("execution_id") or case.get("id") or "").strip()
+        case_apm = slice_device_apm_for_case(result, case_id=case_key)
+        await _save_app_case_result(
+            case,
+            case.get("execution_id"),
+            device_apm_result=case_apm,
+        )
     for case in result.get("pending_cases", []):
         payload = dict(case)
         payload.setdefault("status", "no_run")
@@ -244,6 +263,23 @@ async def _reaggregate_app_plan_execution(plan_record_id: int) -> None:
     plan_data.quarantine_skip = agg.get("quarantine_skip", 0)
     plan_data.duration = agg["duration"]
     plan_data.pass_rate = agg["pass_rate"]
+    # 计划级不冒充「整计划 APM」：多套件/多设备时仅提示看子套件；单套件可复制该套件数据并标注来源
+    apm_suites = [s for s in suites if getattr(s, "device_apm_summary", None)]
+    if len(apm_suites) == 1:
+        s0 = apm_suites[0]
+        summary = dict(s0.device_apm_summary or {})
+        summary["scope"] = "suite"
+        summary["source_suite_execution_id"] = getattr(s0, "id", None)
+        plan_data.device_apm_summary = summary
+        plan_data.device_apm_series = getattr(s0, "device_apm_series", None)
+    else:
+        # 多套件：不写 series，避免误读为计划汇总曲线
+        plan_data.device_apm_summary = {
+            "scope": "plan_multi_suite",
+            "note": "计划含多个带 APM 的套件，请在各套件/用例报告中查看曲线",
+            "suite_count_with_apm": len(apm_suites),
+        } if apm_suites else None
+        plan_data.device_apm_series = None
     await plan_data.save()
 
     if agg["status"] in ("执行完成", "已停止"):

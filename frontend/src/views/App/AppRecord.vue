@@ -150,6 +150,11 @@
         :start-time="detail.start_time"
         :driver-mode="detail.env?.driver_mode"
       />
+      <AppDeviceApmPanel
+        :summary="detail.device_apm_summary"
+        :series="detail.device_apm_series || []"
+        :show-empty="Boolean(detail.env?.device_apm?.enabled || detail.env?.enable_device_apm)"
+      />
 
       <template v-if="recordType === 'case' && detail.result_data">
         <CaseReportTimeline :runInfo="detail.result_data" profile="app" />
@@ -232,6 +237,7 @@ import PageCard from '@/components/PageCard.vue'
 import CaseReportTimeline from '@/components/Report/CaseReportTimeline.vue'
 import AppReportOverview from '@/views/App/components/AppReportOverview.vue'
 import AppReportEnvSummary from '@/views/App/components/AppReportEnvSummary.vue'
+import AppDeviceApmPanel from '@/views/App/components/AppDeviceApmPanel.vue'
 import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
 import { appRecordApi, appExecApi } from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore'

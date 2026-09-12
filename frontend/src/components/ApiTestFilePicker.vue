@@ -104,13 +104,19 @@ function onSelectChange(id) {
 async function onUpload(uploadFile) {
   const projectId = proStore.projectInfo?.id
   const raw = uploadFile?.raw
-  if (!projectId || !raw) return
+  if (!projectId) {
+    ElMessage.warning('请先选择项目后再上传文件')
+    return
+  }
+  if (!raw) return
   uploading.value = true
   try {
     const res = await apiTestFileApi.upload(projectId, raw)
-    const data = res.data?.data
-    if (res.data?.code !== 200 || !data) {
-      ElMessage.error(res.data?.message || '上传失败')
+    const payload = res.data
+    const data = payload?.data
+    if (res.status < 200 || res.status >= 300 || (payload?.code != null && payload.code !== 200) || !data) {
+      const detail = payload?.detail ?? payload?.message
+      ElMessage.error(typeof detail === 'string' ? detail : (detail?.message || '上传失败'))
       return
     }
     ElMessage.success('上传成功')
@@ -124,7 +130,11 @@ async function onUpload(uploadFile) {
       value: '',
     })
   } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || '上传失败')
+    const detail = e?.response?.data?.detail ?? e?.data?.detail
+    const msg = typeof detail === 'string'
+      ? detail
+      : (detail?.message || e?.data?.message || e?.response?.data?.message || '上传失败')
+    ElMessage.error(msg)
   } finally {
     uploading.value = false
   }

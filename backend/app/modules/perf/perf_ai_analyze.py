@@ -53,6 +53,7 @@ def running_placeholder() -> dict[str, Any]:
         "risks": [],
         "recommendations": [],
         "bottleneck_notes": [],
+        "resource_notes": [],
         "error": None,
         "started_at": now,
         "generated_at": None,
@@ -85,6 +86,7 @@ def failed_payload(error: str) -> dict[str, Any]:
         "risks": [],
         "recommendations": [],
         "bottleneck_notes": [],
+        "resource_notes": [],
         "error": (error or "分析失败")[:500],
         "generated_at": _now_str(),
     }
@@ -215,7 +217,7 @@ def scrub_ai_payload(payload: dict[str, Any], label_map: Optional[dict[str, str]
     return cleaned if isinstance(cleaned, dict) else payload
 
 
-# 模型偶发仍输出的「未配置目标」套话；写入前剥离，避免卡片被空判定文案占满
+# 模型偶发仍输出的无目标套话 / 臆造达标语；写入前剥离
 _SLA_UNCONFIGURED_PHRASES = (
     "未配置性能目标，无法按业务 SLA 判定",
     "未配置性能指标，无法按业务 SLA 判定",
@@ -223,14 +225,36 @@ _SLA_UNCONFIGURED_PHRASES = (
     "未配置性能指标，无法判定是否达标",
 )
 
+# 无验收目标时模型爱写的「未达预期 / 理论最大」等；只剥判定词，保留实测数字
+_INVENTED_EXPECTATION_RES = (
+    re.compile(r"[，,；;]?\s*请求量与性能指标均未达预期"),
+    re.compile(r"[，,；;]?\s*性能指标均未达预期"),
+    re.compile(r"[，,；;]?\s*请求数量与QPS均未达预期"),
+    re.compile(r"[，,；;]?\s*请求量与QPS均未达预期"),
+    re.compile(r"[，,；;]?\s*均未达预期"),
+    re.compile(r"[，,；;]?\s*未达(到)?(业务)?预期"),
+    re.compile(r"[，,；;]?\s*未达(到)?SLA"),
+    re.compile(r"[，,；;]?\s*指标不达标"),
+    re.compile(r"[，,；;]?\s*性能不达标"),
+    re.compile(r"[，,；;]?\s*未达到理论最大(值)?[（(][^）)]*[）)]"),
+    re.compile(r"[，,；;]?\s*未达到理论最大(值)?"),
+    re.compile(r"[，,；;]?\s*理论应达\s*\d+\s*请求"),
+    re.compile(r"理论最大(值)?\s*[（(][^）)]*[）)]"),
+    re.compile(r"需确认(压测)?时长和请求间隔设计的合理性[，,]?"),
+)
+
 
 def scrub_unconfigured_sla_boilerplate(text: Any) -> str:
-    """去掉「未配置…无法按业务 SLA 判定」套话，保留其余常规解读。"""
+    """去掉无目标套话与臆造「未达预期/理论最大」判定，保留其余常规解读。"""
     s = str(text or "")
     if not s.strip():
         return ""
     for phrase in _SLA_UNCONFIGURED_PHRASES:
         s = s.replace(phrase, "")
+    for pat in _INVENTED_EXPECTATION_RES:
+        s = pat.sub("", s)
+    # 残留「但/且」后空句清理
+    s = re.sub(r"(但|且|不过)\s*([。．.！!？?]|$)", r"\2", s)
     s = re.sub(r"[，,；;]\s*[，,；;]+", "，", s)
     s = re.sub(r"\s{2,}", " ", s)
     return s.strip(" ，,;；。.\n\t")
@@ -292,14 +316,18 @@ def done_payload(parsed: dict[str, Any], *, label_map: Optional[dict[str, str]] 
     conclusion_points = parsed.get("conclusion_points") or parsed.get("metric_deltas") or []
     cleaned_points = []
     if isinstance(conclusion_points, list):
-        for item in conclusion_points[:12]:
+        for item in conclusion_points[:24]:
             if isinstance(item, str) and item.strip():
-                cleaned_points.append({"label": "", "text": item.strip()[:500], "tone": "flat"})
+                text = scrub_unconfigured_sla_boilerplate(item)[:500]
+                if text:
+                    cleaned_points.append({"label": "", "text": text, "tone": "flat"})
                 continue
             if not isinstance(item, dict):
                 continue
-            label = str(item.get("label") or "").strip()[:80]
-            text = str(item.get("text") or item.get("note") or "").strip()[:500]
+            label = scrub_unconfigured_sla_boilerplate(item.get("label") or "")[:80]
+            text = scrub_unconfigured_sla_boilerplate(
+                item.get("text") or item.get("note") or ""
+            )[:500]
             tone = str(item.get("tone") or "flat").strip().lower()
             if tone not in ("better", "worse", "flat", "improved", "degraded"):
                 tone = "flat"
@@ -334,10 +362,518 @@ def done_payload(parsed: dict[str, Any], *, label_map: Optional[dict[str, str]] 
         "risks": _scrub_str_list(parsed.get("risks") or []),
         "recommendations": _scrub_str_list(parsed.get("recommendations") or []),
         "bottleneck_notes": _scrub_str_list(parsed.get("bottleneck_notes") or []),
+        "resource_notes": _scrub_str_list(parsed.get("resource_notes") or [], limit=24),
         "error": None,
         "generated_at": _now_str(),
     }
     return scrub_ai_payload(out, label_map)
+
+
+def _ms_to_seconds_text(ms: Any) -> str:
+    """快照 RT 为毫秒，结论文案统一写成秒（一位小数）。"""
+    try:
+        v = float(ms)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{v / 1000.0:.1f}"
+
+
+def _level_concurrent_users(lv: dict) -> int:
+    try:
+        return int(lv.get("concurrent_users") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def enrich_ai_with_ladder_coverage(payload: dict[str, Any], snapshot: Optional[dict] = None) -> dict[str, Any]:
+    """若 AI 漏写阶梯/分章中的并发档，用快照数字补全 conclusion_points，并修正 summary 档位列表。"""
+    if not isinstance(payload, dict) or payload.get("status") != "done":
+        return payload
+    snap = snapshot if isinstance(snapshot, dict) else {}
+    ladder = snap.get("ladder_summary") if isinstance(snap.get("ladder_summary"), dict) else {}
+    levels = [lv for lv in (ladder.get("levels") or []) if isinstance(lv, dict)]
+    roster = [r for r in (snap.get("chapter_roster") or []) if isinstance(r, dict)]
+
+    # 优先用 ladder；否则用 roster 的 concurrent_users
+    if len(levels) < 2 and len(roster) >= 2:
+        levels = []
+        for r in roster:
+            cu = _level_concurrent_users(r)
+            if cu <= 0:
+                continue
+            levels.append({
+                "concurrent_users": cu,
+                "label": r.get("label"),
+                "avg_response_time": r.get("avg_response_time"),
+                "p95_response_time": r.get("p95_response_time"),
+                "qps": r.get("qps"),
+                "error_rate": r.get("error_rate"),
+                "total_requests": r.get("total_requests"),
+            })
+
+    levels = [lv for lv in levels if _level_concurrent_users(lv) > 0]
+    levels.sort(key=_level_concurrent_users)
+    if len(levels) < 2:
+        return payload
+
+    # 同并发多章时保留首条数字即可
+    by_cu: dict[int, dict] = {}
+    for lv in levels:
+        cu = _level_concurrent_users(lv)
+        by_cu.setdefault(cu, lv)
+    levels = [by_cu[c] for c in sorted(by_cu)]
+    cus = [ _level_concurrent_users(lv) for lv in levels ]
+    full_phrase = "/".join(str(c) for c in cus)
+
+    points = list(payload.get("conclusion_points") or [])
+    blob_parts = [
+        str(payload.get("summary") or ""),
+        str(payload.get("overview") or ""),
+    ]
+    for p in points:
+        if isinstance(p, dict):
+            blob_parts.append(str(p.get("label") or ""))
+            blob_parts.append(str(p.get("text") or ""))
+        else:
+            blob_parts.append(str(p))
+    blob = "\n".join(blob_parts)
+
+    # 认作「已提及」：出现「N并发」或在「a/b/c」档位枚举里
+    mentioned: set[int] = set()
+    for cu in cus:
+        if (
+            re.search(rf"(?<!\d){cu}\s*并发", blob)
+            or re.search(rf"(?<!\d){cu}/", blob)
+            or re.search(rf"/{cu}(?!\d)", blob)
+        ):
+            mentioned.add(cu)
+
+    missing = [lv for lv in levels if _level_concurrent_users(lv) not in mentioned]
+    for lv in missing:
+        cu = _level_concurrent_users(lv)
+        label = str(lv.get("label") or f"{cu}并发")
+        short = re.sub(r"^.*?[-·]", "", label).strip() or f"{cu}并发"
+        if str(cu) not in short:
+            short = f"{cu}并发"
+        avg_s = _ms_to_seconds_text(lv.get("avg_response_time"))
+        p95_s = _ms_to_seconds_text(lv.get("p95_response_time"))
+        qps = lv.get("qps")
+        try:
+            qps_t = f"{float(qps):.2f}" if qps is not None else "—"
+        except (TypeError, ValueError):
+            qps_t = "—"
+        points.append({
+            "label": short[:80],
+            "text": f"平均响应时间{avg_s}秒，P95响应时间{p95_s}秒，QPS {qps_t}",
+            "tone": "flat",
+        })
+
+    def _fix_cu_list(text: str) -> str:
+        if not text:
+            return text
+
+        def repl(m: re.Match) -> str:
+            parts = [int(x) for x in re.findall(r"\d+", m.group(0))]
+            if len(parts) >= 2 and set(parts).issubset(set(cus)) and set(parts) != set(cus):
+                return full_phrase
+            return m.group(0)
+
+        return re.sub(r"\d+(?:\s*/\s*\d+){1,12}", repl, text)
+
+    summary = _fix_cu_list(str(payload.get("summary") or ""))
+    overview = _fix_cu_list(str(payload.get("overview") or ""))
+    if missing:
+        prefix = f"本报告含并发 {full_phrase} 共 {len(cus)} 档实测。"
+        if summary and prefix not in summary:
+            summary = prefix + summary
+        elif not summary:
+            summary = prefix
+
+    out = dict(payload)
+    out["conclusion_points"] = points[:24]
+    if summary:
+        out["summary"] = summary
+    if overview:
+        out["overview"] = overview
+    return out
+
+
+# 被测资源写入 AI 上下文：只传摘要，不传全量曲线
+SUT_AI_MAX_SERVERS = 5
+SUT_AI_L1_MAX_CHAPTERS = 12
+_SUT_GUIDANCE_COLLECTED = (
+    "有被测资源摘要时须对照 CPU/内存/负载/磁盘IO/网络峰值与 RT/错误率写观察；"
+    "若 servers[].baseline / during 存在：优先写「施压前基线 → 施压中」变化（avg/max）；"
+    "仅 has_metrics=true 的机器可写指标结论；status=no_data/offline 或 has_metrics=false 禁止编造；"
+    "相关不等于根因，禁止断言「就是这台机器导致」。"
+    "若有 missing_roles / binding_incomplete：须声明结论仅覆盖已绑定机器，不代表全链路。"
+    "未展开 servers 详表不等于资源正常。"
+)
+_SUT_GUIDANCE_NONE = (
+    "本轮未采集被测资源，禁止编造 CPU/内存/磁盘/网卡/负载结论；"
+    "勿写「资源充足/未打满」等无依据表述。"
+)
+_SUT_GUIDANCE_COMPARE = (
+    "sut_metrics_l0 覆盖每一章是否采集及峰值；有 baseline/during 时写基线→施压中变化；"
+    "结论须按章对照，禁止用部分章资源概括全书。"
+    "某章 collected=false 时该章禁止写 CPU/内存结论。"
+    "sut_metrics_l1 为可裁详表，缺失或 truncated 时不得臆造未列出的机器指标。"
+)
+
+
+def _sut_pct_pair(summary: Optional[dict], key: str) -> tuple[Any, Any]:
+    block = (summary or {}).get(key) if isinstance(summary, dict) else None
+    if not isinstance(block, dict):
+        return None, None
+    return block.get("avg"), block.get("max")
+
+
+def _sut_has_metrics(detail: dict[str, Any]) -> bool:
+    if detail.get("cpu_pct_max") is not None or detail.get("mem_pct_max") is not None:
+        return True
+    if detail.get("load1_max") is not None:
+        return True
+    if detail.get("disk_read_kbps_max") is not None or detail.get("disk_write_kbps_max") is not None:
+        return True
+    st = str(detail.get("status") or "")
+    if st in ("no_data", "offline", "failed", "none"):
+        return False
+    try:
+        return float(detail.get("coverage") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _sut_server_detail_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    summary = row.get("summary") if isinstance(row.get("summary"), dict) else {}
+    _disk_avg, disk_max = _sut_pct_pair(summary, "disk_pct")
+    cpu_avg, cpu_max = _sut_pct_pair(summary, "cpu_pct")
+    mem_avg, mem_max = _sut_pct_pair(summary, "mem_pct")
+    load_avg, load_max = _sut_pct_pair(summary, "load1")
+    rx_avg, rx_max = _sut_pct_pair(summary, "net_rx_kbps")
+    tx_avg, tx_max = _sut_pct_pair(summary, "net_tx_kbps")
+    dr_avg, dr_max = _sut_pct_pair(summary, "disk_read_kbps")
+    dw_avg, dw_max = _sut_pct_pair(summary, "disk_write_kbps")
+    quality = summary.get("quality") if isinstance(summary.get("quality"), dict) else {}
+    out: dict[str, Any] = {
+        "name": str(row.get("display_name") or row.get("name") or "")[:80],
+        "role": str(row.get("role") or "")[:40],
+        "status": row.get("status"),
+        "coverage": row.get("coverage"),
+        "cpu_pct_avg": cpu_avg,
+        "cpu_pct_max": cpu_max,
+        "mem_pct_avg": mem_avg,
+        "mem_pct_max": mem_max,
+        "disk_pct_max": disk_max,
+        "load1_avg": load_avg,
+        "load1_max": load_max,
+        "net_rx_kbps_avg": rx_avg,
+        "net_rx_kbps_max": rx_max,
+        "net_tx_kbps_avg": tx_avg,
+        "net_tx_kbps_max": tx_max,
+        "disk_read_kbps_avg": dr_avg,
+        "disk_read_kbps_max": dr_max,
+        "disk_write_kbps_avg": dw_avg,
+        "disk_write_kbps_max": dw_max,
+        "interval_sec": summary.get("interval_sec") or row.get("interval_sec"),
+        "raw_point_count": summary.get("raw_point_count"),
+    }
+    if quality:
+        out["bucket_coverage"] = quality.get("bucket_coverage")
+        out["max_gap_sec"] = quality.get("max_gap_sec")
+        out["first_point_delay_sec"] = quality.get("first_point_delay_sec")
+        out["resolution_level"] = quality.get("resolution_level")
+    phases = summary.get("phases") if isinstance(summary.get("phases"), dict) else {}
+    baseline = phases.get("baseline") if isinstance(phases.get("baseline"), dict) else {}
+    during = phases.get("during") if isinstance(phases.get("during"), dict) else {}
+    if baseline or during:
+        def _phase_snip(ph: dict) -> dict[str, Any]:
+            def _m(key: str) -> dict:
+                block = ph.get(key) if isinstance(ph.get(key), dict) else {}
+                return {"avg": block.get("avg"), "max": block.get("max")}
+
+            return {
+                "cpu_pct_avg": _m("cpu_pct").get("avg"),
+                "cpu_pct_max": _m("cpu_pct").get("max"),
+                "mem_pct_avg": _m("mem_pct").get("avg"),
+                "mem_pct_max": _m("mem_pct").get("max"),
+                "load1_max": _m("load1").get("max"),
+                "disk_read_kbps_max": _m("disk_read_kbps").get("max"),
+                "disk_write_kbps_max": _m("disk_write_kbps").get("max"),
+                "net_rx_kbps_max": _m("net_rx_kbps").get("max"),
+                "net_tx_kbps_max": _m("net_tx_kbps").get("max"),
+                "point_count": ph.get("point_count") or 0,
+                "lookback_sec": ph.get("lookback_sec"),
+            }
+        out["baseline"] = _phase_snip(baseline)
+        out["during"] = _phase_snip(during)
+    out["has_metrics"] = _sut_has_metrics(out)
+    return out
+
+
+def _sut_aggregate_peaks(servers: list[dict[str, Any]]) -> dict[str, Any]:
+    def _max_of(key: str) -> Any:
+        vals = []
+        for s in servers:
+            v = s.get(key)
+            if v is None:
+                continue
+            try:
+                vals.append(float(v))
+            except (TypeError, ValueError):
+                continue
+        return round(max(vals), 2) if vals else None
+
+    return {
+        "cpu_pct_max": _max_of("cpu_pct_max"),
+        "mem_pct_max": _max_of("mem_pct_max"),
+        "load1_max": _max_of("load1_max"),
+        "disk_read_kbps_max": _max_of("disk_read_kbps_max"),
+        "disk_write_kbps_max": _max_of("disk_write_kbps_max"),
+    }
+
+
+def build_sut_metrics_ai_block_from_rows(
+    *,
+    status: Optional[str],
+    rows: Optional[list],
+    max_servers: int = SUT_AI_MAX_SERVERS,
+    binding: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """由切片行构建单报告/单章精简块（无曲线点）。"""
+    st = str(status or "none").strip() or "none"
+    raw_rows = [r for r in (rows or []) if isinstance(r, dict)]
+    if st == "none" and not raw_rows:
+        return {
+            "status": "none",
+            "collected": False,
+            "guidance": _SUT_GUIDANCE_NONE,
+            "servers": [],
+            "cpu_pct_max": None,
+            "mem_pct_max": None,
+        }
+
+    details = [_sut_server_detail_from_row(r) for r in raw_rows]
+    details.sort(
+        key=lambda s: (
+            -(float(s["coverage"]) if s.get("coverage") is not None else -1.0),
+            -(float(s["cpu_pct_max"]) if s.get("cpu_pct_max") is not None else -1.0),
+        )
+    )
+    total = len(details)
+    truncated = total > max_servers
+    details = details[: max(1, int(max_servers or SUT_AI_MAX_SERVERS))]
+    metric_servers = [s for s in details if s.get("has_metrics")]
+    has_metric = bool(metric_servers)
+    collected = st not in ("none",) and has_metric
+    peaks = _sut_aggregate_peaks(metric_servers) if collected else {
+        "cpu_pct_max": None,
+        "mem_pct_max": None,
+        "load1_max": None,
+        "disk_read_kbps_max": None,
+        "disk_write_kbps_max": None,
+    }
+    out: dict[str, Any] = {
+        "status": st,
+        "collected": collected,
+        "guidance": _SUT_GUIDANCE_COLLECTED if collected else _SUT_GUIDANCE_NONE,
+        "servers": details if collected else [],
+        "cpu_pct_max": peaks.get("cpu_pct_max"),
+        "mem_pct_max": peaks.get("mem_pct_max"),
+        "load1_max": peaks.get("load1_max"),
+        "disk_read_kbps_max": peaks.get("disk_read_kbps_max"),
+        "disk_write_kbps_max": peaks.get("disk_write_kbps_max"),
+        "server_count_total": total,
+        "collected_server_count": len(metric_servers),
+    }
+    bind = binding if isinstance(binding, dict) else {}
+    if bind:
+        missing_roles = bind.get("missing_roles") or []
+        missing_servers = bind.get("missing_server_ids") or []
+        by_role = bind.get("by_role") if isinstance(bind.get("by_role"), dict) else {}
+        out["binding"] = {
+            "source": bind.get("source"),
+            "missing_roles": missing_roles[:20] if isinstance(missing_roles, list) else [],
+            "missing_server_ids": missing_servers[:20] if isinstance(missing_servers, list) else [],
+            "bound_roles": list(by_role.keys())[:20],
+            "binding_incomplete": bool(missing_roles or missing_servers),
+        }
+    if truncated and collected:
+        out["truncated"] = True
+    return out
+
+def sut_l0_line_from_block(*, label: str, block: dict[str, Any]) -> dict[str, Any]:
+    servers = block.get("servers") if isinstance(block.get("servers"), list) else []
+    b_cpu: list[float] = []
+    d_cpu: list[float] = []
+    for s in servers:
+        if not isinstance(s, dict):
+            continue
+        b = s.get("baseline") if isinstance(s.get("baseline"), dict) else {}
+        d = s.get("during") if isinstance(s.get("during"), dict) else {}
+        for src, bucket in ((b, b_cpu), (d, d_cpu)):
+            v = src.get("cpu_pct_max")
+            if v is None:
+                continue
+            try:
+                bucket.append(float(v))
+            except (TypeError, ValueError):
+                pass
+    return {
+        "label": str(label or "")[:120],
+        "collected": bool(block.get("collected")),
+        "status": block.get("status") or "none",
+        "cpu_pct_max": block.get("cpu_pct_max"),
+        "mem_pct_max": block.get("mem_pct_max"),
+        "baseline_cpu_max": round(max(b_cpu), 2) if b_cpu else None,
+        "during_cpu_max": round(max(d_cpu), 2) if d_cpu else None,
+    }
+
+
+async def load_sut_metrics_ai_block(record: Any) -> dict[str, Any]:
+    """异步加载单条压测记录的被测资源 AI 摘要。"""
+    cfg = record.config_snapshot if isinstance(getattr(record, "config_snapshot", None), dict) else {}
+    status = cfg.get("sut_metrics_status") or "none"
+    binding = cfg.get("sut_binding_snapshot") if isinstance(cfg.get("sut_binding_snapshot"), dict) else None
+    try:
+        from app.modules.perf.sut_slice import load_sut_resource_series
+
+        rows = await load_sut_resource_series(int(record.id))
+    except Exception:
+        rows = []
+        if status not in ("none",):
+            status = "failed"
+    return build_sut_metrics_ai_block_from_rows(status=status, rows=rows, binding=binding)
+
+
+async def load_sut_metrics_ai_blocks_by_record_ids(
+    record_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """批量：record_id → 精简块。"""
+    ids = [int(x) for x in dict.fromkeys(record_ids) if x is not None]
+    if not ids:
+        return {}
+    from app.models.perf import PerfRecord, PerfRecordSutMetric
+
+    records = await PerfRecord.filter(id__in=ids).all()
+    status_by: dict[int, str] = {}
+    binding_by: dict[int, Optional[dict[str, Any]]] = {}
+    for rec in records:
+        cfg = rec.config_snapshot if isinstance(rec.config_snapshot, dict) else {}
+        status_by[int(rec.id)] = str(cfg.get("sut_metrics_status") or "none")
+        bind = cfg.get("sut_binding_snapshot")
+        binding_by[int(rec.id)] = bind if isinstance(bind, dict) else None
+
+    metric_rows = await PerfRecordSutMetric.filter(record_id__in=ids).prefetch_related("server").all()
+    rows_by: dict[int, list[dict[str, Any]]] = {i: [] for i in ids}
+    for r in metric_rows:
+        snap = r.server_snapshot_json if isinstance(r.server_snapshot_json, dict) else {}
+        summary = r.summary_json if isinstance(r.summary_json, dict) else {}
+        rid = int(r.record_id)
+        rows_by.setdefault(rid, []).append(
+            {
+                "server_id": r.server_id,
+                "role": snap.get("role") or "",
+                "display_name": snap.get("name")
+                or (r.server.name if getattr(r, "server", None) else f"server-{r.server_id}"),
+                "summary": summary,
+                "coverage": r.coverage,
+                "status": r.status,
+            }
+        )
+
+    out: dict[int, dict[str, Any]] = {}
+    for rid in ids:
+        out[rid] = build_sut_metrics_ai_block_from_rows(
+            status=status_by.get(rid, "none"),
+            rows=rows_by.get(rid) or [],
+            binding=binding_by.get(rid),
+        )
+    return out
+
+
+def _compare_chapter_refs(full_snap: dict[str, Any]) -> list[tuple[str, Optional[int]]]:
+    """从完整对比快照提取 (展示名, record_id)。"""
+    refs: list[tuple[str, Optional[int]]] = []
+    chapters = full_snap.get("chapters") or []
+    if isinstance(chapters, list) and chapters:
+        for c in chapters:
+            if not isinstance(c, dict):
+                continue
+            label = str(c.get("display_name") or c.get("scene_name") or "").strip()
+            rid = c.get("record_id")
+            try:
+                rid_i = int(rid) if rid is not None else None
+            except (TypeError, ValueError):
+                rid_i = None
+            if not label and rid_i is not None:
+                label = f"执行#{rid_i}"
+            if label or rid_i is not None:
+                refs.append((label or f"执行#{rid_i}", rid_i))
+        return refs
+    for r in full_snap.get("records") or []:
+        if not isinstance(r, dict):
+            continue
+        rid = r.get("id")
+        try:
+            rid_i = int(rid) if rid is not None else None
+        except (TypeError, ValueError):
+            rid_i = None
+        label = str(r.get("display_name") or r.get("scene_name") or "").strip()
+        if not label and rid_i is not None:
+            label = f"执行#{rid_i}"
+        if label or rid_i is not None:
+            refs.append((label or f"执行#{rid_i}", rid_i))
+    return refs
+
+
+async def enrich_compare_ctx_with_sut(
+    ctx: dict[str, Any],
+    full_snap: dict[str, Any],
+    *,
+    l1_max_chapters: int = SUT_AI_L1_MAX_CHAPTERS,
+) -> dict[str, Any]:
+    """多报告：L0 全章一行摘要；L1 有数据章节的 servers 详表（可裁）。"""
+    refs = _compare_chapter_refs(full_snap if isinstance(full_snap, dict) else {})
+    ids = [rid for _, rid in refs if rid is not None]
+    blocks = await load_sut_metrics_ai_blocks_by_record_ids(ids)
+    none_block = build_sut_metrics_ai_block_from_rows(status="none", rows=[])
+
+    l0_chapters: list[dict[str, Any]] = []
+    l1_candidates: list[dict[str, Any]] = []
+    for label, rid in refs:
+        block = blocks.get(rid) if rid is not None else none_block
+        if not isinstance(block, dict):
+            block = none_block
+        l0_chapters.append(sut_l0_line_from_block(label=label, block=block))
+        if block.get("collected") and block.get("servers"):
+            l1_candidates.append(
+                {
+                    "label": label,
+                    "status": block.get("status"),
+                    "collected": True,
+                    "cpu_pct_max": block.get("cpu_pct_max"),
+                    "mem_pct_max": block.get("mem_pct_max"),
+                    "servers": block.get("servers") or [],
+                    **({"truncated": True, "server_count_total": block["server_count_total"]}
+                       if block.get("truncated") else {}),
+                }
+            )
+
+    cap = max(0, int(l1_max_chapters or SUT_AI_L1_MAX_CHAPTERS))
+    l1_chapters = l1_candidates[:cap]
+    out = dict(ctx)
+    out["sut_metrics_l0"] = {
+        "guidance": _SUT_GUIDANCE_COMPARE,
+        "chapters": l0_chapters,
+    }
+    out["sut_metrics_l1"] = {
+        "guidance": "可裁详表；预算不足时可能被省略。",
+        "chapters": l1_chapters,
+        "truncated": len(l1_candidates) > cap,
+        "chapter_count_with_data": len(l1_candidates),
+    }
+    return out
 
 
 def build_record_ai_context(record: Any, *, max_ts_points: int = 30) -> dict[str, Any]:
@@ -396,7 +932,11 @@ def build_record_ai_context(record: Any, *, max_ts_points: int = 30) -> dict[str
         peak_users_from_config,
     )
 
-    cfg_summary = build_config_summary(cfg, getattr(record, "distribution_info", None) or {})
+    cfg_summary = build_config_summary(
+        cfg,
+        getattr(record, "distribution_info", None) or {},
+        getattr(record, "scene_items_snapshot", None),
+    )
     mode = cfg_summary.get("mode") or cfg.get("mode") or "fixed"
     ai_config: dict[str, Any] = {
         "mode": mode,
@@ -510,6 +1050,79 @@ async def run_perf_record_analysis(
         await _end_inflight(_inflight_records, record_id)
 
 
+def pack_record_snapshot_json_for_ai(ctx: dict[str, Any], *, max_chars: int = 14000) -> str:
+    """单报告 AI 上下文：优先保留 sut_metrics，再压时序/用例详表，避免粗暴截断 JSON。"""
+
+    def _dumps(obj: dict) -> str:
+        return json.dumps(obj, ensure_ascii=False, indent=2)
+
+    must_keys = (
+        "scene_name",
+        "mode",
+        "concurrent_users",
+        "duration",
+        "total_requests",
+        "success_rate",
+        "error_rate",
+        "avg_response_time",
+        "p95_response_time",
+        "qps",
+        "acceptance_targets",
+        "sut_metrics",
+    )
+    soft_keys = ("time_series_sample", "case_aggregations", "error_breakdown", "rt_histogram_summary", "config")
+    must = {k: ctx[k] for k in must_keys if k in ctx and ctx[k] is not None}
+    # acceptance_targets 可能在 perf_targets / target_evaluation
+    if "acceptance_targets" not in must and ctx.get("perf_targets") is not None:
+        must["perf_targets"] = ctx.get("perf_targets")
+        must["target_evaluation"] = ctx.get("target_evaluation")
+    soft = {k: ctx[k] for k in soft_keys if k in ctx and ctx[k] is not None}
+    rest = {k: v for k, v in ctx.items() if k not in must and k not in soft}
+
+    packed = dict(must)
+    blob = _dumps(packed)
+    if len(blob) > max_chars:
+        # 极紧：只留核心指标 + sut 峰值
+        sut = packed.get("sut_metrics") if isinstance(packed.get("sut_metrics"), dict) else {}
+        slim_sut = {
+            "collected": sut.get("collected"),
+            "status": sut.get("status"),
+            "guidance": sut.get("guidance"),
+            "cpu_pct_max": sut.get("cpu_pct_max"),
+            "mem_pct_max": sut.get("mem_pct_max"),
+            "load1_max": sut.get("load1_max"),
+            "binding": sut.get("binding"),
+            "servers": (sut.get("servers") or [])[:3],
+        }
+        packed = {
+            k: packed[k]
+            for k in ("mode", "concurrent_users", "qps", "p95_response_time", "error_rate", "avg_response_time")
+            if k in packed
+        }
+        packed["sut_metrics"] = slim_sut
+        return _dumps(packed)[:max_chars]
+
+    for k, v in soft.items():
+        trial = dict(packed)
+        trial[k] = v
+        if len(_dumps(trial)) <= max_chars:
+            packed = trial
+        elif k == "time_series_sample" and isinstance(v, list):
+            for n in (20, 10, 5):
+                trial[k] = v[:n]
+                if len(_dumps(trial)) <= max_chars:
+                    packed = trial
+                    break
+
+    for k, v in rest.items():
+        trial = dict(packed)
+        trial[k] = v
+        if len(_dumps(trial)) <= max_chars:
+            packed = trial
+
+    return _dumps(packed)
+
+
 async def _run_perf_record_analysis_locked(
     record_id: int,
     *,
@@ -531,7 +1144,11 @@ async def _run_perf_record_analysis_locked(
     await record.save(update_fields=["ai_analysis"])
 
     ctx = build_record_ai_context(record)
-    prompt_ctx = {"report_snapshot": json.dumps(ctx, ensure_ascii=False, indent=2)[:14000]}
+    try:
+        ctx["sut_metrics"] = await load_sut_metrics_ai_block(record)
+    except Exception:
+        ctx["sut_metrics"] = build_sut_metrics_ai_block_from_rows(status="failed", rows=[])
+    prompt_ctx = {"report_snapshot": pack_record_snapshot_json_for_ai(ctx, max_chars=14000)}
     try:
         system_prompt, user_prompt = await PromptManager.render("perf_report_analysis", prompt_ctx)
     except ValueError as e:
@@ -684,10 +1301,20 @@ async def _run_perf_compare_analysis_locked(
 
     snap = await hydrate_snapshot_chart_fields(report.snapshot or {})
     ctx = trim_snapshot_for_ai(snap)
-    # 多章节汇总时放宽快照长度；用户补充提示在下方单独追加，不受此截断影响
-    snap_json = json.dumps(ctx, ensure_ascii=False, indent=2)
-    max_snap = 32000 if len(snap_json) > 14000 else 14000
-    prompt_ctx = {"compare_snapshot": snap_json[:max_snap]}
+    try:
+        ctx = await enrich_compare_ctx_with_sut(ctx, snap)
+    except Exception:
+        ctx["sut_metrics_l0"] = {
+            "guidance": _SUT_GUIDANCE_COMPARE,
+            "chapters": [],
+        }
+        ctx["sut_metrics_l1"] = {"guidance": "加载失败", "chapters": [], "truncated": False}
+    # 多章节：优先保留 ladder/roster，再按预算塞 scenes；避免尾部截断漏掉低并发档
+    n_ch = int(ctx.get("chapter_count") or 0)
+    max_snap = 56000 if n_ch >= 6 else (40000 if n_ch >= 4 else 24000)
+    from app.modules.perf.compare_report import pack_snapshot_json_for_ai
+    snap_json = pack_snapshot_json_for_ai(ctx, max_chars=max_snap)
+    prompt_ctx = {"compare_snapshot": snap_json}
     try:
         system_prompt, user_prompt = await PromptManager.render("perf_compare_analysis", prompt_ctx)
     except ValueError as e:
@@ -702,6 +1329,7 @@ async def _run_perf_compare_analysis_locked(
             "## 用户补充说明（最高优先级，须严格遵循；仍不得编造未给出的数字）\n"
             "若补充说明要求「分组规格对照 / 组内互比 / 组间不硬比」，"
             "即使 analysis_mode=chapter_portrait，也必须按补充说明在同一份结论里完成分组对照。\n"
+            "补充说明未给出明确数字门槛时，仍禁止写「未达预期/不达标/理论最大请求量」。\n"
             f"{extra[:2000]}"
         )
 
@@ -742,6 +1370,8 @@ async def _run_perf_compare_analysis_locked(
     parsed = _extract_json_object(raw_response)
     ok = bool(parsed.get("summary"))
     payload = done_payload(parsed, label_map=metric_label_map_from_snapshot(ctx)) if ok else failed_payload("LLM 返回未能解析为结构化分析")
+    if ok:
+        payload = enrich_ai_with_ladder_coverage(payload, ctx)
 
     report.ai_analysis = payload
     await report.save(update_fields=["ai_analysis"])

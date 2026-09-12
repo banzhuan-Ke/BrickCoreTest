@@ -199,6 +199,20 @@ class PerfConfig(BaseModel):
         None,
         description="性能验收目标（绝对值 SLA）；与 error_rate_threshold / baseline_policy 无关",
     )
+    sut_application_id: Optional[int] = Field(
+        None, description="被测应用 ID；执行时按环境解析采集器"
+    )
+    sut_roles: Optional[List[str]] = Field(
+        None, description="可选角色子集；缺省用应用全部角色"
+    )
+    sut_server_ids: Optional[List[int]] = Field(
+        None, description="兼容：无应用时写死采集器 ID 列表"
+    )
+    sut_grafana_url_template: Optional[str] = Field(
+        None,
+        max_length=1024,
+        description="Grafana 深链模板：{from_ms}/{to_ms}/{server_id}/{hostname}",
+    )
 
 class PerfSceneCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="场景名称")
@@ -260,6 +274,18 @@ async def validate_perf_config(config: PerfConfig):
     """校验压测配置"""
     if config.perf_targets is not None:
         config.perf_targets = normalize_perf_targets(config.perf_targets)
+
+    if config.sut_grafana_url_template is not None:
+        from app.modules.perf.sut_slice import validate_grafana_url_template
+
+        try:
+            validated = validate_grafana_url_template(config.sut_grafana_url_template)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        config.sut_grafana_url_template = validated
+
+    if config.sut_application_id is not None and int(config.sut_application_id) <= 0:
+        raise HTTPException(status_code=422, detail="sut_application_id 无效")
 
     mode = normalize_perf_mode(config.mode or "fixed")
     allowed = ("fixed", "stepping", "loop", "stream_burst", JOURNEY_FIXED_MODE, JOURNEY_LOOP_MODE)
@@ -370,6 +396,9 @@ async def _scene_detail_payload(scene: PerfScene) -> dict:
 
     journey_source_status = await _build_journey_source_status(scene)
 
+    from app.modules.perf.csv_dataset import resolve_scene_csv
+    csv_resolved = await resolve_scene_csv(scene, preview_limit=5)
+
     return {
         "id": scene.id,
         "name": scene.name,
@@ -382,6 +411,17 @@ async def _scene_detail_payload(scene: PerfScene) -> dict:
         "baseline_record_id": scene.baseline_record_id,
         "baseline_policy": scene.baseline_policy or {},
         "journey_source_status": journey_source_status,
+        "csv_dataset_id": scene.csv_dataset_id,
+        "csv_binding": {
+            "dataset_id": csv_resolved.get("dataset_id"),
+            "dataset_name": csv_resolved.get("dataset_name"),
+            "source": csv_resolved.get("source"),
+            "enabled": csv_resolved.get("enabled"),
+            "strategy": csv_resolved.get("strategy"),
+            "file_name": csv_resolved.get("file_name"),
+            "columns": csv_resolved.get("columns"),
+            "row_count": csv_resolved.get("row_count"),
+        },
         "create_by": scene.create_by,
         "create_time": scene.create_time.strftime("%Y-%m-%d %H:%M:%S") if scene.create_time else "",
         "update_time": scene.update_time.strftime("%Y-%m-%d %H:%M:%S") if scene.update_time else "",
@@ -496,6 +536,29 @@ class JourneyFromSuiteRequest(BaseModel):
     layout: str = Field(
         default=LAYOUT_SINGLE_PHASE,
         description="single_phase=单阶段多步骤; per_case_phase=每用例一阶段",
+    )
+
+
+@router.get(
+    "/csv-contexts",
+    summary="接口/用例关联的压测场景 CSV 上下文",
+)
+async def list_csv_contexts(
+    project_id: int = Query(..., description="项目ID"),
+    case_id: Optional[int] = Query(None, description="用例ID"),
+    api_id: Optional[int] = Query(None, description="接口ID（反查其下用例）"),
+    preview_limit: int = Query(5, ge=1, le=20, description="每场景预览行数"),
+    user_info: dict = Depends(is_authenticated),
+):
+    """调试/编辑侧：列出引用该用例且可选带 CSV 的压测场景，供提示与试跑一行。"""
+    await assert_project_access(user_info, project_id, min_role=PROJECT_ROLE_VIEWER)
+    from app.modules.perf.csv_case_hint import list_csv_contexts_for_case
+
+    return await list_csv_contexts_for_case(
+        project_id=project_id,
+        case_id=case_id,
+        api_id=api_id,
+        preview_limit=preview_limit,
     )
 
 
@@ -615,13 +678,49 @@ async def clone_scene(
         catalog_id=scene.catalog_id,
         scene_items=scene.scene_items,
         config=scene.config,
+        csv_dataset_id=scene.csv_dataset_id,
+        csv_config=dict(scene.csv_config) if isinstance(scene.csv_config, dict) else {},
+        # 遗留内联数据一并复制，便于未迁出场景克隆后仍可用
+        csv_data=scene.csv_data,
         create_by=username
     )
     
     return await _scene_detail_payload(new_scene)
 
 
-# ========== CSV 参数化数据管理 ==========
+# ========== CSV 参数化数据管理（场景绑定；数据本体在数据集模块） ==========
+
+class CsvBindRequest(BaseModel):
+    dataset_id: Optional[int] = Field(None, description="数据集ID；null 表示解绑")
+    strategy: Optional[str] = Field(None, description="round_robin / unique / random")
+    enabled: Optional[bool] = Field(None, description="是否启用；默认绑定即启用")
+
+
+@router.put(
+    "/{scene_id}/csv-bind",
+    summary="绑定/解绑 CSV 数据集",
+    dependencies=[Depends(require_permissions(PERF_SCENE_EDIT))],
+)
+async def bind_csv_dataset(
+    body: CsvBindRequest,
+    scene: PerfScene = Depends(get_scene_for_member),
+):
+    from app.modules.perf.csv_dataset import bind_scene_dataset
+
+    resolved = await bind_scene_dataset(
+        scene,
+        body.dataset_id,
+        strategy=body.strategy,
+        enabled=body.enabled,
+    )
+    return {"message": "已解绑" if body.dataset_id is None else "绑定成功", **{
+        k: resolved.get(k)
+        for k in (
+            "enabled", "strategy", "file_name", "columns", "row_count",
+            "preview", "source", "dataset_id", "dataset_name",
+        )
+    }}
+
 
 @router.post(
     "/{scene_id}/csv-upload",
@@ -633,57 +732,36 @@ async def upload_csv(
     dry_run: bool = Query(False, description="仅解析预览，不写入场景（供编辑页选文件后暂存）"),
     strategy: Optional[str] = Query(None, description="落库时的分配策略；缺省 round_robin"),
     scene: PerfScene = Depends(get_scene_for_member),
+    username: str = Depends(get_current_username),
 ):
-    """上传 CSV 文件，解析为 JSON 存储到场景；dry_run=true 时只校验并返回预览。"""
-    # 验证文件类型
-    if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="仅支持 CSV 文件")
+    """上传 CSV：写入绑定的数据集（无则新建）；dry_run 只预览。历史场景内联字段兼容保留读取。"""
+    from app.modules.perf.csv_dataset import (
+        ensure_bound_dataset_for_upload,
+        normalize_strategy,
+        parse_csv_bytes,
+        write_dataset_rows,
+    )
 
     content = await file.read()
-    try:
-        text = content.decode('utf-8-sig')  # 自动去掉 UTF-8 BOM
-    except UnicodeDecodeError:
-        try:
-            text = content.decode('gbk')
-        except UnicodeDecodeError:
-            raise HTTPException(status_code=400, detail="文件编码不支持，请使用 UTF-8 或 GBK 编码")
-
-    # 解析 CSV
-    try:
-        reader = csv.DictReader(io.StringIO(text))
-        rows = []
-        columns = []
-        for i, row in enumerate(reader):
-            # 清理列名空白 / BOM，避免 ${{csv.xxx}} / @csv.xxx 对不上
-            cleaned = {}
-            for k, v in row.items():
-                key = str(k or "").strip().lstrip("\ufeff")
-                if not key:
-                    continue
-                cleaned[key] = v.strip() if v else ""
-            if i == 0:
-                columns = list(cleaned.keys())
-            rows.append(cleaned)
-            if i >= 9999:  # 最多 10000 行
-                break
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"CSV 解析失败: {str(e)}")
-
-    if not rows:
-        raise HTTPException(status_code=400, detail="CSV 文件为空或格式错误")
-
-    valid_strategies = ("round_robin", "unique", "random")
-    resolved_strategy = strategy if strategy in valid_strategies else "round_robin"
+    rows, columns = parse_csv_bytes(content, filename=file.filename or "")
+    resolved_strategy = normalize_strategy(strategy)
 
     if not dry_run:
-        scene.csv_data = rows
-        scene.csv_config = {
+        ds = await ensure_bound_dataset_for_upload(
+            scene, username=username or "", file_name=file.filename or ""
+        )
+        await write_dataset_rows(ds, rows, columns, file_name=file.filename or "")
+        cfg = dict(scene.csv_config) if isinstance(scene.csv_config, dict) else {}
+        cfg.update({
             "enabled": True,
             "strategy": resolved_strategy,
             "file_name": file.filename,
             "columns": columns,
-            "row_count": len(rows)
-        }
+            "row_count": len(rows),
+        })
+        scene.csv_dataset_id = ds.id
+        scene.csv_config = cfg
+        scene.csv_data = None  # 新写入走数据集，清空遗留镜像
         await scene.save()
 
     return {
@@ -694,6 +772,7 @@ async def upload_csv(
         "columns": columns,
         "preview": rows[:5],
         "strategy": resolved_strategy,
+        "dataset_id": scene.csv_dataset_id,
     }
 
 
@@ -702,31 +781,36 @@ async def preview_csv(
     limit: int = Query(20, ge=1, le=100),
     scene: PerfScene = Depends(get_scene_for_viewer),
 ):
-    """预览场景的 CSV 数据"""
-    csv_data = scene.csv_data or []
-    config = scene.csv_config or {}
+    """预览场景生效的 CSV（数据集优先，否则遗留内联）。"""
+    from app.modules.perf.csv_dataset import resolve_scene_csv
 
+    resolved = await resolve_scene_csv(scene, preview_limit=limit)
     return {
-        "enabled": config.get("enabled", False),
-        "strategy": config.get("strategy", "round_robin"),
-        "file_name": config.get("file_name", ""),
-        "columns": config.get("columns", []),
-        "row_count": len(csv_data),
-        "preview": csv_data[:limit]
+        "enabled": resolved.get("enabled", False),
+        "strategy": resolved.get("strategy", "round_robin"),
+        "file_name": resolved.get("file_name") or "",
+        "columns": resolved.get("columns") or [],
+        "row_count": resolved.get("row_count") or 0,
+        "preview": resolved.get("preview") or [],
+        "source": resolved.get("source"),
+        "dataset_id": resolved.get("dataset_id"),
+        "dataset_name": resolved.get("dataset_name"),
     }
 
 
 @router.delete(
     "/{scene_id}/csv",
-    summary="删除 CSV 参数化数据",
+    summary="解绑场景 CSV（不删除数据集）",
     dependencies=[Depends(require_permissions(PERF_SCENE_EDIT))],
 )
 async def delete_csv(scene: PerfScene = Depends(get_scene_for_member)):
-    """删除场景的 CSV 数据"""
+    """解绑数据集并清空遗留内联 CSV；数据集本身保留，可在「CSV 数据集」中管理。"""
+    from app.modules.perf.csv_dataset import bind_scene_dataset
+
+    await bind_scene_dataset(scene, None, enabled=False)
     scene.csv_data = None
-    scene.csv_config = {}
     await scene.save()
-    return {"message": "CSV 数据已删除"}
+    return {"message": "已解绑场景 CSV（数据集未删除）"}
 
 
 @router.put(
@@ -735,17 +819,18 @@ async def delete_csv(scene: PerfScene = Depends(get_scene_for_member)):
     dependencies=[Depends(require_permissions(PERF_SCENE_EDIT))],
 )
 async def update_csv_config(config: dict, scene: PerfScene = Depends(get_scene_for_member)):
-    """更新 CSV 分配策略等配置"""
-    if not scene.csv_data:
+    """更新 CSV 分配策略等配置（需已绑定数据集或仍有遗留数据）。"""
+    from app.modules.perf.csv_dataset import normalize_strategy, resolve_scene_csv
+
+    resolved = await resolve_scene_csv(scene)
+    if not resolved.get("row_count"):
         raise HTTPException(status_code=400, detail="场景未绑定 CSV 数据")
 
-    valid_strategies = ["round_robin", "unique", "random"]
-    strategy = config.get("strategy", "round_robin")
-    if strategy not in valid_strategies:
-        raise HTTPException(status_code=400, detail=f"无效的策略，可选: {valid_strategies}")
-
-    scene.csv_config["strategy"] = strategy
-    scene.csv_config["enabled"] = config.get("enabled", True)
+    strategy = normalize_strategy(config.get("strategy", "round_robin"))
+    cfg = dict(scene.csv_config) if isinstance(scene.csv_config, dict) else {}
+    cfg["strategy"] = strategy
+    cfg["enabled"] = config.get("enabled", True)
+    scene.csv_config = cfg
     await scene.save()
 
     return {"message": "配置更新成功", "config": scene.csv_config}

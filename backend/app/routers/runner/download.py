@@ -1,4 +1,4 @@
-"""Runner 下载预签名 API（UI 测试文件/文件夹等）"""
+"""Runner 下载预签名 API（UI / 接口自动化测试文件等）"""
 from __future__ import annotations
 
 import re
@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 
 from app.core.platform.auth import verify_runner_token
-from app.core.platform.config import UI_TEST_FILE_BUCKET
+from app.core.platform.config import API_FILE_BUCKET, UI_TEST_FILE_BUCKET
 from app.core.infra.minio_client import is_minio_storage, minio_client
 from app.models.ui import UiTestFolder
 from app.routers.ui.folders import validate_folder_key
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/runner", tags=["Runner 客户端"])
 
 PRESIGN_EXPIRES = 3600
 
-_ALLOWED_BUCKETS = frozenset({UI_TEST_FILE_BUCKET})
+_ALLOWED_BUCKETS = frozenset({UI_TEST_FILE_BUCKET, API_FILE_BUCKET})
 
 _FILE_OBJECT_KEY_RE = re.compile(r"^[0-9]+/[A-Fa-f0-9]{32}/.+$")
 

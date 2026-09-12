@@ -216,6 +216,7 @@ def generate_html_report(
     
     # 生成环境数据部分
     env_section = generate_env_section(env)
+    device_apm_section = generate_device_apm_section(record_data) if is_app_engine else ""
     
     # 更新套件记录中的all字段（兼容前端显示）
     if suite_records:
@@ -411,6 +412,10 @@ def generate_html_report(
     
     # 环境部分
     html_parts.append(env_section)
+
+    # App 设备性能（可选）
+    if device_apm_section:
+        html_parts.append(device_apm_section)
     
     # 日志部分
     html_parts.append(logs_section)
@@ -548,6 +553,73 @@ def generate_env_section(env: Dict[str, Any]) -> str:
             <div class="env-data"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;">{env_str}</pre></div>
         </div>
     '''
+
+
+def generate_device_apm_section(record_data: Dict[str, Any]) -> str:
+    """App 设备性能摘要（HTML 导出；曲线在线报告查看）。"""
+    summary = record_data.get("device_apm_summary") if isinstance(record_data, dict) else None
+    if not isinstance(summary, dict) or not summary:
+        return ""
+
+    def _fmt(v: Any, unit: str = "") -> str:
+        if v is None:
+            return "—"
+        try:
+            return f"{float(v):.1f}{unit}"
+        except (TypeError, ValueError):
+            return "—"
+
+    rows = [
+        ("CPU 峰值（单核100%）", _fmt(summary.get("cpu_pct_max"), "%")),
+        ("CPU P95", _fmt(summary.get("cpu_pct_p95"), "%")),
+        ("内存峰值 PSS", _fmt(summary.get("mem_pss_mb_max"), " MB")),
+        ("Java 堆峰值", _fmt(summary.get("mem_java_heap_mb_max"), " MB")),
+        ("Native 堆峰值", _fmt(summary.get("mem_native_heap_mb_max"), " MB")),
+        ("Graphics 峰值", _fmt(summary.get("mem_graphics_mb_max"), " MB")),
+        ("FPS 平均", _fmt(summary.get("fps_avg"))),
+        ("Jank 窗口占比峰值", _fmt(summary.get("janky_pct_max"), "%")),
+        ("GPU 忙碌峰值", _fmt(summary.get("gpu_busy_pct_max"), "%")),
+        ("磁盘剩余最低", _fmt(summary.get("disk_free_mb_min"), " MB")),
+        ("热状态最差", summary.get("thermal_status_worst") or "—"),
+        ("电量末值", _fmt(summary.get("battery_pct_last"), "%")),
+        ("温度峰值", _fmt(summary.get("temp_c_max"), " ℃")),
+        ("网络 RX 累计", _fmt(summary.get("net_rx_kb_delta"), " KB")),
+        ("网络 TX 累计", _fmt(summary.get("net_tx_kb_delta"), " KB")),
+        ("采集时长", _fmt(summary.get("duration_sec"), " s")),
+        ("采样点数", str(summary.get("sample_count") if summary.get("sample_count") is not None else "—")),
+        ("有效采样", str(summary.get("sample_ok_count") if summary.get("sample_ok_count") is not None else "—")),
+        ("降级采样", str(summary.get("sample_degraded_count") if summary.get("sample_degraded_count") is not None else "—")),
+        ("采样空洞", str(summary.get("gap_count") if summary.get("gap_count") is not None else "—")),
+        ("包名", summary.get("pkg") or summary.get("pkg_name") or "—"),
+    ]
+    scope = summary.get("scope")
+    if scope:
+        rows.insert(0, ("范围", str(scope)))
+    if summary.get("partial_data"):
+        rows.append(("数据完整性", "部分可用（partial_data）"))
+    if summary.get("error"):
+        rows.append(("错误", str(summary.get("error"))[:200]))
+    if summary.get("approximate_from_downsampled_series"):
+        rows.append(("精度说明", "由降采样序列近似，峰值可能低估"))
+    avg_iv = summary.get("actual_avg_interval_ms")
+    if avg_iv is not None:
+        rows.append(("实际平均采样间隔", _fmt(avg_iv, " ms")))
+    unsupported = summary.get("unsupported_metrics")
+    if isinstance(unsupported, list) and unsupported:
+        rows.append(("不可用指标", ", ".join(str(x) for x in unsupported)))
+
+    row_html = "".join(
+        f'<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;color:#666;width:140px;">{k}</td>'
+        f'<td style="padding:8px 12px;border-bottom:1px solid #eee;">{escape_html(str(v))}</td></tr>'
+        for k, v in rows
+    )
+    return f'''
+        <div class="section">
+            <h2>📱 设备性能（手机资源）</h2>
+            <p style="margin:0 0 10px;color:#666;font-size:12px;">随 App 执行采集的本机进程指标；完整曲线请在平台在线报告查看。</p>
+            <table style="width:100%;border-collapse:collapse;background:#fafafa;border-radius:6px;overflow:hidden;font-size:13px;">{row_html}</table>
+        </div>
+        '''
 
 
 def generate_logs_section(record_data: Dict, suite_records: List[Dict], case_records: List[Dict], img_options: Optional[ImageExportOptions] = None) -> str:

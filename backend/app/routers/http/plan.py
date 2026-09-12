@@ -1026,7 +1026,7 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
         plan_id=plan_id,
         project_id=project_id,
         status=overall_status,
-        trigger_type="manual",
+        trigger_type=(req.trigger_type or "manual"),
         total_cases=total_count,
         success_cases=success_count,
         failed_cases=failed_count,
@@ -1039,6 +1039,11 @@ async def run_plan(plan_id: int, req: ApiPlanRunRequest, username: str = Depends
         end_time=datetime.now(),
         **worker_kw,
     )
+
+    # 与套件/定时对齐：失败告警 + 自动推报告（NOTIFY-1 / BUG-N2）
+    if overall_status == "failed":
+        await NotificationService.maybe_alert_api_plan_failure(run_record.id)
+    await NotificationService.maybe_auto_push_api_plan_report(run_record.id)
 
     return ApiPlanRunResult(
         plan_id=plan_id,
@@ -1326,6 +1331,9 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
                 r.model_dump() if hasattr(r, 'model_dump') else r for r in bg_item_results
             ]
             await run_record.save()
+            if overall_status == "failed":
+                await NotificationService.maybe_alert_api_plan_failure(run_record.id)
+            await NotificationService.maybe_auto_push_api_plan_report(run_record.id)
         except Exception as e:
             # 异常中断时尽量落已累计统计，避免记录全 0
             run_record.status = "failed"
@@ -1341,6 +1349,8 @@ async def run_plan_async(plan_id: int, req: ApiPlanRunRequest, background_tasks:
                 ]
             await run_record.save()
             print(f"[PlanAsyncRun] 计划 {plan_id} 后台执行异常: {e}")
+            await NotificationService.maybe_alert_api_plan_failure(run_record.id)
+            await NotificationService.maybe_auto_push_api_plan_report(run_record.id)
 
     background_tasks.add_task(_run_in_background)
     return ApiPlanAsyncRunResponse(record_id=run_record.id)

@@ -1228,6 +1228,15 @@ async def tool_confirm_run_perf_scene(
 
     if config.get("perf_targets") is not None:
         config["perf_targets"] = normalize_perf_targets(config.get("perf_targets"))
+    from app.modules.perf.sut_bind import apply_sut_binding_to_config
+    from app.modules.perf.sut_force import activate_sut_force_for_record
+
+    config = await apply_sut_binding_to_config(
+        config,
+        project_id=scene.project_id,
+        env_id=resolved_env_id,
+        apply_force=False,
+    )
     record = await PerfRecord.create(
         scene_id=scene_id,
         project_id=scene.project_id,
@@ -1237,6 +1246,7 @@ async def tool_confirm_run_perf_scene(
         scene_items_snapshot=scene.scene_items or [],
         run_by=ctx.username,
     )
+    await activate_sut_force_for_record(record)
     _AsyncBackgroundTasks().add_task(run_perf_scene, record.id, True)
     return {
         "record_id": record.id,

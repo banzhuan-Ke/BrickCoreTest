@@ -2,7 +2,7 @@
   <el-dialog
     v-model="visible"
     :title="isEdit ? '编辑步骤' : '新增步骤'"
-    width="700px"
+    :width="isAppStep ? '880px' : '700px'"
     destroy-on-close
     @closed="handleClose"
   >
@@ -276,22 +276,43 @@
                   />
                 </div>
               </div>
-              <div v-else class="app-locator-row">
-                <el-select
-                  v-model="form.params[key].context"
-                  placeholder="定位环境"
-                  style="width: 130px"
-                  @change="onAppLocatorContextChange(key)"
-                >
-                  <el-option label="原生 App" :value="APP_LOCATOR_CONTEXT_NATIVE" />
-                  <el-option label="WebView / H5" value="webview" />
-                </el-select>
-                <el-select v-model="form.params[key].by" placeholder="定位方式" style="width: 140px" @change="onAppLocatorByChange(key)">
-                  <el-option v-for="opt in appLocatorByOptions(key)" :key="opt.value" :label="opt.label" :value="opt.value" />
-                </el-select>
-                <el-input v-model="form.params[key].value" placeholder="定位值" style="flex: 1" @input="onAppLocatorFieldEdited" />
-                <el-input-number v-model="form.params[key].index" :min="1" :max="99" controls-position="right" style="width: 100px" @change="onAppLocatorFieldEdited" />
-                <el-button type="primary" link :loading="healingLocator" @click="handleHealLocator">AI 自愈</el-button>
+              <div v-else class="app-locator-block">
+                <div class="app-locator-row app-locator-row--meta">
+                  <el-select
+                    v-model="form.params[key].context"
+                    placeholder="定位环境"
+                    class="app-locator-meta-select"
+                    @change="onAppLocatorContextChange(key)"
+                  >
+                    <el-option label="原生 App" :value="APP_LOCATOR_CONTEXT_NATIVE" />
+                    <el-option label="WebView / H5" value="webview" />
+                  </el-select>
+                  <el-select
+                    v-model="form.params[key].by"
+                    placeholder="定位方式"
+                    class="app-locator-meta-select"
+                    @change="onAppLocatorByChange(key)"
+                  >
+                    <el-option v-for="opt in appLocatorByOptions(key)" :key="opt.value" :label="opt.label" :value="opt.value" />
+                  </el-select>
+                  <el-input-number
+                    v-model="form.params[key].index"
+                    :min="1"
+                    :max="99"
+                    controls-position="right"
+                    class="app-locator-index"
+                    @change="onAppLocatorFieldEdited"
+                  />
+                  <el-button type="primary" link :loading="healingLocator" @click="handleHealLocator">AI 自愈</el-button>
+                </div>
+                <el-input
+                  v-model="form.params[key].value"
+                  type="textarea"
+                  :autosize="{ minRows: 1, maxRows: 4 }"
+                  placeholder="定位值（resource-id / xpath / text 等）"
+                  class="app-locator-value"
+                  @input="onAppLocatorFieldEdited"
+                />
               </div>
             </template>
             <template v-else-if="isAppLocatorRefKey(key)">
@@ -643,7 +664,7 @@ import UiTestFilePicker from './UiTestFilePicker.vue'
 import UiTestMultiFilePicker from './UiTestMultiFilePicker.vue'
 import UiTestFolderPicker from './UiTestFolderPicker.vue'
 import { ProjectStore } from '@/stores/module/ProjectStore'
-import { insertVarRef } from '@/utils/varInsert.js'
+import { insertFullVarRef } from '@/utils/varInsert.js'
 import { getOrderedVisibleParams, getParamLabel, getParamTooltip, getStepUsageGuide, hasStepAdvancedParams, isDragDropMethod, isElementOrderMethod, isAssertionMethod } from '@/utils/uiStepMeta.js'
 import { splitSmartStepIntents } from '@/utils/smartStepSplit.js'
 import { generateStepId } from '@/utils/stepHelper.js'
@@ -667,14 +688,12 @@ const stepTemplateUploading = ref(false)
 const stepTemplatePreviewMap = ref({})
 
 async function onDfTagInsert(refStr) {
-  const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
-  const name = m ? m[1] : refStr
-  const result = await insertVarRef(name)
+  const result = await insertFullVarRef(refStr)
   if (result?.ok) {
     const tip =
       result.mode === 'copy'
-        ? `已复制 ${refStr}，请粘贴到目标输入框`
-        : `已插入 ${refStr}`
+        ? `已复制 ${result.display}，请粘贴到目标输入框`
+        : `已插入 ${result.display}`
     ElMessage.success(tip)
   } else {
     ElMessage.warning('请先将光标放入要填入的输入框')
@@ -1440,7 +1459,7 @@ function compactNumberWidth(key) {
 // 判断是否为下拉选择
 function isSelect(key) {
   if (isAppStep.value) {
-    return ['direction', 'key'].includes(key)
+    return ['direction', 'key', 'stop'].includes(key)
   }
   if (key === 'position' && form.value.method === 'scroll_to_height') return true
   if (key === 'direction' && form.value.method === 'mouse_wheel') return true
@@ -2384,6 +2403,31 @@ function handleClose() {
   display: flex;
   gap: 8px;
   align-items: center;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.app-locator-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.app-locator-row--meta {
+  flex-wrap: wrap;
+}
+
+.app-locator-meta-select {
+  width: 150px;
+  flex: 0 0 auto;
+}
+
+.app-locator-index {
+  width: 110px;
+}
+
+.app-locator-value {
   width: 100%;
 }
 

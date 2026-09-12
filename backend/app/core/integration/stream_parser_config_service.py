@@ -12,61 +12,6 @@ from app.models.sys import SystemStreamParserConfig
 BUILTIN_QA_SSE_CODE = "builtin_qa_sse_v1"
 BUILTIN_RULE_QA_RULE_CODE = "builtin_rule_qa_v1"
 
-# 历史库旧名迁移用（拼接避免源码出现客户协议缩写字面量，过 CE audit）
-_VTAG = "K" + "CF"
-_LEGACY_BUILTIN_NAME_MAP = {
-    f"问答流式 v1（{_VTAG} 默认）": "问答流式 v1（默认）",
-    f"{_VTAG} 规则版（可自定义阶段）": "问答规则版（可自定义阶段）",
-}
-
-
-def _scrub_kcf_text(text: str) -> str:
-    raw = text or ""
-    return (
-        raw.replace(f"适用于 {_VTAG} `/api/v1/qa` 标准 SSE 协议", "适用于常见问答 SSE 协议")
-        .replace(f"预置 {_VTAG} 问答 SSE 阶段匹配规则", "预置问答 SSE 阶段匹配规则")
-        .replace(f"{_VTAG} ", "")
-        .replace(f" {_VTAG}", "")
-        .replace(_VTAG, "")
-    )
-
-
-async def _neutralize_legacy_kcf_builtins() -> None:
-    """把库里旧内置名/描述里的客户协议字样改成中性文案（幂等）。"""
-    for old_name, new_name in _LEGACY_BUILTIN_NAME_MAP.items():
-        row = await SystemStreamParserConfig.get_or_none(name=old_name, is_del=False)
-        if not row:
-            continue
-        conflict = await SystemStreamParserConfig.get_or_none(name=new_name, is_del=False)
-        if conflict and conflict.id != row.id:
-            row.is_del = True
-            row.update_by = "system"
-            await row.save(update_fields=["is_del", "update_by", "update_time"])
-            continue
-        row.name = new_name
-        row.description = _scrub_kcf_text(row.description or "")
-        row.update_by = "system"
-        await row.save(update_fields=["name", "description", "update_by", "update_time"])
-
-    rows = await SystemStreamParserConfig.filter(is_del=False)
-    for row in rows:
-        changed = False
-        if _VTAG in (row.name or ""):
-            scrubbed_name = _scrub_kcf_text(row.name).strip() or row.name.replace(_VTAG, "").strip()
-            scrubbed_name = scrubbed_name.replace("（）", "").replace("()", "").strip()
-            if scrubbed_name and scrubbed_name != row.name:
-                conflict = await SystemStreamParserConfig.get_or_none(name=scrubbed_name, is_del=False)
-                if not conflict or conflict.id == row.id:
-                    row.name = scrubbed_name
-                    changed = True
-        scrubbed_desc = _scrub_kcf_text(row.description or "")
-        if scrubbed_desc != (row.description or ""):
-            row.description = scrubbed_desc
-            changed = True
-        if changed:
-            row.update_by = "system"
-            await row.save(update_fields=["name", "description", "update_by", "update_time"])
-
 
 def _default_success_rule(parser_id: str) -> dict[str, Any]:
     meta = get_parser(parser_id) or {}
@@ -95,7 +40,6 @@ def _row_to_dict(row: SystemStreamParserConfig) -> dict[str, Any]:
 
 async def ensure_builtin_stream_parser_configs() -> None:
     """启动时幂等写入内置解析配置。"""
-    await _neutralize_legacy_kcf_builtins()
     seeds = [
         {
             "code": BUILTIN_QA_SSE_CODE,

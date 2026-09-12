@@ -17,12 +17,16 @@ import pinia from '@/stores/index'
 import 'nprogress/nprogress.css'
 import {useDark} from '@vueuse/core'
 import { vPermission } from '@/directives/permission'
+import { applyElementPlusDefaults } from '@/utils/elementPlusDefaults'
 
 // 创建vue实例
 const app = createApp(App)
 
 // 注册权限指令
 app.directive('permission', vPermission)
+
+// Element Plus 表格默认开启边框（支持拖拽调列宽）
+applyElementPlusDefaults()
 
 // 注册element-plus
 app.use(ElementPlus, {zIndex: 3000, locale: zhCn})

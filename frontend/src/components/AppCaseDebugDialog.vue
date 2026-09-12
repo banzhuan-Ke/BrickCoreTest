@@ -46,7 +46,35 @@
       </div>
       <div class="config-section">
         <div class="section-title"><span>应用包名</span></div>
-        <el-input v-model="params.app_id" placeholder="默认启动包名（可选）" />
+        <el-select
+          v-model="params.app_id"
+          filterable
+          allow-create
+          clearable
+          default-first-option
+          placeholder="从用例步骤选择，或手写包名"
+          style="width: 100%"
+        >
+          <el-option v-for="pkg in packageOptions" :key="pkg" :label="pkg" :value="pkg" />
+        </el-select>
+      </div>
+      <div class="config-section">
+        <div class="section-title"><span>设备性能</span></div>
+        <el-checkbox v-model="params.enable_device_apm">
+          采集设备性能（CPU/内存/网络/FPS/电池）
+        </el-checkbox>
+        <el-select
+          v-if="params.enable_device_apm"
+          v-model="params.device_apm_pkg"
+          filterable
+          allow-create
+          clearable
+          default-first-option
+          placeholder="性能包名，留空则用上方应用包名"
+          style="width: 100%; margin-top: 8px;"
+        >
+          <el-option v-for="pkg in packageOptions" :key="`apm-${pkg}`" :label="pkg" :value="pkg" />
+        </el-select>
       </div>
       <div v-if="showHealToggle" class="config-section">
         <div class="section-title"><span>AI 自愈</span></div>
@@ -75,6 +103,11 @@
         <el-tag :type="statusTagType">{{ statusLabel }}</el-tag>
         <span class="result-meta">执行记录 #{{ debugResult.id }}</span>
       </div>
+      <AppDeviceApmPanel
+        :summary="debugResult.device_apm_summary"
+        :series="debugResult.device_apm_series || []"
+        :show-empty="Boolean(params.enable_device_apm)"
+      />
       <CaseReportTimeline v-if="debugResult.result_data" :runInfo="debugResult.result_data" profile="app" />
     </div>
 
@@ -93,7 +126,9 @@ import { UserStore } from '@/stores/module/UserStore.js'
 import { appExecApi, appRecordApi, deviceApi } from '@/api'
 import { aiConfigApi } from '@/api/modules/ai'
 import CaseReportTimeline from '@/components/Report/CaseReportTimeline.vue'
+import AppDeviceApmPanel from '@/views/App/components/AppDeviceApmPanel.vue'
 import { filterAppRunnerDevices } from '@/utils/runnerDevice'
+import { collectAppPackageIdsFromSteps } from '@/utils/appStepMeta.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -131,6 +166,8 @@ const params = reactive({
   no_reset: true,
   auto_grant_permissions: true,
   record_video: true,
+  enable_device_apm: false,
+  device_apm_pkg: '',
   ai_heal_enabled: true,
   username: uStore.userInfo?.username || '',
 })
@@ -163,11 +200,17 @@ const statusTagType = computed(() => {
   return 'danger'
 })
 
+const packageOptions = computed(() => collectAppPackageIdsFromSteps(props.steps || []))
+
 const onOpen = async () => {
   params.env_id = proStore.envList?.[0]?.id || ''
   params.device_id = ''
   params.app_udid = ''
-  params.app_id = ''
+  const hints = packageOptions.value
+  params.app_id = hints[0] || ''
+  params.enable_device_apm = localStorage.getItem('app_enable_device_apm') === '1'
+  const rememberedPkg = localStorage.getItem('app_device_apm_pkg') || ''
+  params.device_apm_pkg = rememberedPkg || hints[0] || ''
   params.username = uStore.userInfo?.username || ''
   debugResult.value = null
   await Promise.all([loadDevices(), loadHealRunOptions()])
@@ -241,10 +284,16 @@ const startDebug = async () => {
     ElMessage.warning('请选择 App 执行器')
     return
   }
+  if (params.enable_device_apm && !(params.device_apm_pkg || params.app_id || '').trim()) {
+    ElMessage.warning('采集设备性能时请填写应用包名或性能包名')
+    return
+  }
 
   running.value = true
   debugResult.value = null
   try {
+    localStorage.setItem('app_enable_device_apm', params.enable_device_apm ? '1' : '0')
+    localStorage.setItem('app_device_apm_pkg', params.device_apm_pkg || '')
     const payload = {
       ...params,
       steps: props.steps,

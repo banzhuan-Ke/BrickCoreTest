@@ -1,4 +1,4 @@
-"""页面滚动 evaluate 脚本（与 runner/WebEngine/scroll_page_js.py 保持同步，仅允许模块 docstring 差异）。
+"""页面滚动 evaluate 脚本（与执行器侧滚动脚本保持同步，仅允许模块 docstring 差异）。
 
 供 Backend page_fetcher 探页与 Runner kw_scroll 共用语义，避免双份漂移。
 """

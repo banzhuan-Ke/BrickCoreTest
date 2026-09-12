@@ -52,6 +52,7 @@ from app.routers.app import (
     app_inspector_router,
     app_fragment_router,
     app_cron_router,
+    app_device_apm_router,
 )
 from app.routers.sys.devices import router as device_router
 from app.routers.runner import router as runner_client_router
@@ -64,16 +65,18 @@ from app.routers.http.records import router as api_records_router
 from app.routers.http.cron import router as api_cron_router, scheduler as api_cron_scheduler
 from app.routers.app.cron import scheduler as app_cron_scheduler
 from app.routers.http.exec import router as api_exec_router
+from app.routers.http.mocks import call_alias_router as api_mock_call_alias_router
 from app.routers.http.mocks import router as api_mock_router
 from app.routers.http.plan import router as api_plan_router
 from app.routers.http.auth_config import router as api_auth_config_router
 from app.routers.http.data_factory import router as api_data_factory_router
 from app.routers.http.header_templates import router as api_header_templates_router
-from app.routers.perf import perf_router, workers_public_router
+from app.routers.perf import perf_router, workers_public_router, sut_public_router
 from app.routers.perf.cron import scheduler as perf_scheduler
 from app.routers.ai import ai_router
 from app.routers.ai.assistant import router as ai_assistant_router
 from app.routers.test_management import test_management_router
+from app.modules.perf.sut_agent_middleware import SutAgentBodyLimitMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.staticfiles import StaticFiles
@@ -191,8 +194,14 @@ async def _core_lifespan(app: FastAPI):
     register_debug_session_cleanup_job(scheduler)
     from app.modules.app.app_execution_stale import register_stale_cleanup_job as register_app_stale_cleanup_job
     register_app_stale_cleanup_job(scheduler)
+    from app.modules.app.device_apm_stale import register_device_apm_stale_job
+    register_device_apm_stale_job(scheduler)
     from app.modules.runner.runner_offline_cleanup import register_runner_heartbeat_stale_job
     register_runner_heartbeat_stale_job(scheduler)
+    from app.modules.perf.sut_metrics_store import register_sut_metric_purge_job
+    register_sut_metric_purge_job(scheduler)
+    from app.modules.perf.sut_slice import register_sut_metrics_reslice_job
+    register_sut_metrics_reslice_job(scheduler)
     from app.modules.test_management.tm_automation_sync import register_tm_automation_sync_job
     register_tm_automation_sync_job(scheduler)
     api_cron_scheduler.start()
@@ -417,6 +426,9 @@ async def global_operational_error_handler(request: Request, exc: OperationalErr
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_credentials=True, allow_methods=["*"],
                    allow_headers=["*"])
 
+# 被测监控采集器：在解析 body 前限制大小，并按 IP 粗限流（须在 CORS 之后注册，使对本路径先执行）
+app.add_middleware(SutAgentBodyLimitMiddleware)
+
 # 注册操作日志中间件
 app.add_middleware(OperationLogMiddleware)
 
@@ -484,6 +496,7 @@ app.include_router(app_element_router, prefix="/app-module", dependencies=_proje
 app.include_router(app_inspector_router, prefix="/app-module", dependencies=_project_access_dep)
 app.include_router(app_fragment_router, prefix="/app-module", dependencies=_project_access_dep)
 app.include_router(app_cron_router, prefix="/app-module", dependencies=_project_access_dep)
+app.include_router(app_device_apm_router, prefix="/app-module", dependencies=_project_access_dep)
 
 app.include_router(cronjob_router, prefix="/schedule", dependencies=_project_access_dep)
 
@@ -495,12 +508,15 @@ app.include_router(api_records_router, prefix="/api-module", dependencies=_proje
 app.include_router(api_cron_router, prefix="/api-module", dependencies=_project_access_dep)
 app.include_router(api_exec_router, prefix="/api-module", dependencies=_project_access_dep)
 app.include_router(api_mock_router, prefix="/api-module", dependencies=_project_access_dep)
+# Mock 调用短别名：/mock/{匹配路径} 与 /api-module/mock-call 双活（免登白名单见 is_mock_call_path）
+app.include_router(api_mock_call_alias_router, prefix="/mock", dependencies=_project_access_dep)
 app.include_router(api_plan_router, prefix="/api-module", dependencies=_project_access_dep)
 app.include_router(api_auth_config_router, prefix="/api-module", dependencies=_project_access_dep)
 app.include_router(api_data_factory_router, prefix="/api-module", dependencies=_project_access_dep)
 app.include_router(api_header_templates_router, prefix="/api-module", dependencies=_project_access_dep)
 app.include_router(perf_router, dependencies=_project_access_dep)
 app.include_router(workers_public_router, prefix="/perf")
+app.include_router(sut_public_router, prefix="/perf")
 ai_router.include_router(ai_assistant_router)
 app.include_router(ai_router, dependencies=_project_access_dep)
 app.include_router(test_management_router, dependencies=_project_access_dep)

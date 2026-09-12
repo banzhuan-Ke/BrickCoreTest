@@ -116,13 +116,13 @@ ALGORITHM = "HS256"
 TOKEN_TIMEOUT = 60 * 60 * 24 * 1
 # Runner 客户端会话 token 有效期（秒），默认 7 天
 RUNNER_TOKEN_TIMEOUT = int(os.getenv("RUNNER_TOKEN_TIMEOUT", str(60 * 60 * 24 * 7)))
-RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.7.0")
+RUNNER_ENGINE_VERSION = os.getenv("RUNNER_ENGINE_VERSION", "1.8.0")
 # 引擎最低版本（压测 / 录制等能力通用门禁）
 RUNNER_ENGINE_VERSION_MIN = os.getenv("RUNNER_ENGINE_VERSION_MIN", "1.0.0")
 RUNNER_CLIENT_VERSION_MIN = os.getenv("RUNNER_CLIENT_VERSION_MIN", "1.3.8")
-RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.7.0")
+RUNNER_CLIENT_VERSION_LATEST = os.getenv("RUNNER_CLIENT_VERSION_LATEST", "1.8.0")
 # 平台产品版本（页脚、/runner/version 展示，与 Runner 客户端版本独立）
-PLATFORM_VERSION = os.getenv("PLATFORM_VERSION", "1.7.1")
+PLATFORM_VERSION = os.getenv("PLATFORM_VERSION", "1.8.0")
 # Runner 客户端安装包下载地址（zip 或文档页）；为空时客户端根据平台地址推导
 RUNNER_CLIENT_DOWNLOAD_URL = os.getenv("RUNNER_CLIENT_DOWNLOAD_URL", "").strip()
 # Phase 6：connect 下发按设备隔离的 MQ/Redis 凭证（需 RabbitMQ Management + Redis ACL）
@@ -231,6 +231,11 @@ KNOWLEDGE_EMBED_DEFAULT_MODEL = os.getenv('KNOWLEDGE_EMBED_DEFAULT_MODEL', 'text
 KNOWLEDGE_EMBED_BATCH_SIZE = int(os.getenv('KNOWLEDGE_EMBED_BATCH_SIZE', '10'))
 KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB = int(os.getenv('KNOWLEDGE_EMBED_MAX_CHUNKS_PER_JOB', '500'))
 KNOWLEDGE_RETRIEVE_STRATEGY = os.getenv('KNOWLEDGE_RETRIEVE_STRATEGY', 'lexical').strip().lower()
+
+# 被测服务器指标：平台默认保留天数（项目设置可覆盖）；采集器本机缓冲见 agent buffer_hours
+SUT_METRICS_RETAIN_DAYS = max(1, min(90, int(os.getenv("SUT_METRICS_RETAIN_DAYS", "14") or 14)))
+# 压测报告「施压前基线」回看秒数（项目可覆盖）
+SUT_METRICS_BASELINE_SEC = max(60, min(1800, int(os.getenv("SUT_METRICS_BASELINE_SEC", "300") or 300)))
 
 # Web 自动化测试文件单文件上限（字节），默认 50MB
 UI_TEST_FILE_MAX_BYTES = int(os.getenv('UI_TEST_FILE_MAX_BYTES', str(50 * 1024 * 1024)))

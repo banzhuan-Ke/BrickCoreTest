@@ -87,13 +87,20 @@
           <VarInsertButton
             :env-id="refEnvId"
             :show-env-edit="false"
-            hint-text="含项目/环境/Token 授权/内置/用例变量；授权变量在调试与执行时自动注入。工厂标签与工具请用旁侧按钮。"
+            :extra-groups="csvExtraGroups"
+            hint-text="含项目/环境/Token 授权/内置/用例变量；CSV 列来自「CSV 数据集」。"
           />
-          <ToolInsertButton :env-id="refEnvId" />
+          <ToolInsertButton :env-id="refEnvId" :extra-groups="csvExtraGroups" />
           <el-button type="info" link size="small" @click="tagPickerVisible = true">数据工厂标签</el-button>
         </div>
         <span class="var-toolbar-hint">先点击下方输入框再插入；参考环境仅预览变量列表，<strong>执行</strong>时以运行环境为准</span>
       </div>
+
+      <CsvPerfHint
+        :source="{ path: form.path, headers: form.headers, params: form.params, body: form.body, body_fields: form.body_fields, bodyText }"
+        :project-id="proStore.projectInfo?.id"
+        :api-id="form.id"
+      />
       
       <!-- 请求参数 -->
       <div class="section-title">
@@ -311,7 +318,7 @@
   </el-dialog>
   
   <!-- 测试环境选择弹窗 -->
-  <el-dialog v-model="testDialogVisible" title="测试接口" width="560px" append-to-body destroy-on-close>
+  <el-dialog v-model="testDialogVisible" title="测试接口" width="640px" append-to-body destroy-on-close>
     <el-form :model="testForm" label-width="100px">
       <el-form-item label="执行环境">
         <el-select v-model="testForm.env_id" placeholder="选择环境（基础URL 为空时必填）" clearable style="width: 100%">
@@ -328,6 +335,18 @@
         <ViaWorkerSelect v-model="testForm.worker_id" :env-id="testForm.env_id" />
       </el-form-item>
     </el-form>
+    <CsvPerfHint
+      v-if="form.protocol !== 'websocket' && form.protocol !== 'grpc'"
+      :source="{ path: form.path, headers: form.headers, params: form.params, body: form.body, body_fields: form.body_fields, bodyText }"
+      :project-id="proStore.projectInfo?.id"
+      :api-id="form.id"
+      show-try-run
+      v-model:enabled="csvTry.enabled"
+      v-model:try-source="csvTry.source"
+      v-model:csv-scene-id="csvTry.sceneId"
+      v-model:csv-dataset-id="csvTry.datasetId"
+      v-model:csv-row-index="csvTry.rowIndex"
+    />
     <template #footer>
       <el-button @click="testDialogVisible = false">取消</el-button>
       <el-button type="primary" @click="handleTest" :loading="testing">开始测试</el-button>
@@ -489,8 +508,10 @@ import http from '@/api/index'
 import { catalogApi, buildCatalogTree } from '@/api/modules/catalog'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
+import CsvPerfHint from '@/components/CsvPerfHint.vue'
 import DataFactoryTagPicker from './DataFactoryTagPicker.vue'
-import { insertVarRef } from '@/utils/varInsert.js'
+import { useCsvInsertGroups } from '@/composables/useCsvInsertGroups.js'
+import { insertFullVarRef } from '@/utils/varInsert.js'
 import JsonTextarea from '@/components/JsonTextarea.vue'
 import HeaderEditorPanel from '@/components/HeaderEditorPanel.vue'
 import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
@@ -516,13 +537,12 @@ const proStore = ProjectStore()
 const formRef = ref()
 const refEnvId = ref(null)
 const tagPickerVisible = ref(false)
+const { csvExtraGroups } = useCsvInsertGroups(computed(() => proStore.projectInfo?.id))
 
 async function onDfTagInsert(refStr) {
-  const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
-  const name = m ? m[1] : refStr
-  const result = await insertVarRef(name)
+  const result = await insertFullVarRef(refStr)
   if (result?.ok) {
-    ElMessage.success(result.mode === 'copy' ? `已复制 ${refStr}，请粘贴到输入框` : `已插入 ${refStr}`)
+    ElMessage.success(result.mode === 'copy' ? `已复制 ${result.display}，请粘贴到输入框` : `已插入 ${result.display}`)
   } else {
     ElMessage.warning('请先将光标放入 Params / Headers / Body 输入框')
   }
@@ -536,6 +556,7 @@ const testDialogVisible = ref(false)
 const testResultVisible = ref(false)
 const testActiveTab = ref('request')
 const testForm = reactive({ env_id: null, worker_id: null })
+const csvTry = reactive({ enabled: false, source: 'dataset', sceneId: null, datasetId: null, rowIndex: 0 })
 const testResult = ref(null)
 
 // 响应结构折叠面板
@@ -680,6 +701,11 @@ const getStatusType = (code) => {
 const showTestDialog = () => {
   testForm.env_id = refEnvId.value || null
   testForm.worker_id = null
+  csvTry.enabled = false
+  csvTry.source = 'dataset'
+  csvTry.sceneId = null
+  csvTry.datasetId = null
+  csvTry.rowIndex = 0
   testDialogVisible.value = true
 }
 
@@ -1142,6 +1168,11 @@ const handleTest = async () => {
       env_id: envId || undefined,
       project_id: proStore.projectInfo?.id || undefined,
       ...(testForm.worker_id ? { worker_id: testForm.worker_id } : {}),
+      ...(csvTry.enabled && csvTry.datasetId
+        ? { csv_dataset_id: csvTry.datasetId, csv_row_index: csvTry.rowIndex ?? 0 }
+        : csvTry.enabled && csvTry.sceneId
+          ? { csv_scene_id: csvTry.sceneId, csv_row_index: csvTry.rowIndex ?? 0 }
+          : {}),
     })
     
     if (res.status === 200) {

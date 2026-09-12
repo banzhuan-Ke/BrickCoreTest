@@ -2,7 +2,8 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from app.modules.app.device_apm import is_valid_android_pkg
 
 
 class AppCaseSchemas(BaseModel):
@@ -36,7 +37,12 @@ class AddAppCaseForm(BaseModel):
     description: Optional[str] = None
     username: str
     catalog_id: Optional[int] = None
-    tags: Optional[list] = None
+    tags: list = Field(default_factory=list)
+
+    @field_validator("tags", "steps", mode="before")
+    @classmethod
+    def _coerce_list(cls, v):
+        return list(v or [])
 
 
 class UpdateAppCaseForm(BaseModel):
@@ -49,6 +55,13 @@ class UpdateAppCaseForm(BaseModel):
     catalog_id: Optional[int] = None
     is_del: bool = False
     tags: Optional[list] = None
+
+    @field_validator("tags", "steps", mode="before")
+    @classmethod
+    def _coerce_optional_list(cls, v):
+        if v is None:
+            return v
+        return list(v)
 
 
 class AppSuiteSchemas(BaseModel):
@@ -162,6 +175,13 @@ class AppRunForm(BaseModel):
     auto_grant_permissions: bool = True
     no_reset: bool = True
     record_video: Optional[bool] = Field(default=None, description="是否录制用例视频，空则使用计划默认值")
+    enable_device_apm: bool = Field(default=False, description="是否随执行采集设备性能（CPU/内存/网络/FPS/Jank/电池）")
+    device_apm_pkg: str = Field(default="", description="设备性能采集包名，空则用 app_id")
+    device_apm_interval_ms: int = Field(default=1000, ge=200, le=10000, description="设备性能采样间隔毫秒")
+    device_apm_metrics: Optional[List[str]] = Field(
+        default=None,
+        description="设备性能指标子集：cpu/memory/network/fps/jank/battery",
+    )
     ai_heal_enabled: Optional[bool] = Field(
         default=None,
         description="本次执行是否启用 AI 定位器自愈；不传则使用项目默认",
@@ -326,3 +346,51 @@ class AppInspectorExploreForm(BaseModel):
     key: str = Field(default="", description="press 按键名，如 enter")
     duration: float = Field(default=0.3, ge=0.05, le=3.0, description="swipe 时长秒")
     refresh_tree: bool = Field(default=True, description="操作后是否刷新控件树")
+
+
+class AppDeviceApmSessionForm(BaseModel):
+    project_id: int
+    device_id: str
+    app_udid: str = Field(default="", max_length=255)
+    pkg_name: str = Field(..., min_length=1, max_length=255, description="监控应用包名")
+    interval_ms: int = Field(default=1000, ge=200, le=10000)
+    metrics: Optional[List[str]] = Field(
+        default=None,
+        description="指标子集：cpu/memory/network/fps/jank/battery/gpu/disk/thermal",
+    )
+    duration_sec: float = Field(default=0, ge=0, le=86400, description="0=手动停止")
+    thresholds: Optional[dict] = None
+
+    @field_validator("pkg_name")
+    @classmethod
+    def _validate_pkg(cls, v: str) -> str:
+        pkg = (v or "").strip()
+        if not is_valid_android_pkg(pkg):
+            raise ValueError("应用包名格式无效（需形如 com.example.app）")
+        return pkg
+
+
+class AppDeviceApmPointsForm(BaseModel):
+    points: List[dict] = Field(default_factory=list)
+    batch_id: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="整批幂等键；同一 session 下相同 batch_id 只接受一次",
+    )
+
+
+class AppDeviceApmFinalForm(BaseModel):
+    summary: Optional[dict] = None
+    series: Optional[List[dict]] = None
+    thresholds: Optional[dict] = None
+    enabled: bool = True
+    error: Optional[str] = Field(default=None, max_length=500)
+
+
+class AppDeviceApmCompareForm(BaseModel):
+    left_type: str = Field(..., description="case|suite|plan|session")
+    left_id: str = Field(..., description="执行记录 ID 或独立会话 ID")
+    right_type: str = Field(..., description="case|suite|plan|session")
+    right_id: str = Field(..., description="执行记录 ID 或独立会话 ID")
+    left_label: str = "A"
+    right_label: str = "B"

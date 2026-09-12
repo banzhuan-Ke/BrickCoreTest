@@ -141,6 +141,13 @@
 
       <ApiCaseUsedVarsPanel :case-form="form" />
 
+      <CsvPerfHint
+        :source="form"
+        :project-id="proStore.projectInfo?.id"
+        :case-id="form.id"
+        :api-id="form.api_id"
+      />
+
       <div class="var-toolbar">
         <div class="var-toolbar-actions">
           <el-select
@@ -160,9 +167,10 @@
           <VarInsertButton
             :env-id="refEnvId"
             :extra-vars="extractorVarNames"
-            hint-text="不含工厂标签；标签与内联工具请用右侧按钮。"
+            :extra-groups="csvExtraGroups"
+            hint-text="不含工厂标签；标签与内联工具请用右侧按钮。CSV 列来自项目「CSV 数据集」。"
           />
-          <ToolInsertButton :env-id="refEnvId" :extra-vars="extractorVarNames" />
+          <ToolInsertButton :env-id="refEnvId" :extra-vars="extractorVarNames" :extra-groups="csvExtraGroups" />
           <el-button type="info" link size="small" @click="tagPickerVisible = true">数据工厂标签</el-button>
         </div>
         <span class="var-toolbar-hint">先点击下方输入框再插入；变量 <code v-pre>${{名}}</code> / 标签 <code v-pre>${{df:标签}}</code> / 工具 <code v-pre>${{dt:md5|text=@a}}</code></span>
@@ -800,7 +808,9 @@ import { catalogApi, buildCatalogTree } from '@/api/modules/catalog'
 import { dataFactoryApi } from '@/api/modules/dataFactory'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ApiCaseUsedVarsPanel from '@/components/ApiCaseUsedVarsPanel.vue'
+import CsvPerfHint from '@/components/CsvPerfHint.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
+import { useCsvInsertGroups } from '@/composables/useCsvInsertGroups.js'
 import DbAssertionsEditor from './DbAssertionsEditor.vue'
 import DbAssertionTestResult from './DbAssertionTestResult.vue'
 import AssertionGroupsEditor from './AssertionGroupsEditor.vue'
@@ -812,7 +822,7 @@ import HeaderEditorPanel from '@/components/HeaderEditorPanel.vue'
 import DataFactoryTagPicker from './DataFactoryTagPicker.vue'
 import WsStepsEditor from './WsStepsEditor.vue'
 import ApiTestFilePicker from '@/components/ApiTestFilePicker.vue'
-import { insertVarRef } from '@/utils/varInsert.js'
+import { insertFullVarRef } from '@/utils/varInsert.js'
 import { buildAssertionsFromJson } from '@/utils/assertionSuggest'
 import {
   assertionNeedsTarget,
@@ -835,6 +845,7 @@ const emit = defineEmits(['update:modelValue', 'success'])
 
 const proStore = ProjectStore()
 const catalogTree = ref([])
+const { csvExtraGroups } = useCsvInsertGroups(computed(() => proStore.projectInfo?.id))
 
 const loadCatalogTree = async () => {
   if (!proStore.projectInfo?.id) return
@@ -855,11 +866,9 @@ const saving = ref(false)
 const tagPickerVisible = ref(false)
 
 async function onDfTagInsert(refStr) {
-  const m = String(refStr).match(/^\$\{\{(.+)\}\}$/)
-  const name = m ? m[1] : refStr
-  const result = await insertVarRef(name)
+  const result = await insertFullVarRef(refStr)
   if (result?.ok) {
-    ElMessage.success(result.mode === 'copy' ? `已复制 ${refStr}，请粘贴到输入框` : `已插入 ${refStr}`)
+    ElMessage.success(result.mode === 'copy' ? `已复制 ${result.display}，请粘贴到输入框` : `已插入 ${result.display}`)
     return
   }
   form.request_params.push({ name: '', value: refStr, type: 'string', required: false, description: '' })

@@ -1,0 +1,20 @@
+# MySQL 高配覆盖（机器内存建议 ≥4G，推荐 ≥8G）
+#
+# 用法（在仓库根目录）：
+#   docker compose -f docker-compose.yml -f docker-compose.high-mem.yml up -d
+# 只重建 MySQL：
+#   docker compose -f docker-compose.yml -f docker-compose.high-mem.yml up -d mysql
+#
+# 低配（约 1～2G）请不要用本文件，直接用默认 docker-compose.yml。
+# 详见 docs/其他文档/DEPLOY_DOCKER.md「坑 6」
+
+services:
+  mysql:
+    # 抬高容器上限（覆盖默认 350m）；需要更大可自行改
+    mem_limit: 2g
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --binlog-expire-logs-seconds=604800
+      --innodb_buffer_pool_size=1G
+      --performance_schema=ON
+      --max_connections=200

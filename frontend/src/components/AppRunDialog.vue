@@ -58,12 +58,21 @@
         <el-input v-model="form.app_udid" placeholder="留空则使用设备登记值" />
       </el-form-item>
       <el-form-item label="应用包名">
-        <el-input v-model="form.app_id" placeholder="默认启动包名（可选）" />
+        <el-select
+          v-model="form.app_id"
+          filterable
+          allow-create
+          clearable
+          default-first-option
+          placeholder="从用例启动步骤选择，或手写包名"
+          style="width: 100%"
+        >
+          <el-option v-for="pkg in packageOptions" :key="pkg" :label="pkg" :value="pkg" />
+        </el-select>
       </el-form-item>
       <el-form-item label="隐式等待">
-        <el-input-number v-model="form.implicit_wait" :min="1" :max="120" />
-      </el-form-item>
-      <el-form-item v-if="showHealToggle" label="AI 自愈">
+        <el-input-number v-model="form.implicit_wait" :min="1" :max="120" style="width: 160px" />
+      </el-form-item>      <el-form-item v-if="showHealToggle" label="AI 自愈">
         <div v-if="healOverrideAllowed" class="heal-segments">
           <div
             :class="['ui-run-segment', 'ui-run-segment--grow', { active: form.ai_heal_enabled === true }]"
@@ -103,9 +112,27 @@
               <el-icon class="option-help"><QuestionFilled /></el-icon>
             </el-tooltip>
           </el-checkbox>
+          <el-checkbox v-model="form.enable_device_apm">
+            采集设备性能
+            <el-tooltip content="默认轻量采集 CPU/内存/FPS/Jank/电量（单核 CPU% 可>100）；可进独立监控页看曲线。写入报告「设备性能」章（需较新执行器；与被测服务器监控无关）。" placement="top">
+              <el-icon class="option-help"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </el-checkbox>
         </div>
       </el-form-item>
-      <IncludeQuarantineCheckbox v-if="showIncludeQuarantine" v-model="form.include_quarantine" />
+      <el-form-item v-if="form.enable_device_apm" label="性能包名">
+        <el-select
+          v-model="form.device_apm_pkg"
+          filterable
+          allow-create
+          clearable
+          default-first-option
+          placeholder="留空则用上方应用包名；可选手写"
+          style="width: 100%"
+        >
+          <el-option v-for="pkg in packageOptions" :key="`apm-${pkg}`" :label="pkg" :value="pkg" />
+        </el-select>
+      </el-form-item>      <IncludeQuarantineCheckbox v-if="showIncludeQuarantine" v-model="form.include_quarantine" />
         </el-form>
       </section>
     </div>
@@ -133,6 +160,8 @@ const props = defineProps({
   defaultRecordVideo: { type: Boolean, default: true },
   parallel: { type: Boolean, default: false },
   showIncludeQuarantine: { type: Boolean, default: false },
+  /** 用例/套件中解析出的包名候选，用于下拉预填 */
+  packageHints: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits(['update:modelValue', 'submit'])
@@ -142,6 +171,18 @@ const proStore = ProjectStore()
 const devices = ref([])
 const deviceRows = ref([])
 const healRunOptions = ref(null)
+
+const packageOptions = computed(() => {
+  const seen = new Set()
+  const out = []
+  for (const raw of props.packageHints || []) {
+    const pkg = String(raw || '').trim()
+    if (!pkg || seen.has(pkg)) continue
+    seen.add(pkg)
+    out.push(pkg)
+  }
+  return out
+})
 
 const form = reactive({
   env_id: '',
@@ -153,6 +194,8 @@ const form = reactive({
   no_reset: true,
   auto_grant_permissions: true,
   record_video: true,
+  enable_device_apm: false,
+  device_apm_pkg: '',
   ai_heal_enabled: true,
   include_quarantine: false,
 })
@@ -212,11 +255,15 @@ watch(
     form.env_id = ''
     form.device_id = ''
     form.app_udid = ''
-    form.app_id = ''
+    const hints = packageOptions.value
+    form.app_id = hints[0] || ''
     form.implicit_wait = 10
     form.no_reset = true
     form.auto_grant_permissions = true
     form.record_video = props.defaultRecordVideo
+    form.enable_device_apm = localStorage.getItem('app_enable_device_apm') === '1'
+    const rememberedPkg = localStorage.getItem('app_device_apm_pkg') || ''
+    form.device_apm_pkg = rememberedPkg || hints[0] || ''
     form.ai_heal_enabled = true
     form.include_quarantine = false
     loadHealRunOptions()
@@ -227,6 +274,10 @@ watch(
 function submit() {
   if (!form.env_id) {
     ElMessage.warning('请选择运行环境')
+    return
+  }
+  if (form.enable_device_apm && !(form.device_apm_pkg || form.app_id || '').trim()) {
+    ElMessage.warning('开启设备性能采集时请填写应用包名或性能包名')
     return
   }
   const payload = { ...form }
@@ -249,6 +300,12 @@ function submit() {
   }
   if (!props.showIncludeQuarantine) {
     delete payload.include_quarantine
+  }
+  try {
+    localStorage.setItem('app_enable_device_apm', form.enable_device_apm ? '1' : '0')
+    localStorage.setItem('app_device_apm_pkg', form.device_apm_pkg || '')
+  } catch {
+    /* ignore */
   }
   emit('submit', { ...payload, trigger_source: 'manual' })
 }

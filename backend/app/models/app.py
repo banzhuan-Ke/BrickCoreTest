@@ -149,6 +149,8 @@ class AppPlanExecution(models.Model):
     quarantine_skip = fields.IntField(default=0, description="已隔离未跑数")
     pass_rate = fields.FloatField(default=0)
     execution_log = fields.JSONField(default=list, null=True)
+    device_apm_summary = fields.JSONField(null=True, description="设备性能汇总（A-5）")
+    device_apm_series = fields.JSONField(null=True, description="设备性能降采样序列（A-5）")
     username = fields.CharField(max_length=50, description="创建人")
     is_del = fields.BooleanField(default=False, description="是否删除")
 
@@ -180,6 +182,8 @@ class AppSuiteExecution(models.Model):
     pass_rate = fields.FloatField(default=0)
     cronjob_id = fields.CharField(max_length=100, null=True, default=None, description="定时任务ID")
     env = fields.JSONField(default=dict, null=True)
+    device_apm_summary = fields.JSONField(null=True, description="设备性能汇总（A-5）")
+    device_apm_series = fields.JSONField(null=True, description="设备性能降采样序列（A-5）")
     username = fields.CharField(max_length=50, description="创建人")
     is_del = fields.BooleanField(default=False, description="是否删除")
 
@@ -199,6 +203,8 @@ class AppCaseExecution(models.Model):
     result_data = fields.JSONField(default=dict, description="执行详情")
     start_time = fields.DatetimeField(auto_now_add=True)
     env = fields.JSONField(default=dict)
+    device_apm_summary = fields.JSONField(null=True, description="设备性能汇总（A-5）")
+    device_apm_series = fields.JSONField(null=True, description="设备性能降采样序列（A-5）")
     username = fields.CharField(max_length=50, description="创建人")
     is_del = fields.BooleanField(default=False, description="是否删除")
 
@@ -267,3 +273,28 @@ class AppCronJob(models.Model):
     class Meta:
         table = "app_cron_job"
         table_description = "App定时任务"
+
+
+class AppDeviceApmSession(models.Model):
+    """独立设备性能监控会话（停后落库，便于回看）。"""
+
+    id = fields.CharField(pk=True, max_length=64, description="会话 ID")
+    project = fields.ForeignKeyField("models.Project", related_name="app_device_apm_sessions", description="所属项目")
+    device_id = fields.CharField(max_length=100, description="执行设备 ID")
+    app_udid = fields.CharField(max_length=128, description="设备 UDID")
+    pkg_name = fields.CharField(max_length=255, description="监控包名")
+    status = fields.CharField(max_length=32, default="finished", description="starting|running|stopping|finished|failed")
+    interval_ms = fields.IntField(default=1000)
+    metrics = fields.JSONField(default=list)
+    thresholds = fields.JSONField(null=True)
+    summary = fields.JSONField(null=True)
+    series = fields.JSONField(null=True)
+    error = fields.CharField(max_length=500, null=True)
+    username = fields.CharField(max_length=50, description="创建人")
+    is_del = fields.BooleanField(default=False)
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "app_device_apm_session"
+        table_description = "App独立设备性能监控会话"

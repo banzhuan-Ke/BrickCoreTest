@@ -296,9 +296,8 @@
               <ResponseBodyViewer
                 :body="detailData.response_detail.body"
                 :highlight-text="detailResponseHighlight"
-                max-height="72vh"
                 fill
-                min-height="360px"
+                min-height="200px"
               />
             </el-tab-pane>
             <el-tab-pane

@@ -28,20 +28,37 @@
         </div>
       </div>
 
-      <div class="catalog-page">
-        <div class="catalog-sidebar">
-          <CatalogTree
-            :project-id="proStore.projectInfo.id"
-            v-model="selectedCatalogId"
-            :show-manage="true"
-            :include-all-node="true"
-            all-node-label="全部目录"
-            :count-map="catalogCountMap"
-            :show-search="true"
-            fill-height
-            @change="handleCatalogChange"
-            @changed="loadCatalogTable"
-          />
+      <div class="catalog-page" :class="{ 'is-sidebar-collapsed': isCatalogCollapsed }">
+        <div class="catalog-sidebar" :class="{ 'is-collapsed': isCatalogCollapsed }">
+          <div v-if="isCatalogCollapsed" class="catalog-rail" @click="expandCatalogSidebar">
+            <el-tooltip content="展开测试目录" placement="right">
+              <button type="button" class="rail-btn" aria-label="展开测试目录">
+                <el-icon :size="18"><FolderOpened /></el-icon>
+              </button>
+            </el-tooltip>
+            <span class="rail-label">目录</span>
+          </div>
+          <template v-else>
+            <div class="sidebar-toolbar">
+              <el-tooltip content="收起测试目录" placement="top">
+                <button type="button" class="collapse-btn" aria-label="收起测试目录" @click="collapseCatalogSidebar">
+                  <el-icon :size="16"><DArrowLeft /></el-icon>
+                </button>
+              </el-tooltip>
+            </div>
+            <CatalogTree
+              :project-id="proStore.projectInfo.id"
+              v-model="selectedCatalogId"
+              :show-manage="true"
+              :include-all-node="true"
+              all-node-label="全部目录"
+              :count-map="catalogCountMap"
+              :show-search="true"
+              fill-height
+              @change="handleCatalogChange"
+              @changed="loadCatalogTable"
+            />
+          </template>
         </div>
 
         <el-card shadow="never" class="catalog-table-card">
@@ -304,7 +321,7 @@
 
 <script setup>
 import { ref, computed, watch, defineComponent, h } from 'vue'
-import { Folder, Files, Monitor, Iphone, Grid } from '@element-plus/icons-vue'
+import { Folder, Files, Monitor, Iphone, Grid, FolderOpened, DArrowLeft } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import http from '@/api'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
@@ -312,6 +329,13 @@ import dateTools from '@/tools/dateTools'
 import PageCard from '@/components/PageCard.vue'
 import CatalogTree from '@/components/CatalogTree.vue'
 import { collectCatalogSubtreeIds } from '@/api/modules/catalog'
+import { useCatalogSidebarCollapse } from '@/composables/useCatalogSidebarCollapse'
+
+const {
+  isCollapsed: isCatalogCollapsed,
+  expand: expandCatalogSidebar,
+  collapse: collapseCatalogSidebar,
+} = useCatalogSidebarCollapse()
 
 const STORAGE_KEY_COLUMNS = 'brickcore.catalog-module.columns'
 const STORAGE_KEY_DENSITY = 'brickcore.catalog-module.density'
@@ -840,6 +864,66 @@ const handleEditAsset = (asset) => {
   min-width: 240px;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
+  transition: width 0.18s ease, min-width 0.18s ease;
+
+  &.is-collapsed {
+    width: 44px;
+    min-width: 44px;
+  }
+}
+
+.sidebar-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.collapse-btn,
+.rail-btn {
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-bg-color);
+  color: var(--el-text-color-secondary);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+
+  &:hover {
+    color: var(--el-color-primary);
+    border-color: var(--el-color-primary-light-5);
+    background: var(--el-color-primary-light-9);
+  }
+}
+
+.catalog-rail {
+  height: 100%;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-blank);
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--el-color-primary-light-5);
+  }
+}
+
+.rail-label {
+  writing-mode: vertical-rl;
+  letter-spacing: 0.2em;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  user-select: none;
 }
 
 .catalog-table-card {

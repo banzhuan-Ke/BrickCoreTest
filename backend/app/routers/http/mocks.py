@@ -12,6 +12,8 @@ from app.core.platform.permissions import API_MOCK_VIEW, API_MOCK_EDIT, AI_TEST_
 from app.core.llm.mock_ai_service import generate_mock_response_body
 
 router = APIRouter()
+# 短别名：挂到 /mock/{匹配路径}，与 /api-module/mock-call 双活
+call_alias_router = APIRouter()
 
 MOCK_VIEW = API_MOCK_VIEW
 MOCK_EDIT = API_MOCK_EDIT
@@ -258,30 +260,8 @@ def select_mock_candidate(candidates: list, *, method: str, headers, query_param
     return None
 
 
-@router.api_route(
-    "/mock-call/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
-    summary="Mock 接口调用",
-    include_in_schema=False,
-)
-async def mock_call(request: Request, path: str):
-    """
-    根据已配置的 Mock 规则返回预设响应。
-
-    鉴权：调用路径由 project_access 白名单放行，不要求平台 JWT；
-    Mock CRUD（/api-module/mock）仍需登录。
-
-    匹配逻辑：
-    1. 按 request.method + path 精确匹配（可多条）
-    2. 在候选中按 match_rules（header / query / body）筛选；规则更具体的优先
-    3. 如有 response_delay 则延迟响应
-    4. 更新 call_count + last_call_time
-    5. 返回配置的 response_status + response_headers + response_body
-
-    调用示例：
-        GET  /api-module/mock-call/api/users
-        POST /api-module/mock-call/api/login
-    """
+async def _handle_mock_call(request: Request, path: str) -> Response:
+    """按方法 + 匹配路径（及 match_rules）返回已启用 Mock 响应。"""
     request_path = _normalize_mock_path(path)
     method = request.method.upper()
 
@@ -327,16 +307,13 @@ async def mock_call(request: Request, path: str):
     if not matched_mock:
         raise HTTPException(status_code=404, detail="Mock 接口未找到或未启用（路径/方法/匹配规则均未命中）")
 
-    # ---------- 延迟响应 ----------
     if matched_mock.response_delay and matched_mock.response_delay > 0:
         await asyncio.sleep(matched_mock.response_delay / 1000)
 
-    # ---------- 更新统计 ----------
     matched_mock.call_count = matched_mock.call_count + 1
     matched_mock.last_call_time = datetime.now()
     await matched_mock.save(update_fields=["call_count", "last_call_time"])
 
-    # ---------- 构造响应 ----------
     response_body = matched_mock.response_body
     if isinstance(response_body, (dict, list)):
         content = json.dumps(response_body, ensure_ascii=False)
@@ -345,7 +322,6 @@ async def mock_call(request: Request, path: str):
         content = str(response_body)
         default_headers = {}
 
-    # 合并用户配置的响应头
     mock_headers = matched_mock.response_headers or {}
     response_headers = {**default_headers, **mock_headers}
 
@@ -354,3 +330,35 @@ async def mock_call(request: Request, path: str):
         headers=response_headers,
         content=content,
     )
+
+
+@router.api_route(
+    "/mock-call/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+    summary="Mock 接口调用",
+    include_in_schema=False,
+)
+async def mock_call(request: Request, path: str):
+    """
+    根据已配置的 Mock 规则返回预设响应。
+
+    鉴权：调用路径由 project_access 白名单放行，不要求平台 JWT；
+    Mock CRUD（/api-module/mock）仍需登录。
+
+    调用示例（双活）：
+        GET  /mock/api/users
+        GET  /api-module/mock-call/api/users
+        POST /mock/api/login
+    """
+    return await _handle_mock_call(request, path)
+
+
+@call_alias_router.api_route(
+    "/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+    summary="Mock 接口调用（短别名）",
+    include_in_schema=False,
+)
+async def mock_call_short_alias(request: Request, path: str):
+    """短别名入口：/mock/{匹配路径}，语义与 /api-module/mock-call 相同。"""
+    return await _handle_mock_call(request, path)

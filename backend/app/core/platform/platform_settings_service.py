@@ -204,6 +204,22 @@ async def delete_app_case_execution(record, *, permanent: bool = False) -> str:
     return "soft_deleted"
 
 
+async def delete_app_device_apm_session(record, *, permanent: bool = False) -> str:
+    """删除独立设备性能监控记录，遵循平台 ui_case_record_delete_mode 配置。"""
+    if permanent:
+        await record.delete()
+        return "hard_deleted"
+
+    mode = await get_ui_case_record_delete_mode()
+    if mode == DELETE_MODE_PHYSICAL:
+        await record.delete()
+        return "hard_deleted"
+
+    record.is_del = True
+    await record.save()
+    return "soft_deleted"
+
+
 async def restore_app_case_execution(record) -> None:
     record.is_del = False
     await record.save()

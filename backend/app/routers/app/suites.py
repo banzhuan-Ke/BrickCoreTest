@@ -8,6 +8,7 @@ from app.core.platform.permissions import APP_SUITE_EDIT, APP_SUITE_VIEW
 from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppCase, AppSuite, AppSuiteExecution, AppSuiteStep
 from app.models.sys import Project
+from app.routers.perf.report_utils import apply_display_nicknames, resolve_user_nickname
 from app.schemas.app import (
     AddAppSuiteForm,
     AddAppSuiteStepForm,
@@ -67,6 +68,7 @@ async def list_suites(
             "create_time": suite.create_time,
             "update_time": suite.update_time,
         })
+    await apply_display_nicknames(data)
     return {"data": data, "total": total}
 
 
@@ -76,7 +78,9 @@ async def get_suite(suite_id: int, user_info: dict = Depends(require_permissions
     if not suite:
         raise HTTPException(status_code=422, detail="套件不存在")
     await assert_user_project_viewer(user_info, suite.project_id)
-    return suite
+    data = AppSuiteSchemas.model_validate(suite).model_dump(mode="json")
+    data["username"] = await resolve_user_nickname(suite.username)
+    return data
 
 
 @router.put("/{suite_id}", response_model=AppSuiteSchemas, dependencies=[Depends(require_permissions(APP_SUITE_EDIT))])

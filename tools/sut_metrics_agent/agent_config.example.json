@@ -1,0 +1,9 @@
+{
+  "platform": "http://127.0.0.1:8000",
+  "token": "<粘贴控制台创建被测服务器时返回的一次性 Token>",
+  "allow_insecure_http": false,
+  "interval_sec": 5,
+  "upload_every_sec": 15,
+  "buffer_hours": 48,
+  "data_dir": "./data"
+}

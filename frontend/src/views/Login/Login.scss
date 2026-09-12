@@ -2,6 +2,7 @@
 
 .mian {
   height: 100vh;
+  height: calc(100vh / var(--ui-zoom, 1));
   width: 100vw;
   display: flex;
   align-items: center;
