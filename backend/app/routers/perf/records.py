@@ -22,6 +22,7 @@ from app.routers.perf.report_utils import (
     render_perf_html_status_codes,
     render_perf_html_stream_sections,
     render_perf_html_request_traces,
+    render_sut_metrics_html_section,
     summarize_stepping_stages,
 )
 from app.modules.stream_phase import detail_to_excel_row, is_stream_burst_mode, normalize_perf_mode, migrate_legacy_detail
@@ -244,12 +245,34 @@ async def send_perf_report(
 
 
 @router.get("/{record_id}/export", summary="导出性能测试报告(HTML)")
-async def export_perf_report(record: PerfRecord = Depends(get_record_for_viewer)):
+async def export_perf_report(
+    record: PerfRecord = Depends(get_record_for_viewer),
+    report_style: Optional[str] = Query(
+        None,
+        description="报告版式：brief=精简 / standard=标准 / technical=详细；默认 standard",
+    ),
+):
     """导出性能测试报告为 HTML"""
     from app.core.shared.download_headers import content_disposition_attachment, sanitize_download_basename
+    from app.routers.perf.report_utils import resolve_env_label, resolve_user_nickname
+    from app.modules.perf.compare_report import normalize_report_style_or_raise
 
     scene = await record.scene
-    html_content = _generate_perf_html_report(record, scene)
+    env_label = await resolve_env_label(record.config_snapshot or {})
+    executor = await resolve_user_nickname(record.run_by) or (record.run_by or "—")
+    try:
+        from app.modules.perf.sut_slice import load_sut_resource_series
+
+        record._sut_series_cache = await load_sut_resource_series(record.id)  # type: ignore[attr-defined]
+    except Exception:
+        record._sut_series_cache = []  # type: ignore[attr-defined]
+    html_content = _generate_perf_html_report(
+        record,
+        scene,
+        env_label=env_label,
+        executor_display=executor,
+        report_style=normalize_report_style_or_raise(report_style),
+    )
     scene_name = sanitize_download_basename(
         getattr(scene, "name", None) or "性能测试报告",
         fallback="性能测试报告",
@@ -353,31 +376,54 @@ def _generate_perf_html_report(
     *,
     editable: bool = True,
     embed_echarts: bool = True,
+    env_label: Optional[str] = None,
+    executor_display: Optional[str] = None,
+    report_style: Optional[str] = None,
 ) -> str:
     """生成性能测试 HTML 报告（汇报型模块结构）。
 
     embed_echarts=False：图表库走 CDN，适合邮件附件（避免内嵌约 1MB JS）。
     """
     from app.modules.perf.perf_html_theme import (
+        PLATFORM_TOOL_NAME,
         case_note_map,
+        env_label_from_config,
         err_tag,
+        exec_summary_heading,
+        executor_display_from_config,
         h,
         render_conclusion_box,
+        render_exec_summary_section,
         render_overview_para,
         render_percentile_table,
+        render_throughput_error_table,
+        render_report_hero,
         render_rt_bars,
         report_css,
         report_edit_chrome,
         render_metric_glossary,
         render_target_evaluation_section,
+        rt_visualization_heading_html,
+        run_description_from_config,
+        should_render_case_detail_for_style,
+        report_style_flags,
+        report_style_label,
         target_card_note,
         ai_is_done,
     )
     from app.modules.perf.perf_target_eval import evaluate_perf_targets
 
+    flags = report_style_flags(report_style)
+
     scene_name = scene.name if scene else "未知场景"
     config = record.config_snapshot or {}
-    cfg_summary = build_config_summary(config, record.distribution_info or {})
+    resolved_env = (env_label or "").strip() or env_label_from_config(config)
+    resolved_executor = (executor_display or "").strip() or executor_display_from_config(
+        config, record.run_by
+    )
+    cfg_summary = build_config_summary(
+        config, record.distribution_info or {}, getattr(record, "scene_items_snapshot", None)
+    )
     mode_label = cfg_summary.get("mode_label", config.get("mode", "fixed"))
     dist_label = cfg_summary.get("distribution_mode_label", "随机权重")
     concurrent_label = cfg_summary.get("concurrent_users_label") or "并发用户数"
@@ -407,11 +453,11 @@ def _generate_perf_html_report(
             "</tr>"
         )
     stages_html = ""
-    if stage_rows:
+    if flags.get("include_stepping_stage") and stage_rows:
         stages_html = f"""
     <h3 style="margin-top:18px">梯度阶段明细</h3>
     <p style="font-size:12px;color:#64748b;margin-bottom:8px">
-      按配置阶段列出计划并发/时长。平均 QPS 含整段墙钟；平均 RT/P95 仅统计有完成请求的秒，避免空闲秒把耗时稀释。
+      按配置阶段列出计划并发/时长。平均 QPS 含整段从开始到结束的实际秒数；平均 RT/P95 仅统计有完成请求的秒，避免空闲秒把耗时稀释。
     </p>
     <div class="stage-summary-block" style="margin-bottom:12px">
       <div class="stage-summary-label">分阶段摘要</div>
@@ -509,25 +555,46 @@ def _generate_perf_html_report(
     )
     case_target_th = "<th>目标判定</th>" if show_case_target_col else ""
 
-    chart_sections, chart_scripts = render_perf_html_chart_parts(
-        record,
-        ai_trend_note=str((ai or {}).get("trend_note") or "").strip(),
-        ai_dist_note=str((ai or {}).get("distribution_note") or "").strip(),
-        embed_echarts=embed_echarts,
-    )
-    stream_html = render_perf_html_stream_sections(record)
-    status_code_html = render_perf_html_status_codes(record)
-    error_html = render_perf_html_errors(record)
-    request_traces_html = render_perf_html_request_traces(record)
+    case_section_html = ""
+    if should_render_case_detail_for_style(list(case_aggs.values()), notes_by_case, report_style):
+        case_section_html = f"""
+  <div class="section">
+    <h2>五、接口明细</h2>
+    <table>
+      <thead>
+        <tr><th>接口</th><th>请求数</th><th>失败</th><th>失败率</th>
+          <th>Avg <span class="unit">(ms)</span></th>
+          <th>P50 <span class="unit">(ms)</span></th>
+          <th>P90 <span class="unit">(ms)</span></th>
+          <th>P95 <span class="unit">(ms)</span></th>
+          <th>Max <span class="unit">(ms)</span></th>{case_target_th}</tr>
+      </thead>
+      <tbody>{case_body}</tbody>
+    </table>
+  </div>"""
 
-    # 错误 / 状态码 / 趋势 / 结论章节号顺延，避免双「五、」
+    chart_sections, chart_scripts = ("", "")
+    if flags.get("include_charts"):
+        chart_sections, chart_scripts = render_perf_html_chart_parts(
+            record,
+            ai_trend_note=str((ai or {}).get("trend_note") or "").strip(),
+            ai_dist_note=str((ai or {}).get("distribution_note") or "").strip(),
+            embed_echarts=embed_echarts,
+        )
+    sut_html = render_sut_metrics_html_section(record, heading="被测资源")
+    stream_html = render_perf_html_stream_sections(record) if flags.get("include_stream_appendix") else ""
+    status_code_html = render_perf_html_status_codes(record) if flags.get("include_error_detail") else ""
+    error_html = render_perf_html_errors(record) if flags.get("include_error_detail") else ""
+    request_traces_html = render_perf_html_request_traces(record) if flags.get("include_stream_appendix") else ""
+
+    # 错误 / 状态码 / 趋势章节号：一=结论，二=概览，三=核心，四=分位，五=接口，六起顺延
     _cn = "零一二三四五六七八九十"
 
     def _sec(n: int, title: str) -> str:
         prefix = _cn[n] if 0 <= n < len(_cn) else str(n)
         return f"{prefix}、{title}"
 
-    sec_n = 5
+    sec_n = 6
     if status_code_html:
         status_code_html = status_code_html.replace(
             "<h2>HTTP 状态码分布</h2>", f"<h2>{_sec(sec_n, 'HTTP 状态码分布')}</h2>", 1
@@ -560,20 +627,21 @@ def _generate_perf_html_report(
     if not err_cls:
         err_cls = "danger" if (record.error_rate or 0) > 5 else "success"
 
-    target_section_html = render_target_evaluation_section(
-        target_evaluation, heading="二（附）、性能目标明细"
-    )
-
-    if ai_is_done(ai) and ai.get("summary"):
-        conclusion = render_conclusion_box(ai)
-    elif ai.get("status") in ("running", "pending"):
-        conclusion = '<div class="conclusion-box warn"><p>AI 分析进行中，请稍后重新导出或在报告页刷新查看。</p></div>'
-    else:
-        conclusion = (
-            f'<div class="conclusion-box"><p><strong>规则摘要（未跑 AI）：</strong>'
-            f'QPS {round(record.qps or 0, 2)}，P95 {round(record.p95_response_time or 0, 2)} ms，'
-            f'错误率 {round(record.error_rate or 0, 2)}%，总请求 {record.total_requests or 0}。</p></div>'
+    target_section_html = ""
+    if flags.get("include_target_detail"):
+        target_section_html = render_target_evaluation_section(
+            target_evaluation, heading="三（附）、性能目标明细"
         )
+
+    conclusion_section = render_exec_summary_section(
+        ai,
+        fallback_html=(
+            f"<p><strong>规则摘要（未跑 AI）：</strong>"
+            f"QPS {round(record.qps or 0, 2)}，P95 {round(record.p95_response_time or 0, 2)} ms，"
+            f"错误率 {round(record.error_rate or 0, 2)}%，总请求 {record.total_requests or 0}。</p>"
+        ),
+        heading=exec_summary_heading(ai),
+    )
 
     pct_table = render_percentile_table(
         min_rt=record.min_response_time,
@@ -583,15 +651,28 @@ def _generate_perf_html_report(
         p95_rt=record.p95_response_time,
         p99_rt=record.p99_response_time,
         max_rt=record.max_response_time,
+        include_lead=bool(flags.get("include_percentile_lead", True)),
     )
-    bars = render_rt_bars(
-        min_rt=record.min_response_time,
-        median_rt=record.median_response_time,
+    from app.routers.perf.report_utils import _success_qps
+
+    throughput_table = render_throughput_error_table(
+        qps=record.qps,
+        success_qps=_success_qps(record),
         avg_rt=record.avg_response_time,
-        p90_rt=record.p90_response_time,
         p95_rt=record.p95_response_time,
-        max_rt=record.max_response_time,
+        error_rate=record.error_rate,
+        total_requests=record.total_requests,
     )
+    bars = ""
+    if flags.get("include_rt_bars"):
+        bars = render_rt_bars(
+            min_rt=record.min_response_time,
+            median_rt=record.median_response_time,
+            avg_rt=record.avg_response_time,
+            p90_rt=record.p90_response_time,
+            p95_rt=record.p95_response_time,
+            max_rt=record.max_response_time,
+        )
 
     appendix_parts = []
     if stream_html:
@@ -606,14 +687,16 @@ def _generate_perf_html_report(
     {''.join(appendix_parts)}
   </details>"""
 
-    err_section = status_code_html + error_html
-    if not err_section.strip():
-        err_section = f"""
+    err_section = ""
+    if flags.get("include_error_detail"):
+        err_section = status_code_html + error_html
+        if not err_section.strip():
+            err_section = f"""
   <div class="section">
     <h2>{_sec(sec_n, '错误与状态码')}</h2>
     <p style="color:#666;font-size:13px">本次无错误分类 / 状态码分布数据。</p>
   </div>"""
-        sec_n += 1
+            sec_n += 1
 
     if chart_sections:
         chart_sections = chart_sections.replace(
@@ -626,10 +709,41 @@ def _generate_perf_html_report(
                 "<h2>响应时间分布</h2>", f"<h2>{_sec(sec_n, '响应时间分布')}</h2>", 1
             )
             sec_n += 1
-    conclusion_h2 = _sec(sec_n, "结论与建议")
 
     edit_chrome = report_edit_chrome() if editable else ""
     root_ce = ' contenteditable="true"' if editable else ""
+
+    eval_time = started if started != "-" else generate_time
+    if started != "-" and started[:10]:
+        eval_time = started[:10]
+    delay_label = cfg_summary.get("request_delay_label") or "无"
+    from app.routers.perf.report_utils import delay_row_label as _delay_row_label
+
+    delay_row = (
+        f"<tr><td>{h(_delay_row_label(delay_label))}</td><td>{h(delay_label)}</td></tr>"
+        if delay_label and delay_label != "无"
+        else ""
+    )
+    hero_html = render_report_hero(
+        title=f"性能测试报告 — {scene_name}",
+        description=run_description_from_config(config),
+        eval_time=eval_time,
+        env_label=resolved_env,
+        tool_name=PLATFORM_TOOL_NAME,
+        executor=resolved_executor,
+        extra_items=[
+            ("状态", status_text),
+            ("模式", mode_label),
+            ("实际时长", f"{round(record.duration or 0, 2)}s"),
+            ("版式", report_style_label(report_style)),
+        ],
+    )
+
+    rt_viz_block = ""
+    if flags.get("include_rt_bars"):
+        bars_html = bars or '<p style="color:#999;font-size:13px">暂无分位数据</p>'
+        rt_viz_block = f"<h3>4.2 {rt_visualization_heading_html('可视化')}</h3>{bars_html}"
+    glossary_html = render_metric_glossary() if flags.get("include_appendix") else ""
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -641,31 +755,19 @@ def _generate_perf_html_report(
 <body>
 {edit_chrome}
 <div class="container" id="reportRoot"{root_ce}>
-  <div class="header">
-    <h1>性能测试报告 — {h(scene_name)}</h1>
-    <div class="meta">
-      <span class="status-badge {status_class}">{h(status_text)}</span>
-      <span>模式：{h(mode_label)}</span>
-      <span>分配：{h(dist_label)}</span>
-      <span>执行人：{h(record.run_by or '-')}</span>
-      <span>生成：{h(generate_time)}</span>
-    </div>
-    <div class="meta" style="margin-top:8px">
-      <span>开始：{h(started)}</span>
-      <span>结束：{h(ended)}</span>
-      <span>时长：{h(round(record.duration or 0, 2))}s</span>
-      <span>目标：{h(config.get('target_host') or '默认')}</span>
-    </div>
-  </div>
+  {hero_html}
+
+  {conclusion_section}
 
   <div class="section">
-    <h2>一、测试概览</h2>
+    <h2>二、测试概览</h2>
     {render_overview_para(ai)}
     <table class="config-table">
       <tr><td>压测模式</td><td>{h(mode_label)}</td></tr>
       <tr><td>{h(concurrent_label)}</td><td>{h(concurrent_display)}</td></tr>
       <tr><td>Ramp-up</td><td>{h(config.get('ramp_up_seconds', 0))}s</td></tr>
       <tr><td>持续时间/循环</td><td>{h(cfg_summary.get('duration_label', '-'))}</td></tr>
+      {delay_row}
       <tr><td>分配模式</td><td>{h(dist_label)}</td></tr>
       <tr><td>预热</td><td>{h(cfg_summary.get('warmup_seconds') if cfg_summary.get('warmup_seconds') is not None else (config.get('warmup_seconds') or 0))}s</td></tr>
       <tr><td>总请求 / 成功 / 失败</td><td>{h(record.total_requests)} / {h(record.success_count)} / {h(record.fail_count)}</td></tr>
@@ -675,7 +777,7 @@ def _generate_perf_html_report(
   </div>
 
   <div class="section">
-    <h2>二、核心指标</h2>
+    <h2>三、核心指标</h2>
     <div class="summary-grid">
       <div class="summary-card">
         <div class="label">QPS</div>
@@ -708,40 +810,24 @@ def _generate_perf_html_report(
   {target_section_html}
 
   <div class="section">
-    <h2>三、响应时间分布</h2>
-    <h3>3.1 百分位</h3>
+    <h2>四、响应时间分布</h2>
+    <h3>4.1 百分位</h3>
     {pct_table}
-    <h3>3.2 可视化</h3>
-    {bars or '<p style="color:#999;font-size:13px">暂无分位数据</p>'}
+    {throughput_table}
+    {rt_viz_block}
   </div>
 
-  <div class="section">
-    <h2>四、接口明细</h2>
-    <table>
-      <thead>
-        <tr><th>接口</th><th>请求数</th><th>失败</th><th>失败率</th>
-          <th>Avg <span class="unit">(ms)</span></th>
-          <th>P50 <span class="unit">(ms)</span></th>
-          <th>P90 <span class="unit">(ms)</span></th>
-          <th>P95 <span class="unit">(ms)</span></th>
-          <th>Max <span class="unit">(ms)</span></th>{case_target_th}</tr>
-      </thead>
-      <tbody>{case_body}</tbody>
-    </table>
-  </div>
+  {case_section_html}
 
   {err_section}
 
-  {chart_sections}
+  {sut_html}
 
-  <div class="section">
-    <h2>{conclusion_h2}</h2>
-    {conclusion}
-  </div>
+  {chart_sections}
 
   {appendix}
 
-  {render_metric_glossary()}
+  {glossary_html}
 
   <div class="footer">BrickCore 性能测试报告 — {h(generate_time)}</div>
 </div>

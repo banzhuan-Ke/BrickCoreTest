@@ -1,7 +1,7 @@
 <template>
   <el-container>
     <!-- 左侧侧边栏 -->
-    <el-aside :style="{width:uStore.isCollapse? '65px':'200px',height:'100vh'}">
+    <el-aside :style="{ width: uStore.isCollapse ? '65px' : '200px', height: '100%' }">
       <Menu></Menu>
     </el-aside>
     <el-container>

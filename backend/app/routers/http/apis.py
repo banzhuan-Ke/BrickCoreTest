@@ -874,8 +874,9 @@ async def parse_curl_endpoint(item: CurlParseRequest):
             "description": parsed.get("description", f"从 curl 命令导入: {parsed.get('method', 'GET')} {parsed.get('path', '')}"),
             "headers": headers_list,
             "params": parsed.get("params", []),
-            "body": parsed.get("body") if parsed.get("body") else None,
+            "body": parsed.get("body") if parsed.get("body") is not None else None,
             "body_type": parsed.get("body_type", "none"),
+            "body_fields": parsed.get("body_fields") or [],
             "project_id": item.project_id,
             "catalog_id": item.catalog_id
         }
@@ -924,6 +925,9 @@ async def import_curl(
         
         # 处理 body，确保不为 null
         body = item.body if item.body is not None else {}
+        body_fields = item.body_fields or []
+        if item.body_type == "form-data":
+            body = {}
         
         # 创建接口
         api = await ApiDefinition.create(
@@ -938,6 +942,7 @@ async def import_curl(
             params=item.params if item.params else [],
             body=body,
             body_type=item.body_type,
+            body_fields=body_fields,
             source="curl",
             create_by=username,
             update_by=username,
@@ -1013,6 +1018,17 @@ async def debug_api(item: ApiDebugRequest):
         )
         if auth_err:
             raise HTTPException(status_code=400, detail=f"授权刷新失败: {auth_err}")
+        if item.csv_dataset_id is not None or item.csv_scene_id is not None:
+            if not project_id:
+                raise HTTPException(status_code=400, detail="注入场景 CSV 需要 project_id 或 env_id")
+            from app.modules.perf.csv_case_hint import load_csv_row_vars
+            csv_vars = await load_csv_row_vars(
+                project_id=int(project_id),
+                scene_id=int(item.csv_scene_id) if item.csv_scene_id is not None else None,
+                dataset_id=int(item.csv_dataset_id) if item.csv_dataset_id is not None else None,
+                row_index=int(item.csv_row_index or 0),
+            )
+            variables.update(csv_vars)
 
         var_resolver = VariableResolver(variables)
 

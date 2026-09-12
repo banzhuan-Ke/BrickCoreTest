@@ -7,6 +7,7 @@ from app.routers.app.elements import router as app_element_router
 from app.routers.app.inspector import router as app_inspector_router
 from app.routers.app.fragments import router as app_fragment_router
 from app.routers.app.cron import router as app_cron_router
+from app.routers.app.device_apm_sessions import router as app_device_apm_router
 
 __all__ = [
     "app_case_router",
@@ -18,4 +19,5 @@ __all__ = [
     "app_inspector_router",
     "app_fragment_router",
     "app_cron_router",
+    "app_device_apm_router",
 ]

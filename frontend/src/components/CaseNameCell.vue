@@ -1,6 +1,13 @@
 <template>
   <span class="case-name-cell">
-    <span class="case-name-text">{{ name }}</span>
+    <el-tooltip
+      :content="name"
+      placement="top"
+      :disabled="!name"
+      :show-after="400"
+    >
+      <span class="case-name-text">{{ name }}</span>
+    </el-tooltip>
     <CaseStabilityBadges :quarantine="showQuarantine" :unstable="unstable" />
   </span>
 </template>
@@ -35,10 +42,16 @@ const showQuarantine = computed(() =>
   vertical-align: middle;
   line-height: 1.4;
 }
+.case-name-cell :deep(.el-tooltip__trigger) {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
 .case-name-text {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+  max-width: 100%;
 }
 </style>

@@ -11,6 +11,7 @@ from app.core.platform.permissions import APP_CASE_EDIT, APP_ELEMENT_EDIT, APP_E
 from app.modules.ui.ui_project_guard import assert_user_project_member, assert_user_project_viewer
 from app.models.app import AppElement
 from app.models.sys import Project
+from app.routers.perf.report_utils import apply_display_nicknames, resolve_user_nickname
 from app.schemas.app import AddAppElementForm, AppElementSchemas, AppTemplatePresignForm, UpdateAppElementForm
 
 router = APIRouter(prefix="/elements", dependencies=[Depends(is_authenticated)], tags=["App元素库"])
@@ -161,7 +162,9 @@ async def list_elements(
         query = query.filter(element_type=element_type)
     total = await query.count()
     rows = await query.offset((page - 1) * size).limit(size)
-    return {"data": [AppElementSchemas.model_validate(r) for r in rows], "total": total}
+    data = [AppElementSchemas.model_validate(r).model_dump(mode="json") for r in rows]
+    await apply_display_nicknames(data)
+    return {"data": data, "total": total}
 
 
 @router.get("/options", summary="元素名下拉（供步骤 locator_ref 选择）")
@@ -192,7 +195,9 @@ async def get_element(element_id: int, user_info: dict = Depends(require_permiss
     if not row:
         raise HTTPException(status_code=422, detail="元素不存在")
     await assert_user_project_viewer(user_info, row.project_id)
-    return row
+    data = AppElementSchemas.model_validate(row).model_dump(mode="json")
+    data["username"] = await resolve_user_nickname(row.username)
+    return data
 
 
 @router.put("/{element_id}", response_model=AppElementSchemas,

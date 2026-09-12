@@ -466,6 +466,9 @@ SKIP_PATHS = {
     "/runner/active-recording",
     "/login",  # 外部扫描/误配路径，非平台真实登录接口
     "/perf/workers/heartbeat",  # 压测 Worker 每 30s 心跳，无审计价值
+    "/perf/sut-agent/activate",
+    "/perf/sut-agent/heartbeat",
+    "/perf/sut-agent/metrics",  # 被测监控采集器高频上报，无审计价值
     # Runner 高频上报：无审计价值且 params 体积巨大（尤其 image_base64）
     "/runner/device-screen",
     "/runner/device-log",

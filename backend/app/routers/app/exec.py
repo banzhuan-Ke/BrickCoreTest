@@ -59,7 +59,23 @@ class AppExecutionService:
         if record_video is None:
             record_video = True
         ai_heal_enabled = await resolve_locator_heal_for_execute(project_id, item.ai_heal_enabled)
-        return {
+        from app.modules.app.device_apm import normalize_device_apm_option, validate_device_apm_for_dispatch
+
+        device_apm = normalize_device_apm_option(
+            enabled=bool(getattr(item, "enable_device_apm", False)),
+            pkg_name=getattr(item, "device_apm_pkg", "") or "",
+            interval_ms=getattr(item, "device_apm_interval_ms", 1000),
+            metrics=getattr(item, "device_apm_metrics", None),
+            fallback_pkg=item.app_id or "",
+        )
+        err = validate_device_apm_for_dispatch(
+            device_apm,
+            udid=udid,
+            platform=device.app_platform or "android",
+        )
+        if err:
+            raise HTTPException(status_code=422, detail=err)
+        payload = {
             "engine_type": "app",
             "platform": device.app_platform or "android",
             "device_udid": udid,
@@ -75,6 +91,10 @@ class AppExecutionService:
             "device_id": item.device_id,
             "ai_heal_enabled": ai_heal_enabled,
         }
+        if device_apm:
+            payload["device_apm"] = device_apm
+            payload["enable_device_apm"] = True
+        return payload
 
     @staticmethod
     def with_trigger_source(env_payload: Dict[str, Any], trigger_source: str | None) -> Dict[str, Any]:

@@ -183,7 +183,7 @@ KNOWLEDGE_SETTING_FIELD_DEFS: list[dict[str, Any]] = [
         "group": "rag",
         "recommended": "开启",
         "description": "为文档建立 TF 词法分块索引，用于关键词检索（不调用 Embedding API）。",
-        "tip": "默认免费；与可选向量 Embedding 独立。",
+        "tip": "默认本地规则、无需 Embedding API；与可选向量 Embedding 独立。",
     },
     {
         "key": "rag_top_k",
@@ -314,7 +314,7 @@ KNOWLEDGE_SETTING_FIELD_DEFS: list[dict[str, Any]] = [
         ],
         "recommended": "ocr",
         "description": "上传/重新解析时，将文档内图片识别结果写入正文；无单文档张数上限，后台串行处理。",
-        "tip": "默认 OCR 免费省内存；加强解析可在文档详情单独触发 Vision。",
+        "tip": "默认 OCR 省内存；加强解析可在文档详情单独触发 Vision。",
     },
     {
         "key": "knowledge_doc_vision_ai_config_id",

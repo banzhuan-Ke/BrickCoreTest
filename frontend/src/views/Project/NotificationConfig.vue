@@ -73,10 +73,13 @@
                 <el-tag v-if="scope.row.app_alert_on_failure !== false" size="small" type="danger">App失败告警</el-tag>
                 <el-tag v-if="scope.row.tm_assignment_notify !== false" size="small" type="warning">测试指派</el-tag>
                 <template v-if="scope.row.channel_type === 'email'">
-                  <el-tag v-if="scope.row.api_auto_push_report" size="small" type="success">API自动推送</el-tag>
-                  <el-tag v-if="scope.row.ui_auto_push_report" size="small" type="info">Web自动推送</el-tag>
+                  <el-tag v-if="scope.row.api_suite_auto_push_report" size="small" type="success">API套件推送</el-tag>
+                  <el-tag v-if="scope.row.api_plan_auto_push_report" size="small" type="success">API计划推送</el-tag>
+                  <el-tag v-if="scope.row.ui_suite_auto_push_report" size="small" type="info">Web套件推送</el-tag>
+                  <el-tag v-if="scope.row.ui_plan_auto_push_report" size="small" type="info">Web计划推送</el-tag>
                   <el-tag v-if="scope.row.perf_auto_push_report" size="small" type="warning">压测自动推送</el-tag>
-                  <el-tag v-if="scope.row.app_auto_push_report" size="small" type="primary">App自动推送</el-tag>
+                  <el-tag v-if="scope.row.app_suite_auto_push_report" size="small" type="primary">App套件推送</el-tag>
+                  <el-tag v-if="scope.row.app_plan_auto_push_report" size="small" type="primary">App计划推送</el-tag>
                 </template>
               </div>
             </div>
@@ -181,7 +184,7 @@
 
       <el-form-item label="失败告警：">
         <div style="display: flex; flex-direction: column; gap: 8px;">
-          <el-switch v-model="formData.api_alert_on_failure" active-text="API 套件执行失败时告警"/>
+          <el-switch v-model="formData.api_alert_on_failure" active-text="API 套件/计划执行失败时告警"/>
           <el-switch v-model="formData.ui_alert_on_failure" active-text="Web 计划/套件执行失败时告警"/>
           <el-switch v-model="formData.perf_alert_on_failure" active-text="性能测试执行失败时告警"/>
           <el-switch v-model="formData.app_alert_on_failure" active-text="App 计划/套件执行失败时告警"/>
@@ -200,10 +203,16 @@
 
       <el-form-item v-if="formData.channel_type === 'email'" label="自动推报告：">
         <div style="display: flex; flex-direction: column; gap: 8px;">
-          <el-switch v-model="formData.api_auto_push_report" active-text="API 套件执行完成后自动发送报告"/>
-          <el-switch v-model="formData.ui_auto_push_report" active-text="Web 计划执行完成后自动发送报告"/>
+          <el-switch v-model="formData.api_suite_auto_push_report" active-text="API 套件执行完成后自动发送报告（含定时）"/>
+          <el-switch v-model="formData.api_plan_auto_push_report" active-text="API 计划执行完成后自动发送报告（含定时）"/>
+          <el-switch v-model="formData.ui_suite_auto_push_report" active-text="Web 套件执行完成后自动发送报告（含定时）"/>
+          <el-switch v-model="formData.ui_plan_auto_push_report" active-text="Web 计划执行完成后自动发送报告（含定时）"/>
+          <el-switch v-model="formData.app_suite_auto_push_report" active-text="App 套件执行完成后自动发送报告（含定时）"/>
+          <el-switch v-model="formData.app_plan_auto_push_report" active-text="App 计划执行完成后自动发送报告（含定时）"/>
           <el-switch v-model="formData.perf_auto_push_report" active-text="性能测试执行完成后自动发送报告"/>
-          <el-switch v-model="formData.app_auto_push_report" active-text="App 计划/套件执行完成后自动发送报告"/>
+          <div style="font-size: 12px; color: #909399; line-height: 1.4;">
+            成功/失败均推报告；定时任务按执行类型（套件/计划）走对应开关，与页面手动执行同一套逻辑。计划内嵌套件只推计划报告，不重复推套件。
+          </div>
         </div>
       </el-form-item>
 
@@ -262,10 +271,13 @@ const formData = reactive({
   perf_alert_on_failure: true,
   app_alert_on_failure: true,
   config: {},
-  api_auto_push_report: false,
-  ui_auto_push_report: false,
+  api_suite_auto_push_report: false,
+  api_plan_auto_push_report: false,
+  ui_suite_auto_push_report: false,
+  ui_plan_auto_push_report: false,
+  app_suite_auto_push_report: false,
+  app_plan_auto_push_report: false,
   perf_auto_push_report: false,
-  app_auto_push_report: false,
   tm_assignment_notify: true,
 })
 const recipientsText = ref('')
@@ -275,12 +287,19 @@ const formRules = {
   webhook_url: [{ required: true, message: '请填写 Webhook 地址', trigger: 'blur' }]
 }
 
+const _resetAutoPushFlags = () => {
+  formData.api_suite_auto_push_report = false
+  formData.api_plan_auto_push_report = false
+  formData.ui_suite_auto_push_report = false
+  formData.ui_plan_auto_push_report = false
+  formData.app_suite_auto_push_report = false
+  formData.app_plan_auto_push_report = false
+  formData.perf_auto_push_report = false
+}
+
 watch(() => formData.channel_type, (val) => {
   if (val !== 'email') {
-    formData.api_auto_push_report = false
-    formData.ui_auto_push_report = false
-    formData.perf_auto_push_report = false
-    formData.app_auto_push_report = false
+    _resetAutoPushFlags()
     delete formData.config.recipients
     recipientsText.value = ''
   }
@@ -349,6 +368,35 @@ const formatRecipients = (list) => {
   return list.join('、')
 }
 
+const _expandPushFlagsFromRow = (row) => {
+  let apiSuite = !!row.api_suite_auto_push_report
+  let apiPlan = !!row.api_plan_auto_push_report
+  if (!apiSuite && !apiPlan && row.api_auto_push_report) {
+    apiSuite = true
+    apiPlan = true
+  }
+  let uiSuite = !!row.ui_suite_auto_push_report
+  let uiPlan = !!row.ui_plan_auto_push_report
+  if (!uiSuite && !uiPlan && row.ui_auto_push_report) {
+    uiPlan = true
+  }
+  let appSuite = !!row.app_suite_auto_push_report
+  let appPlan = !!row.app_plan_auto_push_report
+  if (!appSuite && !appPlan && row.app_auto_push_report) {
+    appSuite = true
+    appPlan = true
+  }
+  return {
+    api_suite_auto_push_report: apiSuite,
+    api_plan_auto_push_report: apiPlan,
+    ui_suite_auto_push_report: uiSuite,
+    ui_plan_auto_push_report: uiPlan,
+    app_suite_auto_push_report: appSuite,
+    app_plan_auto_push_report: appPlan,
+    perf_auto_push_report: !!row.perf_auto_push_report,
+  }
+}
+
 const buildPayload = () => ({
   channel_type: formData.channel_type,
   enabled: formData.enabled,
@@ -357,10 +405,13 @@ const buildPayload = () => ({
   perf_alert_on_failure: formData.perf_alert_on_failure,
   app_alert_on_failure: formData.app_alert_on_failure,
   config: formData.config,
-  api_auto_push_report: formData.api_auto_push_report,
-  ui_auto_push_report: formData.ui_auto_push_report,
+  api_suite_auto_push_report: formData.api_suite_auto_push_report,
+  api_plan_auto_push_report: formData.api_plan_auto_push_report,
+  ui_suite_auto_push_report: formData.ui_suite_auto_push_report,
+  ui_plan_auto_push_report: formData.ui_plan_auto_push_report,
+  app_suite_auto_push_report: formData.app_suite_auto_push_report,
+  app_plan_auto_push_report: formData.app_plan_auto_push_report,
   perf_auto_push_report: formData.perf_auto_push_report,
-  app_auto_push_report: formData.app_auto_push_report,
   tm_assignment_notify: formData.tm_assignment_notify,
 })
 
@@ -378,10 +429,7 @@ const openAddDialog = () => {
   formData.perf_alert_on_failure = true
   formData.app_alert_on_failure = true
   formData.config = {}
-  formData.api_auto_push_report = false
-  formData.ui_auto_push_report = false
-  formData.perf_auto_push_report = false
-  formData.app_auto_push_report = false
+  _resetAutoPushFlags()
   formData.tm_assignment_notify = true
   recipientsText.value = ''
   dialogVisible.value = true
@@ -397,10 +445,7 @@ const openEditDialog = (row) => {
   formData.perf_alert_on_failure = row.perf_alert_on_failure !== false
   formData.app_alert_on_failure = row.app_alert_on_failure !== false
   formData.config = { ...row.config }
-  formData.api_auto_push_report = row.api_auto_push_report || false
-  formData.ui_auto_push_report = row.ui_auto_push_report || false
-  formData.perf_auto_push_report = row.perf_auto_push_report || false
-  formData.app_auto_push_report = row.app_auto_push_report || false
+  Object.assign(formData, _expandPushFlagsFromRow(row))
   formData.tm_assignment_notify = row.tm_assignment_notify !== false
   if (row.channel_type === 'email') {
     recipientsText.value = (row.config.recipients || []).join(',')
@@ -444,6 +489,7 @@ const submitForm = async () => {
 
 const toggleEnabled = async (row) => {
   try {
+    const pushFlags = _expandPushFlagsFromRow(row)
     await http.notificationApi.updateConfig(row.id, {
       channel_type: row.channel_type,
       enabled: row.enabled,
@@ -452,10 +498,7 @@ const toggleEnabled = async (row) => {
       perf_alert_on_failure: row.perf_alert_on_failure !== false,
       app_alert_on_failure: row.app_alert_on_failure !== false,
       config: row.config,
-      api_auto_push_report: row.api_auto_push_report,
-      ui_auto_push_report: row.ui_auto_push_report,
-      perf_auto_push_report: row.perf_auto_push_report,
-      app_auto_push_report: row.app_auto_push_report || false,
+      ...pushFlags,
       tm_assignment_notify: row.tm_assignment_notify !== false,
     })
     ElMessage.success('状态更新成功')

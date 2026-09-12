@@ -11,7 +11,7 @@
 ## 快速上手
 
 1. 新建 Mock：选 **方法**、填 **匹配路径**、写 **响应 Body**（填什么就返回什么，不必再包 `status_code` 外壳）
-2. 调用：`{平台}/api-module/mock-call/{匹配路径}`（方法必须与配置一致）
+2. 调用：优先 `{平台}/mock/{匹配路径}`（短别名）；亦可用 `{平台}/api-module/mock-call/{匹配路径}`（方法必须与配置一致）
 3. 同 URL 要多种返回：建 **多条** Mock（方法+路径相同），用 **高级匹配** 分流；可用列表 **复制为新场景** 少填一遍
 
 ## 字段说明
@@ -29,20 +29,22 @@
 ## 调用地址
 
 ```text
-{平台地址}/api-module/mock-call/{匹配路径}
+{平台地址}/mock/{匹配路径}
+{平台地址}/api-module/mock-call/{匹配路径}   # 兼容，语义相同
 ```
 
 可选 `?_project_id=项目ID`（多项目同路径时建议加上）。
 
 | 场景 | 请求示例 |
 |------|----------|
-| GET | `GET https://example.com/api-module/mock-call/api/hello` |
-| POST | `POST …/mock-call/api/login` + JSON Body |
-| 带 query | `POST …/mock-call/api/order?type=1` |
+| GET | `GET https://example.com/mock/api/hello` |
+| POST | `POST …/mock/api/login` + JSON Body |
+| 带 query | `POST …/mock/api/order?type=1` |
+| 兼容旧路径 | `GET …/api-module/mock-call/api/hello` |
 
-接口调试：Base URL 填 `{平台}/api-module/mock-call`，Path 填 `/api/order`，**不必**填平台登录 Token。
+接口调试：Base URL 填 `{平台}/mock`（或 `{平台}/api-module/mock-call`），Path 填 `/api/order`，**不必**填平台登录 Token。
 
-> **鉴权**：调用 `/api-module/mock-call/...` **免平台 JWT**（按配置的方法/路径/高级匹配即可命中）；Mock 管理页的新建/编辑/删除仍需登录与权限。请勿在响应体里写真实密钥。
+> **鉴权**：调用 `/mock/...` 与 `/api-module/mock-call/...` **均免平台 JWT**（按配置的方法/路径/高级匹配即可命中）；Mock 管理页的新建/编辑/删除仍需登录与权限。请勿在响应体里写真实密钥。
 
 ## 示例 1：最简单的 GET
 
@@ -55,7 +57,7 @@
 | 高级匹配 | `{}` |
 
 ```bash
-curl "https://example.com/api-module/mock-call/api/hello"
+curl "https://example.com/mock/api/hello"
 ```
 
 ## 示例 2：POST（方法要对上）
@@ -67,7 +69,7 @@ curl "https://example.com/api-module/mock-call/api/hello"
 | 响应 Body | `{"code":0,"token":"mock-token","user":"demo"}` |
 
 ```bash
-curl -X POST "https://example.com/api-module/mock-call/api/login" \
+curl -X POST "https://example.com/mock/api/login" \
   -H "Content-Type: application/json" \
   -d '{"username":"a","password":"b"}'
 ```
@@ -123,16 +125,16 @@ Mock 配 GET、调用发 POST → **404**。
 
 ```bash
 # 待支付
-curl -X POST "https://example.com/api-module/mock-call/api/order?type=1" \
+curl -X POST "https://example.com/mock/api/order?type=1" \
   -H "Content-Type: application/json" \
   -d '{"status":"pending"}'
 
 # 已支付
-curl -X POST "https://example.com/api-module/mock-call/api/order?type=2" \
+curl -X POST "https://example.com/mock/api/order?type=2" \
   -H "Content-Type: application/json" -d '{}'
 
 # 兜底
-curl -X POST "https://example.com/api-module/mock-call/api/order?type=9" \
+curl -X POST "https://example.com/mock/api/order?type=9" \
   -H "Content-Type: application/json" -d '{}'
 ```
 
@@ -169,10 +171,10 @@ curl -X POST "https://example.com/api-module/mock-call/api/order?type=9" \
 核对 query / body / header 是否全部满足；可先清空为 `{}` 验证路径能通。
 
 **Q：调用还返回 401？**  
-升级到含 **API-5** 的 Backend 后，调用本身不应再因平台登录失败。若仍 401：确认路径是 `/api-module/mock-call/...`（不是 `/api-module/mock` 管理 API）；旧版本需重启升级后的 Backend。
+升级到含 **API-5** 的 Backend 后，调用本身不应再因平台登录失败。若仍 401：确认路径是 `/mock/...` 或 `/api-module/mock-call/...`（不是 `/api-module/mock` 管理 API）；旧版本需重启升级后的 Backend。
 
 **Q：浏览器打开一堆 HTML？**  
-多半打到前端路由；请用完整路径 `/api-module/mock-call/...`，并确认 Nginx 已把 `/api-module` 反代到 Backend。
+多半打到前端路由；请用 `/mock/...` 或 `/api-module/mock-call/...`，并确认 Nginx 已把 `/mock/` 与 `/api-module` 反代到 Backend（Docker 镜像内 `nginx-docker.conf` 已含 `/mock/`）。
 
 ## 相关规划（研发备忘）
 

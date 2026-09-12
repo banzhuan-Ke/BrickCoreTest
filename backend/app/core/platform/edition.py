@@ -75,8 +75,3 @@ KNOWLEDGE_PACK_PROMPT_SCENES: frozenset[str] = frozenset(
 def knowledge_pack_addon_enabled() -> bool:
     """行业资料库扩展包：开源发行版不启用。"""
     return False
-
-
-# 兼容 Pro 旧符号名（sync 后通用路由仍可能引用）
-def knowledge_digitech_pack_enabled() -> bool:
-    return knowledge_pack_addon_enabled()

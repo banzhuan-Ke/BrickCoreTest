@@ -19,14 +19,31 @@
         <template v-if="report">
           <div class="report-hero">
             <div class="hero-title">{{ report.title || kindTitle }}</div>
+            <p v-if="reportDescription" class="hero-subtitle">{{ reportDescription }}</p>
             <div class="hero-meta">
-              <span>{{ kindLabel }}</span>
-              <span v-if="baselineEnabled">参照轮：{{ refRoundLabel }}</span>
-              <span v-else-if="!isMerge">模式：并排（无相对变化率）</span>
-              <span>记录 {{ records.length }} 条</span>
-              <span v-if="report.create_time">创建 {{ report.create_time }}</span>
+              <span><em>类型</em>{{ kindLabel }}</span>
+              <span v-if="baselineEnabled"><em>参照轮</em>{{ refRoundLabel }}</span>
+              <span v-else-if="!isMerge"><em>模式</em>并排（无相对变化率）</span>
+              <span v-if="reportEvalTime"><em>评估时间</em>{{ reportEvalTime }}</span>
+              <span v-if="reportEnvLabel"><em>受测环境</em>{{ reportEnvLabel }}</span>
+              <span><em>执行工具</em>BrickCore</span>
+              <span v-if="reportExecutor"><em>执行人</em>{{ reportExecutor }}</span>
+              <span><em>记录</em>{{ records.length }} 条</span>
             </div>
           </div>
+
+          <section class="rpt-section" style="margin-bottom: 16px">
+            <PerfAiAnalysisPanel
+              v-if="report?.id"
+              mode="comparison"
+              variant="conclusion"
+              :target-id="report.id"
+              :report-kind="aiPanelReportKind"
+              :initial-analysis="liveAi || report.ai_analysis"
+              :label-map="metricLabelMap"
+              @analysis-updated="onAiUpdated"
+            />
+          </section>
 
           <el-alert
             v-if="snapshot.note"
@@ -46,52 +63,196 @@
             class="block-gap"
           />
 
-          <!-- 汇总 -->
+          <!-- 汇总：概览左右分卡 + 分章（与导出 HTML 一致；一、结论在上方 AI 区） -->
           <template v-if="isMerge">
             <section class="rpt-section">
-              <h3 class="rpt-h2">一、测试概览</h3>
+              <h3 class="rpt-h2">二、测试概览</h3>
               <PerfAiInlineNote
                 v-if="aiOverview"
                 :text="aiOverview"
                 label="概览"
                 :label-map="metricLabelMap"
               />
-              <p class="compare-intro">{{ snapshot.note || '各场景分章展示；顶层指标并排，不计算变化率。' }}</p>
-              <div v-if="metricNoteStrip.length" class="metric-notes-strip">
-                <PerfAiInlineNote
-                  v-for="row in metricNoteStrip"
-                  :key="'m-' + row.key"
-                  :label="row.label"
-                  :text="row.note"
-                  :metric-key="row.key"
-                  :label-map="metricLabelMap"
-                  :lower-is-better="row.lowerIsBetter"
-                />
-              </div>
-              <el-table :data="overviewRows" border size="small" class="rpt-table">
-                <el-table-column prop="label" label="指标" width="150" fixed />
-                <el-table-column
+              <p class="compare-intro">{{ snapshot.note || '各场景分开展示；顶层左右分卡概览，分章详情见下文，不计算变化率。' }}</p>
+              <div class="overview-grid">
+                <div
                   v-for="r in records"
-                  :key="'o-' + r.id"
-                  :label="recLabel(r)"
-                  min-width="130"
-                  align="right"
+                  :key="'merge-ov-' + r.id"
+                  class="overview-panel"
                 >
-                  <template #default="{ row }">
-                    {{ formatMetric(row.key, row.values[String(r.id)]) }}
-                  </template>
-                </el-table-column>
-              </el-table>
+                  <div class="panel-title">
+                    <el-tag size="small" type="info">本轮</el-tag>
+                    <strong>{{ recLabel(r) }}</strong>
+                    <span class="muted">#{{ r.id }} · {{ shortTime(r.started_at) || r.scene_name }}</span>
+                  </div>
+                  <table class="kv-table">
+                    <tr>
+                      <td>并发用户</td>
+                      <td>
+                        <div v-if="isSteppingRecord(r)" class="steps-stack">
+                          <div class="steps-head">{{ concurrentPeakText(r) }}</div>
+                          <div
+                            v-for="(s, i) in steppingStepsOf(r)"
+                            :key="'m-cu-' + r.id + '-' + i"
+                            class="step-line"
+                          >
+                            第 {{ i + 1 }} 阶段 · {{ s.users }}用户<span v-if="s.duration != null"> × {{ s.duration }}s</span>
+                          </div>
+                        </div>
+                        <template v-else>{{ concurrentConfigText(r) }}</template>
+                      </td>
+                    </tr>
+                    <tr><td>模式</td><td>{{ modeLabel(r.config_snapshot?.mode) }}</td></tr>
+                    <tr>
+                      <td>
+                        Ramp-up
+                        <el-tooltip placement="top" content="从 0 到目标并发的爬升时间；0 表示立即达到目标并发。">
+                          <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+                        </el-tooltip>
+                      </td>
+                      <td>{{ r.config_snapshot?.ramp_up_seconds ?? 0 }}s</td>
+                    </tr>
+                    <tr v-if="showDurationConfig(r)">
+                      <td>时长配置</td>
+                      <td>
+                        <div v-if="isSteppingRecord(r)" class="steps-stack">
+                          <div class="steps-head">{{ steppingStepsOf(r).length }} 个阶段</div>
+                          <div
+                            v-for="(s, i) in steppingStepsOf(r)"
+                            :key="'m-du-' + r.id + '-' + i"
+                            class="step-line"
+                          >
+                            第 {{ i + 1 }} 阶段 · {{ s.users }}用户<span v-if="s.duration != null"> × {{ s.duration }}s</span>
+                          </div>
+                        </div>
+                        <template v-else>{{ durationConfigText(r) }}</template>
+                      </td>
+                    </tr>
+                    <tr v-if="requestDelayLabel(r)">
+                      <td>{{ delayFieldLabel(requestDelayLabel(r)) }}</td>
+                      <td>{{ requestDelayLabel(r) }}</td>
+                    </tr>
+                    <tr>
+                      <td>
+                        预热
+                        <el-tooltip placement="top" content="统计 Avg/P95 时剔除开始一段时间的样本，降低冷启动噪声；未配置时通常跟随 Ramp-up。">
+                          <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+                        </el-tooltip>
+                      </td>
+                      <td>{{ r.config_snapshot?.warmup_seconds ?? 0 }}s</td>
+                    </tr>
+                    <tr><td>实际时长</td><td>{{ r.duration ?? '-' }}s</td></tr>
+                    <tr><td>开始 / 结束</td><td>{{ r.started_at || '-' }} ~ {{ r.ended_at || '-' }}</td></tr>
+                    <tr><td>请求 / 成功 / 失败</td><td>{{ r.total_requests ?? '-' }} / {{ r.success_count ?? '-' }} / {{ r.fail_count ?? '-' }}</td></tr>
+                    <tr>
+                      <td>Avg / P95</td>
+                      <td>{{ r.avg_response_time ?? '-' }} / {{ r.p95_response_time ?? '-' }} ms</td>
+                    </tr>
+                    <tr v-for="ph in recordPhaseHighlights(r)" :key="'mph-' + r.id + '-' + ph.key">
+                      <td>{{ ph.label }}</td>
+                      <td>{{ ph.mean != null ? ph.mean + ' s' : '—' }}</td>
+                    </tr>
+                  </table>
+                </div>
+              </div>
+              <template v-if="overviewRows.length">
+                <h4 class="merge-side-title">指标并排</h4>
+                <div v-if="metricNoteStrip.length" class="metric-notes-strip">
+                  <PerfAiInlineNote
+                    v-for="row in metricNoteStrip"
+                    :key="'m-' + row.key"
+                    :label="row.label"
+                    :text="row.note"
+                    :metric-key="row.key"
+                    :label-map="metricLabelMap"
+                    :lower-is-better="row.lowerIsBetter"
+                  />
+                </div>
+                <el-table :data="overviewRows" border size="small" class="rpt-table">
+                  <el-table-column prop="label" label="指标" width="150" fixed />
+                  <el-table-column
+                    v-for="r in records"
+                    :key="'o-' + r.id"
+                    :label="recLabel(r)"
+                    min-width="130"
+                    align="right"
+                  >
+                    <template #default="{ row }">
+                      {{ formatMetric(row.key, row.values[String(r.id)]) }}
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </template>
             </section>
 
-            <section
-              v-for="(ch, idx) in chapters"
-              :key="'ch-' + ch.record_id"
-              class="rpt-section chapter"
-            >
+            <section v-if="ladderSummary" class="rpt-section" id="sec-ladder">
+              <h3 class="rpt-h2">三、阶梯并发对照</h3>
+              <p class="compare-intro">{{ ladderSummary.note || '仅汇总同模式、同用例且并发 ≥2 档的轮次；横轴为并发用户数。' }}</p>
+              <el-table :data="ladderSummary.levels || []" border size="small" class="rpt-table">
+                <el-table-column prop="concurrent_users" label="并发" width="80" align="center" />
+                <el-table-column prop="success_count" label="成功数" width="90" align="center" />
+                <el-table-column label="失败率(%)" width="100" align="center">
+                  <template #default="{ row }">
+                    <el-tag
+                      size="small"
+                      :type="Number(row.error_rate) >= 20 ? 'danger' : (Number(row.error_rate) < 5 ? 'success' : 'info')"
+                    >
+                      {{ row.error_rate ?? 0 }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Avg(ms)" min-width="100" align="center">
+                  <template #default="{ row }">{{ row.avg_response_time ?? '—' }}</template>
+                </el-table-column>
+                <el-table-column label="P95(ms)" min-width="100" align="center">
+                  <template #default="{ row }">{{ row.p95_response_time ?? '—' }}</template>
+                </el-table-column>
+                <el-table-column
+                  v-if="ladderSummary.has_phase_first"
+                  :label="ladderSummary.phase_first_label || '首字'"
+                  min-width="110"
+                  align="center"
+                >
+                  <template #default="{ row }">{{ row.phase_first_mean ?? '—' }}</template>
+                </el-table-column>
+                <el-table-column
+                  v-if="ladderSummary.has_phase_total"
+                  :label="ladderSummary.phase_total_label || '流式总耗时'"
+                  min-width="120"
+                  align="center"
+                >
+                  <template #default="{ row }">{{ row.phase_total_mean ?? '—' }}</template>
+                </el-table-column>
+                <el-table-column label="QPS" width="90" align="center">
+                  <template #default="{ row }">{{ row.qps ?? '—' }}</template>
+                </el-table-column>
+                <el-table-column prop="total_requests" label="总请求" width="90" align="center" />
+              </el-table>
+              <div v-if="(ladderSummary.zones || []).length" class="ladder-zones">
+                <div class="ladder-zones-label">区间观察（按失败率变化）</div>
+                <div
+                  v-for="(z, zi) in ladderSummary.zones"
+                  :key="'lz-' + zi"
+                  class="ladder-zone-card"
+                  :class="z.kind || 'flat'"
+                >
+                  <div class="lz-title">{{ z.title }}</div>
+                  <div class="lz-summary">{{ z.summary }}</div>
+                </div>
+              </div>
+              <PerfLadderCharts :ladder="ladderSummary" />
+            </section>
+
+            <section v-if="chapters.length" class="rpt-section">
+              <h3 class="rpt-h2">{{ ladderSummary ? '四' : '三' }}、各轮压测详情</h3>
+              <div
+                v-for="(ch, idx) in chapters"
+                :key="'ch-' + ch.record_id"
+                class="merge-chapter-scene"
+              >
               <div class="chapter-head">
-                <h3 class="rpt-h2" style="border: none; margin: 0; padding: 0">
-                  {{ idx + 1 }}. {{ chLabel(ch) }}
+                <h3 class="rpt-h2 chapter-scene-h" style="border: none; margin: 0; padding: 0">
+                  {{ ladderSummary ? 4 : 3 }}.{{ idx + 1 }} {{ chLabel(ch) }}
                 </h3>
                 <el-button link type="primary" @click="router.push(`/perf-report/${ch.record_id}`)">原报告</el-button>
               </div>
@@ -124,6 +285,22 @@
                   <div class="value tone-neutral">{{ ch.total_requests ?? '-' }}</div>
                 </div>
               </div>
+              <div v-if="chapterPhaseRows(ch).length" class="phase-block">
+                <div class="phase-block-label">流式阶段耗时</div>
+                <div class="summary-grid">
+                <div
+                  v-for="pm in chapterPhaseRows(ch)"
+                  :key="'ph-' + ch.record_id + '-' + pm.key"
+                  class="summary-card phase-metric-card"
+                >
+                  <div class="label">{{ pm.label }}</div>
+                  <div class="value" style="font-size: 16px">
+                    {{ pm.mean ?? '-' }} <small>s</small>
+                  </div>
+                  <div class="note">P95 {{ pm.p95 ?? '-' }}s</div>
+                </div>
+                </div>
+              </div>
               <el-table v-if="(ch.top_cases || []).length" :data="ch.top_cases" border size="small" max-height="240" class="rpt-table">
                 <el-table-column prop="name" label="接口" min-width="140" show-overflow-tooltip>
                   <template #default="{ row }">
@@ -149,6 +326,7 @@
                 </el-table-column>
               </el-table>
               <PerfRecordTrendCharts v-bind="recordChartsProps(ch)" />
+              </div>
             </section>
           </template>
 
@@ -219,6 +397,10 @@
                         <template v-else>{{ durationConfigText(r) }}</template>
                       </td>
                     </tr>
+                    <tr v-if="requestDelayLabel(r)">
+                      <td>{{ delayFieldLabel(requestDelayLabel(r)) }}</td>
+                      <td>{{ requestDelayLabel(r) }}</td>
+                    </tr>
                     <tr>
                       <td>
                         预热
@@ -244,6 +426,10 @@
                         <span :class="overviewMetricClass(r, 'p95')">{{ r.p95_response_time ?? '-' }}</span>
                         ms
                       </td>
+                    </tr>
+                    <tr v-for="ph in recordPhaseHighlights(r)" :key="'cph-' + r.id + '-' + ph.key">
+                      <td>{{ ph.label }}</td>
+                      <td>{{ ph.mean != null ? ph.mean + ' s' : '—' }}</td>
                     </tr>
                   </table>
                 </div>
@@ -422,6 +608,48 @@
               </div>
             </section>
 
+            <section v-if="ladderSummary" class="rpt-section" id="sec-ladder-hybrid">
+              <h3 class="rpt-h2">阶梯并发对照</h3>
+              <p class="compare-intro">{{ ladderSummary.note || '仅汇总同模式、同用例且并发 ≥2 档的轮次。' }}</p>
+              <el-table :data="ladderSummary.levels || []" border size="small" class="rpt-table">
+                <el-table-column prop="concurrent_users" label="并发" width="80" align="center" />
+                <el-table-column prop="success_count" label="成功数" width="90" align="center" />
+                <el-table-column label="失败率(%)" width="100" align="center">
+                  <template #default="{ row }">
+                    <el-tag
+                      size="small"
+                      :type="Number(row.error_rate) >= 20 ? 'danger' : (Number(row.error_rate) < 5 ? 'success' : 'info')"
+                    >
+                      {{ row.error_rate ?? 0 }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Avg(ms)" min-width="100" align="center">
+                  <template #default="{ row }">{{ row.avg_response_time ?? '—' }}</template>
+                </el-table-column>
+                <el-table-column label="P95(ms)" min-width="100" align="center">
+                  <template #default="{ row }">{{ row.p95_response_time ?? '—' }}</template>
+                </el-table-column>
+                <el-table-column label="QPS" width="90" align="center">
+                  <template #default="{ row }">{{ row.qps ?? '—' }}</template>
+                </el-table-column>
+                <el-table-column prop="total_requests" label="总请求" width="90" align="center" />
+              </el-table>
+              <div v-if="(ladderSummary.zones || []).length" class="ladder-zones">
+                <div class="ladder-zones-label">区间观察（按失败率变化）</div>
+                <div
+                  v-for="(z, zi) in ladderSummary.zones"
+                  :key="'hz-' + zi"
+                  class="ladder-zone-card"
+                  :class="z.kind || 'flat'"
+                >
+                  <div class="lz-title">{{ z.title }}</div>
+                  <div class="lz-summary">{{ z.summary }}</div>
+                </div>
+              </div>
+              <PerfLadderCharts :ladder="ladderSummary" />
+            </section>
+
             <section v-if="baselineEnabled && caseRows.length" class="rpt-section">
               <h3 class="rpt-h2">{{ isHybrid ? '用例维度对照' : '用例维度对比' }}</h3>
               <el-alert
@@ -545,6 +773,22 @@
                     <div class="value tone-neutral">{{ ch.total_requests ?? '-' }}</div>
                   </div>
                 </div>
+                <div v-if="chapterPhaseRows(ch).length" class="phase-block">
+                  <div class="phase-block-label">流式阶段耗时</div>
+                  <div class="summary-grid">
+                  <div
+                    v-for="pm in chapterPhaseRows(ch)"
+                    :key="'hph-' + ch.record_id + '-' + pm.key"
+                    class="summary-card phase-metric-card"
+                  >
+                    <div class="label">{{ pm.label }}</div>
+                    <div class="value" style="font-size: 16px">
+                      {{ pm.mean ?? '-' }} <small>s</small>
+                    </div>
+                    <div class="note">P95 {{ pm.p95 ?? '-' }}s</div>
+                  </div>
+                  </div>
+                </div>
                 <el-table v-if="(ch.top_cases || []).length" :data="ch.top_cases" border size="small" max-height="220" class="rpt-table">
                   <el-table-column prop="name" label="接口" min-width="140" show-overflow-tooltip>
                     <template #default="{ row }">
@@ -590,19 +834,6 @@
           </template>
 
           <section class="rpt-section">
-            <PerfAiAnalysisPanel
-              v-if="report?.id"
-              mode="comparison"
-              variant="conclusion"
-              :target-id="report.id"
-              :report-kind="aiPanelReportKind"
-              :initial-analysis="liveAi || report.ai_analysis"
-              :label-map="metricLabelMap"
-              @analysis-updated="onAiUpdated"
-            />
-          </section>
-
-          <section class="rpt-section">
             <PerfMetricGlossary />
           </section>
         </template>
@@ -622,6 +853,7 @@ import PerfAiInlineNote from '@/views/Perf/components/PerfAiInlineNote.vue'
 import PerfMetricGlossary from '@/views/Perf/components/PerfMetricGlossary.vue'
 import PerfRecordTrendCharts from '@/views/Perf/components/PerfRecordTrendCharts.vue'
 import PerfCompareOverlayCharts from '@/views/Perf/components/PerfCompareOverlayCharts.vue'
+import PerfLadderCharts from '@/views/Perf/components/PerfLadderCharts.vue'
 import {
   buildMetricLabelMap,
   colorizePctPhrases,
@@ -662,6 +894,43 @@ const kindTagType = computed(() => {
   return 'warning'
 })
 const records = computed(() => snapshot.value.records || [])
+const reportDescription = computed(
+  () => String(report.value?.description || snapshot.value.description || '').trim()
+)
+const reportExecutor = computed(
+  () =>
+    String(
+      report.value?.create_by_display ||
+        snapshot.value.create_by_nickname ||
+        report.value?.create_by ||
+        ''
+    ).trim()
+)
+const reportEvalTime = computed(() => {
+  const t = records.value[0]?.started_at || report.value?.create_time || ''
+  return t ? String(t).slice(0, 16) : ''
+})
+const reportEnvLabel = computed(() => {
+  const labels = []
+  for (const r of records.value) {
+    const stamped = String(r?.env_label || '').trim()
+    if (stamped && stamped !== '—') {
+      labels.push(stamped)
+      continue
+    }
+    const cfg = r?.config_snapshot || {}
+    const host = String(cfg.env_host || '').trim()
+    const name = String(cfg.env_name || '').trim()
+    let lab = ''
+    if (host && name && host !== name) lab = `${name}（${host}）`
+    else lab = host || name || String(cfg.target_host || '').trim()
+    if (lab) labels.push(lab)
+  }
+  const uniq = [...new Set(labels)]
+  if (!uniq.length) return ''
+  if (uniq.length === 1) return uniq[0]
+  return uniq.slice(0, 3).join('；') + (uniq.length > 3 ? '…' : '')
+})
 const baselineEnabled = computed(() => {
   if (isMerge.value) return false
   if (snapshot.value.baseline_enabled === false) return false
@@ -719,6 +988,11 @@ const detailChapters = computed(() => {
   })
 })
 const overviewRows = computed(() => snapshot.value.overview_table || [])
+const ladderSummary = computed(() => {
+  const block = snapshot.value.ladder_summary
+  if (!block || !block.eligible || !(block.levels || []).length) return null
+  return block
+})
 const referenceId = computed(() => snapshot.value.reference_record_id)
 const metricRows = computed(() => snapshot.value.metric_compare || [])
 const steppingStageBlocks = computed(() => {
@@ -866,7 +1140,91 @@ const onAiUpdated = (ai) => {
 }
 
 const recLabel = (r) => r?.display_name || r?.scene_name || `#${r?.id}`
+
+const requestDelayLabel = (r) => {
+  const lab = String(r?.request_delay_label || '').trim()
+  return lab && lab !== '无' ? lab : ''
+}
+
+const delayFieldLabel = (lab) => {
+  const s = String(lab || '').trim()
+  if (s.startsWith('随机')) return '随机等待时间'
+  if (s.startsWith('固定')) return '固定等待'
+  return '请求间隔'
+}
+
+const chapterPhaseRows = (ch) => {
+  const raw = ch?.phase_metrics
+  if (Array.isArray(raw) && raw.length) {
+    return raw.filter((x) => x && (x.mean != null || x.p95 != null)).slice(0, 12)
+  }
+  const rec = records.value.find((x) => x.id === ch?.record_id)
+  const pm = rec?.phase_metrics
+  if (Array.isArray(pm)) {
+    return pm.filter((x) => x && (x.mean != null || x.p95 != null)).slice(0, 12)
+  }
+  if (pm && typeof pm === 'object' && Array.isArray(pm.metrics)) {
+    return pm.metrics
+      .filter((x) => x && (x.mean != null || x.p95 != null))
+      .slice(0, 12)
+      .map((x) => ({
+        key: x.key,
+        label: x.label || x.key,
+        mean: x.mean,
+        p95: x.p95
+      }))
+  }
+  return []
+}
+
+const PHASE_FIRST_KEYS = ['first_char', 'first_token', 'ttft', 'time_to_first_token']
+const PHASE_TOTAL_KEYS = ['total_time', 'full_stream', 'overall', 'e2e']
+
+const recordPhaseHighlights = (r, limit = 3) => {
+  const rows = (() => {
+    const pm = r?.phase_metrics
+    if (Array.isArray(pm)) {
+      return pm
+        .filter((x) => x && (x.mean != null || x.p95 != null))
+        .map((x) => ({ key: x.key, label: x.label || x.key, mean: x.mean, p95: x.p95 }))
+    }
+    if (pm && typeof pm === 'object' && Array.isArray(pm.metrics)) {
+      return pm.metrics
+        .filter((x) => x && (x.mean != null || x.p95 != null))
+        .map((x) => ({ key: x.key, label: x.label || x.key, mean: x.mean, p95: x.p95 }))
+    }
+    return []
+  })()
+  if (!rows.length) return []
+  const byKey = Object.fromEntries(rows.map((x) => [String(x.key || ''), x]))
+  const picked = []
+  const used = new Set()
+  for (const keys of [PHASE_FIRST_KEYS, PHASE_TOTAL_KEYS]) {
+    const hit = keys.map((k) => byKey[k]).find(Boolean)
+    if (hit && !used.has(String(hit.key))) {
+      picked.push(hit)
+      used.add(String(hit.key))
+    }
+  }
+  for (const row of rows) {
+    if (picked.length >= limit) break
+    const k = String(row.key || '')
+    if (k && !used.has(k)) {
+      picked.push(row)
+      used.add(k)
+    }
+  }
+  return picked.slice(0, limit)
+}
 const chLabel = (c) => c?.display_name || c?.scene_name || `#${c?.record_id}`
+/** 与导出 HTML 一致：顶级章节用中文序号（二、三…），子节仍用阿拉伯小数 */
+const CN_SECTION = {
+  1: '一', 2: '二', 3: '三', 4: '四', 5: '五',
+  6: '六', 7: '七', 8: '八', 9: '九', 10: '十',
+  11: '十一', 12: '十二', 13: '十三', 14: '十四', 15: '十五',
+  16: '十六', 17: '十七', 18: '十八', 19: '十九', 20: '二十',
+}
+const cnSection = (n) => CN_SECTION[n] || String(n)
 const shortTime = (ts) => {
   const s = String(ts || '').trim()
   if (!s) return ''
@@ -1167,6 +1525,10 @@ const formatMetric = (key, val) => {
   if (val === undefined || val === null) return '-'
   if (key === 'error_rate') return `${val}%`
   if (key === 'qps' || key === 'success_qps') return Number(val).toFixed(2)
+  if (String(key || '').startsWith('phase_')) {
+    const n = Number(val)
+    return Number.isFinite(n) ? `${Math.round(n * 1000) / 1000} s` : `${val} s`
+  }
   return val
 }
 
@@ -1299,23 +1661,41 @@ onMounted(loadReport)
   flex-wrap: wrap;
 }
 .report-hero {
-  background: linear-gradient(135deg, #1a73e8, #0d47a1);
+  background: linear-gradient(105deg, #0a1628 0%, #0f2744 38%, #163a5f 72%, #1a4a6e 100%);
   color: #fff;
-  padding: 28px 32px;
-  border-radius: 12px;
+  padding: 32px 36px 26px;
+  border-radius: 14px;
   margin-bottom: 18px;
+  box-shadow: 0 8px 28px rgba(15, 39, 68, 0.22);
 }
 .hero-title {
   font-size: 22px;
   font-weight: 700;
-  margin-bottom: 8px;
+  margin-bottom: 0;
+  letter-spacing: 0.02em;
+  line-height: 1.35;
+}
+.hero-subtitle {
+  margin: 12px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(226, 232, 240, 0.82);
+  max-width: 92%;
 }
 .hero-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 10px 22px;
   font-size: 13px;
-  opacity: 0.9;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(148, 180, 212, 0.28);
+}
+.hero-meta em {
+  font-style: normal;
+  color: #7eb8e8;
+  margin-right: 8px;
+  font-weight: 500;
 }
 .rpt-section {
   background: #fff;
@@ -1327,6 +1707,35 @@ onMounted(loadReport)
 }
 .rpt-section.chapter {
   background: #fafbfd;
+}
+.merge-chapter-scene {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px dashed #e2e8f0;
+}
+.merge-chapter-scene:first-of-type {
+  margin-top: 8px;
+  padding-top: 0;
+  border-top: 0;
+}
+.chapter-scene-h {
+  font-size: 15px !important;
+  color: #1a73e8;
+}
+.merge-side-title {
+  margin: 18px 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+}
+.phase-block {
+  margin-top: 12px;
+}
+.phase-block-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 8px;
 }
 .rpt-h2 {
   font-size: 16px;
@@ -1413,6 +1822,43 @@ onMounted(loadReport)
 .stage-summary-card.flat {
   border-left-color: #94a3b8;
   background: #f8fafc;
+}
+.ladder-zones {
+  margin: 14px 0 8px;
+}
+.ladder-zones-label {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+.ladder-zone-card {
+  border-left: 4px solid #94a3b8;
+  background: #f8fafc;
+  border-radius: 0 8px 8px 0;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+}
+.ladder-zone-card.stable {
+  border-left-color: #22c55e;
+  background: #f0fdf4;
+}
+.ladder-zone-card.inflection {
+  border-left-color: #f59e0b;
+  background: #fffbeb;
+}
+.ladder-zone-card.saturated {
+  border-left-color: #ef4444;
+  background: #fef2f2;
+}
+.ladder-zone-card .lz-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.ladder-zone-card .lz-summary {
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.5;
 }
 .stage-sum-title {
   font-size: 13px;

@@ -200,6 +200,19 @@ class ApiDebugRequest(BaseModel):
         None,
         description="经在线压测执行机代发时指定 Worker ID；不传则由平台本机发送",
     )
+    csv_scene_id: Optional[int] = Field(
+        None,
+        description="可选：用压测场景 CSV 指定行注入变量（调试试跑，非默认）",
+    )
+    csv_dataset_id: Optional[int] = Field(
+        None,
+        description="可选：用项目 CSV 数据集指定行注入（优先于 csv_scene_id）",
+    )
+    csv_row_index: int = Field(
+        0,
+        ge=0,
+        description="CSV 行号（0 起）；配合 csv_scene_id / csv_dataset_id",
+    )
 
 
 class ApiDebugResponse(BaseModel):
@@ -279,7 +292,7 @@ class ApiTestCaseBase(BaseModel):
     assertion_groups: List[Dict[str, Any]] = Field(default=[], description="条件分支断言组")
     extractors: List[ApiExtractor] = Field(default=[], description="变量提取规则")
     depends_on: List[int] = Field(default=[], description="依赖用例ID列表")
-    timeout: int = Field(default=30, description="超时时间(秒)")
+    timeout: int = Field(default=30, ge=1, le=1800, description="超时时间(秒)，上限 30 分钟")
     retry_count: int = Field(default=0, description="重试次数")
     tags: List[str] = Field(default=[], description="标签")
     priority: str = Field(default="P2", description="优先级 P0/P1/P2/P3")
@@ -366,6 +379,19 @@ class ApiRunRequest(BaseModel):
     worker_id: Optional[int] = Field(
         None,
         description="经在线压测执行机代发时指定 Worker ID；不传则由平台本机发送",
+    )
+    csv_scene_id: Optional[int] = Field(
+        None,
+        description="可选：用压测场景 CSV 指定行注入变量（试跑，非默认）",
+    )
+    csv_dataset_id: Optional[int] = Field(
+        None,
+        description="可选：用项目 CSV 数据集指定行注入（优先于 csv_scene_id）",
+    )
+    csv_row_index: int = Field(
+        0,
+        ge=0,
+        description="CSV 行号（0 起）；配合 csv_scene_id / csv_dataset_id",
     )
 
 

@@ -1,4 +1,4 @@
-"""兼容层：实现位于 brickcore_tm.export_service（Pro 内置 / CE 扩展包）。
+"""兼容层：实现位于 brickcore_tm.export_service（平台内置或扩展包）。
 
 展平/筛选工具始终开源，见 matrix_export_utils。
 """

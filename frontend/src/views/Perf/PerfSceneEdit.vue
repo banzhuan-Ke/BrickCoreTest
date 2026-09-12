@@ -150,6 +150,20 @@
           </el-tooltip>
           <div class="field-tip">建议 ≥ Ramp-up；总请求数 / QPS 仍按全窗口有效加压时长计算</div>
         </el-form-item>
+        <el-form-item label="请求等待">
+          <el-radio-group v-model="form.config.request_wait_mode">
+            <el-radio label="case_timeout">按用例超时判失败</el-radio>
+            <el-radio label="wait_response">一直等到返回</el-radio>
+          </el-radio-group>
+          <el-tooltip placement="top">
+            <template #content>
+              <b>按用例超时判失败（推荐）</b>：超过用例超时未返回记为超时失败；收尾强制取消的在途请求也会记失败，不再静默丢弃。<br />
+              <b>一直等到返回</b>：不设客户端超时，等到接口返回（或手动停止）。适合网关/上传极慢、必须收齐样本的场景。
+            </template>
+            <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+          </el-tooltip>
+          <div class="field-tip">大文件上传 / 慢网关：优先抬高用例超时并用默认项；确需拿全量完成样本时再选「一直等到返回」</div>
+        </el-form-item>
         <el-form-item label="目标Host">
           <el-input v-model="form.config.target_host" placeholder="可选，覆盖环境配置的Host" />
           <el-tooltip placement="top" content="不填则使用环境配置中的Host地址，填写后将覆盖环境配置">
@@ -234,6 +248,53 @@
                 当前可选 {{ PERF_TARGET_GLOBAL_OPTIONS.length }} 项：QPS / 成功 QPS / 总请求数 / 平均与成功平均 RT / P90·P95·P99 与成功 P95 / 错误率。
                 勾选并填写目标值后才参与判定；未勾选或留空不影响其它项。
               </div>
+            </template>
+          </div>
+        </el-form-item>
+
+        <!-- 被测资源（报告切片） -->
+        <el-divider content-position="left">被测资源监控</el-divider>
+        <el-form-item label="被测应用">
+          <div style="width:100%;max-width:640px">
+            <el-select
+              v-model="form.config.sut_application_id"
+              clearable
+              filterable
+              placeholder="可选：绑定后按执行环境自动解析采集器"
+              style="width:100%"
+              @change="onSutAppChange"
+            >
+              <el-option
+                v-for="app in sutAppList"
+                :key="app.id"
+                :label="app.name"
+                :value="app.id"
+              />
+            </el-select>
+            <div class="field-tip" style="margin-top:6px">
+              选「被测应用」后，启动压测时按<strong>执行环境</strong>解析该应用已配置的机器，结束时把施压窗内 CPU/内存切进报告。
+              未选择则报告不出现资源章。请先在「被测应用」菜单完成环境绑定。
+            </div>
+            <template v-if="form.config.sut_application_id">
+              <div style="margin-top:10px">
+                <span style="font-size:13px;margin-right:8px;">角色子集</span>
+                <el-select
+                  v-model="form.config.sut_roles"
+                  multiple
+                  clearable
+                  collapse-tags
+                  placeholder="默认全部角色"
+                  style="min-width:280px"
+                >
+                  <el-option v-for="r in sutAppRoles" :key="r" :label="r" :value="r" />
+                </el-select>
+              </div>
+              <el-input
+                v-model="form.config.sut_grafana_url_template"
+                style="margin-top:10px"
+                clearable
+                placeholder="可选 Grafana 深链模板，如 https://g/d/x?from={from_ms}&to={to_ms}&var-host={hostname}"
+              />
             </template>
           </div>
         </el-form-item>
@@ -657,7 +718,7 @@
         />
         <p class="field-tip" style="margin: 0 0 12px 120px;">
           压测会合并项目/环境变量、数据工厂标签 <code v-pre>${{df:标签名}}</code>，以及关联接口用例中的
-          <strong>内联工具</strong> <code v-pre>${{dt:md5|text=@a}}</code>（在接口/Web 用例编辑页点「插入工具」配置；固定值用引号如 <code v-pre>"test@163.com"</code>）。
+          <strong>内联工具</strong> <code v-pre>${{dt:md5|text=@a}}</code>（在接口/Web 用例编辑页点「插入工具」配置；固定值会自动加单引号，JSON 值位置会自动包外层双引号）。
           同一轮压测内相同 <code v-pre>dt:</code> 表达式只计算一次，随机数保持一致。
         </p>
         <el-form-item v-if="!isJourneyMode" label="选择用例" prop="scene_items">
@@ -795,8 +856,9 @@
                 <div><b>Step 1 — 准备 CSV</b></div>
                 <div>　• 第一行必须是<b>英文列名</b>（如 question），UTF-8 编码，最多 10000 行</div>
                 <div>　• 可点击「下载模板」获取样例文件后改内容</div>
-                <div style="margin-top: 4px;"><b>Step 2 — 选择 CSV</b></div>
-                <div>　• 编辑已保存的场景，选择文件后可预览；<b>须再点下方「保存」才会写入场景</b>（取消离开则丢弃）</div>
+                <div style="margin-top: 4px;"><b>Step 2 — 绑定 CSV</b></div>
+                <div>　• 在 <b>CSV 数据集</b> 上传后于场景选择绑定，或于本页直接上传（自动创建/更新数据集）</div>
+                <div>　• 编辑已保存的场景，选择文件后可预览；<b>须再点下方「保存」才会写入</b></div>
                 <div style="margin-top: 4px;"><b>Step 3 — 在用例 Body 中引用</b></div>
                 <div>　• 写法：<code v-pre style="background:#f5f7fa;padding:2px 6px;border-radius:4px;">${{csv.列名}}</code>（兼容旧写法 <code v-pre>{{csv.列名}}</code>）</div>
                 <div>　• 对 CSV 列做 MD5 等工具：<code v-pre style="background:#f5f7fa;padding:2px 6px;border-radius:4px;">${{dt:md5|text=@csv.列名}}</code>（与环境变量同名时仍取 CSV）</div>
@@ -811,17 +873,35 @@
             </el-alert>
             <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px;">
               <el-button :icon="Download" @click="downloadCSVTemplate">下载模板</el-button>
-              <el-upload
-                v-if="isEdit"
-                accept=".csv"
-                :show-file-list="false"
-                :auto-upload="false"
-                :on-change="handleCSVUpload"
-              >
-                <el-button type="primary" :icon="Upload">
-                  {{ csvInfo.hasCSV ? '重新选择 CSV' : '选择 CSV 文件' }}
-                </el-button>
-              </el-upload>
+              <template v-if="isEdit">
+                <el-select
+                  v-model="csvInfo.datasetId"
+                  filterable
+                  clearable
+                  placeholder="绑定项目 CSV 数据集"
+                  style="width: 260px"
+                  :loading="datasetListLoading"
+                  @change="onDatasetBindChange"
+                >
+                  <el-option
+                    v-for="d in datasetOptions"
+                    :key="d.id"
+                    :label="`${d.name}（${d.row_count || 0} 行）`"
+                    :value="d.id"
+                  />
+                </el-select>
+                <el-button link type="primary" @click="goCsvDatasets">管理数据集</el-button>
+                <el-upload
+                  accept=".csv"
+                  :show-file-list="false"
+                  :auto-upload="false"
+                  :on-change="handleCSVUpload"
+                >
+                  <el-button type="primary" :icon="Upload">
+                    {{ csvInfo.hasCSV ? '上传并更新绑定数据' : '上传为新数据集' }}
+                  </el-button>
+                </el-upload>
+              </template>
               <span style="color: #909399; font-size: 13px;">支持 UTF-8 / GBK，最多 10000 行；变更需点下方保存</span>
             </div>
             <el-alert
@@ -833,10 +913,12 @@
               title="CSV 尚未写入场景，请点击下方「保存」生效；取消离开将丢弃本次变更。"
             />
             <div v-if="csvInfo.hasCSV">
-              <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-                <el-tag size="small" :type="csvDirty ? 'warning' : 'success'">{{ csvInfo.fileName }}</el-tag>
+              <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
+                <el-tag size="small" :type="csvDirty ? 'warning' : 'success'">{{ csvInfo.fileName || csvInfo.datasetName || 'CSV' }}</el-tag>
+                <el-tag v-if="csvInfo.datasetName" size="small" type="info">数据集：{{ csvInfo.datasetName }}</el-tag>
+                <el-tag v-if="csvInfo.source === 'legacy'" size="small" type="warning">历史内联（保存/上传后将迁入数据集）</el-tag>
                 <span style="color: #606266; font-size: 13px;">共 {{ csvInfo.rowCount }} 行</span>
-                <el-button link type="danger" size="small" @click="handleCSVDelete">删除</el-button>
+                <el-button link type="danger" size="small" @click="handleCSVDelete">解绑</el-button>
               </div>
               <el-table :data="csvInfo.preview" size="small" border style="width: 100%; max-width: 600px; margin-bottom: 12px;">
                 <el-table-column
@@ -891,7 +973,7 @@ import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
 import LinkFunctionalCaseButton from '@/views/TestManagement/components/LinkFunctionalCaseButton.vue'
 import StreamRuleBuilder from '@/components/perf/StreamRuleBuilder.vue'
 import { perfSceneApi, httpCaseApi, httpSuiteApi, perfJourneyTemplateApi } from '@/api'
-import { perfSceneApi as perfSceneApiCSV, perfStreamParserApi } from '@/api/modules/perf'
+import { perfSceneApi as perfSceneApiCSV, perfStreamParserApi, perfCsvDatasetApi, perfSutApplicationApi } from '@/api/modules/perf'
 import { streamParserConfigApi } from '@/api/modules/sys.js'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { defaultPerfTargets, normalizePerfTargetsLocal, ensureGlobalTargetItems, PERF_TARGET_GLOBAL_OPTIONS } from '@/views/Perf/perfTargets'
@@ -1100,26 +1182,34 @@ const formatSseConfigLabel = (c) => {
   const type = c.parser_display_name || c.parser_id || ''
   return type ? `${c.name}（${type}）` : c.name
 }
-// CSV 参数化数据（选择/删除/改策略均为本地待定，点「保存」才写入）
+// CSV 参数化数据（选择/删除/改策略/绑数据集均为本地待定，点「保存」才写入）
 const csvInfo = reactive({
   hasCSV: false,
   fileName: '',
   rowCount: 0,
   columns: [],
   preview: [],
-  strategy: 'round_robin'
+  strategy: 'round_robin',
+  datasetId: null,
+  datasetName: '',
+  source: 'none',
 })
 /** 服务端已有 CSV（用于判断删除是否需要落库） */
 const csvServerHasData = ref(false)
 const csvServerStrategy = ref('round_robin')
+const csvServerDatasetId = ref(null)
 /** 待落库的文件；非 null 表示有新文件待上传 */
 const csvPendingFile = ref(null)
 /** 待落库删除 */
 const csvPendingDelete = ref(false)
+const csvPendingBind = ref(false)
+const datasetOptions = ref([])
+const datasetListLoading = ref(false)
 
 const csvDirty = computed(() => {
-  if (csvPendingFile.value || csvPendingDelete.value) return true
+  if (csvPendingFile.value || csvPendingDelete.value || csvPendingBind.value) return true
   if (!csvInfo.hasCSV || !csvServerHasData.value) return false
+  if (Number(csvInfo.datasetId || 0) !== Number(csvServerDatasetId.value || 0)) return true
   return csvInfo.strategy !== csvServerStrategy.value
 })
 
@@ -1147,8 +1237,12 @@ const resetCSVLocal = () => {
   csvInfo.columns = []
   csvInfo.preview = []
   csvInfo.strategy = 'round_robin'
+  csvInfo.datasetId = null
+  csvInfo.datasetName = ''
+  csvInfo.source = 'none'
   csvPendingFile.value = null
   csvPendingDelete.value = false
+  csvPendingBind.value = false
 }
 
 const applyCSVPreviewData = (data, { fromServer = false } = {}) => {
@@ -1158,11 +1252,61 @@ const applyCSVPreviewData = (data, { fromServer = false } = {}) => {
   csvInfo.columns = data.columns || []
   csvInfo.preview = data.preview || []
   csvInfo.strategy = data.strategy || csvInfo.strategy || 'round_robin'
+  csvInfo.datasetId = data.dataset_id ?? csvInfo.datasetId
+  csvInfo.datasetName = data.dataset_name || ''
+  csvInfo.source = data.source || (data.dataset_id ? 'dataset' : 'legacy')
   if (fromServer) {
     csvServerHasData.value = true
     csvServerStrategy.value = csvInfo.strategy
+    csvServerDatasetId.value = csvInfo.datasetId
     csvPendingFile.value = null
     csvPendingDelete.value = false
+    csvPendingBind.value = false
+  }
+}
+
+const goCsvDatasets = () => {
+  router.push('/perf-csv-datasets')
+}
+
+const loadDatasetOptions = async () => {
+  const pid = proStore.projectInfo?.id
+  if (!pid) return
+  datasetListLoading.value = true
+  try {
+    const res = await perfCsvDatasetApi.getList({ project_id: pid })
+    const data = res?.data || res || {}
+    datasetOptions.value = data.data || []
+  } catch {
+    datasetOptions.value = []
+  } finally {
+    datasetListLoading.value = false
+  }
+}
+
+const onDatasetBindChange = async (id) => {
+  csvPendingFile.value = null
+  csvPendingBind.value = true
+  if (!id) {
+    resetCSVLocal()
+    csvPendingDelete.value = true
+    csvPendingBind.value = true
+    return
+  }
+  csvPendingDelete.value = false
+  try {
+    const res = await perfCsvDatasetApi.preview(id, { limit: 5 })
+    const data = res?.data || res || {}
+    applyCSVPreviewData({
+      ...data,
+      dataset_id: id,
+      dataset_name: data.name,
+      strategy: csvInfo.strategy || 'round_robin',
+      source: 'dataset',
+    })
+    csvPendingBind.value = true
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '加载数据集失败')
   }
 }
 
@@ -1172,20 +1316,40 @@ const flushCSVChanges = async (sid) => {
     await perfSceneApiCSV.deleteCSV(sid)
     csvServerHasData.value = false
     csvServerStrategy.value = 'round_robin'
+    csvServerDatasetId.value = null
     csvPendingDelete.value = false
     csvPendingFile.value = null
+    csvPendingBind.value = false
     return
   }
   if (csvPendingFile.value) {
     const formData = new FormData()
     formData.append('file', csvPendingFile.value)
-    await perfSceneApiCSV.uploadCSV(sid, formData, {
+    const res = await perfSceneApiCSV.uploadCSV(sid, formData, {
       dryRun: false,
       strategy: csvInfo.strategy,
     })
+    const data = res?.data || res || {}
+    csvInfo.datasetId = data.dataset_id ?? csvInfo.datasetId
     csvServerHasData.value = true
     csvServerStrategy.value = csvInfo.strategy
+    csvServerDatasetId.value = csvInfo.datasetId
     csvPendingFile.value = null
+    csvPendingBind.value = false
+    await loadCSVPreview()
+    return
+  }
+  if (csvPendingBind.value) {
+    await perfSceneApiCSV.bindCsvDataset(sid, {
+      dataset_id: csvInfo.datasetId || null,
+      strategy: csvInfo.strategy,
+      enabled: true,
+    })
+    csvServerHasData.value = !!csvInfo.datasetId
+    csvServerStrategy.value = csvInfo.strategy
+    csvServerDatasetId.value = csvInfo.datasetId
+    csvPendingBind.value = false
+    await loadCSVPreview()
     return
   }
   if (
@@ -1214,16 +1378,45 @@ const form = reactive({
     concurrent_users: 10,
     ramp_up_seconds: 5,
     warmup_seconds: null,
+    request_wait_mode: 'case_timeout',
     duration_seconds: 60,
     loop_count: 100,
     steps: [{ users: 10, duration: 30 }],
     target_host: '',
     error_rate_threshold: 50,
     stream_profile: undefined,
-    journey: defaultJourney()
+    journey: defaultJourney(),
+    sut_application_id: null,
+    sut_roles: [],
+    sut_grafana_url_template: '',
   },
   scene_items: []
 })
+
+const sutAppList = ref([])
+const sutAppRoles = computed(() => {
+  const id = form.config.sut_application_id
+  if (!id) return []
+  const app = sutAppList.value.find((a) => a.id === id)
+  const roles = app?.roles || app?.roles_json || []
+  return Array.isArray(roles) ? roles.filter(Boolean) : []
+})
+
+const onSutAppChange = () => {
+  form.config.sut_roles = []
+}
+
+const loadSutApplications = async () => {
+  if (!proStore.projectInfo?.id) return
+  try {
+    const res = await perfSutApplicationApi.getList({ project_id: proStore.projectInfo.id, size: 200 })
+    const rows = res?.data || res || []
+    sutAppList.value = Array.isArray(rows) ? rows : (rows.data || [])
+  } catch (e) {
+    console.warn('[PerfSceneEdit] load sut applications failed', e)
+    sutAppList.value = []
+  }
+}
 
 const rules = {
   name: [{ required: true, message: '请输入场景名称', trigger: 'blur' }],
@@ -1898,6 +2091,9 @@ const loadScene = async () => {
       if (!('warmup_seconds' in data.config) || data.config.warmup_seconds === undefined) {
         form.config.warmup_seconds = null
       }
+      if (!form.config.request_wait_mode) {
+        form.config.request_wait_mode = 'case_timeout'
+      }
       if (!form.config.mode) form.config.mode = 'fixed'
       if (form.config.mode === 'sse_burst') form.config.mode = 'stream_burst'
       const hasStream = form.config.stream_profile?.parser_id
@@ -1935,6 +2131,9 @@ const loadScene = async () => {
         }
       }
       enableErrorThreshold.value = !!(data.config.error_rate_threshold && data.config.error_rate_threshold > 0)
+      form.config.sut_application_id = data.config.sut_application_id ?? null
+      form.config.sut_roles = Array.isArray(data.config.sut_roles) ? [...data.config.sut_roles] : []
+      form.config.sut_grafana_url_template = data.config.sut_grafana_url_template || ''
       const nextTargets = normalizePerfTargetsLocal(data.config.perf_targets)
       perfTargets.enabled = nextTargets.enabled
       perfTargets.profile = nextTargets.profile
@@ -1994,6 +2193,18 @@ const handleSave = async () => {
       payload.config.error_rate_threshold = 0
     }
     payload.config.perf_targets = normalizePerfTargetsLocal(perfTargets)
+    if (!payload.config.sut_application_id) {
+      delete payload.config.sut_application_id
+      delete payload.config.sut_roles
+      delete payload.config.sut_grafana_url_template
+    } else {
+      if (!Array.isArray(payload.config.sut_roles) || !payload.config.sut_roles.length) {
+        delete payload.config.sut_roles
+      }
+      if (!String(payload.config.sut_grafana_url_template || '').trim()) {
+        delete payload.config.sut_grafana_url_template
+      }
+    }
     // 清理不需要的字段
     if (payload.config.mode === 'fixed') {
       delete payload.config.loop_count
@@ -2074,7 +2285,8 @@ const handleCSVUpload = async (file) => {
     applyCSVPreviewData({ ...data, strategy: keepStrategy })
     csvPendingFile.value = raw
     csvPendingDelete.value = false
-    ElMessage.success('已解析预览，请点击下方「保存」写入场景')
+    csvPendingBind.value = false
+    ElMessage.success('已解析预览，请点击下方「保存」写入（将写入/更新绑定的数据集）')
   } catch (err) {
     console.error(err)
     const detail = err?.response?.data?.detail
@@ -2082,14 +2294,14 @@ const handleCSVUpload = async (file) => {
   }
 }
 
-// 删除：仅本地标记，保存时落库
+// 解绑：仅本地标记，保存时落库
 const handleCSVDelete = async () => {
   try {
     await ElMessageBox.confirm(
       csvServerHasData.value
-        ? '确定删除 CSV？需再点下方「保存」才会从场景中移除。'
+        ? '确定解绑 CSV？需再点下方「保存」才会生效；数据集本身不会删除。'
         : '确定清除已选择的 CSV？',
-      '删除 CSV',
+      '解绑 CSV',
       { type: 'warning' }
     )
   } catch {
@@ -2098,7 +2310,7 @@ const handleCSVDelete = async () => {
   const hadServer = csvServerHasData.value
   resetCSVLocal()
   if (hadServer) csvPendingDelete.value = true
-  ElMessage.info(hadServer ? '已标记删除，请点击下方「保存」生效' : '已清除所选 CSV')
+  ElMessage.info(hadServer ? '已标记解绑，请点击下方「保存」生效' : '已清除所选 CSV')
 }
 
 // 策略变更：仅本地，保存时写入
@@ -2128,14 +2340,25 @@ const loadCSVPreview = async () => {
 }
 
 onMounted(async () => {
-  await Promise.all([loadParsers(), loadSseConfigs(), loadCases(), loadScene(), loadCSVPreview()])
+  await Promise.all([
+    loadParsers(),
+    loadSseConfigs(),
+    loadCases(),
+    loadScene(),
+    loadCSVPreview(),
+    loadDatasetOptions(),
+    loadSutApplications(),
+  ])
   await consumeAppendCaseQuery()
 })
 
 watch(
   () => proStore.projectInfo?.id,
   (pid) => {
-    if (pid) loadCases()
+    if (pid) {
+      loadCases()
+      loadSutApplications()
+    }
   },
 )
 </script>

@@ -22,7 +22,7 @@ import httpx
 import smtplib
 
 from app.models.sys import NotificationConfig, SystemSmtpConfig, Project, NotificationLog
-from app.models.http import ApiSuiteRunRecord, ApiRunRecord, ApiPlanRunRecord
+from app.models.http import ApiSuiteRunRecord, ApiRunRecord, ApiPlanRunRecord, ApiTestSuite
 from app.models.perf import PerfRecord
 from app.models.ui import UiPlanExecution, UiSuiteExecution, UiCaseExecution
 from app.modules.http.api_report_export import (
@@ -1073,7 +1073,11 @@ class NotificationService:
             attachment=(filename, html_content, "text/html"),
             recipients=recipients,
             config_ids=config_ids,
-            auto_push_field="api_auto_push_report" if auto_push_only else None,
+            auto_push_field=(
+                ("api_plan_auto_push_report" if record_type == "plan" else "api_suite_auto_push_report")
+                if auto_push_only
+                else None
+            ),
             related_id=record_id,
             related_type=related_type,
         )
@@ -1186,9 +1190,111 @@ class NotificationService:
             attachment=(filename, html_content, "text/html"),
             recipients=recipients,
             config_ids=config_ids,
-            auto_push_field="ui_auto_push_report" if auto_push_only else None,
+            auto_push_field="ui_plan_auto_push_report" if auto_push_only else None,
             related_id=plan_execution_id,
             related_type="ui_plan_execution",
+        )
+
+    @staticmethod
+    async def send_ui_suite_report(
+        suite_execution_id: int,
+        recipients: Optional[List[str]] = None,
+        *,
+        auto_push_only: bool = False,
+        config_ids: Optional[List[int]] = None,
+    ):
+        """发送 Web 独立套件执行报告（邮件 HTML 附件 + 可选 IM 摘要）"""
+        record = await UiSuiteExecution.get_or_none(id=suite_execution_id, is_del=False).prefetch_related("suite")
+        if not record:
+            raise ValueError("套件执行记录不存在")
+        suite = await record.suite
+        project_id = suite.project_id if suite else None
+
+        suite_records = [{
+            "id": record.id,
+            "suite_name": suite.name if suite else "未知套件",
+            "status": record.status,
+            "case_count": record.case_count,
+            "success": record.success,
+            "fail": record.fail,
+            "error": record.error,
+            "skip": record.skip,
+            "no_run": record.no_run,
+            "pass_rate": record.pass_rate,
+            "execution_log": record.execution_log,
+            "duration": record.duration,
+            "start_time": record.start_time,
+        }]
+        case_records_db = await UiCaseExecution.filter(suite_execution=record.id, is_del=False).prefetch_related("case")
+        case_records = []
+        for cr in case_records_db:
+            case_records.append({
+                "id": cr.id,
+                "case_name": cr.case.name if cr.case else "未知用例",
+                "status": cr.status,
+                "result_data": cr.result_data,
+                "suite_execution_id": record.id,
+                "start_time": cr.start_time,
+            })
+        record_data = {
+            "id": record.id,
+            "suite_name": suite.name if suite else "未知套件",
+            "username": record.username,
+            "start_time": record.start_time,
+            "duration": record.duration,
+            "status": record.status,
+            "case_count": record.case_count,
+            "success": record.success,
+            "fail": record.fail,
+            "error": record.error,
+            "skip": record.skip,
+            "no_run": record.no_run,
+            "pass_rate": record.pass_rate,
+            "env": record.env,
+            "execution_log": record.execution_log,
+        }
+        html_content, image_mode_used = build_email_html_report(
+            record_data, "suite", suite_records, case_records
+        )
+        filename = f"ui_suite_report_{suite_execution_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        subject = f"[UI套件报告] {record_data['suite_name']} - {record.status}"
+        env_name = ""
+        env = record_data.get("env") or {}
+        if isinstance(env, str):
+            try:
+                env = json.loads(env)
+            except Exception:
+                env = {}
+        if isinstance(env, dict):
+            env_name = env.get("env_name") or env.get("name") or ""
+        fail_n = int(record.fail or 0)
+        error_n = int(record.error or 0)
+        report_info = {
+            "title": "Web UI 套件执行报告",
+            "name_label": "套件名称",
+            "name": record_data["suite_name"],
+            "status": record.status,
+            "total": record.case_count or 0,
+            "success": record.success or 0,
+            "failed": fail_n,
+            "error": error_n,
+            "skipped": record.skip or 0,
+            "pass_rate": record.pass_rate,
+            "duration": record.duration,
+            "run_by": record.username,
+            "env_name": env_name,
+            "note": email_report_attachment_note(image_mode_used),
+        }
+        return await NotificationService._dispatch_report(
+            project_id,
+            subject=subject,
+            report_info=report_info,
+            attachment=(filename, html_content, "text/html"),
+            recipients=recipients,
+            config_ids=config_ids,
+            auto_push_field="ui_suite_auto_push_report" if auto_push_only else None,
+            related_id=suite_execution_id,
+            related_type="ui_suite_execution",
         )
 
     @staticmethod
@@ -1211,8 +1317,19 @@ class NotificationService:
         scene_name = scene.name if scene else "未知场景"
 
         from app.routers.perf.records import _generate_perf_html_report
+        from app.routers.perf.report_utils import resolve_env_label, resolve_user_nickname
 
-        html_content = _generate_perf_html_report(record, scene, editable=False)
+        env_label = await resolve_env_label(record.config_snapshot or {})
+        executor = await resolve_user_nickname(record.run_by) or (record.run_by or "—")
+        try:
+            from app.modules.perf.sut_slice import load_sut_resource_series
+
+            record._sut_series_cache = await load_sut_resource_series(record.id)
+        except Exception:
+            record._sut_series_cache = []
+        html_content = _generate_perf_html_report(
+            record, scene, editable=False, env_label=env_label, executor_display=executor
+        )
         filename = f"perf_report_{record_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
         subject = f"[性能测试报告] {scene_name} - {record.status}"
         report_info = {
@@ -1276,6 +1393,177 @@ class NotificationService:
             print(f"[AutoReport] Perf report auto push failed: {e}")
 
     @staticmethod
+    async def maybe_auto_push_api_suite_report(record_id: int) -> None:
+        """接口套件执行结束后按 api_suite_auto_push_report 自动推（定时与手动同路径）。"""
+        record = await ApiSuiteRunRecord.get_or_none(id=record_id)
+        if not record:
+            return
+        if record.status not in ("success", "failed"):
+            return
+        email_cfg = await NotificationConfig.filter(
+            project_id=record.project_id,
+            channel_type="email",
+            enabled=True,
+            api_suite_auto_push_report=True,
+        ).first()
+        if not email_cfg:
+            return
+        try:
+            await NotificationService.send_api_report(
+                project_id=record.project_id,
+                record_id=record_id,
+                record_type="suite",
+                auto_push_only=True,
+            )
+        except Exception as e:
+            print(f"[AutoReport] API suite report auto push failed: {e}")
+
+    @staticmethod
+    async def maybe_auto_push_api_plan_report(record_id: int) -> None:
+        """接口计划执行结束后按 api_plan_auto_push_report 自动推（定时与手动同路径）。"""
+        record = await ApiPlanRunRecord.get_or_none(id=record_id)
+        if not record:
+            return
+        if record.status not in ("success", "failed"):
+            return
+        email_cfg = await NotificationConfig.filter(
+            project_id=record.project_id,
+            channel_type="email",
+            enabled=True,
+            api_plan_auto_push_report=True,
+        ).first()
+        if not email_cfg:
+            return
+        try:
+            await NotificationService.send_api_report(
+                project_id=record.project_id,
+                record_id=record_id,
+                record_type="plan",
+                auto_push_only=True,
+            )
+        except Exception as e:
+            print(f"[AutoReport] API plan report auto push failed: {e}")
+
+    @staticmethod
+    async def maybe_auto_push_ui_plan_report(plan_execution_id: int) -> None:
+        """Web 计划执行结束后按 ui_plan_auto_push_report 自动推。"""
+        record = await UiPlanExecution.get_or_none(id=plan_execution_id, is_del=False)
+        if not record or record.status != "执行完成":
+            return
+        project_id = record.project_id
+        if not project_id:
+            return
+        email_cfg = await NotificationConfig.filter(
+            project_id=project_id,
+            channel_type="email",
+            enabled=True,
+            ui_plan_auto_push_report=True,
+        ).first()
+        if not email_cfg:
+            return
+        try:
+            await NotificationService.send_ui_report(
+                plan_execution_id=plan_execution_id,
+                auto_push_only=True,
+            )
+        except Exception as e:
+            print(f"[AutoReport] UI plan report auto push failed: {e}")
+
+    @staticmethod
+    async def maybe_auto_push_ui_suite_report(suite_execution_id: int) -> None:
+        """Web 独立套件执行结束后按 ui_suite_auto_push_report 自动推（计划内套件不推）。"""
+        record = await UiSuiteExecution.get_or_none(id=suite_execution_id, is_del=False)
+        if not record or record.status != "执行完成":
+            return
+        if record.plan_execution_id:
+            return
+        suite = await record.suite
+        project_id = suite.project_id if suite else None
+        if not project_id:
+            return
+        email_cfg = await NotificationConfig.filter(
+            project_id=project_id,
+            channel_type="email",
+            enabled=True,
+            ui_suite_auto_push_report=True,
+        ).first()
+        if not email_cfg:
+            return
+        try:
+            await NotificationService.send_ui_suite_report(
+                suite_execution_id=suite_execution_id,
+                auto_push_only=True,
+            )
+        except Exception as e:
+            print(f"[AutoReport] UI suite report auto push failed: {e}")
+
+    @staticmethod
+    async def maybe_alert_api_suite_failure(record_id: int) -> None:
+        """接口套件失败告警（与页面执行路径对齐；定时任务亦应调用）。"""
+        record = await ApiSuiteRunRecord.get_or_none(id=record_id)
+        if not record or record.status != "failed":
+            return
+        suite_obj = await ApiTestSuite.get_or_none(id=record.suite_id, is_del=False)
+        total = int(record.total_cases or 0)
+        success = int(record.success_cases or 0)
+        failed = int(record.failed_cases or 0)
+        try:
+            await NotificationService.send_alert(
+                project_id=record.project_id,
+                title=f"API套件执行失败：{suite_obj.name if suite_obj else '未知套件'}",
+                content={
+                    "execution_type": "API套件",
+                    "name": suite_obj.name if suite_obj else "未知套件",
+                    "status": "failed",
+                    "total": total,
+                    "success": success,
+                    "failed": failed,
+                    "pass_rate": round(success / total * 100, 2) if total > 0 else 0,
+                    "duration": round((record.duration or 0) / 1000, 2),
+                    "run_by": record.run_by,
+                    "link": "",
+                },
+                related_id=record.id,
+                related_type="api_suite_run_record",
+                alert_scope="api",
+            )
+        except Exception as e:
+            print(f"[AutoAlert] API suite failure alert failed: {e}")
+
+    @staticmethod
+    async def maybe_alert_api_plan_failure(record_id: int) -> None:
+        """接口计划失败告警。"""
+        record = await ApiPlanRunRecord.get_or_none(id=record_id)
+        if not record or record.status != "failed":
+            return
+        plan = await record.plan
+        total = int(record.total_cases or 0)
+        success = int(record.success_cases or 0)
+        failed = int(record.failed_cases or 0)
+        try:
+            await NotificationService.send_alert(
+                project_id=record.project_id,
+                title=f"API计划执行失败：{plan.name if plan else '未知计划'}",
+                content={
+                    "execution_type": "API计划",
+                    "name": plan.name if plan else "未知计划",
+                    "status": "failed",
+                    "total": total,
+                    "success": success,
+                    "failed": failed,
+                    "pass_rate": round(success / total * 100, 2) if total > 0 else 0,
+                    "duration": round((record.duration or 0) / 1000, 2),
+                    "run_by": record.run_by,
+                    "link": "",
+                },
+                related_id=record.id,
+                related_type="api_plan_run_record",
+                alert_scope="api",
+            )
+        except Exception as e:
+            print(f"[AutoAlert] API plan failure alert failed: {e}")
+
+    @staticmethod
     async def send_app_plan_report(
         plan_execution_id: int,
         recipients: Optional[List[str]] = None,
@@ -1324,7 +1612,7 @@ class NotificationService:
             attachment=(filename, html_content, "text/html"),
             recipients=recipients,
             config_ids=config_ids,
-            auto_push_field="app_auto_push_report" if auto_push_only else None,
+            auto_push_field="app_plan_auto_push_report" if auto_push_only else None,
             related_id=plan_execution_id,
             related_type="app_plan_execution",
         )
@@ -1378,7 +1666,7 @@ class NotificationService:
             attachment=(filename, html_content, "text/html"),
             recipients=recipients,
             config_ids=config_ids,
-            auto_push_field="app_auto_push_report" if auto_push_only else None,
+            auto_push_field="app_suite_auto_push_report" if auto_push_only else None,
             related_id=suite_execution_id,
             related_type="app_suite_execution",
         )

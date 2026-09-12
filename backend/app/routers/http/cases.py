@@ -681,12 +681,26 @@ async def run_test_case(case_id: int, request: ApiRunRequest, username: str = De
             raise HTTPException(status_code=404, detail="用例不存在")
         from app.modules.http.worker_http_proxy import require_api_proxy_worker_http
         await require_api_proxy_worker_http(case.project_id, request.worker_id)
+
+    run_variables = dict(request.variables or {})
+    if request.csv_dataset_id is not None or request.csv_scene_id is not None:
+        if not case:
+            raise HTTPException(status_code=404, detail="用例不存在")
+        from app.modules.perf.csv_case_hint import load_csv_row_vars
+        csv_vars = await load_csv_row_vars(
+            project_id=int(case.project_id),
+            scene_id=int(request.csv_scene_id) if request.csv_scene_id is not None else None,
+            dataset_id=int(request.csv_dataset_id) if request.csv_dataset_id is not None else None,
+            row_index=int(request.csv_row_index or 0),
+        )
+        run_variables.update(csv_vars)
+
     if case and case.data_set:
         return await run_data_driven_case(
             case_id,
             request.env_id,
             username,
-            request.variables or {},
+            run_variables,
             request.auto_validate_schema,
             request.propagate_extracted,
             worker_id=request.worker_id,
@@ -697,7 +711,7 @@ async def run_test_case(case_id: int, request: ApiRunRequest, username: str = De
         env_id=request.env_id,
         suite_record_id=None,
         username=username,
-        variables=request.variables or {},
+        variables=run_variables,
         auto_validate_schema=request.auto_validate_schema,
         worker_id=request.worker_id,
     )

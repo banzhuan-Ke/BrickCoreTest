@@ -192,10 +192,10 @@ AI_REQUIREMENT_BUCKET=ai-requirements
 DOC_USERNAME=admin
 DOC_PASSWORD=BrickCore123456
 INTERNAL_API_KEY=brickcore-internal-demo
-PLATFORM_VERSION=1.7.0
-RUNNER_CLIENT_VERSION_LATEST=1.7.0
+PLATFORM_VERSION=1.8.0
+RUNNER_CLIENT_VERSION_LATEST=1.8.0
 RUNNER_CLIENT_VERSION_MIN=1.3.8
-RUNNER_ENGINE_VERSION=1.7.0
+RUNNER_ENGINE_VERSION=1.8.0
 RUNNER_ENGINE_VERSION_MIN=1.0.0
 ```
 
@@ -252,6 +252,10 @@ npm run dev
 浏览器打开：**http://localhost:8080**（端口以 `frontend/.env.development` 的 `VITE_PORT` 为准）。  
 登录：**admin / BrickCore123456**
 
+> **仅本机访问**：`npm run dev` 会读 `frontend/.env.development`，其中 `VITE_BASE_API` 默认是 `http://localhost:8000`。  
+> 服务器本机登录正常、**局域网其他电脑打开页面却「网络错误」** 是预期现象——浏览器在对方电脑上请求了对方自己的 `localhost`。  
+> 需要给同事用时，见下文 **「局域网内其他电脑访问」**。
+
 ### 7. 日常启动顺序（无 Docker）
 
 1. MySQL 服务（安装后一般开机自启）  
@@ -269,6 +273,113 @@ npm run dev
 
 - 平台地址：`http://127.0.0.1:8000` 或前端反代地址  
 - MQ / Redis 端口必须与 `backend/.env` 一致（本方式为 **5672**、**6379**），不要填 Docker 映射用的 25672 / 26379  
+
+### 9. 局域网内其他电脑访问（方式一 / 方式二）
+
+前提：已在服务器上按上文跑通 Backend + Frontend，本机用 `http://localhost:8080` 能登录。  
+先查服务器局域网 IP（示例用 `192.168.1.233`，请换成你的）：
+
+```powershell
+ipconfig
+# 看「以太网」或「WLAN」的 IPv4 地址
+```
+
+Windows 防火墙放行 **8080**（前端）和 **8000**（后端；临时方案需要）。
+
+#### 方案 A：继续 `npm run dev`（临时 / 演示）
+
+适合：IP 基本固定、先让同事能登录。**前端与后端端口不同，必须同时改 API 地址并放行 CORS。**
+
+1. 编辑 `frontend/.env.development`：
+
+```env
+VITE_BASE_API="http://192.168.1.233:8000"
+VITE_BASE_WS="ws://192.168.1.233:8000"
+```
+
+2. 编辑 `backend/.env`，追加（或改成你的前端来源；多个用来源逗号分隔）：
+
+```env
+CORS_ALLOWED_ORIGINS=http://192.168.1.233:8080
+```
+
+> 只改前端、不改 CORS 时，浏览器会报：  
+> `blocked by CORS policy: No 'Access-Control-Allow-Origin' header`  
+> （页面在 `:8080`，接口在 `:8000`，属于跨域。）
+
+3. **重启 Backend**（`python run_new.py`）与 **Frontend**（先停再 `npm run dev`）。改 `.env` 不重启不生效。
+
+4. 其他电脑浏览器访问：`http://192.168.1.233:8080`（不要写 `localhost`）。
+
+5. 自检（在出问题的电脑按 F12 → Network）：
+   - 错误：`http://localhost:8000/...` → 前端仍是旧配置，未改或未重启  
+   - 错误：CORS / `Access-Control-Allow-Origin` → 未配 `CORS_ALLOWED_ORIGINS` 或未重启 Backend  
+   - 正常：请求为 `http://192.168.1.233:8000/sys/...` 且状态 200
+
+IP 变更后需同步改两处 `.env` 并重启。长期给多人用请用方案 B。
+
+#### 方案 B：生产构建 + Nginx 同域（推荐）
+
+适合：局域网长期访问。接口与页面同端口，**不必**配置 CORS，也**不要**把 `localhost:8000` 打进前端包。
+
+**思路**：浏览器只访问 `http://服务器IP:8080` → Nginx 把页面文件直接返回，把 `/sys`、`/ai` 等 API **转发**到本机已启动的 Backend `127.0.0.1:8000`。对浏览器来说仍是同一域名端口，故无跨域。
+
+1. 确认 `frontend/.env.production` 中为（仓库默认即如此）：
+
+```env
+VITE_BASE_API=""
+VITE_BASE_WS=""
+```
+
+2. **停掉** `npm run dev`（否则会占 8080）。构建：
+
+```powershell
+cd frontend
+npm install
+npm run build
+# 确认存在 frontend\dist\index.html
+```
+
+3. 安装 Nginx for Windows：打开 [nginx.org/en/download.html](https://nginx.org/en/download.html)，下载 **Stable** 的 zip，解压到例如 `C:\tools\nginx`。目录里应有 `nginx.exe`、`conf\`、`html\`。
+
+4. 用仓库根目录 `nginx.conf` 改一版给 Windows（不要直接覆盖成 Linux 路径）。复制为 `C:\tools\nginx\conf\nginx.conf`，至少改这几处：
+
+```nginx
+# 原：include /etc/nginx/mime.types;
+include       mime.types;
+
+# 原：listen 80;
+listen 8080;
+
+# 所有 root /usr/share/nginx/html; 改成你的 dist 绝对路径（正斜杠）
+# 例如代码在 D:\ework\BrickCore：
+root D:/ework/BrickCore/frontend/dist;
+```
+
+`location /` 与静态资源缓存那两处的 `root` 都要改。`proxy_pass http://127.0.0.1:8000;` **不用改**（Nginx 与 Backend 在同一台机）。其余 `location`（`/sys`、`/mock/`、`/ws/` 等）保持仓库配置即可。
+
+5. Backend 照常运行（`python run_new.py`，监听 8000）。启动 Nginx：
+
+```powershell
+cd C:\tools\nginx
+.\nginx.exe
+# 改配置后重载：
+.\nginx.exe -s reload
+# 停止：
+.\nginx.exe -s stop
+```
+
+若提示端口被占用：先结束仍在跑的 `npm run dev`，或把 `listen` 改成别的端口。  
+防火墙放行 Nginx 监听端口（如 **8080**）；此时别人**不必**直连 8000。
+
+6. 其他电脑只访问：`http://192.168.1.233:8080`。  
+   F12 → Network：接口应为 `http://192.168.1.233:8080/sys/...`，**不应**再出现 `localhost:8000`。
+
+7. 前端有更新时：再执行 `npm run build`，然后 `nginx.exe -s reload`（或重启 Nginx）。一般不用改 conf。
+
+8. 也可改用上文 **方式三：Docker 全栈**（镜像内已含 Nginx + 构建流程），访问入口以 compose / 文档为准。
+
+> **Python 位数**：请使用 **64 位** Python 3.10–3.12 建 venv。若 `python -c "import sys; print(sys.version)"` 出现 `32 bit`，`matplotlib` / `numpy` 等常无 Windows wheel，会误走源码编译并报找不到 `cl`/`gcc`。请改装 64 位后重建 venv。
 
 ---
 
@@ -322,6 +433,8 @@ npm run dev
 ```
 
 访问 http://localhost:8080 。可选根目录 `start-local.bat`（需已建好 venv 且 `.env` 与中间件一致）。
+
+> 局域网其他电脑访问：同样适用方式一 **§9**（改 `VITE_BASE_API` + `CORS_ALLOWED_ORIGINS`，或 `npm run build` + Nginx）。
 
 ---
 
@@ -400,6 +513,9 @@ docker compose logs -f backend
 | Docker 装不上 / 无 Hyper-V | 不要用方式二/三，改方式一 |
 | 页面空白（全栈） | 先 `npm run build`，确认有 `frontend/dist/index.html` |
 | AI 生成 Agent（MCP）/ 探索失败：`Executable doesn't exist` / `ms-playwright` | 在 **Backend** 目录激活 `venv` 后执行 `python -m playwright install chromium`，重启 Backend（与 Runner 浏览器无关） |
+| 服务器本机能登录，局域网其他电脑「网络错误」 | `npm run dev` 默认请求 `localhost:8000`；按 **§9** 改 API 为服务器 IP 并配置 CORS，或改用 build + Nginx |
+| 已改成服务器 IP，仍报 CORS / `Access-Control-Allow-Origin` | 在 `backend/.env` 增加 `CORS_ALLOWED_ORIGINS=http://<服务器IP>:8080` 并**重启 Backend** |
+| `pip install` 编译 matplotlib 失败 / 找不到 `cl` | 多为 **32 位** Python；改用 64 位并重建 venv（见 §9 末） |
 
 ---
 

@@ -14,8 +14,8 @@ export const apiTestFileApi = {
         const form = new FormData()
         form.append('file', file)
         return await http.post(`/api-module/files/upload?project_id=${projectId}`, form, {
-            headers: { 'Content-Type': 'multipart/form-data' },
             onUploadProgress: onProgress,
+            timeout: 120000,
         })
     },
     async delete(fileId, projectId, force = false) {

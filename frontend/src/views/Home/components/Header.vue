@@ -28,6 +28,54 @@
         </div>
       </el-tooltip>
 
+      <!-- 界面缩放（类似浏览器缩放，缓解密集页拥挤） -->
+      <div class="ui-zoom">
+        <el-tooltip content="缩小界面" placement="bottom">
+          <button
+            type="button"
+            class="zoom-btn"
+            :disabled="uStore.uiZoom <= UI_ZOOM_MIN"
+            @click="uStore.bumpUiZoom(-UI_ZOOM_STEP)"
+          >−</button>
+        </el-tooltip>
+        <el-tooltip content="输入缩放百分比后回车或失焦生效（80～110）" placement="bottom">
+          <span class="zoom-input-wrap">
+            <input
+              v-model="zoomInput"
+              class="zoom-input"
+              type="number"
+              :min="UI_ZOOM_MIN"
+              :max="UI_ZOOM_MAX"
+              step="1"
+              aria-label="界面缩放百分比"
+              @focus="onZoomInputFocus"
+              @keydown.enter.prevent="commitZoomInput"
+              @blur="commitZoomInput"
+            />
+            <span class="zoom-suffix">%</span>
+          </span>
+        </el-tooltip>
+        <el-tooltip content="放大界面" placement="bottom">
+          <button
+            type="button"
+            class="zoom-btn"
+            :disabled="uStore.uiZoom >= UI_ZOOM_MAX"
+            @click="uStore.bumpUiZoom(UI_ZOOM_STEP)"
+          >+</button>
+        </el-tooltip>
+        <el-tooltip content="恢复 100%" placement="bottom">
+          <button
+            type="button"
+            class="zoom-btn zoom-reset"
+            :disabled="uStore.uiZoom === 100"
+            aria-label="恢复 100%"
+            @click="resetZoom"
+          >
+            <el-icon :size="14"><RefreshRight /></el-icon>
+          </button>
+        </el-tooltip>
+      </div>
+
       <!-- 界面风格 -->
       <el-tooltip content="切换界面风格" placement="bottom">
         <ThemeSwitcher compact />
@@ -75,18 +123,29 @@
         </el-dropdown>
       </el-badge>
 
-      <!-- 联系作者（微信好友二维码，与站内信入口并存） -->
-      <el-popover placement="bottom-end" :width="280" trigger="click">
+      <!-- 联系作者微信码：仅 CE 显示；Pro 默认隐藏（edition 来自 /runner/version） -->
+      <el-popover
+        v-if="isCommunityEdition"
+        placement="bottom-end"
+        :width="300"
+        trigger="click"
+        :teleported="true"
+        popper-class="contact-wechat-popper"
+      >
         <template #reference>
-          <el-tooltip content="联系作者 / 加微信好友" placement="bottom">
-            <div class="avatar contact-icon">
-              <el-icon :size="20"><ChatDotRound /></el-icon>
-            </div>
-          </el-tooltip>
+          <div
+            class="avatar contact-icon"
+            role="button"
+            tabindex="0"
+            aria-label="联系作者 / 加微信好友"
+            title="联系作者 / 加微信好友（点击查看二维码）"
+          >
+            <el-icon :size="20"><ChatDotRound /></el-icon>
+          </div>
         </template>
         <div class="contact-popover">
-          <img src="/contact-wechat-qr.png" alt="微信好友二维码" class="contact-qr" />
-          <p class="contact-tip">搬砖客 · 扫码加微信好友</p>
+          <img :src="contactWechatQr" alt="微信好友二维码" class="contact-qr" />
+          <p class="contact-tip">扫码加微信好友</p>
         </div>
       </el-popover>
       
@@ -154,11 +213,11 @@
 
 <script setup>
 import {ProjectStore} from "@/stores/module/ProjectStore"
-import {UserStore} from '@/stores/module/UserStore'
+import {UserStore, UI_ZOOM_MIN, UI_ZOOM_MAX, UI_ZOOM_STEP} from '@/stores/module/UserStore'
 import { resetMenuExpandedSession } from '@/datas/Menu'
 import {useRouter} from 'vue-router'
 import screenfull from "screenfull"
-import {ref, onMounted, onBeforeUnmount, computed} from 'vue'
+import {ref, onMounted, onBeforeUnmount, computed, watch} from 'vue'
 import {ElNotification, ElMessage, ElMessageBox} from 'element-plus'
 import dateTools from "@/tools/dateTools.js"
 import HelpContent from "@/components/HelpContent.vue"
@@ -166,7 +225,11 @@ import ThemeSwitcher from "@/components/ThemeSwitcher.vue"
 import GlobalProjectSearch from "@/components/GlobalProjectSearch.vue"
 import NotificationInboxPanel from "@/components/NotificationInboxPanel.vue"
 import { inboxApi } from '@/api/modules/sys'
-import { Search, ChatDotRound } from '@element-plus/icons-vue'
+import { Search, ChatDotRound, RefreshRight } from '@element-plus/icons-vue'
+import contactWechatQr from '@/assets/images/contact-wechat-qr.png'
+import { useCommunityEdition } from '@/composables/useCommunityEdition'
+
+const { isCommunityEdition, loadCommunityEdition } = useCommunityEdition()
 
 // 定义props判断是否为项目列表页
 const props = defineProps({
@@ -175,6 +238,33 @@ const props = defineProps({
 const proStore = ProjectStore()
 const uStore = UserStore()
 const router = useRouter()
+
+const zoomInput = ref(String(uStore.uiZoom))
+watch(
+  () => uStore.uiZoom,
+  (v) => {
+    zoomInput.value = String(v)
+  }
+)
+
+const onZoomInputFocus = (e) => {
+  e?.target?.select?.()
+}
+
+const commitZoomInput = () => {
+  const raw = String(zoomInput.value ?? '').trim().replace(/%/g, '')
+  if (!raw) {
+    zoomInput.value = String(uStore.uiZoom)
+    return
+  }
+  uStore.setUiZoom(raw)
+  zoomInput.value = String(uStore.uiZoom)
+}
+
+const resetZoom = () => {
+  uStore.setUiZoom(100)
+  zoomInput.value = '100'
+}
 
 // 切换菜单折叠
 const switchCollapse = () => {
@@ -377,6 +467,7 @@ onMounted(() => {
   }, 1000)
   refreshInboxCount()
   startInboxSse()
+  loadCommunityEdition()
   if (screenfull.isEnabled) {
     screenfull.on('change', onScreenfullChange)
   }
@@ -409,4 +500,28 @@ const handleFullScreen = () => {
 
 <style scoped lang="scss">
 @use "./Header.scss";
+</style>
+
+<!-- teleported 到 body，scoped 可能套不上，单独补一层 -->
+<style lang="scss">
+.contact-wechat-popper {
+  padding: 12px !important;
+  .contact-popover {
+    text-align: center;
+  }
+  .contact-qr {
+    width: 268px;
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    display: block;
+    margin: 0 auto 8px;
+    background: #fff;
+  }
+  .contact-tip {
+    margin: 0;
+    font-size: 12px;
+    color: #909399;
+  }
+}
 </style>

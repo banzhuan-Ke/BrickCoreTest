@@ -10,6 +10,10 @@ from .workers import router as workers_router, public_router as workers_public_r
 from .stream_parsers import router as stream_parsers_router
 from .journey_templates import router as journey_templates_router
 from .comparison_reports import router as comparison_reports_router
+from .csv_datasets import router as csv_datasets_router
+from .sut_servers import router as sut_servers_router
+from .sut_servers_public import public_router as sut_public_router
+from .sut_applications import router as sut_applications_router
 
 perf_router = APIRouter(
     prefix="/perf",
@@ -18,6 +22,7 @@ perf_router = APIRouter(
 )
 
 perf_router.include_router(scenes_router)
+perf_router.include_router(csv_datasets_router)
 perf_router.include_router(journey_templates_router)
 perf_router.include_router(exec_router)
 perf_router.include_router(records_router)
@@ -25,3 +30,5 @@ perf_router.include_router(comparison_reports_router)
 perf_router.include_router(cron_router)
 perf_router.include_router(workers_router)
 perf_router.include_router(stream_parsers_router)
+perf_router.include_router(sut_servers_router)
+perf_router.include_router(sut_applications_router)

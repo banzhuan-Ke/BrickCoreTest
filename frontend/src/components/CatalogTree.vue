@@ -190,7 +190,9 @@ const normalizeTreeResponse = (data) => {
 
 const badgeMap = computed(() => {
   const map = {}
-  const countOf = (id) => props.countMap[id] ?? props.countMap[String(id)] ?? 0
+  // CatalogListLayout 曾默认传 null，导致节点插槽渲染中断、只剩展开箭头
+  const counts = props.countMap && typeof props.countMap === 'object' ? props.countMap : {}
+  const countOf = (id) => counts[id] ?? counts[String(id)] ?? 0
   const sumSubtree = (node) => {
     if (!node || node.id === 'all') return 0
     let total = countOf(node.id)
@@ -202,7 +204,7 @@ const badgeMap = computed(() => {
   const walk = (nodes) => {
     for (const node of nodes) {
       if (node.id === 'all') {
-        const total = Object.values(props.countMap).reduce((a, b) => a + (b || 0), 0)
+        const total = Object.values(counts).reduce((a, b) => a + (b || 0), 0)
         if (total > 0) map.all = total
       } else {
         const count = sumSubtree(node)

@@ -240,6 +240,32 @@
             :disabled="!execSettings.perf_ai_analysis_enabled"
           />
         </el-form-item>
+        <el-divider content-position="left">被测资源指标</el-divider>
+        <el-form-item label="指标保留天数">
+          <el-input-number
+            v-model="execSettings.sut_metrics_retain_days"
+            :min="1"
+            :max="90"
+            :controls="true"
+            placeholder="跟随平台"
+          />
+          <div class="form-tip">
+            平台库被测指标 chunk 保留天数（1～90）。留空/不改默认跟随平台环境变量
+            <code>SUT_METRICS_RETAIN_DAYS</code>（默认 14）。定时清理按项目生效。
+          </div>
+        </el-form-item>
+        <el-form-item label="施压前基线回看(秒)">
+          <el-input-number
+            v-model="execSettings.sut_metrics_baseline_sec"
+            :min="60"
+            :max="1800"
+            :step="60"
+            placeholder="跟随平台"
+          />
+          <div class="form-tip">
+            报告/AI 对比「施压前 → 施压中」时，施压前窗口长度（默认 300 秒=5 分钟）。需采集器在压测开始前已在上报。
+          </div>
+        </el-form-item>
       </template>
 
       <template v-else-if="activeSection === 'cases'">
@@ -364,6 +390,8 @@ const execSettings = reactive({
   perf_ai_analysis_enabled: false,
   perf_ai_analysis_default_on_run: false,
   perf_ai_analysis_allow_run_override: true,
+  sut_metrics_retain_days: null,
+  sut_metrics_baseline_sec: null,
   requirement_case: {
     auto_count_enabled_default: false,
     auto_count_min_floor: 4,
@@ -441,6 +469,8 @@ const SECTION_PAYLOAD_KEYS = {
     'perf_ai_analysis_enabled',
     'perf_ai_analysis_default_on_run',
     'perf_ai_analysis_allow_run_override',
+    'sut_metrics_retain_days',
+    'sut_metrics_baseline_sec',
   ],
   cases: ['requirement_case'],
 }
@@ -474,6 +504,8 @@ const buildSavePayload = () => {
       perf_ai_analysis_enabled: execSettings.perf_ai_analysis_enabled,
       perf_ai_analysis_default_on_run: execSettings.perf_ai_analysis_default_on_run,
       perf_ai_analysis_allow_run_override: execSettings.perf_ai_analysis_allow_run_override,
+      sut_metrics_retain_days: execSettings.sut_metrics_retain_days,
+      sut_metrics_baseline_sec: execSettings.sut_metrics_baseline_sec,
       requirement_case: { ...execSettings.requirement_case },
     }
   }

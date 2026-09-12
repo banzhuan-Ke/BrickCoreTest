@@ -34,6 +34,29 @@
         </div>
       </div>
 
+      <!-- 报告抬头 -->
+      <div class="report-hero">
+        <div class="hero-title">性能测试报告 — {{ reportData.scene_name || '' }}</div>
+        <p v-if="reportData.run_description" class="hero-subtitle">{{ reportData.run_description }}</p>
+        <div class="hero-meta">
+          <span><em>评估时间</em>{{ (reportData.started_at || '').slice(0, 16) || '—' }}</span>
+          <span><em>受测环境</em>{{ reportData.env_label || '—' }}</span>
+          <span><em>执行工具</em>{{ reportData.tool_name || 'BrickCore' }}</span>
+          <span><em>执行人</em>{{ reportData.executor_display || reportData.run_by || '—' }}</span>
+          <span v-if="reportData.duration != null"><em>实际时长</em>{{ reportData.duration }}s</span>
+        </div>
+      </div>
+
+      <section v-if="reportData.id" class="ai-top-panel">
+        <PerfAiAnalysisPanel
+          mode="record"
+          variant="conclusion"
+          :target-id="reportData.id"
+          :initial-analysis="liveAi || reportData.ai_analysis"
+          @analysis-updated="onAiUpdated"
+        />
+      </section>
+
       <el-alert
         v-if="caseDrift.has_drift"
         type="warning"
@@ -75,11 +98,18 @@
           <div class="config-item"><span class="label">Ramp-up</span><span class="value">{{ configSummary.ramp_up_seconds }}s</span></div>
           <div class="config-item"><span class="label">热身 Warmup</span><span class="value">{{ configSummary.warmup_seconds ?? 0 }}s</span></div>
           <div class="config-item"><span class="label">持续/循环</span><span class="value">{{ configSummary.duration_label }}</span></div>
+          <div
+            v-if="configSummary.request_delay_label && configSummary.request_delay_label !== '无'"
+            class="config-item"
+          >
+            <span class="label">{{ delayFieldLabel(configSummary.request_delay_label) }}</span>
+            <span class="value">{{ configSummary.request_delay_label }}</span>
+          </div>
           <div class="config-item"><span class="label">分配模式</span><span class="value">{{ configSummary.distribution_mode_label }}</span></div>
           <div class="config-item"><span class="label">目标 Host</span><span class="value">{{ configSummary.target_host }}</span></div>
           <div class="config-item"><span class="label">执行方式</span><span class="value">{{ configSummary.execution_type }}</span></div>
           <div class="config-item"><span class="label">触发方式</span><span class="value">{{ reportData.trigger_type_label || '手动' }}</span></div>
-          <div class="config-item"><span class="label">执行人</span><span class="value">{{ reportData.run_by || '-' }}</span></div>
+          <div class="config-item"><span class="label">执行人</span><span class="value">{{ reportData.executor_display || reportData.run_by || '-' }}</span></div>
           <div class="config-item"><span class="label">开始时间</span><span class="value">{{ reportData.started_at || '-' }}</span></div>
           <div class="config-item"><span class="label">结束时间</span><span class="value">{{ reportData.ended_at || '-' }}</span></div>
           <div class="config-item"><span class="label">峰值/平均并发</span><span class="value">{{ reportData.peak_concurrent }} / {{ reportData.avg_concurrent }}</span></div>
@@ -94,7 +124,7 @@
         <div v-if="steppingStages.length" class="stepping-stages" style="margin-top: 16px;">
           <div class="section-header" style="margin-bottom: 8px;"><h4 style="margin:0;font-size:14px;">梯度阶段明细</h4></div>
           <p class="compare-hint" style="margin-bottom: 8px;">
-            按配置阶段列出计划并发/时长；平均 QPS 含整段墙钟（无完成秒记 0）。
+            按配置阶段列出计划并发/时长；平均 QPS 含整段从开始到结束的实际秒数（无完成秒记 0）。
             平均 RT/P95 仅统计「有完成请求」的秒，避免被大量空闲秒稀释。
           </p>
           <p v-if="steppingStages.length" class="compare-hint" style="margin-bottom: 10px; color:#334155;">
@@ -376,6 +406,7 @@
       <div v-if="hasRtPercentiles" class="table-section rt-distribution-section">
         <div class="section-header">
           <h3>响应时间分布</h3>
+          <span class="section-hint">HTTP 响应时间分位（Min / Median / Avg / P90 / P95 / P99 / Max），非流式阶段耗时</span>
         </div>
         <el-table :data="[rtPercentileRow]" size="small" border style="margin-bottom: 14px">
           <el-table-column
@@ -685,6 +716,157 @@
         <div v-show="hasChartData" ref="chartRef" class="perf-chart"></div>
       </div>
 
+      <!-- 被测资源（与 QPS 相对时间轴对齐） -->
+      <div v-if="showSutSection" class="chart-section">
+        <div class="section-header">
+          <h3>🖥️ 被测资源</h3>
+        </div>
+        <el-alert
+          v-if="sutWindowNote"
+          :title="sutWindowNote"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px;"
+        />
+        <el-alert
+          v-for="(tip, ti) in sutQualityTips"
+          :key="'sut-q-' + ti"
+          :title="tip"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 8px;"
+        />
+        <el-alert
+          v-if="sutMetricsStatus === 'none'"
+          title="本记录未绑定被测应用/采集器，无资源曲线。"
+          type="info"
+          show-icon
+          :closable="false"
+        />
+        <el-alert
+          v-else-if="sutMetricsStatus === 'pending' || (!sutSeriesRows.length && sutMetricsStatus !== 'failed')"
+          title="已绑定被测机器，资源切片尚未就绪（压测结束后写入；进行中可稍后再刷新）。"
+          type="info"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px;"
+        />
+        <el-alert
+          v-else-if="sutMetricsStatus === 'failed' && !sutSeriesRows.length"
+          title="被测资源切片失败或无采样点，请检查被测监控采集器在线与日程/force。"
+          type="warning"
+          show-icon
+          :closable="false"
+          style="margin-bottom: 12px;"
+        />
+        <template v-if="sutSeriesRows.length">
+          <div v-if="sutBaselineCards.length" class="sut-baseline-row">
+            <div v-for="c in sutBaselineCards" :key="c.key" class="sut-baseline-card">
+              <div class="sut-baseline-name">{{ c.name }}</div>
+              <div class="sut-baseline-meta">{{ c.role || '—' }}</div>
+              <div class="sut-baseline-vals">
+                <span>CPU {{ c.baseCpu ?? '—' }}% → {{ c.duringCpu ?? '—' }}%</span>
+                <span>内存 {{ c.baseMem ?? '—' }}% → {{ c.duringMem ?? '—' }}%</span>
+              </div>
+            </div>
+          </div>
+          <el-table
+            v-if="sutSeriesRows.length"
+            :data="sutSeriesRows"
+            size="small"
+            border
+            style="margin-bottom: 12px;"
+          >
+            <el-table-column prop="display_name" label="服务器" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="role" label="角色" width="100" show-overflow-tooltip />
+            <el-table-column label="状态" width="100" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" :type="sutStatusTagType(row.status)">{{ sutStatusLabel(row.status) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="来源" width="100" align="center">
+              <template #default="{ row }">{{ sutSourceLabel(row.source) }}</template>
+            </el-table-column>
+            <el-table-column label="采样点" width="80" align="center">
+              <template #default="{ row }">{{ row.raw_point_count ?? row.summary?.raw_point_count ?? '—' }}</template>
+            </el-table-column>
+            <el-table-column label="覆盖率" width="90" align="center">
+              <template #default="{ row }">
+                {{ row.coverage != null ? `${Math.round(row.coverage * 1000) / 10}%` : '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="桶覆盖/最大空洞" width="130" align="center">
+              <template #default="{ row }">
+                {{
+                  row.summary?.quality?.bucket_coverage != null
+                    ? `${Math.round(row.summary.quality.bucket_coverage * 1000) / 10}%`
+                    : '—'
+                }}
+                /
+                {{ row.summary?.quality?.max_gap_sec != null ? `${row.summary.quality.max_gap_sec}s` : '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="CPU avg/max" width="120" align="center">
+              <template #default="{ row }">
+                {{ fmtSutAvgMax(row.summary?.cpu_pct) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="内存 avg/max" width="120" align="center">
+              <template #default="{ row }">
+                {{ fmtSutAvgMax(row.summary?.mem_pct) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="load1 max" width="90" align="center">
+              <template #default="{ row }">
+                {{ row.summary?.load1?.max ?? '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="磁盘读/写 max" width="120" align="center">
+              <template #default="{ row }">
+                {{ row.summary?.disk_read_kbps?.max ?? '—' }} / {{ row.summary?.disk_write_kbps?.max ?? '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="基线→施压 CPU" width="120" align="center">
+              <template #default="{ row }">
+                {{ row.summary?.phases?.baseline?.cpu_pct?.max ?? '—' }}
+                →
+                {{ row.summary?.phases?.during?.cpu_pct?.max ?? '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="Grafana" width="90" align="center">
+              <template #default="{ row }">
+                <el-link v-if="row.grafana_url" :href="row.grafana_url" target="_blank" type="primary">打开</el-link>
+                <span v-else>—</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div v-if="hasSutChartData" class="sut-chart-toolbar">
+            <span class="sut-chart-label">曲线</span>
+            <el-checkbox-group v-model="sutChartMetrics" size="small" @change="onSutChartMetricsChange">
+              <el-checkbox-button value="cpu">CPU使用率</el-checkbox-button>
+              <el-checkbox-button value="mem">内存占用</el-checkbox-button>
+              <el-checkbox-button value="load">系统负载</el-checkbox-button>
+              <el-checkbox-button value="net">网络</el-checkbox-button>
+              <el-checkbox-button value="disk_io">磁盘IO</el-checkbox-button>
+            </el-checkbox-group>
+            <span class="sut-chart-hint">与上方趋势图同一「相对秒」轴，缩放可联动</span>
+          </div>
+          <div v-if="hasSutChartData" ref="sutChartRef" class="perf-chart"></div>
+          <div v-else-if="sutSeriesRows.length" class="chart-empty">
+            <el-empty description="已绑定机器但施压窗内无采样点（检查被测监控采集器是否在线、日程/开关、force 是否生效）" :image-size="64" />
+          </div>
+        </template>
+        <el-collapse v-if="sutDebugLines.length" style="margin-top: 12px">
+          <el-collapse-item title="被测资源绑定详情（排障）" name="sut-debug">
+            <ul class="sut-debug-list">
+              <li v-for="(line, idx) in sutDebugLines" :key="idx">{{ line }}</li>
+            </ul>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
+
       <!-- HTTP 状态码分布 -->
       <div v-if="statusCodeDistribution.length" class="table-section">
         <div class="section-header"><h3>📋 HTTP 状态码分布（全部请求）</h3></div>
@@ -782,15 +964,6 @@
         </el-table>
       </div>
 
-      <PerfAiAnalysisPanel
-        v-if="reportData?.id"
-        mode="record"
-        variant="conclusion"
-        :target-id="reportData.id"
-        :initial-analysis="liveAi || reportData.ai_analysis"
-        style="margin: 16px 0"
-        @analysis-updated="onAiUpdated"
-      />
       <div style="margin: 16px 0">
         <PerfMetricGlossary />
       </div>
@@ -863,6 +1036,12 @@ const expandedPanels = ref([])
 const baselineTrend = ref({ points: [], baseline: null })
 
 const configSummary = computed(() => reportData.value.config_summary || {})
+const delayFieldLabel = (lab) => {
+  const s = String(lab || '').trim()
+  if (s.startsWith('随机')) return '随机等待时间'
+  if (s.startsWith('固定')) return '固定等待'
+  return '请求间隔'
+}
 const steppingStages = computed(() => {
   const stages = reportData.value.stepping_stages
   if (Array.isArray(stages) && stages.length) return stages
@@ -926,6 +1105,32 @@ const statusLabel = (st) => ({
 const statusTagType = (st) => ({
   pass: 'success', warn: 'warning', fail: 'danger', skipped: 'info', unknown: 'info'
 }[st] || 'info')
+
+const sutStatusLabel = (st) => ({
+  complete: '完整',
+  partial: '部分覆盖',
+  low_resolution: '分辨率低',
+  no_data: '无数据',
+  failed: '失败',
+  offline: '离线',
+  pending: '处理中',
+  none: '未绑定',
+}[st] || st || '—')
+
+const sutStatusTagType = (st) => ({
+  complete: 'success',
+  partial: 'warning',
+  low_resolution: 'warning',
+  no_data: 'info',
+  failed: 'danger',
+  offline: 'info',
+  pending: 'info',
+}[st] || 'info')
+
+const sutSourceLabel = (src) => ({
+  agent: '被测监控采集器',
+  grafana_link: '仅 Grafana 深链',
+}[src] || src || '—')
 
 const targetItemMap = computed(() => {
   const map = {}
@@ -1449,6 +1654,148 @@ const hasChartData = computed(() => {
   return Array.isArray(ts) && ts.length > 0
 })
 
+const sutMetrics = computed(() => reportData.value.sut_metrics || {})
+const sutMetricsStatus = computed(() => sutMetrics.value.status || reportData.value.config_snapshot?.sut_metrics_status || '')
+const sutSeriesRows = computed(() => {
+  const rows = sutMetrics.value.series || reportData.value.sut_resource_series || []
+  return Array.isArray(rows) ? rows : []
+})
+const showSutSection = computed(() => {
+  const st = sutMetricsStatus.value
+  if (st && st !== 'none') return true
+  if (sutSeriesRows.value.length) return true
+  // 配置里曾绑定但切片尚未写完
+  const ids = reportData.value.config_snapshot?.sut_server_ids
+  return Array.isArray(ids) && ids.length > 0
+})
+const sutWindowNote = computed(() => {
+  const w = sutMetrics.value.pressure_window || reportData.value.config_snapshot?.sut_pressure_window
+  if (!w || typeof w !== 'object') return ''
+  const note = w.note || ''
+  const srcMap = { load: '真实负载时间', qps: 'QPS 推断', record: '记录起止时间', unknown: '未知' }
+  const src = srcMap[w.source] || ''
+  if (note && src) return `${note}（来源：${src}）`
+  return note || (src ? `施压窗来源：${src}` : '')
+})
+const hasSutChartData = computed(() =>
+  sutSeriesRows.value.some((r) => Array.isArray(r.series) && r.series.length > 0)
+)
+const sutQualityTips = computed(() => {
+  const tips = []
+  const seen = new Set()
+  const push = (t) => {
+    if (!t || seen.has(t)) return
+    seen.add(t)
+    tips.push(t)
+  }
+  for (const row of sutSeriesRows.value) {
+    const name = row.display_name || `server-${row.server_id}`
+    const q = row.summary?.quality && typeof row.summary.quality === 'object' ? row.summary.quality : {}
+    if (row.status === 'low_resolution' || q.resolution_level === 'low') {
+      push(`${name}：采样分辨率偏低（间隔偏大或点数过少），曲线仅供方向性参考`)
+    }
+    if (q.first_point_delay_sec != null && Number(q.first_point_delay_sec) >= 15) {
+      push(`${name}：首点相对施压窗延迟约 ${q.first_point_delay_sec}s，开头资源可能未采全`)
+    }
+    if (q.bucket_coverage != null && Number(q.bucket_coverage) < 0.7) {
+      push(`${name}：时间桶覆盖仅 ${Math.round(Number(q.bucket_coverage) * 1000) / 10}%，存在明显空洞`)
+    }
+    if (q.max_gap_sec != null && Number(q.max_gap_sec) >= 30) {
+      push(`${name}：最大采样空洞约 ${q.max_gap_sec}s`)
+    }
+  }
+  return tips.slice(0, 6)
+})
+const sutBaselineCards = computed(() =>
+  sutSeriesRows.value
+    .map((row) => {
+      const phases = row.summary?.phases && typeof row.summary.phases === 'object' ? row.summary.phases : {}
+      const base = phases.baseline && typeof phases.baseline === 'object' ? phases.baseline : {}
+      const during = phases.during && typeof phases.during === 'object' ? phases.during : {}
+      const baseCpu = base.cpu_pct?.max ?? base.cpu_pct?.avg
+      const duringCpu = during.cpu_pct?.max ?? during.cpu_pct?.avg
+      const baseMem = base.mem_pct?.max ?? base.mem_pct?.avg
+      const duringMem = during.mem_pct?.max ?? during.mem_pct?.avg
+      if (baseCpu == null && duringCpu == null && baseMem == null && duringMem == null) return null
+      return {
+        key: String(row.server_id ?? row.display_name),
+        name: row.display_name || `server-${row.server_id}`,
+        role: row.role || '',
+        baseCpu: baseCpu ?? null,
+        duringCpu: duringCpu ?? null,
+        baseMem: baseMem ?? null,
+        duringMem: duringMem ?? null,
+      }
+    })
+    .filter(Boolean)
+)
+const fmtSutAvgMax = (obj) => {
+  if (!obj || typeof obj !== 'object') return '—'
+  const a = obj.avg
+  const m = obj.max
+  if (a == null && m == null) return '—'
+  return `${a ?? '—'} / ${m ?? '—'}`
+}
+const SUT_CHART_METRIC_OPTS = [
+  { key: 'cpu', name: 'CPU使用率(%)', field: 'cpu_pct', y: 0 },
+  { key: 'mem', name: '内存占用(%)', field: 'mem_pct', y: 0 },
+  { key: 'load', name: '1分钟系统负载', field: 'load1', y: 2 },
+  { key: 'net_rx', name: '网络下行', field: 'net_rx_kbps', y: 1, group: 'net' },
+  { key: 'net_tx', name: '网络上行', field: 'net_tx_kbps', y: 1, group: 'net' },
+  { key: 'disk_r', name: '磁盘读取', field: 'disk_read_kbps', y: 1, group: 'disk_io' },
+  { key: 'disk_w', name: '磁盘写入', field: 'disk_write_kbps', y: 1, group: 'disk_io' },
+]
+const sutChartMetrics = ref(['cpu', 'mem', 'load'])
+const PERF_CHART_GROUP = 'perf-report-rel-sec'
+const onSutChartMetricsChange = (vals) => {
+  if (!vals?.length) {
+    sutChartMetrics.value = ['cpu']
+    ElMessage.warning('请至少选择一种曲线')
+  }
+  nextTick(() => initSutChart())
+}
+const sutDebugLines = computed(() => {
+  const cfg = reportData.value.config_snapshot || {}
+  const binding = sutMetrics.value.binding || cfg.sut_binding_snapshot || {}
+  const win = sutMetrics.value.pressure_window || cfg.sut_pressure_window || {}
+  const lines = []
+  if (sutMetricsStatus.value) {
+    lines.push(`记录状态：${sutStatusLabel(sutMetricsStatus.value)}${cfg.sut_metrics_error ? `（${cfg.sut_metrics_error}）` : ''}`)
+  }
+  if (binding.application_id != null || binding.application_name) {
+    lines.push(`绑定应用：${binding.application_name || ''} #${binding.application_id ?? '—'}`)
+  }
+  if (binding.environment_id != null) {
+    lines.push(`执行环境 ID：${binding.environment_id}`)
+  }
+  if (Array.isArray(binding.roles) && binding.roles.length) {
+    lines.push(`角色：${binding.roles.join(', ')}`)
+  }
+  const sids = cfg.sut_server_ids || binding.server_ids || []
+  if (Array.isArray(sids) && sids.length) {
+    lines.push(`服务器 ID：${sids.join(', ')}`)
+  }
+  if (win.start_ms != null && win.end_ms != null) {
+    lines.push(`施压窗：${win.start_ms} ～ ${win.end_ms}（${win.source || '—'}）`)
+  }
+  if (cfg.sut_force_from_ms != null || cfg.sut_force_until_ms != null) {
+    lines.push(`Force 窗：${cfg.sut_force_from_ms ?? '—'} ～ ${cfg.sut_force_until_ms ?? '—'}`)
+  }
+  for (const row of sutSeriesRows.value) {
+    const iv = row.interval_sec ?? row.summary?.interval_sec
+    const n = row.raw_point_count ?? row.summary?.raw_point_count
+    lines.push(
+      `${row.display_name || row.server_id}：来源=${sutSourceLabel(row.source)} · 间隔=${iv ?? '—'}s · 点数=${n ?? '—'} · 覆盖率=${
+        row.coverage != null ? `${Math.round(row.coverage * 1000) / 10}%` : '—'
+      }`
+    )
+  }
+  return lines
+})
+
+const sutChartRef = ref(null)
+let sutChartInstance = null
+
 /** 多 Worker 秒级合并时后端会标 p95_approx，避免误读为精确分位 */
 const hasApproxP95 = computed(() => {
   const ts = reportData.value.time_series_data
@@ -1711,6 +2058,7 @@ const loadReport = async () => {
       initBaselineTrendChart()
       seedPhaseHighlightFromProfile()
       initPhaseCompareChart()
+      initSutChart()
     })
   } catch (err) {
     console.error(err)
@@ -1796,10 +2144,66 @@ const initBaselineTrendChart = () => {
   })
 }
 
+const getQpsOffsetSec = () => {
+  // load/record 窗：rel_sec 已相对施压起点，与趋势图 timestamp（相对 sync/记录起点）同轴，勿再加首非零 QPS 偏移
+  const win = sutMetrics.value.pressure_window || reportData.value.config_snapshot?.sut_pressure_window || {}
+  if (win.source !== 'qps') return 0
+  const ts = reportData.value.time_series_data || []
+  for (const p of ts) {
+    const q = Number(p?.qps || p?.success_qps || 0)
+    if (q > 0 && p?.timestamp != null) return Number(p.timestamp) || 0
+  }
+  return 0
+}
+
+const sutPointToRelSec = (p, qpsOffsetSec, pressureStart) => {
+  if (p?.rel_sec != null && Number.isFinite(Number(p.rel_sec))) {
+    return qpsOffsetSec + Number(p.rel_sec)
+  }
+  if (pressureStart != null && p?.ts_ms != null) {
+    return qpsOffsetSec + (Number(p.ts_ms) - pressureStart) / 1000
+  }
+  return null
+}
+
+const collectSharedXExtent = (timeSeries) => {
+  let min = Infinity
+  let max = -Infinity
+  const bump = (x) => {
+    if (x == null || !Number.isFinite(Number(x))) return
+    const n = Number(x)
+    min = Math.min(min, n)
+    max = Math.max(max, n)
+  }
+  for (const d of timeSeries || []) bump(d.timestamp)
+  const qpsOffsetSec = getQpsOffsetSec()
+  const win = sutMetrics.value.pressure_window || reportData.value.config_snapshot?.sut_pressure_window || {}
+  const pressureStart = win.start_ms != null ? Number(win.start_ms) : null
+  for (const row of sutSeriesRows.value) {
+    for (const p of row.series || []) bump(sutPointToRelSec(p, qpsOffsetSec, pressureStart))
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null
+  if (max <= min) max = min + 1
+  return { min, max }
+}
+
+const linkPerfCharts = () => {
+  try {
+    if (chartInstance) chartInstance.group = PERF_CHART_GROUP
+    if (sutChartInstance) sutChartInstance.group = PERF_CHART_GROUP
+    if (chartInstance && sutChartInstance) {
+      echarts.connect(PERF_CHART_GROUP)
+    }
+  } catch (_) {
+    /* ignore connect failures on dispose races */
+  }
+}
+
 const initChart = () => {
   if (!chartRef.value) return
   if (chartInstance) {
     chartInstance.dispose()
+    chartInstance = null
   }
 
   const timeSeries = normalizeChartTimeSeries(reportData.value.time_series_data || [])
@@ -1809,18 +2213,22 @@ const initChart = () => {
 
   const summaryQps = reportData.value.qps
   const summaryP95 = reportData.value.p95_response_time
+  const xExtent = collectSharedXExtent(timeSeries)
 
-  const xData = timeSeries.map(d => d.timestamp + 's')
-  const qpsData = timeSeries.map(d => d.qps)
+  const pairOrNull = (d, val) => {
+    if (val == null || val === '-') return null
+    return [Number(d.timestamp), val]
+  }
+  const qpsData = timeSeries.map(d => pairOrNull(d, d.qps)).filter(Boolean)
   const avgRtData = timeSeries.map(d => {
     if (!d.qps || d.qps <= 0) return null
-    return d.avg_rt != null ? d.avg_rt : null
-  })
+    return pairOrNull(d, d.avg_rt != null ? d.avg_rt : null)
+  }).filter(Boolean)
   const p95RtData = timeSeries.map(d => {
     if (!d.qps || d.qps <= 0) return null
-    if (d.p95_rt != null) return d.p95_rt
-    return d.avg_rt != null ? d.avg_rt : null
-  })
+    const v = d.p95_rt != null ? d.p95_rt : (d.avg_rt != null ? d.avg_rt : null)
+    return pairOrNull(d, v)
+  }).filter(Boolean)
   const p95MarkLine = summaryP95 != null ? {
     silent: true,
     symbol: 'none',
@@ -1828,8 +2236,8 @@ const initChart = () => {
     label: { formatter: `全程 P95: ${summaryP95} ms`, position: 'insideEndTop', color: '#c9a227' },
     data: [{ yAxis: summaryP95 }]
   } : undefined
-  const usersData = timeSeries.map(d => d.active_users)
-  const errorRateData = timeSeries.map(d => d.error_rate || 0)
+  const usersData = timeSeries.map(d => pairOrNull(d, d.active_users)).filter(Boolean)
+  const errorRateData = timeSeries.map(d => pairOrNull(d, d.error_rate || 0)).filter(Boolean)
 
   const option = {
     tooltip: {
@@ -1837,15 +2245,16 @@ const initChart = () => {
       axisPointer: { type: 'cross' },
       formatter (params) {
         if (!params?.length) return ''
-        const axis = params[0].axisValue
-        const idx = params[0].dataIndex
-        const point = timeSeries[idx] || {}
-        const lines = [axis]
+        const raw0 = params[0].value
+        const xSec = Array.isArray(raw0) ? raw0[0] : params[0].axisValue
+        const point = timeSeries.find(d => Number(d.timestamp) === Number(xSec)) || {}
+        const lines = [`${xSec}s`]
         if (!point.qps || point.qps <= 0) {
           lines.push('<span style="color:#909399">该秒无完成请求</span>')
         }
         params.forEach(p => {
-          let val = p.value
+          const raw = p.value
+          let val = Array.isArray(raw) ? raw[1] : raw
           if (val == null || val === '-') {
             lines.push(`${p.marker}${p.seriesName}: —`)
             return
@@ -1878,15 +2287,20 @@ const initChart = () => {
     grid: {
       left: '3%',
       right: '4%',
-      bottom: '15%',
+      bottom: '18%',
       top: '10%',
       containLabel: true
     },
+    dataZoom: [
+      { type: 'inside', xAxisIndex: 0 },
+      { type: 'slider', xAxisIndex: 0, height: 18, bottom: 28 }
+    ],
     xAxis: {
-      type: 'category',
-      boundaryGap: true,
-      data: xData,
-      name: '时间(秒)'
+      type: 'value',
+      name: '相对秒',
+      min: xExtent?.min,
+      max: xExtent?.max,
+      axisLabel: { formatter: (v) => `${v}s` }
     },
     yAxis: [
       {
@@ -1920,6 +2334,7 @@ const initChart = () => {
         data: avgRtData,
         connectNulls: true,
         smooth: true,
+        showSymbol: false,
         itemStyle: { color: '#5470c6' },
         lineStyle: { width: 2 }
       },
@@ -1930,6 +2345,7 @@ const initChart = () => {
         data: p95RtData,
         connectNulls: true,
         smooth: true,
+        showSymbol: false,
         itemStyle: { color: '#fac858' },
         lineStyle: { width: 2, type: 'dashed' },
         markLine: p95MarkLine
@@ -1940,6 +2356,7 @@ const initChart = () => {
         yAxisIndex: 1,
         data: errorRateData,
         smooth: true,
+        showSymbol: false,
         itemStyle: { color: '#e6a23c' },
         lineStyle: { width: 1 }
       },
@@ -1949,6 +2366,7 @@ const initChart = () => {
         yAxisIndex: 1,
         data: usersData,
         smooth: true,
+        showSymbol: false,
         itemStyle: { color: '#ee6666' },
         lineStyle: { width: 1, type: 'dotted' },
         areaStyle: {
@@ -1962,6 +2380,7 @@ const initChart = () => {
   }
 
   chartInstance.setOption(option)
+  linkPerfCharts()
 }
 
 const initPhaseCompareChart = () => {
@@ -2036,6 +2455,141 @@ const initHistogramChart = () => {
   })
 }
 
+const initSutChart = () => {
+  if (!sutChartRef.value || !hasSutChartData.value) {
+    if (sutChartInstance) {
+      sutChartInstance.dispose()
+      sutChartInstance = null
+    }
+    return
+  }
+  if (sutChartInstance) {
+    sutChartInstance.dispose()
+    sutChartInstance = null
+  }
+  const palette = ['#5470c6', '#91cc75', '#ee6666', '#73c0de', '#fac858', '#3ba272', '#fc8452', '#9a60b4']
+  const selected = new Set(sutChartMetrics.value || [])
+  const activeMetrics = SUT_CHART_METRIC_OPTS.filter((m) => {
+    if (m.group) return selected.has(m.group)
+    return selected.has(m.key)
+  })
+  if (!activeMetrics.length) return
+
+  const needPct = activeMetrics.some((m) => m.y === 0)
+  const needRate = activeMetrics.some((m) => m.y === 1)
+  const needLoad = activeMetrics.some((m) => m.y === 2)
+  const yAxis = []
+  const yIndexOf = { 0: 0, 1: 0, 2: 0 }
+  if (needPct) {
+    yIndexOf[0] = yAxis.length
+    yAxis.push({
+      type: 'value',
+      name: '%',
+      min: 0,
+      max: 100,
+      nameTextStyle: { fontSize: 11 },
+    })
+  }
+  if (needLoad) {
+    yIndexOf[2] = yAxis.length
+    yAxis.push({
+      type: 'value',
+      name: 'load',
+      min: 0,
+      splitLine: { show: !needPct },
+      nameTextStyle: { fontSize: 11 },
+    })
+  }
+  if (needRate) {
+    yIndexOf[1] = yAxis.length
+    yAxis.push({
+      type: 'value',
+      name: 'KB/s',
+      min: 0,
+      splitLine: { show: !needPct && !needLoad },
+      nameTextStyle: { fontSize: 11 },
+    })
+  }
+  if (!yAxis.length) yAxis.push({ type: 'value' })
+
+  const series = []
+  let colorIdx = 0
+  const qpsOffsetSec = getQpsOffsetSec()
+  const win = sutMetrics.value.pressure_window || reportData.value.config_snapshot?.sut_pressure_window || {}
+  const pressureStart = win.start_ms != null ? Number(win.start_ms) : null
+  const timeSeries = normalizeChartTimeSeries(reportData.value.time_series_data || [])
+  const xExtent = collectSharedXExtent(timeSeries)
+
+  for (const row of sutSeriesRows.value) {
+    const pts = Array.isArray(row.series) ? row.series : []
+    if (!pts.length) continue
+    const nameBase = row.display_name || `server-${row.server_id}`
+    const role = row.role ? `(${row.role})` : ''
+    for (const m of activeMetrics) {
+      const data = []
+      for (const p of pts) {
+        const x = sutPointToRelSec(p, qpsOffsetSec, pressureStart)
+        if (x == null) continue
+        const v = p[m.field]
+        if (v == null) continue
+        data.push([x, Number(v)])
+      }
+      if (!data.length) continue
+      series.push({
+        name: `${nameBase}${role} ${m.name}`,
+        type: 'line',
+        showSymbol: false,
+        data,
+        yAxisIndex: yIndexOf[m.y] ?? 0,
+        lineStyle: m.key === 'mem' || m.field?.includes('tx') || m.field?.includes('write')
+          ? { type: 'dashed' }
+          : undefined,
+        itemStyle: { color: palette[colorIdx % palette.length] },
+      })
+      colorIdx += 1
+    }
+  }
+  if (!series.length) return
+  sutChartInstance = echarts.init(sutChartRef.value)
+  sutChartInstance.setOption({
+    tooltip: {
+      trigger: 'axis',
+      formatter (params) {
+        if (!params?.length) return ''
+        const raw0 = params[0].value
+        const xSec = Array.isArray(raw0) ? raw0[0] : params[0].axisValue
+        const lines = [`${Number(xSec).toFixed(1)}s`]
+        params.forEach((p) => {
+          const raw = p.value
+          const val = Array.isArray(raw) ? raw[1] : raw
+          lines.push(`${p.marker}${p.seriesName}: ${val ?? '—'}`)
+        })
+        return lines.join('<br/>')
+      },
+    },
+    legend: { type: 'scroll', top: 0 },
+    grid: {
+      left: '3%',
+      right: needRate || needLoad ? '5%' : '4%',
+      bottom: '14%',
+      top: 48,
+      containLabel: true,
+    },
+    dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'slider', xAxisIndex: 0, height: 18 }],
+    xAxis: {
+      type: 'value',
+      name: '相对秒（与趋势图同轴）',
+      min: xExtent?.min,
+      max: xExtent?.max,
+      nameTextStyle: { fontSize: 11 },
+      axisLabel: { formatter: (v) => `${v}s` },
+    },
+    yAxis,
+    series,
+  })
+  linkPerfCharts()
+}
+
 // 轮询
 const startPolling = () => {
   if (pollTimer) clearInterval(pollTimer)
@@ -2072,10 +2626,14 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  try {
+    echarts.disconnect(PERF_CHART_GROUP)
+  } catch (_) { /* ignore */ }
   if (chartInstance) chartInstance.dispose()
   if (histogramInstance) histogramInstance.dispose()
   if (baselineTrendChartInstance) baselineTrendChartInstance.dispose()
   if (phaseChartInstance) phaseChartInstance.dispose()
+  if (sutChartInstance) sutChartInstance.dispose()
 })
 
 window.addEventListener('resize', () => {
@@ -2083,6 +2641,7 @@ window.addEventListener('resize', () => {
   histogramInstance && histogramInstance.resize()
   baselineTrendChartInstance && baselineTrendChartInstance.resize()
   phaseChartInstance && phaseChartInstance.resize()
+  sutChartInstance && sutChartInstance.resize()
 })
 </script>
 
@@ -2092,6 +2651,45 @@ window.addEventListener('resize', () => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+}
+.report-hero {
+  background: linear-gradient(105deg, #0a1628 0%, #0f2744 38%, #163a5f 72%, #1a4a6e 100%);
+  color: #fff;
+  padding: 32px 36px 26px;
+  border-radius: 14px;
+  margin-bottom: 16px;
+  box-shadow: 0 8px 28px rgba(15, 39, 68, 0.22);
+}
+.hero-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.35;
+}
+.hero-subtitle {
+  margin: 12px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(226, 232, 240, 0.82);
+  max-width: 92%;
+}
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  font-size: 13px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(148, 180, 212, 0.28);
+}
+.hero-meta em {
+  font-style: normal;
+  color: #7eb8e8;
+  margin-right: 8px;
+  font-weight: 500;
+}
+.ai-top-panel {
+  margin-bottom: 16px;
 }
 .tag-group {
   display: flex;
@@ -2396,12 +2994,23 @@ window.addEventListener('resize', () => {
 }
 .section-header {
   margin-bottom: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
 }
 
 .section-header h3 {
   margin: 0;
   font-size: 16px;
   color: #333;
+}
+
+.section-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: #888;
+  line-height: 1.4;
 }
 
 .perf-chart {
@@ -2424,6 +3033,64 @@ window.addEventListener('resize', () => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.sut-debug-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.7;
+}
+
+.sut-baseline-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.sut-baseline-card {
+  flex: 1 1 200px;
+  min-width: 180px;
+  max-width: 320px;
+  padding: 10px 12px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  background: #fafbfc;
+}
+.sut-baseline-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+}
+.sut-baseline-meta {
+  font-size: 12px;
+  color: #909399;
+  margin: 2px 0 6px;
+}
+.sut-baseline-vals {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.45;
+}
+.sut-chart-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 4px 0 10px;
+}
+.sut-chart-label {
+  font-size: 13px;
+  color: #606266;
+  font-weight: 500;
+}
+.sut-chart-hint {
+  font-size: 12px;
+  color: #909399;
 }
 
 .error-sections {

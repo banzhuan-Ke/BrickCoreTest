@@ -72,6 +72,9 @@ export const appRecordApi = {
   planDetail: (id) => http.get(`${prefix}/records/plans/${id}`),
   suiteDetail: (id) => http.get(`${prefix}/records/suites/${id}`),
   caseDetail: (id) => http.get(`${prefix}/records/cases/${id}`),
+  planDeviceApm: (id) => http.get(`${prefix}/records/plans/${id}/device-apm`),
+  suiteDeviceApm: (id) => http.get(`${prefix}/records/suites/${id}/device-apm`),
+  caseDeviceApm: (id) => http.get(`${prefix}/records/cases/${id}/device-apm`),
   exportReport: (recordId, params) => http.get(`${prefix}/records/export/${recordId}`, { params, responseType: 'blob' }),
   exportReportAsync: (recordId, params) => http.post(`${prefix}/records/export-async/${recordId}`, null, { params }),
   exportStatus: (taskId) => http.get(`${prefix}/records/export-status/${taskId}`),
@@ -131,4 +134,15 @@ export const appInspectorApi = {
   explore: (sessionId, data) => http.post(`${prefix}/inspector/sessions/${sessionId}/explore`, data),
   refreshScreenshot: (sessionId) => http.post(`${prefix}/inspector/sessions/${sessionId}/screenshot-refresh`),
   close: (sessionId) => http.delete(`${prefix}/inspector/sessions/${sessionId}`),
+}
+
+export const appDeviceApmApi = {
+  startSession: (data) => http.post(`${prefix}/device-apm/sessions`, data),
+  listSessions: (params = {}) => http.get(`${prefix}/device-apm/sessions`, { params }),
+  getSession: (sessionId, params = {}) => http.get(`${prefix}/device-apm/sessions/${sessionId}`, { params }),
+  stopSession: (sessionId) => http.delete(`${prefix}/device-apm/sessions/${sessionId}`),
+  persistSession: (sessionId) => http.post(`${prefix}/device-apm/sessions/${sessionId}/persist`),
+  deleteHistory: (sessionId, params = {}) =>
+    http.delete(`${prefix}/device-apm/history/${sessionId}`, { params }),
+  compare: (data) => http.post(`${prefix}/device-apm/compare`, data),
 }

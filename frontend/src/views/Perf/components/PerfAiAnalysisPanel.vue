@@ -3,7 +3,7 @@
     <template #header>
       <div class="panel-header">
         <div class="title-wrap">
-          <span class="panel-title">{{ isConclusion ? '结论与建议' : 'AI 分析' }}</span>
+          <span class="panel-title">{{ panelTitle }}</span>
           <span v-if="isConclusion && hasSummary" class="title-hint">正文中已随文展示指标/趋势解读</span>
         </div>
         <div class="panel-actions">
@@ -81,6 +81,12 @@
         <div class="block-label">瓶颈</div>
         <ul>
           <li v-for="(h, i) in analysis.bottleneck_notes" :key="'b' + i" v-html="richText(h)" />
+        </ul>
+      </div>
+      <div v-if="analysis.resource_notes?.length" class="block">
+        <div class="block-label">被测资源</div>
+        <ul>
+          <li v-for="(h, i) in analysis.resource_notes" :key="'res' + i" v-html="richText(h)" />
         </ul>
       </div>
       <div v-if="analysis.risks?.length" class="block">
@@ -185,6 +191,14 @@ const disabledByProject = ref(false)
 const expanded = ref(false)
 
 const isConclusion = computed(() => props.variant === 'conclusion')
+const hasRecommendations = computed(() => {
+  const recs = analysis.value?.recommendations
+  return Array.isArray(recs) && recs.length > 0
+})
+const panelTitle = computed(() => {
+  if (!isConclusion.value) return 'AI 分析'
+  return hasRecommendations.value ? '结论与建议' : '数据摘要'
+})
 const isChapterPortrait = computed(() => String(props.reportKind || '').toLowerCase() === 'merge')
 const conclusionPointsLabel = computed(() =>
   isChapterPortrait.value ? '分章要点' : '关键指标对照'
@@ -378,6 +392,7 @@ const copySummary = async () => {
   const parts = [
     analysis.value?.summary,
     ...(analysis.value?.highlights || []).map((x) => `- ${x}`),
+    ...(analysis.value?.resource_notes || []).map((x) => `资源: ${x}`),
     ...(analysis.value?.recommendations || []).map((x) => `建议: ${x}`)
   ].filter(Boolean)
   try {

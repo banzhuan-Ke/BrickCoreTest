@@ -1194,6 +1194,23 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
                 "输出中文、专业、可执行。"
                 "流式(stream_burst)/链路(journey_*)/问答类场景通常并发与请求数本就不高，"
                 "除非 trust.workload_hint 明确且完成量远低于并发×预期轮次，否则不要把「少于50请求」当作主要风险反复强调。"
+                "禁止用「并发用户数×压测时长」自行推算理论请求总数（如 50×180=9000）；"
+                "快照未提供 expected_total_requests 时，不得写「理论应达 N 请求/样本严重不足因未达理论值」。"
+                "有随机/固定思考间隔（think_time_phrase、request_delay_label）时，须在持续压测章节说明该间隔，"
+                "且不得忽略间隔后仍用并发×时长推导理论请求量。"
+                "验收口径：先读快照 acceptance_targets。"
+                "any_enabled=false 或 overall_status=unknown：只做笼统事实陈述（配置、完成量、QPS、平均RT、P95、错误率、阶段耗时量级与稳定性线索），"
+                "禁止「未达预期/均未达预期/不达标/未达SLA/请求量与性能指标均未达预期/理论最大请求量」等无配置依据的判定；"
+                "也禁止用训练先验臆造「合理 QPS/可接受时延」。"
+                "any_enabled=true：达标表述须与各轮已配置目标一致，不得改写 pass/fail。"
+                "用户补充说明可要求分组对照或强调关注点，但仍不得在未给出数字门槛时发明「预期/达标」话术。"
+                "conclusion_points / summary 须同时写出平均 RT（秒）与 P95（秒），不可只写 P95 或 QPS。"
+                "若快照含 ladder_summary.levels 或 chapter_roster：必须覆盖其中每一档 concurrent_users；"
+                "禁止只写高并发区间而漏掉低并发档（例如有 10/20/30/40…80 时不得只写 40～80）；"
+                "summary 枚举并发档时须写全档（可用 10/20/…/80），conclusion_points 条数可按章节数增加到最多 16 条。"
+                "被测资源：以 sut_metrics_l0 为全章覆盖（每章是否采集及 cpu/mem 峰值）；"
+                "collected=false 的章节禁止写该章 CPU/内存结论；禁止用部分章资源概括全书。"
+                "sut_metrics_l1 为可裁详表，缺失或 truncated 不等于资源正常；相关不等于根因。"
             ),
             "user_prompt_template": """请分析以下压测多记录报告快照。
 
@@ -1206,31 +1223,41 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
 - kind=hybrid：合并+对比；仅当 baseline_enabled=true 时做相对基准对照；配置差大或跨场景时变化率仅参考或不要写
 - analysis_mode=chapter_portrait：默认分章画像；若快照含 user_extra_prompt 且要求分组规格对照，则按补充说明做组内对照
 - analysis_mode=baseline_delta：才允许「从 A 到 B（±x%）」式参照轮对照
+- acceptance_targets：未启用验收目标时只陈述实测数字与观察，禁止「未达预期/理论最大」；启用后才可写达标与否
 - 记录请用 label / display_name（如「瞬间峰值」），禁止输出 case_id、内部数字 ID
 - metric_compare 中 key 以 phase_ 开头的为流式/链路阶段指标（单位秒，越低越好）；仅 baseline_delta 时必须写入结论对照，对外只用中文 label
 - 若快照含 stepping_stage_compare：仅在 baseline_delta 时按「第 N 阶段」对齐写变化；chapter_portrait 默认只分章写各阶段事实
 - 若快照含 user_extra_prompt，须优先遵循：可在同一份汇总中要求「多组规格阶梯对照 + 其它章节单独画像」
-  （例如上传四档一组、textin 两组各四档、问答单独写）；仍不得编造数字；不同业务组之间不要硬比，除非补充提示也写明
+  （例如上传四档一组、另一业务线两组各四档、问答单独写）；仍不得编造数字；不同业务组之间不要硬比，除非补充提示也写明
 - trust_by_record / workload_hint=stream_or_journey：低并发少请求属常见设计，勿机械要求「每侧≥50」
+- ladder_summary / chapter_roster：含全档并发与关键数字；写结论前先核对档位列表，低并发与高并发同等必写
+- sut_metrics_l0：每章一行资源覆盖（collected / cpu_pct_max / mem_pct_max）；sut_metrics_l1：可选详表
 
 要求：
 1. 按 kind / analysis_mode 选择叙述（对比趋势 / 合订分章 / 分章+对照）
 2. summary：
+   - 未启用验收目标：笼统总览各章实测数字即可（可写错误率、长尾、阶段耗时占比等观察），不要写达标/未达预期
    - baseline_delta：4–8 句，含参照轮与对比轮前后数值与变化百分比（中文指标名）
    - chapter_portrait / merge：先总览各章，再按 user_extra_prompt 的分组做规格对照（可写在同一段 summary 里分小节）；
      无补充提示时默认只分章画像、禁止跨章相对句；有分组对照要求时，组内可写倍数/百分比并标明「规格对照」
+   - 若有 ladder_summary：summary 必须点名全档 concurrent_users（如 10/20/30/40/50/60/70/80），禁止只概括高并发段
 3. overview 2–4 句写测试画像（模式、并发、请求量）；勿夸大样本不足
-4. 指出最值得关注的 1–3 个问题（引用展示名、接口名与指标）
+4. 指出最值得关注的 1–3 个观察点（引用展示名、接口名与指标）；无目标时用「关注/观察」而非「不达标」
 5. compare/hybrid 且 baseline_enabled 时结合 trust_by_record；merge 默认勿编造跨场景变化率（分组规格对照例外见上）
-6. 给出可执行优化或复测建议（流式/问答不要默认「加到50并发」）
-7. 为主要指标写短评（metric_notes）；阶段指标键与 metric_compare.key 一致，正文用中文
+6. 给出可执行优化或复测建议（流式/问答不要默认「加到50并发」）；建议基于观测到的数字，勿假装已有 SLA
+7. 为主要指标写短评（metric_notes）；阶段指标键与 metric_compare.key 一致，正文用中文；无目标时只解释量级与关系
 8. 为关键接口写短评（case_notes，按接口 name）；merge 时按章节分别写
 9. 结合 time_series_sample / rt_histogram_summary，为各轮写 chart_notes
-10. conclusion_points（3–8 条，必要时可到 8 条以覆盖多组）：
+10. conclusion_points（按章节/档位数写，通常 N 章约 N 条，最少 3、最多 16）：
    - baseline_delta：「指标对照」，含具体数字与百分比，tone=better|worse|flat
    - chapter_portrait / merge：label 建议带组别，如「上传·500KB」「上传规格对照」「问答」；
-     有分组要求时既有各档画像也有组内对照摘要；tone 建议 flat
-11. 输出 JSON：
+     有分组要求时既有各档画像也有组内对照摘要；tone 建议 flat；
+     每条须含该章平均 RT（秒）与 P95（秒）；持续压测且含 think_time_phrase 时须写思考间隔说明；
+     无验收目标时禁止夹带「未达预期」等判定词；
+     有 ladder_summary / chapter_roster 时，每一档 concurrent_users 至少对应一条要点，不得省略低并发档
+11. 被测资源：按 sut_metrics_l0 逐章；有采集的章可写峰值对照；无采集章跳过资源断言；
+    resource_notes 1–8 条点名章节/机器；勿用部分章概括全书资源
+12. 输出 JSON：
 {
   "summary": "详细结论，可含多组规格对照，指标名用中文",
   "overview": "测试概览 2–4 句",
@@ -1252,7 +1279,8 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
   "highlights": ["要点1", "要点2"],
   "risks": ["风险1"],
   "recommendations": ["建议1", "建议2"],
-  "bottleneck_notes": ["瓶颈说明"]
+  "bottleneck_notes": ["瓶颈说明"],
+  "resource_notes": ["被测资源观察（无采集章节勿编造）"]
 }
 不要输出任何解释性文字，只输出 JSON。""",
             "examples": [],
@@ -1299,11 +1327,15 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
                 "测试概览解读、瓶颈接口、错误与风险、结论与建议。"
                 "只能使用快照中的数字与字段，禁止编造未给出的 QPS、分位、错误率或失败原因。"
                 "性能是否「达标」必须以快照中的 target_evaluation 为唯一依据，禁止自行创造 SLA、"
-                "目标 QPS、可接受响应时间、「预期基准值」「业务可接受范围」等说法。"
-                "若未启用目标或 overall_status 为 unknown：不要写「未配置性能目标/指标，无法按业务 SLA 判定」一类套话，"
-                "改为基于实际数字做常规结果解读（量级、稳定性线索、瓶颈与复测方向），并明确这不是 SLA 验收结论。"
+                "目标 QPS、可接受响应时间、「预期基准值」「业务可接受范围」「合理吞吐」等说法。"
+                "若未启用目标或 overall_status 为 unknown：只做笼统、有据的结果陈述"
+                "（配置、完成量、QPS、平均RT、P95、错误率、阶段耗时量级、稳定性/长尾线索与可执行复测方向）；"
+                "禁止「未达预期/均未达预期/不达标/未达SLA/请求量与性能指标均未达预期」；"
+                "也不要写「未配置性能目标/指标，无法按业务 SLA 判定」一类套话；"
+                "可点明「本次未配置验收目标，以下为实测观察，非 SLA 验收结论」。"
+                "禁止用「并发×时长」推算理论请求总数或写「未达理论最大值」。"
                 "metric_notes：某指标在 target_evaluation.items 中有对应项时，先引用系统判定（pass/warn/fail/message）再补一句观察；"
-                "该项未配置时直接写常规指标解读，禁止用「未配置…无法判定」敷衍。"
+                "该项未配置时直接写常规指标解读，禁止用「未配置…无法判定」或「未达预期」敷衍。"
                 "不得改写或否定 target_evaluation 的 pass/fail。"
                 "样本很少（如总请求数个位数、时长很短）时：勿写「系统稳定性达标」「容量已充分验证」；"
                 "勿把低并发短时跑批说成「未充分利用系统资源」；P95 略高于均值可写「存在一定离散/长尾迹象」，勿夸大。"
@@ -1312,6 +1344,9 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
                 "（如「固定模式」「循环模式」「梯度模式」「流式阶段压测」「链路固定模式」「链路循环模式」），"
                 "禁止输出 fixed/loop/stepping/stream_burst/sse_burst/journey_* 等英文枚举。"
                 "禁止在结论/建议/瓶颈中输出 phase_mean_*、phase_p95_* 等英文字段名，一律用中文指标名。"
+                "被测资源：若快照 sut_metrics.collected=true，须在 bottleneck_notes / recommendations / resource_notes "
+                "中对照各机 CPU/内存 avg 与 max 与 RT/错误率写观察；相关不等于根因。"
+                "若 collected=false 或无 sut_metrics：禁止编造 CPU/内存/磁盘结论，勿写「资源充足/未打满」。"
                 "输出中文、专业、可执行。"
             ),
             "user_prompt_template": """请分析以下单次压测报告快照。
@@ -1322,14 +1357,14 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
 要求：
 1. 用 2–4 句写 overview（测试概览：配置、时长、整体表现）；模式名只用 mode_label 中文。
    - 已启用目标：达标表述须与 target_evaluation.overall_status 一致（可写「已配置目标均通过/未通过」），但不要只堆「目标通过」空话，须带关键数字。
-   - 未启用目标或 overall_status=unknown：做常规结果分析即可，不要写「未配置性能目标，无法按业务 SLA 判定」。
-2. summary 再写一段总评（样本少时点明「样本量有限，结论仅供参考」；建议应可执行）
-3. 指出瓶颈接口或长尾（只引用接口 name 与指标，禁止 case_id）；样本过少时瓶颈表述要克制
+   - 未启用目标或 overall_status=unknown：笼统陈述实测数字与观察即可；禁止「未达预期」及「未配置…无法按业务 SLA 判定」。
+2. summary 再写一段总评（样本少时点明「样本量有限，结论仅供参考」；建议应可执行；无目标时不要假装有验收门槛）
+3. 指出瓶颈接口或长尾（只引用接口 name 与指标，禁止 case_id）；样本过少时瓶颈表述要克制；用「关注点」而非「不达标」
 4. 若有错误 breakdown / 失败采样，说明可能风险（勿臆造根因细节）
 5. 为主要指标写一句短评（metric_notes）：
    - 该指标在 target_evaluation 有对应项：先引用系统判定 message/status，再补一句观察（勿否定 pass/fail）
-   - 该指标未配置目标：直接解读数值含义（量级、与其它指标关系、对业务体验的可能影响），禁止「未配置性能目标/指标，无法按业务 SLA 判定」
-   - 全程禁止自造「预期基准值/业务可接受范围」
+   - 该指标未配置目标：直接解读数值含义（量级、与其它指标关系、对体验的可能影响），禁止「未配置…无法判定」与「未达预期」
+   - 全程禁止自造「预期基准值/业务可接受范围/理论最大请求量」
 6. 结合 time_series_sample / rt_histogram，写 trend_note 与 distribution_note（各 1–2 句）
 7. 给出可执行复测或优化建议（低负载探测跑优先建议加并发/加时长验证容量，而非空泛「优化系统」）
 8. 若 config.mode 为 stepping（梯度模式）或存在 stepping_stages / steps：
@@ -1338,8 +1373,11 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
    - 结合 stepping_stages 判断容量拐点（QPS 不再随并发上升、RT 或错误率陡升）；有 completed_seconds=0 的阶段须明确写「该阶段无完成样本」
    - 勿把 config.concurrent_users（常为起始并发）误写成全程固定并发；峰值用 peak_concurrent_users / steps
    - recommendations 应针对梯度探容量给出下一档复测建议（例如在拐点附近加密阶段）
-9. highlights / risks / recommendations / bottleneck_notes 避免口号化：少用「稳定性达标」「资源未充分利用」等空话，多用数字与下一步动作
-10. 输出 JSON：
+9. 被测资源 sut_metrics：
+   - collected=true：在 resource_notes 写 1–4 条；若有 baseline/during，须写「施压前→施压中」CPU/内存 avg 与 max 变化并点名机器；对照 RT/错误率用「观察」语气；truncated 时注明未列出全部机器
+   - collected=false：resource_notes 可为 []，正文禁止臆造服务器资源结论
+10. highlights / risks / recommendations / bottleneck_notes 避免口号化：少用「稳定性达标」「资源未充分利用」「未达预期」等空话，多用数字与下一步动作
+11. 输出 JSON：
 {
   "summary": "总体概述",
   "overview": "测试概览 2–4 句",
@@ -1361,7 +1399,8 @@ type（禅道用例类型，默认「功能测试」，勿写正向/异常/边�
   "highlights": ["要点1", "要点2"],
   "risks": ["风险1"],
   "recommendations": ["建议1", "建议2"],
-  "bottleneck_notes": ["瓶颈说明"]
+  "bottleneck_notes": ["瓶颈说明"],
+  "resource_notes": ["被测资源观察（无采集则为空数组）"]
 }
 不要输出任何解释性文字，只输出 JSON。""",
             "examples": [],

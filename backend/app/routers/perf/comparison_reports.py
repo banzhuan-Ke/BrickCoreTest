@@ -34,6 +34,11 @@ class CreateComparisonBody(BaseModel):
     record_ids: List[int] = Field(..., min_length=MIN_COMPARE_RECORDS, max_length=MAX_COMPARE_RECORDS)
     reference_record_id: Optional[int] = None
     title: Optional[str] = None
+    description: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="报告描述，展示在详情/导出抬头",
+    )
     kind: Optional[str] = Field(
         None,
         description="compare=对比 / merge=汇总 / hybrid=合并+对比；空则按场景自动选择",
@@ -46,6 +51,14 @@ class CreateComparisonBody(BaseModel):
         None,
         max_length=2000,
         description="附加给 AI 的用户提示（仅本报告）",
+    )
+    record_sort: Optional[str] = Field(
+        None,
+        description="记录排序：selection / chapter_smart / concurrency_desc / concurrency_asc / started_at_desc；汇总默认 chapter_smart",
+    )
+    report_style: Optional[str] = Field(
+        None,
+        description="报告版式：brief=精简 / standard=标准 / technical=详细；默认 standard",
     )
     ai_analyze: Optional[bool] = Field(None, description="创建后是否自动 AI 分析")
 
@@ -67,16 +80,24 @@ async def _load_ordered_records(record_ids: List[int]) -> list[PerfRecord]:
 def _serialize(report: PerfComparisonReport) -> dict:
     snap = report.snapshot or {}
     kind = (getattr(report, "kind", None) or snap.get("kind") or REPORT_KIND_COMPARE)
+    create_by = report.create_by
+    create_by_display = (
+        str(snap.get("create_by_nickname") or "").strip()
+        or create_by
+        or ""
+    )
     return {
         "id": report.id,
         "project_id": report.project_id,
         "title": report.title,
         "kind": kind,
+        "description": snap.get("description") or "",
         "record_ids": report.record_ids or [],
         "reference_record_id": report.reference_record_id,
         "snapshot": snap,
         "ai_analysis": report.ai_analysis,
-        "create_by": report.create_by,
+        "create_by": create_by,
+        "create_by_display": create_by_display,
         "create_time": report.create_time.strftime("%Y-%m-%d %H:%M:%S") if report.create_time else None,
         "update_time": report.update_time.strftime("%Y-%m-%d %H:%M:%S") if report.update_time else None,
     }
@@ -176,6 +197,9 @@ async def create_comparison_report(
         kind=body.kind,
         display_names=body.display_names,
         user_extra_prompt=body.user_extra_prompt,
+        description=body.description,
+        record_sort=body.record_sort,
+        report_style=body.report_style,
     )
     kind = snapshot.get("kind") or REPORT_KIND_COMPARE
     title = (body.title or "").strip()
@@ -188,6 +212,15 @@ async def create_comparison_report(
         title = f"{prefix} #{ids}" + ("…" if len(snapshot["record_ids"]) > 5 else "")
         title = f"{title} · {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
+    from app.routers.perf.report_utils import resolve_user_nickname
+
+    create_by = username or str(user_info.get("username") or "")
+    nickname = await resolve_user_nickname(create_by)
+    if nickname:
+        snapshot["create_by_nickname"] = nickname
+
+    snapshot = await hydrate_snapshot_chart_fields(snapshot)
+
     report = await PerfComparisonReport.create(
         project_id=body.project_id,
         title=title[:200],
@@ -195,7 +228,7 @@ async def create_comparison_report(
         record_ids=snapshot["record_ids"],
         reference_record_id=snapshot["reference_record_id"],
         snapshot=snapshot,
-        create_by=username or str(user_info.get("username") or ""),
+        create_by=create_by,
     )
 
     from app.modules.ai.ai_project_settings import resolve_perf_ai_for_run
