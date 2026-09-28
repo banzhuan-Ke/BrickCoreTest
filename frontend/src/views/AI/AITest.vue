@@ -412,7 +412,8 @@ import {
   ChatLineRound,
   DataLine,
   FolderOpened,
-  Monitor
+  Monitor,
+  Collection
 } from '@element-plus/icons-vue'
 import PageCard from '@/components/PageCard.vue'
 import FailureAnalyzer from '@/views/AI/components/FailureAnalyzer.vue'
@@ -553,6 +554,13 @@ const secondaryEntries = computed(() => {
     desc: 'Token 统计 · 场景占比 · 调用明细',
     path: '/ai-usage',
     icon: DataLine,
+    disabled: !canAiTest.value
+  },
+  {
+    name: '技能与助手',
+    desc: '技能清单 · 助手介绍 · 调用统计',
+    path: '/ai-skills',
+    icon: Collection,
     disabled: !canAiTest.value
   },
   {

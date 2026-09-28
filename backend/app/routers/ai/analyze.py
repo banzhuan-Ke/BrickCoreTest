@@ -87,8 +87,9 @@ class ReportSummaryRequest(BaseModel):
 
 
 def _is_likely_vision_model(model: str) -> bool:
-    m = (model or "").lower()
-    return "vl" in m or "vision" in m or "gpt-4o" in m
+    from app.modules.ai.vision_capability import is_likely_vision_model
+
+    return is_likely_vision_model(model)
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -271,6 +272,7 @@ async def _execute_failure_analysis(
     force_refresh: bool = False,
     knowledge_folder_ids: Optional[list[int]] = None,
     knowledge_document_ids: Optional[list[int]] = None,
+    usage_extra: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     from app.modules.knowledge.knowledge_refs_resolve import resolve_knowledge_refs_for_scene
     from app.modules.ai.ai_project_settings import assert_failure_analysis_enabled
@@ -318,9 +320,18 @@ async def _execute_failure_analysis(
     vision_requested = bool(use_vision)
     use_vision = vision_requested and target_type in ("ui", "app") and bool(context_images)
     if use_vision:
+        from app.modules.ai.vision_capability import raise_if_vision_unsupported
+
         vision_config = await _get_vision_config(vision_config_id)
-        if not vision_config or not _is_likely_vision_model(vision_config.model):
-            use_vision = False
+        if not vision_config:
+            raise HTTPException(
+                status_code=400,
+                detail="已开启截图识图，但未找到可用的 Vision 模型配置，请在 AI 模型配置中绑定「失败分析 · Vision」场景",
+            )
+        raise_if_vision_unsupported(vision_config, action="失败分析截图识图")
+    elif vision_requested and target_type in ("ui", "app") and not context_images:
+        # 用户勾了识图但无截图：按纯文本继续，不阻断
+        use_vision = False
 
     try:
         if use_vision and vision_config:
@@ -356,6 +367,7 @@ async def _execute_failure_analysis(
             output_summary=llm_error[:500],
             target_type=target_type,
             target_id=target_id,
+            **(usage_extra or {}),
         )
         raise
 
@@ -404,6 +416,7 @@ async def _execute_failure_analysis(
         analysis_id=record.id,
         vision_used=bool(use_vision and vision_config),
         parsed=status == "accepted",
+        **(usage_extra or {}),
     )
 
     if status != "accepted":
@@ -428,15 +441,11 @@ async def _execute_failure_analysis(
 
 
 async def _assert_failure_analysis_record_env(project_id: int, env: dict | None) -> None:
-    from app.modules.ai.ai_project_settings import (
-        assert_failure_analysis_for_execution_env,
-        load_ai_project_settings,
-    )
+    """已弃用：主动分析不再按执行 env 拦截。保留函数以免外部脚本引用炸掉。"""
+    from app.modules.ai.ai_project_settings import assert_failure_analysis_enabled
 
-    settings = await load_ai_project_settings(project_id)
     try:
-        record_env = env if isinstance(env, dict) else {}
-        assert_failure_analysis_for_execution_env(settings, record_env)
+        await assert_failure_analysis_enabled(project_id)
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -465,7 +474,8 @@ async def _load_target(
             raise HTTPException(status_code=403, detail="无权访问该执行记录")
         if record.status not in ("fail", "failed", "error"):
             raise HTTPException(status_code=400, detail="仅支持分析失败或错误的执行记录")
-        await _assert_failure_analysis_record_env(project_id, record.env)
+        # 主动分析（报告按钮 / 小测 Skill）只校验项目「启用失败 AI 分析」；
+        # 不再用执行时 env.failure_analysis_on_report 拦截（该标记仅控制报告页入口展示）。
         ctx, image_payload, screenshot_url = await build_app_failure_context(record)
         images: list[tuple[bytes, str, str]] = []
         if image_payload:
@@ -481,7 +491,6 @@ async def _load_target(
         raise HTTPException(status_code=404, detail="关联用例不存在")
     if record.status not in ("fail", "failed", "error"):
         raise HTTPException(status_code=400, detail="仅支持分析失败或错误的执行记录")
-    await _assert_failure_analysis_record_env(project_id, record.env)
     ctx, context_images, screenshot_url = await build_ui_failure_context(record)
     return ctx, context_images, screenshot_url, ctx.get("case_name") or ""
 

@@ -31,6 +31,12 @@ _INDEX_PATTERNS = (
     re.compile(r"nth\s*[=:]\s*(\d+)", re.I),
 )
 
+_MENU_HOST_CLASS_RE = re.compile(
+    r"menu-item|dropdown-menu__item|dropdown-item|select-dropdown__item|"
+    r"ant-select-item|el-cascader-node|ui-env-option",
+    re.I,
+)
+
 
 def extract_suggested_index(intent: str) -> int | None:
     text = (intent or "").strip()
@@ -47,19 +53,27 @@ def extract_suggested_index(intent: str) -> int | None:
 
 def is_dynamic_element_id(elem_id: str) -> bool:
     s = (elem_id or "").strip()
-    if not s:
+    if not s or len(s) < 2:
         return True
-    if re.match(r"^el-id-", s, re.I):
+    if re.match(
+        r"^(ng-|_ngcontent-|ember\d+|jsx-|css-|radix-|:r\d+|el-id-|el-popover-|"
+        r"cdk-overlay-|el-popper-|el-overlay-|\d+$)",
+        s,
+        re.I,
+    ):
         return True
     if re.search(r"\d{6,}", s):
         return True
     if re.match(r"^(ember|react|vue|ng)[-_]", s, re.I):
         return True
+    digits = sum(ch.isdigit() for ch in s)
+    if len(s) >= 6 and digits / len(s) > 0.45:
+        return True
     return False
 
 
 def _unsafe_css_has_text(text: str) -> bool:
-    return bool(re.search(r"[\$\\]", text or ""))
+    return bool(re.search(r'[\$\\"]', text or ""))
 
 
 def _infer_role(element_data: dict[str, Any]) -> str:
@@ -92,6 +106,225 @@ def _dedupe(candidates: list[str]) -> list[str]:
     return out
 
 
+def _pick_stable_class(classes: str) -> str:
+    for c in str(classes or "").split():
+        if not c or c.startswith("ng-") or c.startswith("v-") or len(c) >= 40:
+            continue
+        if _MENU_HOST_CLASS_RE.search(c) or c.startswith(("el-", "ant-", "nz-", "ui-")):
+            return c
+    for c in str(classes or "").split():
+        if c and not c.startswith("ng-") and not c.startswith("v-") and len(c) < 30:
+            return c
+    return ""
+
+
+def build_elevated_candidates(element_data: dict[str, Any]) -> list[str]:
+    """由 elevate* 字段生成抬升候选（菜单整项等）。"""
+    elevate_tag = (element_data.get("elevateTag") or "").strip().lower()
+    if not elevate_tag:
+        return []
+    elevate_text = (element_data.get("elevateText") or "").strip()
+    elevate_class = element_data.get("elevateClass") or ""
+    cur_tag = (element_data.get("tag") or "").strip().lower()
+    cur_text = (
+        element_data.get("accessibleName") or element_data.get("text") or ""
+    ).strip()
+    cur_class = element_data.get("class") or ""
+    if (
+        elevate_tag == cur_tag
+        and elevate_text == cur_text
+        and str(elevate_class) == str(cur_class)
+    ):
+        return []
+    snap = {
+        "tag": elevate_tag,
+        "class": elevate_class,
+        "text": elevate_text,
+        "accessibleName": elevate_text,
+        "role": element_data.get("elevateRole") or "",
+        "dataTestid": element_data.get("elevateDataTestid") or "",
+        "cssPath": element_data.get("elevateCssPath") or "",
+        "popupRoot": element_data.get("popupRoot") or "",
+        "region": element_data.get("region") or "",
+        "ancestorRole": element_data.get("ancestorRole") or "menu",
+    }
+    return build_rule_candidates(snap)
+
+
+def _neighbor_climb_levels(element_data: dict[str, Any]) -> list[int]:
+    raw = element_data.get("neighborClimb")
+    if raw is None:
+        raw = element_data.get("neighborClimbLevels")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            return [max(0, min(8, int(raw)))]
+        except (TypeError, ValueError):
+            pass
+    return [0, 1]
+
+
+def _neighbor_rel_axis(
+    climb: int,
+    neighbor_rel: str,
+    t_tag: str,
+    sibling_idx: int,
+    stable: str = "",
+) -> str:
+    cls = f'[contains(@class,"{stable}")]' if stable else ""
+    step = f"{neighbor_rel}::{t_tag}{cls}[{sibling_idx}]"
+    if climb <= 0:
+        return step
+    return f"ancestor::*[{climb}]/{step}"
+
+
+def _neighbor_locs_for_climb(
+    *,
+    neighbor_text: str,
+    n_lit: str,
+    n_tag: str,
+    t_tag: str,
+    neighbor_rel: str,
+    sibling_idx: int,
+    climb: int,
+    stable: str = "",
+) -> list[str]:
+    axis = _neighbor_rel_axis(climb, neighbor_rel, t_tag, sibling_idx)
+    leaf = (
+        f"//{n_tag}[normalize-space()={n_lit}]"
+        f"[not(.//{n_tag}[normalize-space()={n_lit}])]"
+    )
+    out = [
+        f"get_by_text={neighbor_text} >> xpath=./{axis}",
+        f"xpath={leaf}/{axis}",
+    ]
+    if stable:
+        axis_c = _neighbor_rel_axis(climb, neighbor_rel, t_tag, sibling_idx, stable)
+        out.append(f"xpath={leaf}/{axis_c}")
+    return out
+
+
+def build_neighbor_candidates(element_data: dict[str, Any]) -> list[str]:
+    """由 neighbor* 字段生成相邻相对定位。
+
+    通用：按 neighborClimb（文案叶节点到兄弟容器的层数）生成相对轴，
+    不针对某一业务组件写死。climb 未知时仅试 0/1 两档。
+    """
+    neighbor_text = (element_data.get("neighborText") or "").strip()
+    neighbor_rel = (element_data.get("neighborRelation") or "").strip()
+    neighbor_tag = (element_data.get("neighborTag") or "*").strip() or "*"
+    tag = (
+        (element_data.get("neighborTargetTag") or "").strip()
+        or (element_data.get("tag") or "*").strip()
+        or "*"
+    )
+    try:
+        sibling_idx = max(1, int(element_data.get("neighborSiblingIndex") or 1))
+    except (TypeError, ValueError):
+        sibling_idx = 1
+    if (
+        not neighbor_text
+        or neighbor_rel not in ("following-sibling", "preceding-sibling")
+        or not (1 < len(neighbor_text) <= 40)
+    ):
+        return []
+    n_lit = _xpath_string_literal(neighbor_text)
+    n_tag = re.sub(r"[^a-zA-Z0-9_-]", "", neighbor_tag) or "*"
+    t_tag = re.sub(r"[^a-zA-Z0-9_-]", "", tag) or "*"
+    if not n_lit:
+        return []
+    stable = _pick_stable_class(element_data.get("class") or "")
+    climbs = _neighbor_climb_levels(element_data)
+    out: list[str] = []
+    for climb in climbs:
+        out.extend(
+            _neighbor_locs_for_climb(
+                neighbor_text=neighbor_text,
+                n_lit=n_lit,
+                n_tag=n_tag,
+                t_tag=t_tag,
+                neighbor_rel=neighbor_rel,
+                sibling_idx=sibling_idx,
+                climb=climb,
+                stable=stable,
+            )
+        )
+    css = (element_data.get("cssPath") or "").strip()
+    m = re.match(r"^(#[^\s>#]+)", css)
+    if m:
+        eid = m.group(1)[1:]
+        if eid and not is_dynamic_element_id(eid):
+            scope = m.group(1)
+            scoped: list[str] = []
+            for climb in climbs:
+                for loc in _neighbor_locs_for_climb(
+                    neighbor_text=neighbor_text,
+                    n_lit=n_lit,
+                    n_tag=n_tag,
+                    t_tag=t_tag,
+                    neighbor_rel=neighbor_rel,
+                    sibling_idx=sibling_idx,
+                    climb=climb,
+                ):
+                    if loc.startswith("get_by_text="):
+                        scoped.append(f"{scope} >> {loc}")
+                    elif loc.startswith("xpath=//"):
+                        scoped.append(f"{scope} >> xpath=." + loc[len("xpath=") :])
+            out = scoped + out
+    return _dedupe(out)
+
+
+def _xpath_string_literal(text: str) -> str:
+    s = (text or "").strip()
+    if not s:
+        return ""
+    if "'" not in s:
+        return f"'{s}'"
+    if '"' not in s:
+        return f'"{s}"'
+    chunks: list[str] = []
+    buf = ""
+    for ch in s:
+        if ch == "'":
+            if buf:
+                chunks.append(f'"{buf}"')
+                buf = ""
+            chunks.append('"\'"')
+        elif ch == '"':
+            if buf:
+                chunks.append(f"'{buf}'")
+                buf = ""
+            chunks.append("'\"'")
+        else:
+            buf += ch
+    if buf:
+        if "'" not in buf:
+            chunks.append(f"'{buf}'")
+        else:
+            chunks.append(f'"{buf}"')
+    return "concat(" + ", ".join(chunks) + ")"
+
+
+def build_tagged_candidates(element_data: dict[str, Any]) -> list[dict[str, str]]:
+    """当前所选 + 抬升 + 相邻，带来源标签。"""
+    tagged: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def _push(loc: str, source: str) -> None:
+        loc = (loc or "").strip()
+        if not loc or loc in seen:
+            return
+        seen.add(loc)
+        tagged.append({"locator": loc, "source": source})
+
+    for loc in build_rule_candidates(element_data):
+        _push(loc, "current")
+    for loc in build_elevated_candidates(element_data):
+        _push(loc, "elevated")
+    for loc in build_neighbor_candidates(element_data):
+        _push(loc, "neighbor")
+    return tagged
+
+
 def build_rule_candidates(element_data: dict[str, Any]) -> list[str]:
     if not element_data:
         return []
@@ -112,7 +345,7 @@ def build_rule_candidates(element_data: dict[str, Any]) -> list[str]:
         candidates.append(f"#{elem_id}")
 
     title = element_data.get("title") or ""
-    if title and tag:
+    if title and tag and not _unsafe_css_has_text(title):
         candidates.append(f'{tag}[title="{title}"]')
 
     if popup_root and text and len(text) < 40 and not is_common_short:
@@ -126,18 +359,22 @@ def build_rule_candidates(element_data: dict[str, Any]) -> list[str]:
         if role:
             candidates.append(f"get_by_role={role}, {text}")
         candidates.append(f"get_by_text={text}")
+        stable = _pick_stable_class(classes)
+        if tag and stable and not _unsafe_css_has_text(text):
+            candidates.append(f'{tag}.{stable}:has-text("{text}")')
 
     name = element_data.get("name") or ""
-    if name and tag:
+    if name and tag and not _unsafe_css_has_text(name):
         candidates.append(f'{tag}[name="{name}"]')
 
     aria = element_data.get("ariaLabel") or ""
-    if aria and tag:
+    if aria and tag and not _unsafe_css_has_text(aria):
         candidates.append(f'{tag}[aria-label="{aria}"]')
 
     placeholder = element_data.get("placeholder") or ""
     if placeholder and tag in ("input", "textarea"):
-        candidates.append(f'{tag}[placeholder="{placeholder}"]')
+        if not _unsafe_css_has_text(placeholder):
+            candidates.append(f'{tag}[placeholder="{placeholder}"]')
         candidates.append(f"get_by_placeholder={placeholder}")
 
     fillable_role = _infer_role(element_data)
@@ -182,7 +419,6 @@ def build_rule_candidates(element_data: dict[str, Any]) -> list[str]:
         if role:
             candidates.append(f"{region} >> get_by_role={role}, {text}")
 
-    # 结构路径作中后段兜底：cssPath 优先于 structurePath，勿 insert(0) 反转
     for key in ("cssPath", "tableXPath", "tableRowXPath", "dropdownXPath", "structurePath"):
         val = (element_data.get(key) or "").strip()
         if val:

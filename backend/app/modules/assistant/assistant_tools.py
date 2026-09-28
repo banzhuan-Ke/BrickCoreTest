@@ -36,6 +36,7 @@ READONLY_TOOL_NAMES: tuple[str, ...] = (
     "list_data_factory_datasources",
     "list_sql_templates",
     "get_sql_template",
+    "query_datasource",
     "list_ui_tasks",
     "list_ui_cases",
     "list_ui_run_records",
@@ -59,9 +60,54 @@ READONLY_TOOL_NAMES: tuple[str, ...] = (
     "ask_test_knowledge",
     "list_knowledge_folders",
     "list_recent_failures",
+    "get_case_latest_failure",
     "get_execution_record",
     "get_generate_job",
     "get_requirement_latest_job",
+    "list_browser_lab_tasks",
+    "get_browser_lab_task",
+    "get_browser_lab_task_report",
+    "list_browser_lab_cases",
+    "get_browser_lab_case",
+    "list_ui_agent_jobs",
+    "get_ui_agent_job",
+    "get_ui_agent_job_report",
+    "list_ai_configs",
+    "get_ai_config",
+    "list_ai_config_select_options",
+    "list_ai_scene_bindings",
+    "get_ai_usage_logs",
+    "list_inbox_messages",
+    "get_inbox_unread_count",
+    "get_inbox_preferences",
+    "list_notification_configs",
+    "list_notification_logs",
+    "list_api_auth_configs",
+    "get_api_auth_config",
+    "get_api_case_execution_detail",
+    "get_ui_case_execution_detail",
+    "get_app_case_execution_detail",
+    "get_perf_record_detail",
+    "get_execution_report",
+    "get_project_settings_overview",
+    "get_project_execution_settings",
+    "get_environment_detail",
+    "list_devices",
+    "get_device_detail",
+    "list_project_members",
+    "get_catalog_detail",
+    "list_catalog_assets",
+    "list_operation_logs",
+    "list_assistant_traces",
+    "get_dashboard_summary",
+    "search_project_assets",
+    "list_releases",
+    "get_release",
+    "list_defects",
+    "get_defect",
+    "list_reviews",
+    "get_review",
+    "get_quality_gate_settings",
 )
 
 PREVIEW_TOOL_NAMES: tuple[str, ...] = (
@@ -76,6 +122,10 @@ PREVIEW_TOOL_NAMES: tuple[str, ...] = (
     "preview_run_app_suite",
     "preview_run_app_plan",
     "preview_run_perf_scene",
+    "preview_spawn_browser_lab",
+    "preview_spawn_ui_agent",
+    "preview_stop_browser_lab_task",
+    "preview_stop_ui_agent_job",
     "preview_analyze_failure",
 )
 
@@ -91,7 +141,26 @@ CONFIRM_ACTION_MAP: dict[str, str] = {
     "run_app_suite": "confirm_run_app_suite",
     "run_app_plan": "confirm_run_app_plan",
     "run_perf_scene": "confirm_run_perf_scene",
+    "spawn_browser_lab": "confirm_spawn_browser_lab",
+    "spawn_ui_agent": "confirm_spawn_ui_agent",
+    "stop_browser_lab_task": "confirm_stop_browser_lab_task",
+    "stop_ui_agent_job": "confirm_stop_ui_agent_job",
     "analyze_failure": "confirm_analyze_failure",
+    "skill_requirement_to_test_points": "confirm_run_skill",
+    "skill_api_definition_to_cases": "confirm_run_skill",
+    "skill_test_points_to_functional_cases": "confirm_run_skill",
+    "skill_mock_response_generate": "confirm_run_skill",
+    "skill_nl_to_sql_template": "confirm_run_skill",
+    "skill_perf_scene_from_nl": "confirm_run_skill",
+    "skill_browser_lab_to_ui_case": "confirm_run_skill",
+    "skill_ui_steps_from_nl": "confirm_run_skill",
+    "skill_report_narrative": "confirm_run_skill",
+    "skill_qa_eval_assist": "confirm_run_skill",
+    "skill_curl_to_cases": "confirm_run_skill",
+    "skill_functional_case_to_ui_case": "confirm_run_skill",
+    "skill_functional_case_to_app_case": "confirm_run_skill",
+    "skill_perf_journey_from_suite": "confirm_run_skill",
+    "skill_failure_to_defect_draft": "confirm_run_skill",
 }
 
 CONFIRM_TOOL_NAMES: tuple[str, ...] = tuple(CONFIRM_ACTION_MAP.values())
@@ -180,14 +249,18 @@ READONLY_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_api_definitions",
-            "description": "列出项目接口定义（HTTP 方法、路径、描述、关联用例数）",
+            "description": (
+                "列出项目接口定义（HTTP 方法、路径、描述、关联用例数）。"
+                "返回 total/page/size/items；单页最多 100 条。"
+                "选接口给用户时优先 size=100；若 total>本页条数请翻 page，禁止编造未返回的 id。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "project_id": {"type": "integer"},
                     "keyword": {"type": "string", "description": "按名称/路径/描述搜索"},
-                    "page": {"type": "integer"},
-                    "size": {"type": "integer"},
+                    "page": {"type": "integer", "description": "页码，从 1 起"},
+                    "size": {"type": "integer", "description": "每页条数，最大 100"},
                 },
                 "required": ["project_id"],
             },
@@ -277,7 +350,7 @@ READONLY_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_ui_cases",
-            "description": "列出项目 Web UI 用例（摘要，不含 steps 全文）",
+            "description": "列出项目 Web UI 用例（摘要，不含 steps 全文）。查某用例失败详情请用 get_case_latest_failure。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -285,6 +358,31 @@ READONLY_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "keyword": {"type": "string"},
                     "page": {"type": "integer"},
                     "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_case_latest_failure",
+            "description": (
+                "按用例名或 case_id 取最新失败的轻量错误摘要（error_hint/失败步骤）。"
+                "用户问某用例详细错误时优先本工具；"
+                "list_ui_run_records 仅为 UI 测试计划执行列表，不是单用例失败详情。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "case_name": {"type": "string", "description": "用例名称（可模糊）"},
+                    "case_id": {"type": "integer"},
+                    "target_type": {
+                        "type": "string",
+                        "enum": ["ui", "app", "api"],
+                        "description": "默认 ui",
+                    },
                 },
                 "required": ["project_id"],
             },
@@ -535,7 +633,7 @@ READONLY_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_ui_run_records",
-            "description": "列出 UI 测试计划执行记录",
+            "description": "列出 UI 测试计划执行记录（计划级）。单用例失败详情请用 get_case_latest_failure。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -649,6 +747,28 @@ READONLY_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "template_id": {"type": "integer", "description": "SQL 模板 ID"},
                 },
                 "required": ["template_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_datasource",
+            "description": (
+                "对数据工厂数据源执行只读查询（SELECT / Redis GET / ES _search 等）；"
+                "环境若配置了默认执行机则经该执行机连库（失败不改回平台本机）；"
+                "结果强制截断（默认≤30行，硬顶50）；写操作请引导用户去查询控制台，禁止静默写库"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "datasource_id": {"type": "integer", "description": "数据源 ID"},
+                    "statement": {"type": "string", "description": "只读 SQL / Redis 命令 / ES DSL"},
+                    "max_rows": {"type": "integer", "description": "进模型行数上限，默认 30，硬顶 50"},
+                    "variables": {"type": "object", "description": "可选变量替换"},
+                },
+                "required": ["project_id", "datasource_id", "statement"],
             },
         },
     },
@@ -853,6 +973,664 @@ READONLY_TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_browser_lab_tasks",
+            "description": "列出项目智能浏览器（Browser Lab）执行任务，用于轮询进度",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "status": {"type": "string", "description": "pending/running/done/failed/stopped，可选"},
+                    "case_id": {"type": "integer"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_browser_lab_task",
+            "description": "获取单个智能浏览器任务状态与失败摘要（不含完整步骤）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "task_id": {"type": "integer"},
+                },
+                "required": ["project_id", "task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_browser_lab_task_report",
+            "description": "获取智能浏览器报告摘要：状态、失败原因、关键步骤（已截断）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "task_id": {"type": "integer"},
+                    "max_steps": {"type": "integer", "description": "关键步骤条数，默认 12"},
+                },
+                "required": ["project_id", "task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_browser_lab_cases",
+            "description": "列出智能浏览器用例库",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_browser_lab_case",
+            "description": "获取单个智能浏览器用例",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "case_id": {"type": "integer"},
+                },
+                "required": ["project_id", "case_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_ui_agent_jobs",
+            "description": "列出项目 UI Agent 探索任务",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "status": {"type": "string"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ui_agent_job",
+            "description": "获取单个 UI Agent 任务状态与错误摘要",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "job_id": {"type": "integer"},
+                },
+                "required": ["project_id", "job_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ui_agent_job_report",
+            "description": "获取 UI Agent 步骤结果摘要（已截断）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "job_id": {"type": "integer"},
+                    "max_steps": {"type": "integer"},
+                },
+                "required": ["project_id", "job_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_ai_configs",
+            "description": "列出平台 LLM 配置（API Key 已脱敏；含 supports_vision）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                    "keyword": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ai_config",
+            "description": "获取单个 LLM 配置详情（Key 脱敏；含 supports_vision）",
+            "parameters": {
+                "type": "object",
+                "properties": {"config_id": {"type": "integer"}},
+                "required": ["config_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_ai_config_select_options",
+            "description": "列出可用于执行/分析的已启用模型选项",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_ai_scene_bindings",
+            "description": "列出 AI 场景与模型绑定",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ai_usage_logs",
+            "description": "查询 AI 用量摘要与近期调用记录（不含完整 Prompt）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "days": {"type": "integer"},
+                    "scene": {"type": "string"},
+                    "status": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_inbox_messages",
+            "description": "列出当前用户站内信（需测试管理扩展包）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "unread_only": {"type": "boolean"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_inbox_unread_count",
+            "description": "获取站内信未读数",
+            "parameters": {
+                "type": "object",
+                "properties": {"project_id": {"type": "integer"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_inbox_preferences",
+            "description": "获取当前用户通知偏好",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_notification_configs",
+            "description": "列出项目通知渠道配置（Webhook 已脱敏）",
+            "parameters": {
+                "type": "object",
+                "properties": {"project_id": {"type": "integer"}},
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_notification_logs",
+            "description": "列出项目通知推送记录",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "channel_type": {"type": "string"},
+                    "notify_type": {"type": "string"},
+                    "status": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_api_auth_configs",
+            "description": "列出项目 Token 授权配置（缓存 token 已脱敏）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "environment_id": {"type": "integer"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_api_auth_config",
+            "description": "获取授权配置详情（token 脱敏）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "config_id": {"type": "integer"},
+                },
+                "required": ["project_id", "config_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_api_case_execution_detail",
+            "description": "获取接口用例执行详情：请求/响应/断言摘要（已截断）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "record_id": {"type": "integer"},
+                },
+                "required": ["project_id", "record_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_ui_case_execution_detail",
+            "description": "获取 Web UI 用例执行详情：失败步骤/截图提示",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "record_id": {"type": "integer"},
+                },
+                "required": ["project_id", "record_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_app_case_execution_detail",
+            "description": "获取 App 用例执行详情摘要",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "record_id": {"type": "integer"},
+                },
+                "required": ["project_id", "record_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_perf_record_detail",
+            "description": "获取压测执行记录摘要",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "record_id": {"type": "integer"},
+                },
+                "required": ["project_id", "record_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_execution_report",
+            "description": "获取执行报告链接与摘要（api_suite/api_plan/ui_plan/perf 等）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "record_type": {"type": "string"},
+                    "record_id": {"type": "integer"},
+                },
+                "required": ["project_id", "record_type", "record_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_project_settings_overview",
+            "description": "获取项目设置概览，含调试单步超时",
+            "parameters": {
+                "type": "object",
+                "properties": {"project_id": {"type": "integer"}},
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_project_execution_settings",
+            "description": "获取项目执行设置与调试超时秒数",
+            "parameters": {
+                "type": "object",
+                "properties": {"project_id": {"type": "integer"}},
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_environment_detail",
+            "description": "获取环境详情：地址、脱敏变量、UI 超时倍率",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "env_id": {"type": "integer"},
+                },
+                "required": ["project_id", "env_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_devices",
+            "description": "列出 Runner 设备与是否在线（不含连接凭证）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "status": {"type": "string"},
+                    "keyword": {"type": "string"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_device_detail",
+            "description": "获取 Runner 设备详情：在线状态、心跳、引擎能力",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string"},
+                    "project_id": {"type": "integer"},
+                },
+                "required": ["device_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_project_members",
+            "description": "列出项目成员与角色",
+            "parameters": {
+                "type": "object",
+                "properties": {"project_id": {"type": "integer"}},
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_catalog_detail",
+            "description": "获取测试目录详情与各类资产数量",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "catalog_id": {"type": "integer"},
+                },
+                "required": ["project_id", "catalog_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_catalog_assets",
+            "description": "列出目录下的资产名称摘要",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "catalog_id": {"type": "integer"},
+                    "include_children": {"type": "boolean"},
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                },
+                "required": ["project_id", "catalog_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_operation_logs",
+            "description": "列出平台操作日志（不含请求体）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer"},
+                    "size": {"type": "integer"},
+                    "username": {"type": "string"},
+                    "module": {"type": "string"},
+                    "action": {"type": "string"},
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_assistant_traces",
+            "description": "列出小测回合追踪（不含 Prompt）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "session_id": {"type": "integer"},
+                    "limit": {"type": "integer"},
+                    "offset": {"type": "integer"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_dashboard_summary",
+            "description": "获取首页看板摘要（用例/执行趋势/失败 Top）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_project_assets",
+            "description": "项目内关键词搜索用例/套件/计划/接口等",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "q": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["project_id", "q"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_releases",
+            "description": "列出测试管理发布版本",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "status": {"type": "string"},
+                    "keyword": {"type": "string"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_release",
+            "description": "获取发布版本详情",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "release_id": {"type": "integer"},
+                },
+                "required": ["project_id", "release_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_defects",
+            "description": "列出测试管理缺陷",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "release_id": {"type": "integer"},
+                    "status": {"type": "string"},
+                    "keyword": {"type": "string"},
+                    "severity": {"type": "string"},
+                    "assignee_id": {"type": "integer"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_defect",
+            "description": "获取缺陷详情",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "defect_id": {"type": "integer"},
+                },
+                "required": ["project_id", "defect_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_reviews",
+            "description": "列出用例评审批次",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "release_id": {"type": "integer"},
+                    "status": {"type": "string"},
+                },
+                "required": ["project_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_review",
+            "description": "获取用例评审详情与条目统计",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "review_id": {"type": "integer"},
+                },
+                "required": ["project_id", "review_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_quality_gate_settings",
+            "description": "获取项目质量门禁阈值",
+            "parameters": {
+                "type": "object",
+                "properties": {"project_id": {"type": "integer"}},
+                "required": ["project_id"],
+            },
+        },
+    },
 ]
 
 PREVIEW_TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -1037,6 +1815,85 @@ PREVIEW_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "preview_spawn_browser_lab",
+            "description": (
+                "预览派发智能浏览器（Browser Lab）任务影响。"
+                "需要 task_text、start_url、在线 Runner 的 device_id；"
+                "缺设备时先 list_online_devices 或 ask_user。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "task_text": {"type": "string", "description": "自然语言任务描述"},
+                    "start_url": {"type": "string", "description": "起始 URL（http/https 或变量）"},
+                    "device_id": {"type": "string", "description": "在线 Runner 设备 ID"},
+                    "env_id": {"type": "integer", "description": "参考环境（解析变量，可选）"},
+                    "ai_config_id": {"type": "integer"},
+                    "max_steps": {"type": "integer"},
+                    "headless": {"type": "boolean"},
+                },
+                "required": ["project_id", "task_text", "start_url", "device_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "preview_spawn_ui_agent",
+            "description": (
+                "预览派发 UI Agent 多轮探索任务影响。"
+                "需要 page_url、description、在线 Runner 的 device_id；"
+                "缺设备时先 list_online_devices 或 ask_user。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "page_url": {"type": "string", "description": "起始页面 URL"},
+                    "description": {"type": "string", "description": "自然语言探索目标"},
+                    "device_id": {"type": "string", "description": "在线 Runner 设备 ID"},
+                    "ai_config_id": {"type": "integer"},
+                    "max_steps": {"type": "integer"},
+                    "headless": {"type": "boolean"},
+                },
+                "required": ["project_id", "page_url", "description", "device_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "preview_stop_browser_lab_task",
+            "description": "预览停止智能浏览器任务（需用户确认后才真正停止）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "task_id": {"type": "integer"},
+                },
+                "required": ["project_id", "task_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "preview_stop_ui_agent_job",
+            "description": "预览停止 UI Agent 探索任务（需用户确认后才真正停止）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "job_id": {"type": "integer"},
+                },
+                "required": ["project_id", "job_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "preview_analyze_failure",
             "description": "预览失败 AI 分析影响（消耗 Token，需用户确认）",
             "parameters": {
@@ -1107,6 +1964,7 @@ def _get_handler_map() -> dict[str, ToolHandler]:
             "list_data_factory_datasources": mcp_tools.tool_list_data_factory_datasources,
             "list_sql_templates": mcp_tools.tool_list_sql_templates,
             "get_sql_template": mcp_tools.tool_get_sql_template,
+            "query_datasource": mcp_tools.tool_query_datasource,
             "list_ui_tasks": mcp_tools.tool_list_ui_tasks,
             "list_ui_cases": mcp_tools.tool_list_ui_cases,
             "list_ui_run_records": mcp_tools.tool_list_ui_run_records,
@@ -1130,6 +1988,7 @@ def _get_handler_map() -> dict[str, ToolHandler]:
             "ask_test_knowledge": mcp_tools.tool_ask_test_knowledge,
             "list_knowledge_folders": mcp_tools.tool_list_knowledge_folders,
             "list_recent_failures": mcp_tools.tool_list_recent_failures,
+            "get_case_latest_failure": mcp_tools.tool_get_case_latest_failure,
             "get_execution_record": mcp_tools.tool_get_execution_record,
             "get_generate_job": mcp_tools.tool_get_generate_job,
             "get_requirement_latest_job": mcp_tools.tool_get_requirement_latest_job,            "preview_trigger_generate": mcp_tools.tool_preview_trigger_generate,
@@ -1142,6 +2001,8 @@ def _get_handler_map() -> dict[str, ToolHandler]:
             "preview_run_ui_task": mcp_tools.tool_preview_run_ui_task,
             "preview_run_ui_suite": mcp_tools.tool_preview_run_ui_suite,
             "preview_run_perf_scene": mcp_tools.tool_preview_run_perf_scene,
+            "preview_spawn_browser_lab": mcp_tools.tool_preview_spawn_browser_lab,
+            "preview_spawn_ui_agent": mcp_tools.tool_preview_spawn_ui_agent,
             "confirm_trigger_generate": mcp_tools.tool_confirm_trigger_generate,
             "confirm_run_api_suite": mcp_tools.tool_confirm_run_api_suite,
             "confirm_run_api_plan": mcp_tools.tool_confirm_run_api_plan,
@@ -1152,6 +2013,56 @@ def _get_handler_map() -> dict[str, ToolHandler]:
             "confirm_run_ui_task": mcp_tools.tool_confirm_run_ui_task,
             "confirm_run_ui_suite": mcp_tools.tool_confirm_run_ui_suite,
             "confirm_run_perf_scene": mcp_tools.tool_confirm_run_perf_scene,
+            "confirm_spawn_browser_lab": mcp_tools.tool_confirm_spawn_browser_lab,
+            "confirm_spawn_ui_agent": mcp_tools.tool_confirm_spawn_ui_agent,
+            "list_browser_lab_tasks": mcp_tools.tool_list_browser_lab_tasks,
+            "get_browser_lab_task": mcp_tools.tool_get_browser_lab_task,
+            "get_browser_lab_task_report": mcp_tools.tool_get_browser_lab_task_report,
+            "list_browser_lab_cases": mcp_tools.tool_list_browser_lab_cases,
+            "get_browser_lab_case": mcp_tools.tool_get_browser_lab_case,
+            "list_ui_agent_jobs": mcp_tools.tool_list_ui_agent_jobs,
+            "get_ui_agent_job": mcp_tools.tool_get_ui_agent_job,
+            "get_ui_agent_job_report": mcp_tools.tool_get_ui_agent_job_report,
+            "preview_stop_browser_lab_task": mcp_tools.tool_preview_stop_browser_lab_task,
+            "preview_stop_ui_agent_job": mcp_tools.tool_preview_stop_ui_agent_job,
+            "confirm_stop_browser_lab_task": mcp_tools.tool_confirm_stop_browser_lab_task,
+            "confirm_stop_ui_agent_job": mcp_tools.tool_confirm_stop_ui_agent_job,
+            "list_ai_configs": mcp_tools.tool_list_ai_configs,
+            "get_ai_config": mcp_tools.tool_get_ai_config,
+            "list_ai_config_select_options": mcp_tools.tool_list_ai_config_select_options,
+            "list_ai_scene_bindings": mcp_tools.tool_list_ai_scene_bindings,
+            "get_ai_usage_logs": mcp_tools.tool_get_ai_usage_logs,
+            "list_inbox_messages": mcp_tools.tool_list_inbox_messages,
+            "get_inbox_unread_count": mcp_tools.tool_get_inbox_unread_count,
+            "get_inbox_preferences": mcp_tools.tool_get_inbox_preferences,
+            "list_notification_configs": mcp_tools.tool_list_notification_configs,
+            "list_notification_logs": mcp_tools.tool_list_notification_logs,
+            "list_api_auth_configs": mcp_tools.tool_list_api_auth_configs,
+            "get_api_auth_config": mcp_tools.tool_get_api_auth_config,
+            "get_api_case_execution_detail": mcp_tools.tool_get_api_case_execution_detail,
+            "get_ui_case_execution_detail": mcp_tools.tool_get_ui_case_execution_detail,
+            "get_app_case_execution_detail": mcp_tools.tool_get_app_case_execution_detail,
+            "get_perf_record_detail": mcp_tools.tool_get_perf_record_detail,
+            "get_execution_report": mcp_tools.tool_get_execution_report,
+            "get_project_settings_overview": mcp_tools.tool_get_project_settings_overview,
+            "get_project_execution_settings": mcp_tools.tool_get_project_execution_settings,
+            "get_environment_detail": mcp_tools.tool_get_environment_detail,
+            "list_devices": mcp_tools.tool_list_devices,
+            "get_device_detail": mcp_tools.tool_get_device_detail,
+            "list_project_members": mcp_tools.tool_list_project_members,
+            "get_catalog_detail": mcp_tools.tool_get_catalog_detail,
+            "list_catalog_assets": mcp_tools.tool_list_catalog_assets,
+            "list_operation_logs": mcp_tools.tool_list_operation_logs,
+            "list_assistant_traces": mcp_tools.tool_list_assistant_traces,
+            "get_dashboard_summary": mcp_tools.tool_get_dashboard_summary,
+            "search_project_assets": mcp_tools.tool_search_project_assets,
+            "list_releases": mcp_tools.tool_list_releases,
+            "get_release": mcp_tools.tool_get_release,
+            "list_defects": mcp_tools.tool_list_defects,
+            "get_defect": mcp_tools.tool_get_defect,
+            "list_reviews": mcp_tools.tool_list_reviews,
+            "get_review": mcp_tools.tool_get_review,
+            "get_quality_gate_settings": mcp_tools.tool_get_quality_gate_settings,
         }
     return _handler_map_cache
 
@@ -1174,6 +2085,7 @@ _PROJECT_SCOPED_TOOLS = {
     "list_data_factory_datasources",
     "list_sql_templates",
     "get_sql_template",
+    "query_datasource",
     "list_ui_tasks",
     "list_ui_cases",
     "list_ui_run_records",
@@ -1197,6 +2109,7 @@ _PROJECT_SCOPED_TOOLS = {
     "ask_test_knowledge",
     "list_knowledge_folders",
     "list_recent_failures",
+    "get_case_latest_failure",
     "get_generate_job",
     "get_requirement_latest_job",
     "preview_trigger_generate",
@@ -1205,11 +2118,76 @@ _PROJECT_SCOPED_TOOLS = {
     "preview_run_app_case",
     "preview_run_app_suite",
     "preview_run_app_plan",
+    "preview_spawn_browser_lab",
+    "preview_spawn_ui_agent",
+    "preview_stop_browser_lab_task",
+    "preview_stop_ui_agent_job",
+    "list_browser_lab_tasks",
+    "get_browser_lab_task",
+    "get_browser_lab_task_report",
+    "list_browser_lab_cases",
+    "get_browser_lab_case",
+    "list_ui_agent_jobs",
+    "get_ui_agent_job",
+    "get_ui_agent_job_report",
+    "get_ai_usage_logs",
+    "list_notification_configs",
+    "list_notification_logs",
+    "list_api_auth_configs",
+    "get_api_auth_config",
+    "get_api_case_execution_detail",
+    "get_ui_case_execution_detail",
+    "get_app_case_execution_detail",
+    "get_perf_record_detail",
+    "get_execution_report",
+    "get_project_settings_overview",
+    "get_project_execution_settings",
+    "get_environment_detail",
+    "list_devices",
+    "get_device_detail",
+    "list_project_members",
+    "get_catalog_detail",
+    "list_catalog_assets",
+    # list_assistant_traces / get_dashboard_summary：project_id 可选（全平台超管场景），勿强制注入
+    "search_project_assets",
+    "list_releases",
+    "get_release",
+    "list_defects",
+    "get_defect",
+    "list_reviews",
+    "get_review",
+    "get_quality_gate_settings",
     "preview_analyze_failure",
 }
 
-MAX_TOOL_RESULT_CHARS = 14000
-LIST_ITEM_LIMIT = 15
+MAX_TOOL_RESULT_CHARS = 6000
+LIST_ITEM_LIMIT = 8
+_STRING_FIELD_MAX = 400
+_DROP_KEYS = frozenset(
+    {
+        "result_data",
+        "time_series_data",
+        "case_aggregations",
+        "config_snapshot",
+        "scene_items_snapshot",
+        "request_details",
+        "phase_metrics",
+        "ai_analysis",
+        "error_breakdown",
+        "distribution_info",
+        "steps",
+        "log_data",
+        "logs",
+        "execution_log",
+        "body",
+        "response_body",
+        "raw_response",
+        "headers",
+        "env",
+        "variables",
+        "parsed_content",
+    }
+)
 
 
 def _permission_label_map() -> dict[str, str]:
@@ -1250,35 +2228,76 @@ def _compact_list_items(items: list[Any], limit: int = LIST_ITEM_LIMIT) -> tuple
     return items[:limit], True
 
 
-def compact_tool_result(data: Any, *, list_limit: int = LIST_ITEM_LIMIT) -> Any:
-    """压缩工具 JSON：长列表只保留前 N 条，便于 LLM 上下文。"""
+def _trim_string(value: str, *, max_len: int = _STRING_FIELD_MAX) -> str:
+    text = value.strip() if isinstance(value, str) else str(value)
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
+
+def compact_tool_result(
+    data: Any,
+    *,
+    list_limit: int = LIST_ITEM_LIMIT,
+    drop_bulky: bool = True,
+) -> Any:
+    """压缩工具 JSON：丢弃大字段、截断长字符串、列表只留前 N 条。"""
     if isinstance(data, dict):
         out: dict[str, Any] = {}
         truncated = False
+        dropped: list[str] = []
         for key, value in data.items():
+            if drop_bulky and key in _DROP_KEYS:
+                dropped.append(str(key))
+                continue
             if key == "items" and isinstance(value, list):
                 compact_items, cut = _compact_list_items(value, list_limit)
-                out[key] = compact_items
+                out[key] = [
+                    compact_tool_result(it, list_limit=list_limit, drop_bulky=drop_bulky)
+                    for it in compact_items
+                ]
                 truncated = truncated or cut
-            elif key in ("cases", "definitions", "suites", "requirements", "failures", "categories") and isinstance(
-                value, list
-            ):
+            elif key in (
+                "cases",
+                "definitions",
+                "suites",
+                "requirements",
+                "failures",
+                "categories",
+                "skills",
+                "records",
+            ) and isinstance(value, list):
                 compact_items, cut = _compact_list_items(value, list_limit)
-                out[key] = compact_items
+                out[key] = [
+                    compact_tool_result(it, list_limit=list_limit, drop_bulky=drop_bulky)
+                    for it in compact_items
+                ]
                 truncated = truncated or cut
+            elif isinstance(value, str):
+                out[key] = _trim_string(value)
             elif isinstance(value, (dict, list)):
-                out[key] = compact_tool_result(value, list_limit=list_limit)
+                out[key] = compact_tool_result(
+                    value, list_limit=list_limit, drop_bulky=drop_bulky
+                )
             else:
                 out[key] = value
-        if truncated and "truncated" not in out:
+        if truncated and "_truncated" not in out:
             out["_truncated"] = True
             out["_truncated_note"] = f"列表已截断，仅展示前 {list_limit} 条"
+        if dropped:
+            out["_dropped_keys"] = dropped
         return out
     if isinstance(data, list):
         compact_items, cut = _compact_list_items(data, list_limit)
+        mapped = [
+            compact_tool_result(it, list_limit=list_limit, drop_bulky=drop_bulky)
+            for it in compact_items
+        ]
         if cut:
-            return compact_items + [{"_truncated_note": f"列表已截断，仅展示前 {list_limit} 条"}]
-        return compact_items
+            return mapped + [{"_truncated_note": f"列表已截断，仅展示前 {list_limit} 条"}]
+        return mapped
+    if isinstance(data, str):
+        return _trim_string(data)
     return data
 
 
@@ -1292,11 +2311,43 @@ def compact_tools_payload(payload: dict[str, Any], *, list_limit: int = LIST_ITE
     return compacted
 
 
-def truncate_tool_result(data: Any) -> str:
+def truncate_tool_result(data: Any, *, max_chars: int = MAX_TOOL_RESULT_CHARS) -> str:
     text = json.dumps(data, ensure_ascii=False, default=str)
-    if len(text) <= MAX_TOOL_RESULT_CHARS:
+    limit = max(500, int(max_chars or MAX_TOOL_RESULT_CHARS))
+    if len(text) <= limit:
         return text
-    return text[:MAX_TOOL_RESULT_CHARS] + "…（结果已截断）"
+    return text[:limit] + "…（结果已截断）"
+
+
+def shrink_loop_messages(
+    messages: list[dict[str, Any]],
+    *,
+    max_chars: int = 48_000,
+) -> list[dict[str, Any]]:
+    """当 Loop 上下文过大时，把较早的 tool 结果压成短 stub。"""
+    if not messages:
+        return messages
+    limit = max(8_000, int(max_chars or 48_000))
+
+    def _total() -> int:
+        return sum(len(str(m.get("content") or "")) for m in messages)
+
+    if _total() <= limit:
+        return messages
+
+    for i, msg in enumerate(messages):
+        if msg.get("role") != "tool":
+            continue
+        content = str(msg.get("content") or "")
+        if len(content) <= 240:
+            continue
+        messages[i] = {
+            **msg,
+            "content": content[:200] + "…（较早工具结果已压缩，详见会话摘要）",
+        }
+        if _total() <= limit:
+            break
+    return messages
 
 
 async def preview_analyze_failure(
@@ -1388,6 +2439,17 @@ async def invoke_assistant_tool(
     args = dict(arguments or {})
     if default_project_id and name in _PROJECT_SCOPED_TOOLS and "project_id" not in args:
         args["project_id"] = default_project_id
+    # 中央项目隔离：项目域工具统一校验成员（VIEWER 可读）
+    if name in _PROJECT_SCOPED_TOOLS:
+        pid = args.get("project_id") or default_project_id
+        if not pid:
+            return {"error": "project_id 必填", "user_hint": "请先选择项目"}
+        try:
+            from brickcore_assist.skills.access import require_project_access
+
+            await require_project_access(ctx, int(pid))
+        except Exception as exc:
+            return format_tool_error(exc)
     try:
         return await handler(ctx, **args)
     except TypeError as exc:
@@ -1399,6 +2461,183 @@ async def invoke_assistant_tool(
         return {"error": detail if isinstance(detail, str) else str(detail)}
     except Exception as exc:
         return {"error": f"工具执行失败: {exc}"}
+
+
+async def _confirm_run_skill(
+    ctx: McpAuthContext,
+    action: str,
+    confirm_token: str,
+    confirm_args: dict[str, Any],
+) -> dict[str, Any]:
+    """统一确认入口：按 action / skill_code 分发到具体 Skill confirm。"""
+    from brickcore_assist.skills.api_definition_to_cases import (
+        ACTION as API_CASES_ACTION,
+        confirm_api_definition_to_cases,
+    )
+    from brickcore_assist.skills.browser_lab_to_ui_case import (
+        ACTION as BL_UI_ACTION,
+        confirm_browser_lab_to_ui_case,
+    )
+    from brickcore_assist.skills.curl_to_cases import (
+        ACTION as CURL_CASES_ACTION,
+        confirm_curl_to_cases,
+    )
+    from brickcore_assist.skills.failure_to_defect_draft import (
+        ACTION as FAILURE_DEFECT_ACTION,
+        confirm_failure_to_defect_draft,
+    )
+    from brickcore_assist.skills.functional_case_to_app_case import (
+        ACTION as FC_APP_ACTION,
+        confirm_functional_case_to_app_case,
+    )
+    from brickcore_assist.skills.functional_case_to_ui_case import (
+        ACTION as FC_UI_ACTION,
+        confirm_functional_case_to_ui_case,
+    )
+    from brickcore_assist.skills.mock_response_generate import (
+        ACTION as MOCK_ACTION,
+        confirm_mock_response_generate,
+    )
+    from brickcore_assist.skills.nl_to_sql_template import (
+        ACTION as NL_SQL_ACTION,
+        confirm_nl_to_sql_template,
+    )
+    from brickcore_assist.skills.perf_journey_from_suite import (
+        ACTION as PERF_JOURNEY_ACTION,
+        confirm_perf_journey_from_suite,
+    )
+    from brickcore_assist.skills.perf_scene_from_nl import (
+        ACTION as PERF_NL_ACTION,
+        confirm_perf_scene_from_nl,
+    )
+    from brickcore_assist.skills.qa_eval_assist import (
+        ACTION as QA_EVAL_ACTION,
+        confirm_qa_eval_assist,
+    )
+    from brickcore_assist.skills.report_narrative import (
+        ACTION as REPORT_ACTION,
+        confirm_report_narrative,
+    )
+    from brickcore_assist.skills.requirement_to_test_points import (
+        ACTION as TEST_POINTS_ACTION,
+        confirm_requirement_to_test_points,
+    )
+    from brickcore_assist.skills.test_points_to_functional_cases import (
+        ACTION as FUNC_CASES_ACTION,
+        confirm_test_points_to_functional_cases,
+    )
+    from brickcore_assist.skills.ui_steps_from_nl import (
+        ACTION as UI_NL_ACTION,
+        confirm_ui_steps_from_nl,
+    )
+
+    act = (action or "").strip()
+    skill_code = str(confirm_args.get("skill_code") or "").strip()
+    pid = confirm_args.get("project_id")
+    if act == TEST_POINTS_ACTION or skill_code == "requirement_to_test_points":
+        return await confirm_requirement_to_test_points(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+            requirement_id=confirm_args.get("requirement_id"),
+        )
+    if act == API_CASES_ACTION or skill_code == "api_definition_to_cases":
+        return await confirm_api_definition_to_cases(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+            api_definition_id=confirm_args.get("api_definition_id"),
+        )
+    if act == CURL_CASES_ACTION or skill_code == "curl_to_cases":
+        return await confirm_curl_to_cases(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+        )
+    if act == FUNC_CASES_ACTION or skill_code == "test_points_to_functional_cases":
+        return await confirm_test_points_to_functional_cases(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+            requirement_id=confirm_args.get("requirement_id"),
+        )
+    if act == MOCK_ACTION or skill_code == "mock_response_generate":
+        return await confirm_mock_response_generate(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+        )
+    if act == NL_SQL_ACTION or skill_code == "nl_to_sql_template":
+        return await confirm_nl_to_sql_template(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+        )
+    if act == PERF_NL_ACTION or skill_code == "perf_scene_from_nl":
+        return await confirm_perf_scene_from_nl(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+        )
+    if act == BL_UI_ACTION or skill_code == "browser_lab_to_ui_case":
+        return await confirm_browser_lab_to_ui_case(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+            task_id=confirm_args.get("task_id"),
+        )
+    if act == UI_NL_ACTION or skill_code == "ui_steps_from_nl":
+        return await confirm_ui_steps_from_nl(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+        )
+    if act == REPORT_ACTION or skill_code == "report_narrative":
+        return await confirm_report_narrative(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+            report_type=confirm_args.get("report_type"),
+            record_id=confirm_args.get("record_id"),
+        )
+    if act == QA_EVAL_ACTION or skill_code == "qa_eval_assist":
+        return await confirm_qa_eval_assist(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+            set_id=confirm_args.get("set_id"),
+            target_id=confirm_args.get("target_id"),
+        )
+    if act == FC_UI_ACTION or skill_code == "functional_case_to_ui_case":
+        return await confirm_functional_case_to_ui_case(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+            functional_case_id=confirm_args.get("functional_case_id"),
+        )
+    if act == FC_APP_ACTION or skill_code == "functional_case_to_app_case":
+        return await confirm_functional_case_to_app_case(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+            functional_case_id=confirm_args.get("functional_case_id"),
+        )
+    if act == PERF_JOURNEY_ACTION or skill_code == "perf_journey_from_suite":
+        return await confirm_perf_journey_from_suite(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+            suite_id=confirm_args.get("suite_id"),
+        )
+    if act == FAILURE_DEFECT_ACTION or skill_code == "failure_to_defect_draft":
+        return await confirm_failure_to_defect_draft(
+            ctx=ctx,
+            confirm_token=confirm_token,
+            project_id=pid,
+            target_type=confirm_args.get("target_type"),
+            target_id=confirm_args.get("target_id"),
+        )
+    raise ValueError(f"不支持的 Skill 确认操作: {act or skill_code or '(empty)'}")
 
 
 async def invoke_confirm_tool(
@@ -1417,6 +2656,9 @@ async def invoke_confirm_tool(
             confirm_token=confirm_token,
             project_id=int(confirm_args.get("project_id") or 0),
         )
+
+    if tool_name == "confirm_run_skill":
+        return await _confirm_run_skill(ctx, action, confirm_token, confirm_args or {})
 
     handler = _get_handler_map().get(tool_name)
     if not handler:
@@ -1456,9 +2698,22 @@ def extract_pending_confirm(tool_name: str, result: dict[str, Any]) -> dict[str,
         action = "run_ui_suite"
     elif tool_name == "preview_run_perf_scene":
         action = "run_perf_scene"
+    elif tool_name == "preview_spawn_browser_lab":
+        action = "spawn_browser_lab"
+    elif tool_name == "preview_spawn_ui_agent":
+        action = "spawn_ui_agent"
+    elif tool_name == "preview_stop_browser_lab_task":
+        action = "stop_browser_lab_task"
+    elif tool_name == "preview_stop_ui_agent_job":
+        action = "stop_ui_agent_job"
     elif tool_name == "preview_analyze_failure":
         action = "analyze_failure"
+    elif tool_name in ("run_skill", "preview_run_skill"):
+        # 生成类 Skill：result.action = skill_requirement_to_test_points 等
+        action = str(result.get("action") or "").strip()
     if not action:
+        return None
+    if action not in CONFIRM_ACTION_MAP:
         return None
 
     confirm_args: dict[str, Any] = {"project_id": impact.get("project_id")}
@@ -1527,8 +2782,46 @@ def extract_pending_confirm(tool_name: str, result: dict[str, Any]) -> dict[str,
             "scene_id": impact.get("scene_id"),
             "env_id": impact.get("env_id"),
         }
+    elif action == "spawn_browser_lab":
+        confirm_args = {
+            "project_id": impact.get("project_id"),
+            "task_text": impact.get("task_text"),
+            "start_url": impact.get("start_url"),
+            "device_id": impact.get("device_id"),
+            "env_id": impact.get("env_id"),
+            "ai_config_id": impact.get("ai_config_id"),
+            "max_steps": impact.get("max_steps"),
+            "headless": impact.get("headless", True),
+        }
+    elif action == "spawn_ui_agent":
+        confirm_args = {
+            "project_id": impact.get("project_id"),
+            "page_url": impact.get("page_url"),
+            "description": impact.get("description"),
+            "device_id": impact.get("device_id"),
+            "ai_config_id": impact.get("ai_config_id"),
+            "max_steps": impact.get("max_steps"),
+            "headless": impact.get("headless", True),
+        }
+    elif action == "stop_browser_lab_task":
+        confirm_args = {
+            "project_id": impact.get("project_id"),
+            "task_id": impact.get("task_id"),
+        }
+    elif action == "stop_ui_agent_job":
+        confirm_args = {
+            "project_id": impact.get("project_id"),
+            "job_id": impact.get("job_id"),
+        }
     elif action == "analyze_failure":
         confirm_args = {"project_id": impact.get("project_id")}
+    elif str(action).startswith("skill_"):
+        raw = result.get("confirm_args") if isinstance(result.get("confirm_args"), dict) else {}
+        confirm_args = dict(raw)
+        if not confirm_args.get("project_id"):
+            confirm_args["project_id"] = impact.get("project_id")
+        if not confirm_args.get("skill_code"):
+            confirm_args["skill_code"] = impact.get("skill_code") or action.replace("skill_", "", 1)
 
     return {
         "action": action,

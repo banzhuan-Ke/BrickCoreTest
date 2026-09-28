@@ -1360,9 +1360,19 @@ class MainWindow(QMainWindow):
         return bool(self.api and self.api.user_token)
 
     def _show_version_dialog(self, message: str, force: bool = False) -> None:
+        from runner_client.app.bcpack import patches_ready_for_advertised_latest
+
         download = BrickCoreApi.resolve_download_url(self._current_server_url(), self._version_info)
         package_available = bool(self._version_info and self._version_info.get("package_available"))
-        patches_available = bool(self._version_info and self._version_info.get("update_patches_available"))
+        patches_ready, patches_block = patches_ready_for_advertised_latest(self._version_info)
+        patches_present = bool(
+            self._version_info
+            and (
+                self._version_info.get("update_patches_present")
+                or self._version_info.get("update_patches_available")
+                or (self._version_info.get("update_channels") or [])
+            )
+        )
         logged_in = self._is_logged_in()
         box = QMessageBox(self)
         box.setWindowTitle("客户端更新")
@@ -1371,8 +1381,13 @@ class MainWindow(QMainWindow):
         # 版本查询接口公开，无需登录；下载/增量包需登录，避免未登录仍露出会失败的按钮
         if not logged_in:
             extra.append("检查版本无需登录；下载完整包或一键增量更新请先登录平台账号。")
-        elif patches_available:
+        elif patches_ready:
             extra.append("平台已提供加密分层增量包，可点击「一键增量更新」（将自动覆盖并重启）。")
+        elif patches_present or patches_block:
+            extra.append(
+                patches_block
+                or "服务器增量包尚未对齐推荐版本，一键增量暂不可用；请改用完整安装包，或等管理员上传最新 dist/patches。"
+            )
         if package_available and logged_in:
             extra.append("也可下载完整安装包后手动解压覆盖。")
         if download:
@@ -1380,10 +1395,16 @@ class MainWindow(QMainWindow):
         if extra:
             box.setInformativeText("\n".join(extra))
         patch_btn = None
+        patch_disabled_btn = None
         dl_btn = None
         login_btn = None
-        if logged_in and patches_available:
+        if logged_in and patches_ready:
             patch_btn = box.addButton("一键增量更新", QMessageBox.ButtonRole.AcceptRole)
+        elif logged_in and (patches_present or patches_block):
+            # QMessageBox 无法真正置灰；提供明示不可用的按钮，点击后提示原因
+            patch_disabled_btn = box.addButton(
+                "一键增量更新（不可用）", QMessageBox.ButtonRole.ActionRole
+            )
         if logged_in and package_available:
             dl_btn = box.addButton("下载完整包", QMessageBox.ButtonRole.ActionRole)
         if not logged_in:
@@ -1401,6 +1422,13 @@ class MainWindow(QMainWindow):
             self._set_status("请先登录后再下载或增量更新")
         elif clicked == patch_btn:
             self._apply_layered_update()
+        elif clicked == patch_disabled_btn:
+            QMessageBox.warning(
+                self,
+                "增量更新不可用",
+                patches_block
+                or "服务器上的增量包不是当前推荐版本，请改用「下载完整包」，或联系管理员上传最新 patches。",
+            )
         elif clicked == dl_btn:
             self._download_client_package()
         elif clicked == open_btn and download:
@@ -1443,6 +1471,17 @@ class MainWindow(QMainWindow):
         # 重新拉版本信息，避免本地缓存清单过期
         info = api.fetch_version_info() or self._version_info or {}
         self._version_info = info
+        from runner_client.app.bcpack import patches_ready_for_advertised_latest
+
+        ready, reason = patches_ready_for_advertised_latest(info)
+        if not ready:
+            QMessageBox.warning(
+                self,
+                "增量更新不可用",
+                reason
+                or "服务器上的增量包不是当前推荐版本，请改用完整安装包或等待管理员上传最新 patches。",
+            )
+            return
         if self._layered_update_worker and self._layered_update_worker.isRunning():
             QMessageBox.information(self, "更新", "增量更新正在准备中，请稍候")
             return

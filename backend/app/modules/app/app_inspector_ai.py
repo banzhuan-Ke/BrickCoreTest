@@ -46,10 +46,17 @@ async def suggest_inspector_ai(
             try:
                 from app.core.platform.encryption import decrypt_value
                 from app.core.llm.llm_client import LLMClientFactory
+                from app.modules.ai.vision_capability import (
+                    config_supports_vision,
+                    raise_if_vision_unsupported,
+                )
                 from app.routers.ai.analyze import _build_extra_body
 
                 img_bytes, mime = await load_session_screenshot_bytes(session)
                 vconfig = await resolve_config_for_scene("failure_analysis_vision", vision_config_id)
+                raise_if_vision_unsupported(vconfig, action="App 元素探查读图")
+                if not config_supports_vision(vconfig):
+                    raise HTTPException(status_code=400, detail="Vision 配置无效")
                 api_key = decrypt_value(vconfig.api_key)
                 vclient = LLMClientFactory.create(
                     provider=vconfig.provider,
@@ -69,6 +76,8 @@ async def suggest_inspector_ai(
                         extra_body=_build_extra_body(vconfig) or None,
                     )
                     vision_hint = (vresp.get("content") or "").strip()
+            except HTTPException:
+                raise
             except Exception as exc:
                 logger.warning("[app_inspector_ai] vision failed: %s", exc)
 

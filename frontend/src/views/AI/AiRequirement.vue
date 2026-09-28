@@ -1299,7 +1299,8 @@
                 <b>本次生成用例</b>
                 <el-tag size="small" type="primary">{{ lastSessionCaseIds.length }} 条</el-tag>
                 <el-tag size="small" type="success">已入库 {{ sessionImportedCount }}</el-tag>
-                <el-tag size="small" type="warning">待审核 {{ sessionPendingCount }}</el-tag>
+                <el-tag size="small" type="warning">待审 {{ sessionAwaitingReviewCount }}</el-tag>
+                <el-tag size="small" type="success" effect="plain">可入库 {{ sessionReadyImportCount }}</el-tag>
                 <span v-if="reportMeta.time" class="report-meta">{{ reportMeta.time }}</span>
               </div>
             </template>
@@ -1312,13 +1313,13 @@
                 {{ sessionFilterOnly ? '取消「只看本次」' : '在列表中只看本次' }}
               </el-button>
               <el-button
-                v-if="canImportLibrary && sessionPendingCount"
+                v-if="canImportLibrary && sessionReadyImportCount"
                 size="small"
                 type="success"
                 :loading="importingToLibrary"
                 @click="handleSessionImportPending"
               >
-                批量审核入库 ({{ sessionPendingCount }})
+                批量入库 ({{ sessionReadyImportCount }})
               </el-button>
               <el-select
                 v-if="canImportLibrary"
@@ -1331,32 +1332,42 @@
                 <el-option label="重复覆盖" value="overwrite" />
               </el-select>
               <el-button
-                v-if="canImportLibrary && sessionPendingCount"
+                v-if="canImportLibrary && sessionReadyImportCount"
                 size="small"
                 @click="selectSessionPending"
               >
-                勾选待审核
+                勾选可入库
               </el-button>
             </div>
             <el-table :data="sessionCasePreview" border size="small" max-height="280">
               <el-table-column prop="title" label="用例标题" min-width="220" show-overflow-tooltip />
               <el-table-column prop="module" label="AI功能模块" width="120" show-overflow-tooltip />
               <el-table-column prop="priority" label="优先级" width="72" align="center" />
-              <el-table-column label="入库状态" width="100" align="center">
+              <el-table-column label="状态" width="100" align="center">
                 <template #default="{ row }">
                   <el-tag v-if="isCaseInLibrary(row)" size="small" type="success">已入库</el-tag>
-                  <el-tag v-else size="small" type="info">待审核</el-tag>
+                  <el-tag
+                    v-else-if="canImportCase(row)"
+                    size="small"
+                    type="success"
+                  >已通过</el-tag>
+                  <el-tag
+                    v-else-if="String(row.status || '').toLowerCase() === 'rejected'"
+                    size="small"
+                    type="danger"
+                  >已驳回</el-tag>
+                  <el-tag v-else size="small" type="warning">待审核</el-tag>
                 </template>
               </el-table-column>
               <el-table-column label="操作" width="100" fixed="right">
                 <template #default="{ row }">
                   <el-button
-                    v-if="canImportLibrary && !isCaseInLibrary(row)"
+                    v-if="canImportLibrary && canImportCase(row)"
                     link
                     type="primary"
                     :loading="importingOneId === row.id"
                     @click="handleImportOneToLibrary(row.id)"
-                  >审核入库</el-button>
+                  >入库</el-button>
                   <span v-else-if="isCaseInLibrary(row)" class="report-meta">×{{ libraryCopyCount(row) }}</span>
                 </template>
               </el-table-column>
@@ -1393,7 +1404,7 @@
               <template v-if="casesLoading">正在加载用例…</template>
               <template v-else>
                 共 {{ caseList.length }} 条用例
-                <template v-if="caseFilterSectionId || caseFilterSourceRef || caseFilterPointId || caseFilterLibraryStatus || sessionFilterOnly">
+                <template v-if="caseFilterSectionId || caseFilterSourceRef || caseFilterPointId || caseFilterLibraryStatus || caseFilterReviewStatus || sessionFilterOnly">
                   （筛选后 {{ filteredCaseList.length }} 条）
                 </template>
               </template>
@@ -1434,8 +1445,20 @@
                 size="small"
                 style="width: 120px;"
               >
-                <el-option label="待审核" value="pending" />
+                <el-option label="未入库" value="pending" />
                 <el-option label="已入库" value="imported" />
+              </el-select>
+              <el-select
+                v-model="caseFilterReviewStatus"
+                clearable
+                placeholder="审核状态"
+                size="small"
+                style="width: 130px;"
+              >
+                <el-option label="待审核" value="pending" />
+                <el-option label="已通过" value="approved" />
+                <el-option label="已驳回" value="rejected" />
+                <el-option label="有质检问题" value="quality_issue" />
               </el-select>
               <el-select
                 v-if="caseTestPointFilterOptions.length"
@@ -1461,6 +1484,21 @@
                 {{ sessionFilterOnly ? '取消本次筛选' : `只看本次 (${lastSessionCaseIds.length})` }}
               </el-button>
             </div>
+            <el-button
+              v-if="selectedCaseIds.length"
+              type="success"
+              size="small"
+              :loading="reviewingCases"
+              @click="handleReviewSelected('approved')"
+            >通过 ({{ selectedCaseIds.length }})</el-button>
+            <el-button
+              v-if="selectedCaseIds.length"
+              type="danger"
+              plain
+              size="small"
+              :loading="reviewingCases"
+              @click="handleReviewSelected('rejected')"
+            >驳回</el-button>
             <el-select
               v-if="selectedCaseIds.length && canImportLibrary"
               v-model="importDuplicateMode"
@@ -1477,7 +1515,7 @@
               size="small"
               :loading="importingToLibrary"
               @click="handleImportToLibrary"
-            >审核入库 ({{ selectedCaseIds.length }})</el-button>
+            >入库 ({{ selectedCaseIds.length }})</el-button>
             <el-button
               v-if="selectedCaseIds.length"
               type="danger"
@@ -1524,7 +1562,34 @@
               <template #default="{ row }">
                 <template v-if="row._isFirstStep">
                   <el-tag v-if="isCaseInLibrary(row._case)" size="small" type="success">已入库</el-tag>
+                  <el-tag
+                    v-else-if="row._case?.status === 'approved' || row._case?.status === 'confirmed'"
+                    size="small"
+                    type="success"
+                  >已通过</el-tag>
+                  <el-tag
+                    v-else-if="row._case?.status === 'rejected'"
+                    size="small"
+                    type="danger"
+                  >已驳回</el-tag>
                   <el-tag v-else size="small" type="warning">待审核</el-tag>
+                </template>
+              </template>
+            </el-table-column>
+            <el-table-column label="质检" min-width="140" show-overflow-tooltip>
+              <template #default="{ row }">
+                <template v-if="row._isFirstStep">
+                  <el-tag v-if="!row._case?.quality_checks" size="small" type="info">未检</el-tag>
+                  <el-tag
+                    v-else-if="(row._case?.quality_severity || 'ok') === 'ok'"
+                    size="small"
+                    type="success"
+                  >通过</el-tag>
+                  <el-tag
+                    v-else
+                    size="small"
+                    :type="row._case?.quality_severity === 'error' ? 'danger' : 'warning'"
+                  >{{ row._case?.quality_summary || '有问题' }}</el-tag>
                 </template>
               </template>
             </el-table-column>
@@ -1542,12 +1607,12 @@
               <template #default="{ row }">
                 <template v-if="row._isFirstStep">
                   <el-button
-                    v-if="canImportLibrary && !isCaseInLibrary(row._case)"
+                    v-if="canImportLibrary && canImportCase(row._case)"
                     link
                     type="success"
                     :loading="importingOneId === row._case.id"
                     @click="handleImportOneToLibrary(row._case.id)"
-                  >审核入库</el-button>
+                  >入库</el-button>
                   <el-button link type="primary" @click="openEditCase(row._case)">编辑</el-button>
                   <el-button link type="danger" @click="handleDeleteOneCase(row._case)">删除</el-button>
                 </template>
@@ -1684,6 +1749,7 @@ const canImportLibrary = computed(() => uStore.hasPermission('ai_test:execute'))
 const canDeleteGenerateJob = computed(() => uStore.hasPermission('ai_test:execute'))
 const importingToLibrary = ref(false)
 const importDuplicateMode = ref('skip')
+const reviewingCases = ref(false)
 const importingOneId = ref(null)
 const lastSessionCaseIds = ref([])
 const sessionFilterOnly = ref(false)
@@ -2010,6 +2076,7 @@ const showCoverageCard = computed(() => {
 const caseFilterSectionId = ref('')
 const caseFilterSourceRef = ref('')
 const caseFilterLibraryStatus = ref('')
+const caseFilterReviewStatus = ref('')
 const caseFilterPointId = ref(null)
 const batchZentaoVisible = ref(false)
 const batchZentaoForm = ref(null)
@@ -2100,8 +2167,9 @@ const generateJobHistory = ref([])
 const selectedReportJobId = ref(null)
 const reportCollapse = ref([])
 
-/** 启发式：是否更适合读图（仅用于选项标注，不限制下拉） */
+/** 是否支持读图：优先 supports_vision，旧数据回退模型名 */
 function isLikelyVisionModel(c) {
+  if (typeof c?.supports_vision === 'boolean') return c.supports_vision
   const model = (c.model || '').toLowerCase()
   return /vl|vision|gpt-4o|gpt-4-turbo|qvq|gemini|claude-3/.test(model)
 }
@@ -2210,6 +2278,29 @@ const caseTestPointFilterOptions = computed(() => {
 const isCaseInLibrary = (c) => isCaseInLibraryCopy(c)
 const libraryCopyCount = (c) => (c?.extra?.library_copies?.length) || 0
 
+/** 可入库：已通过审核且尚未入库 */
+const canImportCase = (c) => {
+  if (!c || isCaseInLibrary(c)) return false
+  const st = String(c.status || '').toLowerCase()
+  return ['approved', 'confirmed', 'exported'].includes(st)
+}
+
+const REVIEW_REASON_TAGS = [
+  '规则理解错误',
+  '遗漏场景',
+  '重复',
+  '步骤不可执行',
+  '预期不可验证',
+  '优先级不合理',
+  '需求本身不明确',
+  '其他'
+]
+
+const isPendingReviewCase = (c) => {
+  const st = String(c?.status || '').toLowerCase()
+  return st === 'needs_review' || st === 'draft' || !st
+}
+
 const syncSessionFromReport = (report, fallbackCases = null, { autoFilter = true } = {}) => {
   let ids = report?.created_case_ids
   if ((!ids || !ids.length) && Array.isArray(fallbackCases) && fallbackCases.length) {
@@ -2235,9 +2326,16 @@ const sessionImportedCount = computed(() =>
   sessionCases.value.filter(c => isCaseInLibrary(c)).length
 )
 
-const sessionPendingCount = computed(() =>
-  sessionCases.value.filter(c => !isCaseInLibrary(c)).length
+const sessionAwaitingReviewCount = computed(() =>
+  sessionCases.value.filter((c) => isPendingReviewCase(c)).length
 )
+
+const sessionReadyImportCount = computed(() =>
+  sessionCases.value.filter((c) => canImportCase(c)).length
+)
+
+/** @deprecated 兼容旧引用：可入库条数 */
+const sessionPendingCount = sessionReadyImportCount
 
 const filteredCaseList = computed(() => {
   let list = caseList.value
@@ -2257,6 +2355,21 @@ const filteredCaseList = computed(() => {
     list = list.filter(c => !isCaseInLibrary(c))
   } else if (caseFilterLibraryStatus.value === 'imported') {
     list = list.filter(c => isCaseInLibrary(c))
+  }
+  const rs = caseFilterReviewStatus.value
+  if (rs === 'pending') {
+    list = list.filter((c) => isPendingReviewCase(c))
+  } else if (rs === 'approved') {
+    list = list.filter((c) =>
+      ['approved', 'confirmed', 'exported'].includes(String(c.status || '').toLowerCase())
+    )
+  } else if (rs === 'rejected') {
+    list = list.filter((c) => String(c.status || '').toLowerCase() === 'rejected')
+  } else if (rs === 'quality_issue') {
+    list = list.filter((c) => {
+      const sev = c.quality_severity || c.extra?.quality_checks?.severity
+      return sev && sev !== 'ok'
+    })
   }
   return list
 })
@@ -3342,6 +3455,7 @@ const resetDetailState = () => {
   caseFilterSectionId.value = ''
   caseFilterSourceRef.value = ''
   caseFilterLibraryStatus.value = ''
+  caseFilterReviewStatus.value = ''
   caseFilterPointId.value = null
   sectionCoverage.value = null
   lastSessionCaseIds.value = []
@@ -3960,8 +4074,27 @@ const handleDeleteCases = () =>
   )
 
 const handleImportToLibrary = async (caseIds) => {
-  const ids = Array.isArray(caseIds) ? caseIds : [...selectedCaseIds.value]
-  if (!ids.length || !currentReq.value) return
+  const rawIds = Array.isArray(caseIds) ? caseIds : [...selectedCaseIds.value]
+  if (!rawIds.length || !currentReq.value) return
+  const notApproved = (caseList.value || []).filter(
+    (c) =>
+      rawIds.includes(c.id) &&
+      !isCaseInLibrary(c) &&
+      !['approved', 'confirmed', 'exported'].includes(String(c.status || '').toLowerCase())
+  )
+  const ids = rawIds.filter((id) => {
+    const c = (caseList.value || []).find((x) => x.id === id)
+    return c && canImportCase(c)
+  })
+  if (notApproved.length) {
+    ElMessage.warning(
+      `已跳过 ${notApproved.length} 条未通过审核的用例；请先点「通过」再入库`
+    )
+  }
+  if (!ids.length) {
+    if (!notApproved.length) ElMessage.info('没有可入库的用例（需先审核通过）')
+    return
+  }
   importingToLibrary.value = true
   try {
     const res = await aiRequirementApi.importToLibrary(
@@ -3972,7 +4105,7 @@ const handleImportToLibrary = async (caseIds) => {
     )
     if (res.data?.code === 200) {
       const d = res.data.data || {}
-      const msg = res.data.message || '审核入库成功'
+      const msg = res.data.message || '入库成功'
       if (d.copied_count > 0 || d.overwritten_count > 0) {
         ElMessage.success(msg)
       } else if (d.skipped_count > 0) {
@@ -3983,9 +4116,80 @@ const handleImportToLibrary = async (caseIds) => {
       await loadCases(currentReq.value.id)
     }
   } catch (e) {
-    ElMessage.error(apiErrorMsg(e, '审核入库失败'))
+    ElMessage.error(apiErrorMsg(e, '入库失败'))
   } finally {
     importingToLibrary.value = false
+  }
+}
+
+const handleReviewSelected = async (decision) => {
+  const ids = [...selectedCaseIds.value]
+  if (!ids.length || !currentReq.value) return
+  let note = ''
+  let reasonTag = ''
+  if (decision === 'rejected') {
+    try {
+      const { value } = await ElMessageBox.prompt('可选填写补充说明', '驳回用例', {
+        confirmButtonText: '驳回',
+        cancelButtonText: '取消',
+        inputPlaceholder: '备注（可选）',
+        inputValue: ''
+      })
+      note = (value || '').trim()
+    } catch {
+      return
+    }
+    try {
+      const { value } = await ElMessageBox.prompt(
+        `请填写原因标签（建议之一）：\n${REVIEW_REASON_TAGS.join('、')}`,
+        '驳回原因',
+        {
+          confirmButtonText: '确定',
+          cancelButtonText: '取消',
+          inputPlaceholder: '例如：步骤不可执行',
+          inputValidator: (v) => {
+            const t = (v || '').trim()
+            if (!t && !note) return '请填写原因标签或在上一步填写备注'
+            if (t && !REVIEW_REASON_TAGS.includes(t)) {
+              return `请使用标准标签：${REVIEW_REASON_TAGS.join('、')}`
+            }
+            return true
+          }
+        }
+      )
+      reasonTag = (value || '').trim()
+    } catch {
+      return
+    }
+  } else {
+    try {
+      await ElMessageBox.confirm(
+        `确认通过选中的 ${ids.length} 条用例？通过后方可入库或导出。`,
+        '审核通过',
+        { type: 'success' }
+      )
+    } catch {
+      return
+    }
+  }
+  reviewingCases.value = true
+  try {
+    const rev = await aiRequirementApi.reviewCases({
+      caseIds: ids,
+      decision,
+      note,
+      reasonTag,
+      requirementId: currentReq.value.id,
+      projectId: proStore.projectInfo.id
+    })
+    if (rev.data?.code === 200) {
+      ElMessage.success(rev.data.message || (decision === 'approved' ? '已通过' : '已驳回'))
+      await loadCases(currentReq.value.id)
+    }
+  } catch (e) {
+    ElMessage.error(apiErrorMsg(e, '审核失败'))
+  } finally {
+    reviewingCases.value = false
   }
 }
 
@@ -4000,16 +4204,16 @@ const handleImportOneToLibrary = async (caseId) => {
 }
 
 const handleSessionImportPending = async () => {
-  const pendingIds = sessionCases.value.filter(c => !isCaseInLibrary(c)).map(c => c.id)
+  const pendingIds = sessionCases.value.filter(c => canImportCase(c)).map(c => c.id)
   if (!pendingIds.length) {
-    ElMessage.info('本次生成的用例均已入库')
+    ElMessage.info('本次生成暂无「已通过且未入库」的用例；请先审核通过')
     return
   }
   await handleImportToLibrary(pendingIds)
 }
 
 const selectSessionPending = () => {
-  selectedCaseIds.value = sessionCases.value.filter(c => !isCaseInLibrary(c)).map(c => c.id)
+  selectedCaseIds.value = sessionCases.value.filter(c => canImportCase(c)).map(c => c.id)
 }
 
 const handleDeleteOneCase = (c) =>

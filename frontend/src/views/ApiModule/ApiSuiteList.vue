@@ -381,7 +381,7 @@ const teardownTemplates = computed(() => sqlTemplates.value.filter(t => t.templa
 const loadFactoryMeta = async () => {
   try {
     const [dsRes, tplRes] = await Promise.all([
-      dataFactoryApi.listDatasources({ project_id: projectId.value, size: 100 }),
+      dataFactoryApi.listDatasources({ project_id: projectId.value, enabled_only: true, size: 100 }),
       dataFactoryApi.listSqlTemplates({ project_id: projectId.value, size: 200 }),
     ])
     datasources.value = dsRes.data?.list || []

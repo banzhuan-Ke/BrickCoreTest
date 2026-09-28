@@ -30,17 +30,30 @@
           <span v-else class="text-muted">未上传 — 将 BrickCoreRunner.zip 放到 static/runner/</span>
         </el-form-item>
         <el-form-item label="分层增量包：">
-          <div v-if="form.update_patches_available && (form.update_channels || []).length">
+          <div v-if="(form.update_channels || []).length">
+            <el-alert
+              v-if="!form.update_patches_available"
+              type="warning"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 8px"
+              :title="form.update_patches_block_reason || '增量包未对齐平台推荐版本，客户端一键增量将不可用'"
+            />
             <div v-for="ch in form.update_channels" :key="ch.id" class="patch-row">
               <el-tag size="small" :type="ch.available ? 'success' : 'info'">{{ ch.id }}</el-tag>
               <span>{{ ch.filename || '-' }} · {{ formatSize(ch.size) }}</span>
+              <span v-if="ch.to_version" class="text-muted">→ {{ ch.to_version }}</span>
               <span v-if="!ch.available" class="text-muted">（清单有记录但文件缺失）</span>
+            </div>
+            <div v-if="form.update_manifest_latest || form.runner_client_version_latest" class="field-hint">
+              清单 latest：{{ form.update_manifest_latest || '-' }}
+              · 平台推荐：{{ form.runner_client_version_latest || '-' }}
             </div>
           </div>
           <span v-else class="text-muted">
             未上传 — 将 dist/patches/* 放到 static/runner/patches/（含 update_manifest.json）
           </span>
-          <div class="field-hint">正式打包会生成加密 .bcpack；客户端优先增量更新，底座变更仍用整包</div>
+          <div class="field-hint">正式打包会生成加密 .bcpack；客户端仅在清单 latest 与平台推荐版本一致且文件齐全时开放一键增量</div>
         </el-form-item>
         <el-form-item label="精简压测包 Win：">
           <span v-if="form.perf_package_available">
@@ -92,6 +105,10 @@ const form = reactive({
   perf_package_mac_size_bytes: 0,
   update_channels: [],
   update_patches_available: false,
+  update_patches_present: false,
+  update_manifest_latest: '',
+  update_patches_block_reason: '',
+  runner_client_version_latest: '',
   update_patches_hint: '',
   using_env_fallback: false,
   update_by: '',

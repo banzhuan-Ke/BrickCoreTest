@@ -106,6 +106,7 @@
 
 ## 相关文档
 
+- [小测扩展包](./brickcore-assist-pack.md)（可选；安装后可启用完整小测能力）
 - [MCP 外部接入](./mcp-server.md)
 - [AI 测试](./ai-testing.md)
 - [AI 模型配置](./ai-testing.md#ai-模型配置)（场景绑定、模型使用情况）

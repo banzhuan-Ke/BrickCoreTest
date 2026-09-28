@@ -9,6 +9,11 @@
 #   GIT_BRANCH=main          覆盖自动检测的远程分支
 #   AUTO_AERICH=1            后端启动后自动执行 aerich upgrade
 #   SKIP_GIT=1               不拉代码，只重建/重启（本地调试）
+#   FORCE_BACKEND_NO_CACHE=1 强制 backend 镜像 --no-cache（扩展包/缓存层异常时用）
+#
+# 现网 47 配置在 docker-compose.yml（无根目录 .env）。改 compose 环境变量后
+# 跑本脚本 backend/all（含 force-recreate）；勿只用 docker compose restart。
+# 仅改 frontend 时请用 ./restart.sh frontend（nginx 模式不会 npm build）。
 # ============================================================
 
 set -euo pipefail
@@ -118,6 +123,42 @@ PY
     log_warn "未能探测 premium-status（backend 可能仍在启动），可稍后访问 /test-management/premium-status"
 }
 
+check_assist_premium() {
+    log_info "检查小测扩展包状态..."
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if docker compose exec -T backend python - <<'PY' 2>/dev/null
+from app.modules.assistant.assist_gateway import clear_assist_premium_cache, get_assist_premium_info
+clear_assist_premium_cache()
+info = get_assist_premium_info()
+mode = info.get("mode") or "?"
+ready = bool(info.get("ready"))
+inst = bool(info.get("installed"))
+ver = info.get("version") or "?"
+reason = info.get("reason") or ""
+print(f"installed={inst} ready={ready} mode={mode} assist={ver} reason={reason or '-'}")
+try:
+    from brickcore_assist import api as assist_api
+    print(f"STANDARD_IMPLEMENTED={getattr(assist_api, 'STANDARD_IMPLEMENTED', None)} file={assist_api.__file__}")
+except Exception as e:
+    print(f"import_api_error={type(e).__name__}: {e}")
+raise SystemExit(0 if ready else 2)
+PY
+        then
+            log_info "小测扩展包：标准模式已就绪"
+            return 0
+        fi
+        status=$?
+        if [ "$status" = "2" ]; then
+            log_warn "小测扩展包未 ready（见上）。开关 ASSIST_STANDARD_ENABLED=1 时若仍是 lite，"
+            log_warn "常见原因：镜像缓存未带入最新 brickcore_assist → FORCE_BACKEND_NO_CACHE=1 ./restart.sh backend"
+            return 0
+        fi
+        sleep 2
+    done
+    log_warn "未能探测小测扩展包状态（backend 可能仍在启动）"
+}
+
 echo "=========================================="
 echo "  模式: $MODE"
 echo "  开始更新并重启服务"
@@ -190,10 +231,16 @@ if [ "$MODE" == "backend" ] || [ "$MODE" == "all" ]; then
     backup_installed_tm
 
     BUILD_NO_CACHE=""
-    if [ -n "$OLD_HEAD" ] && [ -n "$NEW_HEAD" ] && [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
+    if [ "${FORCE_BACKEND_NO_CACHE:-0}" = "1" ]; then
+        log_info "FORCE_BACKEND_NO_CACHE=1，使用 --no-cache 全量重建 backend"
+        BUILD_NO_CACHE="--no-cache"
+    elif [ -n "$OLD_HEAD" ] && [ -n "$NEW_HEAD" ] && [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
         if git diff --name-only "$OLD_HEAD" "$NEW_HEAD" | grep -qE '^backend/requirements.txt$|^backend/Dockerfile$|^backend/docker_install_deps.sh$'; then
             log_info "检测到依赖/Dockerfile 变更，使用 --no-cache 重建（仅此情况全量重建）"
             BUILD_NO_CACHE="--no-cache"
+        elif git diff --name-only "$OLD_HEAD" "$NEW_HEAD" | grep -qE '^backend/brickcore_assist/|^backend/brickcore_tm/'; then
+            # 扩展包在 COPY backend 层：普通 build 会因文件校验和变化重打该层，无需 --no-cache
+            log_info "检测到扩展包变更，增量重建 backend（重打 COPY 层，保留依赖缓存）"
         else
             log_info "仅代码变更，使用缓存增量构建（省时间）"
         fi
@@ -216,6 +263,7 @@ if [ "$MODE" == "backend" ] || [ "$MODE" == "all" ]; then
     fi
 
     check_tm_premium
+    check_assist_premium
 fi
 
 # 4. 重建 Nginx（需 recreate：仅 restart 不会应用新 volume/端口等 compose 变更）

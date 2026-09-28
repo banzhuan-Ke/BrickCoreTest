@@ -177,6 +177,17 @@ ROUTE_MAPPING = [
     ("POST", r"^/perf/workers/heartbeat$", "压测Worker心跳", "性能测试", "压测Worker心跳"),
     ("POST", r"^/perf/workers/\d+/report$", "压测Worker秒级上报", "性能测试", "压测Worker秒级上报"),
     ("POST", r"^/perf/workers/\d+/final$", "压测Worker最终报告", "性能测试", "压测Worker最终报告"),
+
+    # 数据工厂
+    ("POST", r"^/api-module/data-factory/console/execute$", "查询控制台执行", "数据工厂", "数据工厂查询控制台执行"),
+    ("POST", r"^/api-module/data-factory/sql/execute$", "调试执行SQL", "数据工厂", "数据工厂调试执行SQL"),
+    ("POST", r"^/api-module/data-factory/sql-templates/execute$", "调试执行SQL模板", "数据工厂", "数据工厂调试执行SQL模板"),
+    ("POST", r"^/api-module/data-factory/datasources$", "创建数据源", "数据工厂", "创建数据源"),
+    ("PUT", r"^/api-module/data-factory/datasources/\d+$", "更新数据源", "数据工厂", "更新数据源"),
+    ("DELETE", r"^/api-module/data-factory/datasources/\d+$", "删除数据源", "数据工厂", "删除数据源"),
+    ("POST", r"^/api-module/data-factory/sql-templates$", "创建SQL模板", "数据工厂", "创建SQL模板"),
+    ("PUT", r"^/api-module/data-factory/sql-templates/\d+$", "更新SQL模板", "数据工厂", "更新SQL模板"),
+    ("DELETE", r"^/api-module/data-factory/sql-templates/\d+$", "删除SQL模板", "数据工厂", "删除SQL模板"),
 ]
 
 

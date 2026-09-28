@@ -177,9 +177,9 @@ def _task_to_dict(task: BrowserLabTask) -> dict[str, Any]:
 
 
 def _task_duration_sec(task: BrowserLabTask) -> Optional[int]:
-    if not task.started_at or not task.finished_at:
-        return None
-    return int((task.finished_at - task.started_at).total_seconds())
+    from app.core.platform.datetime_utils import duration_sec_between
+
+    return duration_sec_between(task.started_at, task.finished_at)
 
 
 def _task_report(task: BrowserLabTask) -> dict[str, Any]:
@@ -318,6 +318,24 @@ async def _start_task(
             detail="Runner 派发未启用（BROWSER_RUN_DISPATCH_ENABLED=0）",
         )
     await validate_device_online(cfg.get("device_id"))
+
+    if bool(cfg.get("use_vision", True)):
+        from app.modules.ai.ai_scene_config import resolve_config_for_scene
+        from app.modules.ai.browser_use_llm import browser_use_supports_vision
+        from app.modules.ai.vision_capability import vision_unsupported_message
+
+        bl_config = await resolve_config_for_scene("browser_lab", cfg.get("ai_config_id"))
+        if not browser_use_supports_vision(bl_config):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    vision_unsupported_message(
+                        bl_config, action="智能浏览器 Vision 截图理解"
+                    )
+                    + " 也可关闭「Vision 截图理解」后仅用 DOM 执行。"
+                ),
+            )
+
     ensure_browser_lab_dir()
     await _check_daily_quota(project_id)
     await _check_concurrent_limit()
@@ -1054,20 +1072,15 @@ def _verify_browser_lab_job_token(task_id: int, token: str, *, project_id: int) 
     return data
 
 
-@router.get(
-    "/tasks/{task_id}/ui-steps-preview",
-    summary="预览 Browser Lab 转 Web UI 步骤",
-    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
-)
-async def preview_ui_steps_from_task(
+async def collect_browser_lab_ui_preview(
+    *,
     task_id: int,
-    project_id: Optional[int] = Query(None),
-    include_open_browser: bool = Query(True),
-    steps_source: str = Query("auto", description="auto|cache|steps"),
-    user_info: dict = Depends(is_authenticated),
-):
-    pid = _resolve_project_id(user_info, project_id)
-    task = await BrowserLabTask.get_or_none(id=task_id, project_id=pid)
+    project_id: int,
+    include_open_browser: bool = True,
+    steps_source: str = "auto",
+) -> dict[str, Any]:
+    """Browser Lab 任务 → UI 步骤预览（供路由与 Assist Skill 共用）。"""
+    task = await BrowserLabTask.get_or_none(id=task_id, project_id=project_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     if task.status not in ("done", "failed", "stopped"):
@@ -1081,7 +1094,7 @@ async def preview_ui_steps_from_task(
     cache_actions = None
     cache_id = cfg.get("cache_entry_id")
     if cache_id:
-        row = await BrowserLabActionCache.get_or_none(id=int(cache_id), project_id=pid)
+        row = await BrowserLabActionCache.get_or_none(id=int(cache_id), project_id=project_id)
         if row and isinstance(row.actions_json, list):
             cache_actions = row.actions_json
 
@@ -1101,22 +1114,45 @@ async def preview_ui_steps_from_task(
     default_name = task.case_name or f"BrowserLab-{task.id}"
     if not default_name.strip():
         default_name = f"BrowserLab-{task.id}"
-    return StandardResponse(
-        data={
-            "task_id": task.id,
-            "default_case_name": default_name[:200],
-            "start_url": task.start_url,
-            "steps": steps,
-            "warnings": errors,
-            "step_count": len(steps),
-            "steps_source": (steps_source or "auto").strip().lower(),
-            "cache_available": bool(cache_actions),
-            "cache_entry_id": cache_id,
-            "task_device_id": cfg.get("device_id"),
-            "task_headless": cfg.get("headless", True),
-            **import_meta,
-        }
+    return {
+        "task_id": task.id,
+        "task": task,
+        "default_case_name": default_name[:200],
+        "start_url": task.start_url,
+        "steps": steps,
+        "warnings": errors,
+        "step_count": len(steps),
+        "steps_source": (steps_source or "auto").strip().lower(),
+        "cache_available": bool(cache_actions),
+        "cache_entry_id": cache_id,
+        "task_device_id": cfg.get("device_id"),
+        "task_headless": cfg.get("headless", True),
+        "task_text": task.task_text or "",
+        **import_meta,
+    }
+
+
+@router.get(
+    "/tasks/{task_id}/ui-steps-preview",
+    summary="预览 Browser Lab 转 Web UI 步骤",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def preview_ui_steps_from_task(
+    task_id: int,
+    project_id: Optional[int] = Query(None),
+    include_open_browser: bool = Query(True),
+    steps_source: str = Query("auto", description="auto|cache|steps"),
+    user_info: dict = Depends(is_authenticated),
+):
+    pid = _resolve_project_id(user_info, project_id)
+    data = await collect_browser_lab_ui_preview(
+        task_id=task_id,
+        project_id=pid,
+        include_open_browser=include_open_browser,
+        steps_source=steps_source,
     )
+    data.pop("task", None)
+    return StandardResponse(data=data)
 
 
 @router.post(

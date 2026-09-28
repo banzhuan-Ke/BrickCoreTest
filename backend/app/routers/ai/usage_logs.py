@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from tortoise.functions import Count, Sum
 
+from app.core.llm.ai_usage_log import summarize_usage_path
 from app.modules.ai.ai_scene_config import AI_SCENE_DEFINITIONS, resolve_scene_label
 from app.core.platform.auth import require_permissions
 from app.core.platform.permissions import AI_TEST_VIEW
@@ -65,6 +66,12 @@ def _build_usage_queryset(
 
 
 def _row_to_dict(row: AiUsageLog) -> dict:
+    extra = row.extra or {}
+    path = summarize_usage_path(
+        scene=row.scene or "",
+        input_summary=row.input_summary or "",
+        extra=extra if isinstance(extra, dict) else {},
+    )
     return {
         "id": row.id,
         "scene": row.scene,
@@ -81,7 +88,12 @@ def _row_to_dict(row: AiUsageLog) -> dict:
         "status": row.status,
         "input_summary": row.input_summary,
         "output_summary": row.output_summary,
-        "extra": row.extra or {},
+        "extra": extra,
+        "path_kind": path["path_kind"],
+        "path_label": path["path_label"],
+        "path_mode": path["mode"],
+        "path_skills": path["skill_labels"],
+        "path_tools": path["tools"],
         "create_time": row.create_time.strftime("%Y-%m-%d %H:%M:%S") if row.create_time else "",
     }
 
@@ -152,6 +164,74 @@ async def usage_logs_summary(
         for r in top_rows
     ]
 
+    by_skill: list[dict] = []
+    by_rounds: list[dict] = []
+    try:
+        from tortoise.functions import Count as TCount
+        from tortoise.functions import Sum as TSum
+
+        from app.models.ai import AiSkillRunRecord, AssistantTurnTrace
+
+        skill_qs = AiSkillRunRecord.filter(create_time__gte=period_start)
+        if project_id:
+            skill_qs = skill_qs.filter(project_id=int(project_id))
+        skill_rows = (
+            await skill_qs.group_by("skill_code")
+            .annotate(call_count=TCount("id"), token_sum=TSum("tokens_used"))
+            .order_by("-token_sum")
+            .limit(20)
+            .values("skill_code", "call_count", "token_sum")
+        )
+        by_skill = [
+            {
+                "skill_code": str(r.get("skill_code") or ""),
+                "call_count": int(r.get("call_count") or 0),
+                "tokens_used": int(r.get("token_sum") or 0),
+            }
+            for r in skill_rows or []
+            if r.get("skill_code")
+        ]
+        skill_name_map: dict[str, str] = {}
+        try:
+            from brickcore_assist.skills.registry import list_skill_manifests
+
+            for m in list_skill_manifests() or []:
+                code = str(m.get("code") or "").strip()
+                name = str(m.get("name") or "").strip()
+                if code and name:
+                    skill_name_map[code] = name
+        except Exception:
+            skill_name_map = {}
+        for item in by_skill:
+            code = item["skill_code"]
+            item["skill_name"] = skill_name_map.get(code) or code
+
+        trace_qs = AssistantTurnTrace.filter(create_time__gte=period_start, rounds__not_isnull=True)
+        if project_id:
+            trace_qs = trace_qs.filter(project_id=int(project_id))
+        round_vals = await trace_qs.values_list("rounds", flat=True)
+        bucket_map: dict[str, dict] = {}
+        for raw in round_vals or []:
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if n <= 1:
+                key, label = "1", "1 轮"
+            elif n == 2:
+                key, label = "2", "2 轮"
+            elif n <= 4:
+                key, label = "3-4", "3～4 轮"
+            else:
+                key, label = "5+", "5+ 轮"
+            slot = bucket_map.setdefault(key, {"bucket": key, "label": label, "calls": 0})
+            slot["calls"] += 1
+        order = ["1", "2", "3-4", "5+"]
+        by_rounds = [bucket_map[k] for k in order if k in bucket_map]
+    except Exception:
+        by_skill = []
+        by_rounds = []
+
     return StandardResponse(
         data={
             "days": days,
@@ -167,6 +247,8 @@ async def usage_logs_summary(
                 "end_date": today_start.strftime("%Y-%m-%d"),
             },
             "top_scenes": top_scenes,
+            "by_skill": by_skill,
+            "by_rounds": by_rounds,
         }
     )
 
@@ -239,11 +321,19 @@ async def export_usage_logs(
             "Tokens",
             "耗时(ms)",
             "状态",
+            "路径",
+            "Skill",
+            "工具",
             "输入摘要",
             "输出摘要",
         ]
     )
     for row in rows:
+        path = summarize_usage_path(
+            scene=row.scene or "",
+            input_summary=row.input_summary or "",
+            extra=row.extra if isinstance(row.extra, dict) else {},
+        )
         writer.writerow(
             [
                 row.create_time.strftime("%Y-%m-%d %H:%M:%S") if row.create_time else "",
@@ -255,6 +345,9 @@ async def export_usage_logs(
                 row.tokens_used,
                 row.duration_ms,
                 row.status,
+                path.get("path_label") or "",
+                "、".join(path.get("skill_labels") or []),
+                "、".join(path.get("tools") or []),
                 (row.input_summary or "").replace("\n", " ")[:500],
                 (row.output_summary or "").replace("\n", " ")[:500],
             ]

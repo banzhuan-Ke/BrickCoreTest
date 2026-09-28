@@ -96,15 +96,19 @@ async def transfer_owner(
     if not target:
         raise HTTPException(status_code=422, detail="目标用户不是项目成员，请先添加为成员")
 
-    current_owner = await ProjectMember.get_or_none(
-        project_id=project_id, user_id=user_info.get("id"), is_del=False
+    # 把除新负责人外的所有 owner 降为 manager，避免超管/无成员身份调用时产生多 owner
+    owners = await ProjectMember.filter(
+        project_id=project_id, role=PROJECT_ROLE_OWNER, is_del=False
     )
-    if current_owner:
-        current_owner.role = PROJECT_ROLE_MANAGER
-        await current_owner.save(update_fields=["role", "update_time"])
+    for owner in owners:
+        if int(owner.user_id) == int(item.user_id):
+            continue
+        owner.role = PROJECT_ROLE_MANAGER
+        await owner.save(update_fields=["role", "update_time"])
 
-    target.role = PROJECT_ROLE_OWNER
-    await target.save(update_fields=["role", "update_time"])
+    if target.role != PROJECT_ROLE_OWNER:
+        target.role = PROJECT_ROLE_OWNER
+        await target.save(update_fields=["role", "update_time"])
     return {"detail": "负责人已转让", "new_owner_id": item.user_id}
 
 

@@ -31,6 +31,9 @@
         <el-tab-pane v-if="canTab('data')" label="数据保留" name="data" lazy>
           <DataRetentionConfig embedded />
         </el-tab-pane>
+        <el-tab-pane v-if="canTab('assist')" label="小测助手" name="assist" lazy>
+          <AssistGuardConfig embedded />
+        </el-tab-pane>
         <el-tab-pane v-if="canTab('streamParser')" label="SSE 解析配置" name="stream-parser" lazy>
           <StreamParserConfig embedded />
         </el-tab-pane>
@@ -51,6 +54,7 @@ import McpConfig from '@/views/System/McpConfig.vue'
 import RunnerReleaseConfig from '@/views/System/RunnerReleaseConfig.vue'
 import LoginPageConfig from '@/views/System/LoginPageConfig.vue'
 import DataRetentionConfig from '@/views/System/DataRetentionConfig.vue'
+import AssistGuardConfig from '@/views/System/AssistGuardConfig.vue'
 import StreamParserConfig from '@/views/System/StreamParserConfig.vue'
 
 const TAB_PERMISSIONS = {
@@ -60,6 +64,7 @@ const TAB_PERMISSIONS = {
   runner: 'device:edit',
   login: 'login_page_config:view',
   data: 'platform_settings:view',
+  assist: 'platform_settings:view',
   streamParser: 'ai_config:view',
 }
 
@@ -77,6 +82,9 @@ const TOP_TAB_ALIASES = {
   data: 'data',
   'data-retention': 'data',
   'platform-settings': 'data',
+  assist: 'assist',
+  'assist-guard': 'assist',
+  'assist-timeout': 'assist',
   'stream-parser': 'stream-parser',
   'stream-parser-config': 'stream-parser',
 }
@@ -99,6 +107,7 @@ const hasAnyTab = computed(() =>
   canTab('runner') ||
   canTab('login') ||
   canTab('data') ||
+  canTab('assist') ||
   canTab('streamParser')
 )
 
@@ -111,6 +120,7 @@ const resolveTopTab = (raw) => {
   if (mapped === 'runner' && canTab('runner')) return 'runner'
   if (mapped === 'login' && canTab('login')) return 'login'
   if (mapped === 'data' && canTab('data')) return 'data'
+  if (mapped === 'assist' && canTab('assist')) return 'assist'
   if (mapped === 'stream-parser' && canTab('streamParser')) return 'stream-parser'
   if (canTab('ai')) return 'ai'
   if (canTab('smtp')) return 'notify'
@@ -118,6 +128,7 @@ const resolveTopTab = (raw) => {
   if (canTab('runner')) return 'runner'
   if (canTab('login')) return 'login'
   if (canTab('data')) return 'data'
+  if (canTab('assist')) return 'assist'
   if (canTab('streamParser')) return 'stream-parser'
   return 'ai'
 }

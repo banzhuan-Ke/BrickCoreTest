@@ -54,6 +54,8 @@ INDUSTRY_SLOT_PROFILES: dict[str, list[tuple[str, bool]]] = {
         ("bug_export", True),
     ],
 }
+# 兼容旧名 / CE sync 替换前引用
+INDUSTRY_SLOT_PROFILES = INDUSTRY_SLOT_PROFILES
 
 GENERIC_REPORT_SLOT_PROFILES: dict[str, list[tuple[str, bool]]] = {
     "iteration_report": [

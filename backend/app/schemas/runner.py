@@ -98,6 +98,9 @@ class RunnerVersionResponse(BaseModel):
     update_manifest: Optional[dict[str, Any]] = None
     update_channels: list[dict[str, Any]] = Field(default_factory=list)
     update_patches_available: bool = False
+    update_patches_present: bool = False
+    update_manifest_latest: str = ""
+    update_patches_block_reason: str = ""
     update_patches_hint: str = ""
 
 

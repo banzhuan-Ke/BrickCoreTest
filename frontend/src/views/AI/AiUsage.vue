@@ -54,6 +54,58 @@
         </el-col>
       </el-row>
 
+      <el-row :gutter="16" class="chart-row" v-loading="usageSummaryLoading">
+        <el-col :xs="24" :lg="14">
+          <el-card shadow="never" class="chart-card">
+            <template #header>
+              <span class="chart-title">按技能拆分（近 {{ usageFilter.days }} 日）</span>
+            </template>
+            <el-table
+              v-if="bySkill.length"
+              :data="bySkill"
+              size="small"
+              stripe
+              border
+              max-height="260"
+            >
+              <el-table-column label="技能" min-width="180" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span :title="row.skill_code">{{ row.skill_name || row.skill_code }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="call_count" label="调用" width="90" align="right" />
+              <el-table-column label="Tokens" width="120" align="right">
+                <template #default="{ row }">{{ formatTokenNum(row.tokens_used) }}</template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="暂无技能调用" :image-size="64" />
+          </el-card>
+        </el-col>
+        <el-col :xs="24" :lg="10">
+          <el-card shadow="never" class="chart-card">
+            <template #header>
+              <span class="chart-title">小测多轮分布（近 {{ usageFilter.days }} 日）</span>
+            </template>
+            <el-table
+              v-if="byRounds.length"
+              :data="byRounds"
+              size="small"
+              stripe
+              border
+              max-height="260"
+            >
+              <el-table-column prop="label" label="轮次桶" min-width="100" />
+              <el-table-column prop="calls" label="回合数" width="100" align="right" />
+            </el-table>
+            <el-empty
+              v-else
+              description="暂无回合追踪（含小测对话与技能快捷入口；历史未计入的直跑入口除外）"
+              :image-size="64"
+            />
+          </el-card>
+        </el-col>
+      </el-row>
+
       <div class="usage-toolbar">
         <el-select v-model="usageFilter.days" style="width: 120px;" @change="onUsageDaysChange">
           <el-option label="近 7 天" :value="7" />
@@ -102,6 +154,17 @@
           <template #default="{ row }">{{ row.project_name || (row.project_id ? `#${row.project_id}` : '—') }}</template>
         </el-table-column>
         <el-table-column prop="model" label="模型" min-width="140" show-overflow-tooltip />
+        <el-table-column label="路径" min-width="170">
+          <template #default="{ row }">
+            <div class="usage-path" :title="(row.path_tools || []).join('、')">
+              <el-tag v-if="row.path_kind && row.path_kind !== 'other'" size="small" :type="pathTagType(row.path_kind)">
+                {{ pathKindLabel(row.path_kind) }}
+              </el-tag>
+              <span v-if="row.path_label" class="usage-path-text">{{ pathShortLabel(row) }}</span>
+              <span v-else class="usage-path-empty">—</span>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="tokens_used" label="Tokens" width="90" align="right" />
         <el-table-column label="耗时" width="90" align="right">
           <template #default="{ row }">{{ formatDuration(row.duration_ms) }}</template>
@@ -149,8 +212,17 @@
               {{ usageDetail.status === 'success' ? '成功' : '失败' }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item v-if="usageDetail.extra?.tools_used?.length" label="工具" :span="2">
-            <el-tag v-for="t in usageDetail.extra.tools_used" :key="t" size="small" style="margin-right: 4px;">{{ t }}</el-tag>
+          <el-descriptions-item v-if="usageDetail.path_label" label="路径" :span="2">
+            {{ pathDetailLabel(usageDetail) }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="usageDetail.path_mode" label="小测模式">
+            {{ assistModeLabel(usageDetail.path_mode) }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="usageDetail.path_skills?.length" label="Skill" :span="2">
+            <el-tag v-for="s in usageDetail.path_skills" :key="s" type="warning" size="small" style="margin-right: 4px;">{{ s }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailTools(usageDetail).length" label="工具" :span="2">
+            <el-tag v-for="t in detailTools(usageDetail)" :key="t" size="small" style="margin-right: 4px;">{{ t }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="输入" :span="2">
             <div class="usage-detail-text">{{ usageDetail.input_summary }}</div>
@@ -196,7 +268,9 @@ const usageExporting = ref(false)
 const usageSummary = ref({
   today: { calls: 0, tokens_used: 0 },
   period: { calls: 0, tokens_used: 0, failed_calls: 0 },
-  top_scenes: []
+  top_scenes: [],
+  by_skill: [],
+  by_rounds: []
 })
 const trendItems = ref([])
 const usageFilter = reactive({
@@ -219,6 +293,8 @@ let sceneChart = null
 let trendChart = null
 
 const sceneChartData = computed(() => usageSummary.value.top_scenes || [])
+const bySkill = computed(() => usageSummary.value.by_skill || [])
+const byRounds = computed(() => usageSummary.value.by_rounds || [])
 
 const successRate = computed(() => {
   const calls = Number(usageSummary.value.period?.calls || 0)
@@ -226,6 +302,56 @@ const successRate = computed(() => {
   if (!calls) return '100.0'
   return (((calls - failed) / calls) * 100).toFixed(1)
 })
+
+const ASSIST_MODE_LABELS = {
+  lite: '精简',
+  standard: '标准'
+}
+
+const pathKindLabel = (kind) => {
+  if (kind === 'agent') return 'Agent'
+  if (kind === 'skill') return 'Skill'
+  if (kind === 'confirm') return '确认'
+  if (kind === 'tool') return '工具'
+  return ''
+}
+
+const pathTagType = (kind) => {
+  if (kind === 'skill') return 'warning'
+  if (kind === 'confirm') return 'success'
+  if (kind === 'tool') return 'info'
+  return ''
+}
+
+const assistModeLabel = (mode) => {
+  const key = String(mode || '').trim().toLowerCase()
+  return ASSIST_MODE_LABELS[key] || mode || ''
+}
+
+const pathShortLabel = (row) => {
+  const label = row.path_label || ''
+  return label
+    .replace(/^小测 Agent(?: · )?/, '')
+    .replace(/^Skill · /, '')
+    .replace(/^确认执行 · /, '')
+    .replace(/^工具 · /, '')
+    .replace(/\bstandard\b/gi, '标准')
+    .replace(/\blite\b/gi, '精简')
+}
+
+const pathDetailLabel = (row) => {
+  const label = row?.path_label || ''
+  return label
+    .replace(/\bstandard\b/gi, '标准')
+    .replace(/\blite\b/gi, '精简')
+}
+
+const detailTools = (row) => {
+  if (row?.path_tools?.length) return row.path_tools
+  const extra = row?.extra || {}
+  const tools = extra.tools_used || extra.tools || []
+  return Array.isArray(tools) ? tools : []
+}
 
 const formatDuration = (ms) => {
   if (!ms) return '—'
@@ -479,6 +605,22 @@ onBeforeUnmount(() => {
 .usage-chart {
   width: 100%;
   height: 280px;
+}
+.usage-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.usage-path-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #606266;
+  font-size: 12px;
+}
+.usage-path-empty {
+  color: #c0c4cc;
 }
 .usage-toolbar {
   display: flex;

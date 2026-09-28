@@ -24,12 +24,61 @@ _REASONING_BLOCK_RE = re.compile(
     rf"(?:{_OPEN_THINK}[\s\S]*?{_CLOSE_THINK}|{_OPEN_REDACTED}[\s\S]*?{_CLOSE_REDACTED})",
     re.IGNORECASE,
 )
+# 已闭合前缀块（兼容旧逻辑）
 _UNCLOSED_REASONING_RE = re.compile(
     rf"^(?:{_OPEN_THINK}|{_OPEN_REDACTED})[\s\S]*?(?:{_CLOSE_THINK}|{_CLOSE_REDACTED})\s*",
     re.IGNORECASE,
 )
 _ONLY_REASONING_RE = re.compile(
     rf"^(?:{_OPEN_THINK}|{_OPEN_REDACTED})[\s\S]*$",
+    re.IGNORECASE,
+)
+# 尾部或整段未闭合思考：从最后一个未配对的 open 到文末（常见于 max_tokens 截断）
+_TRAILING_UNCLOSED_RE = re.compile(
+    rf"({_OPEN_THINK}|{_OPEN_REDACTED})(?![\s\S]*?(?:{_CLOSE_THINK}|{_CLOSE_REDACTED}))[\s\S]*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_reasoning_open(block: str) -> str:
+    inner = re.sub(
+        rf"^({_OPEN_THINK}|{_OPEN_REDACTED})\s*",
+        "",
+        block or "",
+        flags=re.IGNORECASE,
+    )
+    return re.sub(
+        rf"\s*({_CLOSE_THINK}|{_CLOSE_REDACTED})\s*$",
+        "",
+        inner,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def split_qa_reasoning(text: str) -> tuple[str, str]:
+    """拆分模型思考块与面向用户的正文。返回 (thinking, answer)。
+
+    支持未闭合 ``<think>``（输出被截断时常见）：整段落进 thinking，正文为空。
+    """
+    s = (text or "").strip()
+    if not s:
+        return "", ""
+    thinking_parts: list[str] = []
+    for m in _REASONING_BLOCK_RE.finditer(s):
+        inner = _strip_reasoning_open(m.group(0))
+        if inner:
+            thinking_parts.append(inner)
+    trailing = _TRAILING_UNCLOSED_RE.search(s)
+    if trailing:
+        inner = _strip_reasoning_open(trailing.group(0))
+        if inner:
+            thinking_parts.append(inner)
+    answer = clean_qa_answer(s)
+    return "\n\n".join(thinking_parts).strip(), answer
+
+
+_TOOL_CALL_LEAK_RE = re.compile(
+    r"<(?:tool_call|ask_user)\b[^>]*>[\s\S]*?</(?:tool_call|ask_user)>",
     re.IGNORECASE,
 )
 
@@ -44,6 +93,8 @@ def clean_qa_answer(text: str) -> str:
         prev = s
         s = _REASONING_BLOCK_RE.sub("", s).strip()
     s = _UNCLOSED_REASONING_RE.sub("", s).strip()
+    s = _TRAILING_UNCLOSED_RE.sub("", s).strip()
+    s = _TOOL_CALL_LEAK_RE.sub("", s).strip()
     if _ONLY_REASONING_RE.match(s):
         return ""
     return s

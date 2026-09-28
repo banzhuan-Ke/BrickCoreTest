@@ -57,7 +57,7 @@ function routeForSection(section, id) {
     case 'ui_plan':
       return `#/task/edit/${id}`
     case 'api_case':
-      return `#/api-case?case_id=${id}`
+      return `#/api-case?edit_case_id=${id}`
     case 'api_suite':
       return `#/api-suite/${id}`
     case 'api_plan':
@@ -127,7 +127,7 @@ const EXPLICIT_RULES = [
   {
     pattern: /case_id\s*=\s*(\d+)/gi,
     pickId: (a) => a[1],
-    route: (id) => `#/api-case?case_id=${id}`,
+    route: (id) => `#/api-case?edit_case_id=${id}`,
   },
   {
     pattern: /requirement_id\s*=\s*(\d+)/gi,
@@ -276,7 +276,7 @@ function refineLineFallback(line) {
     )
   } else if (/接口/.test(line) && /用例/.test(line)) {
     result = result.replace(/(?<![#\w])#(\d+)\b/g, (m, id, off) =>
-      alreadyLinked(result, off) ? m : mdLink(m, `#/api-case?case_id=${id}`)
+      alreadyLinked(result, off) ? m : mdLink(m, `#/api-case?edit_case_id=${id}`)
     )
   } else if (/接口/.test(line)) {
     result = result.replace(/(?<![#\w])#(\d+)\b/g, (m, id, off) =>
@@ -316,7 +316,15 @@ function linkifyByLines(text) {
     .join('\n')
 }
 
+/** 兜底：剥模型误写入正文的 <tool_call>/<ask_user>（正常应由后端回收） */
+const TOOL_CALL_LEAK_RE = /<(?:tool_call|ask_user)\b[^>]*>[\s\S]*?<\/(?:tool_call|ask_user)>/gi
+
+export function stripAssistantToolCallLeak(content) {
+  if (!content) return ''
+  return String(content).replace(TOOL_CALL_LEAK_RE, '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 export function linkifyAssistantContent(content) {
   if (!content) return ''
-  return linkifyByLines(String(content))
+  return linkifyByLines(stripAssistantToolCallLeak(String(content)))
 }

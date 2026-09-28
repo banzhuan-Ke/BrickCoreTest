@@ -34,6 +34,27 @@ from app.schemas.runner import (
 router = APIRouter(prefix="/runner", tags=["Runner 客户端"])
 logger = logging.getLogger(__name__)
 
+# 与 Device 模型字段长度对齐；Mac 上报 Darwin 内核串曾超过旧上限 50 导致 connect 500
+_DEVICE_STR_LIMITS = {
+    "id": 50,
+    "ip": 50,
+    "name": 50,
+    "system": 50,
+    "username": 50,
+    "version": 255,
+    "hostname": 255,
+    "runner_client_version": 50,
+}
+
+
+def _clip_device_str_fields(payload: dict) -> dict:
+    out = dict(payload)
+    for key, limit in _DEVICE_STR_LIMITS.items():
+        val = out.get(key)
+        if isinstance(val, str) and len(val) > limit:
+            out[key] = val[:limit]
+    return out
+
 
 def _request_base_url(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-proto")
@@ -76,6 +97,7 @@ async def runner_connect(
         payload["runner_engine_types"] = ["web"]
     if item.toolchain_status:
         payload["toolchain_status"] = item.toolchain_status
+    payload = _clip_device_str_fields(payload)
 
     if device:
         await device.update_from_dict(payload)

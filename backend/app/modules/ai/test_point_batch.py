@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Any, Optional
@@ -15,6 +16,7 @@ from app.modules.ai.ai_prompts import PromptManager
 from app.modules.ai.requirement_document import (
     build_interleaved_content,
     collect_image_indices,
+    ensure_text_document_meta,
     estimate_scope,
     resolve_sections,
     truncate_scope_text,
@@ -85,7 +87,7 @@ def plan_test_point_batches(
     max_tokens_per_batch: int = DEFAULT_MAX_TOKENS_PER_BATCH,
 ) -> list[dict[str, Any]]:
     """按 token 预算将选中章节拆成多批（保持文档顺序）。"""
-    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    meta = ensure_text_document_meta(req.original_content, req.parsed_content)
     all_sections = meta.get("sections") or []
     if not all_sections:
         return [{
@@ -144,6 +146,18 @@ def _requirement_sections(req: AiRequirement) -> list[dict]:
     return meta.get("sections") or []
 
 
+def effective_scoped_content(interleaved: str, original: str, *, max_chars: int = 8000) -> str:
+    """章节拼装结果若只有标题无正文，回退到需求原文。
+
+    粘贴预览桩若未带 blocks，build_interleaved_content 会得到「## 全文」，
+    旧逻辑把它当有效内容，导致模型只看到需求名（如「小测粘贴需求」）胡编测试点。
+    """
+    body_only = re.sub(r"(?m)^##\s+.*$", "", interleaved or "").strip()
+    if not body_only:
+        return (original or "")[:max_chars]
+    return interleaved or ""
+
+
 async def _build_scoped_content_for_batch(
     req: AiRequirement,
     scope_section_ids: list[str],
@@ -154,18 +168,9 @@ async def _build_scoped_content_for_batch(
     from app.modules.ai.requirement_storage import load_images_from_meta
     from app.routers.ai.requirements import _analyze_images_with_vision, _get_ai_config
 
-    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    meta = ensure_text_document_meta(req.original_content, req.parsed_content)
     blocks = meta.get("blocks") or []
     all_sections = meta.get("sections") or []
-    if not all_sections:
-        all_sections = [{
-            "id": "sec-1",
-            "title": "全文",
-            "level": 1,
-            "block_ids": [b.get("id") for b in blocks if b.get("id")],
-            "char_count": len(req.original_content or ""),
-            "image_indices": list(range(meta.get("image_count", 0))),
-        }]
     selected_sections = resolve_sections(all_sections, scope_section_ids)
     if not selected_sections:
         raise HTTPException(status_code=400, detail="请至少选择一个章节/范围")
@@ -178,9 +183,15 @@ async def _build_scoped_content_for_batch(
 
     if image_count > 0:
         if not vision_config_id:
+            from app.modules.ai.ai_scene_config import resolve_vision_config
+
+            vcfg = await resolve_vision_config(None, scene="requirement_doc_understand")
+            if vcfg:
+                vision_config_id = int(vcfg.id)
+        if not vision_config_id:
             raise HTTPException(
                 status_code=400,
-                detail=f"选中范围包含 {image_count} 张图片，请选择 Vision 模型配置",
+                detail=f"选中范围包含 {image_count} 张图片，请选择 Vision 模型配置（或绑定「需求文档读图」场景）",
             )
         vision_config = await _get_ai_config(vision_config_id)
         vision_report = {
@@ -204,8 +215,7 @@ async def _build_scoped_content_for_batch(
         total_tokens += v_tokens
 
     scoped_content = build_interleaved_content(blocks, selected_sections, vision_text_by_index)
-    if not scoped_content.strip():
-        scoped_content = (req.original_content or "")[:8000]
+    scoped_content = effective_scoped_content(scoped_content, req.original_content or "")
     scoped_content, _ = truncate_scope_text(scoped_content)
     scope_est = estimate_scope(scoped_content, image_count)
     if scope_est["level"] == "block":
@@ -233,17 +243,21 @@ async def execute_single_test_point_batch(
     supplement: bool = False,
     knowledge_folder_ids: Optional[list[int]] = None,
     knowledge_document_ids: Optional[list[int]] = None,
+    persist: bool = True,
 ) -> dict[str, Any]:
-    """执行单批测试点生成，返回 created_count / points / generate_report / tokens_used。"""
+    """执行单批测试点生成，返回 created_count / points / generate_report / tokens_used。
+
+    persist=False：只生成不落库（W4 小测 preview）；确认后再以同一结构写入。
+    """
+    from app.modules.ai.ai_scene_config import resolve_config_for_scene
     from app.routers.ai.generate import _call_llm, _extract_json_array
-    from app.routers.ai.requirements import _get_ai_config
 
     start_time = time.time()
     req_id = req.id
     username = user_info.get("username") or user_info.get("sub") or "system"
     batch_ref = _batch_source_ref(batch_name)
 
-    if replace_existing and batch_ref:
+    if persist and replace_existing and batch_ref:
         await AiRequirementTestPoint.filter(
             requirement_id=req_id, source_ref=batch_ref, is_del=False
         ).update(is_del=True)
@@ -260,7 +274,7 @@ async def execute_single_test_point_batch(
         if existing:
             existing_titles = "\n".join(f"- {p.title}" for p in existing[:60])
 
-    gen_config = await _get_ai_config(text_config_id)
+    gen_config = await resolve_config_for_scene("requirement_test_point", text_config_id)
     try:
         system_prompt, user_prompt = await PromptManager.render(
             "requirement_doc_to_test_points",
@@ -314,30 +328,45 @@ async def execute_single_test_point_batch(
             item["section_ids"] = mapped
 
     created = []
-    for idx, item in enumerate(normalized):
-        pt = await AiRequirementTestPoint.create(
-            requirement_id=req_id,
-            project_id=project_id,
-            title=item["title"],
-            description=item.get("description"),
-            test_type=item.get("test_type", "正向"),
-            priority=item.get("priority", "P2"),
-            module_path=item.get("module_path", ""),
-            main_module=item.get("main_module", ""),
-            sub_module=item.get("sub_module", ""),
-            acceptance_ref=item.get("acceptance_ref"),
-            section_ids=item.get("section_ids") or default_section_ids,
-            source_ref=batch_ref or None,
-            status="draft",
-            sort_order=idx,
-            extra=item.get("extra") or {},
-            create_by=username,
-        )
-        created.append({
-            "id": pt.id,
-            "title": pt.title,
-            "source_ref": pt.source_ref,
-        })
+    if persist:
+        for idx, item in enumerate(normalized):
+            pt = await AiRequirementTestPoint.create(
+                requirement_id=req_id,
+                project_id=project_id,
+                title=item["title"],
+                description=item.get("description"),
+                test_type=item.get("test_type", "正向"),
+                priority=item.get("priority", "P2"),
+                module_path=item.get("module_path", ""),
+                main_module=item.get("main_module", ""),
+                sub_module=item.get("sub_module", ""),
+                acceptance_ref=item.get("acceptance_ref"),
+                section_ids=item.get("section_ids") or default_section_ids,
+                source_ref=batch_ref or None,
+                status="draft",
+                sort_order=idx,
+                extra=item.get("extra") or {},
+                create_by=username,
+            )
+            created.append({
+                "id": pt.id,
+                "title": pt.title,
+                "source_ref": pt.source_ref,
+            })
+    else:
+        for idx, item in enumerate(normalized):
+            created.append({
+                "title": item.get("title") or f"测试点{idx + 1}",
+                "description": (item.get("description") or "")[:500],
+                "test_type": item.get("test_type", "正向"),
+                "priority": item.get("priority", "P2"),
+                "module_path": item.get("module_path", ""),
+                "main_module": item.get("main_module", ""),
+                "sub_module": item.get("sub_module", ""),
+                "acceptance_ref": item.get("acceptance_ref"),
+                "section_ids": item.get("section_ids") or default_section_ids,
+                "extra": item.get("extra") or {},
+            })
 
     duration_ms = int((time.time() - start_time) * 1000)
     report = {
@@ -352,6 +381,7 @@ async def execute_single_test_point_batch(
         "model": gen_config.model,
         "config_name": gen_config.name,
         "batch_name": batch_name,
+        "persisted": bool(persist),
     }
     await log_ai_usage(
         gen_config,
@@ -360,17 +390,66 @@ async def execute_single_test_point_batch(
         project_id=project_id,
         tokens_used=total_tokens,
         duration_ms=duration_ms,
-        input_summary=f"需求#{req_id} {req.name}, batch={batch_name}"[:500],
-        output_summary=f"生成 {len(created)} 条测试点",
+        input_summary=f"需求#{req_id} {req.name}, batch={batch_name}, persist={persist}"[:500],
+        output_summary=(
+            f"生成 {len(created)} 条测试点"
+            if persist
+            else f"预览 {len(created)} 条测试点（未落库）"
+        ),
         requirement_id=req_id,
         batch_name=batch_name,
     )
     return {
-        "created_count": len(created),
+        "created_count": len(created) if persist else 0,
+        "preview_count": len(created),
         "points": created,
         "generate_report": report,
         "tokens_used": total_tokens,
         "duration_ms": duration_ms,
+        "persisted": bool(persist),
+    }
+
+
+async def persist_test_point_drafts(
+    *,
+    requirement_id: int,
+    project_id: int,
+    username: str,
+    points: list[dict[str, Any]],
+    batch_name: str = "",
+) -> dict[str, Any]:
+    """将 preview 阶段的测试点草稿写入库（status=draft）。"""
+    batch_ref = _batch_source_ref(batch_name)
+    created: list[dict[str, Any]] = []
+    for idx, item in enumerate(points or []):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        pt = await AiRequirementTestPoint.create(
+            requirement_id=int(requirement_id),
+            project_id=int(project_id),
+            title=title[:200],
+            description=(item.get("description") or None),
+            test_type=item.get("test_type") or "正向",
+            priority=item.get("priority") or "P2",
+            module_path=item.get("module_path") or "",
+            main_module=item.get("main_module") or "",
+            sub_module=item.get("sub_module") or "",
+            acceptance_ref=item.get("acceptance_ref"),
+            section_ids=item.get("section_ids") or [],
+            source_ref=batch_ref or None,
+            status="draft",
+            sort_order=idx,
+            extra=item.get("extra") if isinstance(item.get("extra"), dict) else {},
+            create_by=username or "system",
+        )
+        created.append({"id": pt.id, "title": pt.title, "source_ref": pt.source_ref})
+    return {
+        "created_count": len(created),
+        "points": created,
+        "navigate": f"/ai-testing/requirements/{requirement_id}?tab=points",
     }
 
 

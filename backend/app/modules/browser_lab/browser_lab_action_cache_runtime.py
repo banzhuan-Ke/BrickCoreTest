@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any, Callable
 
+from app.core.platform.datetime_utils import now_app
 from app.models.ai import BrowserLabCase, BrowserLabTask
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ async def try_action_cache_path(
             task.error_message = f"缓存无法回放，缺少变量: {','.join(missing_vars[:8])}"[:4000]
             task.result_summary = task.error_message
             task.tokens_used = 0
-            task.finished_at = datetime.now(timezone.utc)
+            task.finished_at = now_app()
             await task.save(update_fields=_TASK_FINISH_FIELDS)
             await append_step(
                 task_id,
@@ -211,7 +211,7 @@ async def try_action_cache_path(
         task.error_message = None
         task.tokens_used = 0
         task.engine = "action_cache"
-        task.finished_at = datetime.now(timezone.utc)
+        task.finished_at = now_app()
         cfg2 = dict(task.config_json or {})
         cfg2["cache_status"] = "cache_hit"
         cfg2["cache_hit"] = True
@@ -248,7 +248,7 @@ async def try_action_cache_path(
             task.error_message = "用户已停止"
             task.result_summary = "用户已停止"
             task.tokens_used = 0
-            task.finished_at = datetime.now(timezone.utc)
+            task.finished_at = now_app()
             await task.save(update_fields=_TASK_FINISH_FIELDS)
             await append_step(
                 task_id,
@@ -298,7 +298,7 @@ async def try_action_cache_path(
         task.error_message = f"缓存回放失败: {ex}"[:4000]
         task.result_summary = task.error_message
         task.tokens_used = 0
-        task.finished_at = datetime.now(timezone.utc)
+        task.finished_at = now_app()
         await task.save(update_fields=_TASK_FINISH_FIELDS)
         await append_step(
             task_id,

@@ -79,6 +79,10 @@ export function buildAssistantPageContext(route) {
     case 'aiTestAnalysis':
       ctx.page_hint = 'requirements'
       break
+    case 'aiTestingWorkspace':
+      ctx.requirement_id = parseId(p.reqId)
+      ctx.page_hint = 'requirements'
+      break
     case 'aiFunctionalCases':
       ctx.page_hint = 'functional_cases'
       break
@@ -186,4 +190,39 @@ export function formatPageContextLabel(ctx) {
   if (ctx.template_id) parts.push(`SQL模板#${ctx.template_id}`)
   if (ctx.datasource_id) parts.push(`数据源#${ctx.datasource_id}`)
   return parts.join(' · ')
+}
+
+/**
+ * 从 page_context 推导可钉住实体（W2 PinBar「钉住当前页」）
+ * @returns {{ type: string, id: number|string, label: string } | null}
+ */
+export function pinCandidateFromPageContext(ctx) {
+  if (!ctx) return null
+  const candidates = [
+    ['plan_id', 'plan', '接口计划'],
+    ['suite_id', 'suite', '接口套件'],
+    ['ui_case_id', 'ui_case', 'UI用例'],
+    ['ui_suite_id', 'ui_suite', 'UI套件'],
+    ['task_id', 'ui_plan', 'UI计划'],
+    ['app_case_id', 'app_case', 'App用例'],
+    ['app_plan_id', 'app_plan', 'App计划'],
+    ['api_id', 'api', '接口'],
+    ['requirement_id', 'requirement', '需求'],
+    ['perf_scene_id', 'perf_scene', '压测场景'],
+    ['api_run_record_id', 'api_run_record', '接口执行'],
+    ['ui_suite_run_id', 'ui_suite_run', 'UI套件执行'],
+    ['env_id', 'env', '环境'],
+    ['device_id', 'device', '设备']
+  ]
+  for (const [key, type, prefix] of candidates) {
+    const id = ctx[key]
+    if (id != null && id !== '') {
+      return {
+        type,
+        id,
+        label: `${prefix}#${id}`
+      }
+    }
+  }
+  return null
 }

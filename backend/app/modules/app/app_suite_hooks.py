@@ -36,14 +36,34 @@ async def trigger_app_suite_hooks_for_execution(suite_execution_id: int) -> None
         return
     variables = dict(env.get("variables") or {})
     teardown = await run_sql_templates_by_ids(
-        suite.teardown_sql_ids or [], variables, environment_id, suite.project_id, phase="teardown"
+        suite.teardown_sql_ids or [],
+        variables,
+        environment_id,
+        suite.project_id,
+        phase="teardown",
+        use_env_default=True,
     )
     db_result = await evaluate_db_assertions(
-        suite.db_assertions or [], variables, environment_id, suite.project_id
+        suite.db_assertions or [],
+        variables,
+        environment_id,
+        suite.project_id,
+        use_env_default=True,
     )
     if not teardown.get("success") or not db_result.get("all_passed"):
         record.fail = (record.fail or 0) + 1
+        err = ""
+        logs = teardown.get("logs") or []
+        if logs:
+            err = str(logs[0].get("error") or logs[0].get("message") or "")
+        if not err:
+            results = db_result.get("results") or []
+            if results:
+                err = str(results[0].get("error") or results[0].get("message") or "")
+        message = "App 套件 teardown/库断言未通过"
+        if err:
+            message = f"{message}: {err}"
         log = list(record.execution_log or [])
-        log.append({"level": "error", "message": "App 套件 teardown/库断言未通过"})
+        log.append({"level": "error", "message": message})
         record.execution_log = log
         await record.save()

@@ -33,10 +33,10 @@ BrickCore 将 **Web 自动化、App 自动化、接口自动化、性能测试�
 |------|----------|
 | [**Web 自动化**](#ui-automation) | 可视化编排、步骤片段、测试文件库、录制回放、套件与执行计划、定时任务、截图/视频报告 |
 | [**App 自动化**](#app-automation) | 用例/套件/计划编排、元素库、**元素探查**、步骤片段、定时任务、**设备性能监控**（Android）；真机执行需 Runner 勾选 **App 自动化** |
-| [**接口自动化**](#api-automation) | Swagger / Postman / cURL 导入、测试计划、Mock、数据驱动、Token 授权、数据工厂与库断言 |
+| [**接口自动化**](#api-automation) | Swagger / Postman / cURL 导入、测试计划、Mock、数据驱动、Token 授权、数据工厂（含 **ES / 查询控制台 / 经执行机**）与库断言 |
 | [**性能测试**](#perf-testing) | 固定/循环/梯度压测、流式 SSE、业务链路、CSV 参数化、分布式 Worker（Runner / Perf）、验收目标与基线、**增强报告**、**被测服务器监控** |
 | [**测试管理**](#test-management) | **版本交付闭环**：范围、评审、计划运行、缺陷、质量门禁/快照/豁免、追溯矩阵 |
-| [**AI 测试**](#ai-testing) | 需求生成功能用例、[**迭代资料库**](#knowledge-base)、[**智能浏览器**](#browser-lab)、录制优化、失败分析 |
+| [**AI 测试**](#ai-testing) | 需求生成功能用例、[**迭代资料库**](#knowledge-base)、[**智能浏览器**](#browser-lab)、录制优化、失败分析；可选 [小测扩展包](./brickcore-assist-pack.md) |
 | **平台能力** | 数据看板、邮件/钉钉/企微通知、[MCP 外部接入](#mcp-server)、[平台助手「小测」](#platform-assistant)、RBAC、文档中心 |
 
 > **Web / App 执行** 依赖网盘或设备管理下载的 **BrickCoreRunner**（见 [执行器使用说明](#runner-client)）。App 真机调度须使用勾选 **App 自动化** 的整包。**压测**须上线压测 Worker（Runner 压测角色或精简 **BrickCorePerf**），平台不本机代压。

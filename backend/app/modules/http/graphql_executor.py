@@ -201,6 +201,7 @@ async def execute_graphql_case_attempt(
             script_vars,
             env_id,
             case.project_id,
+            worker_id=worker_id,
         )
         for dr in db_eval.get("results", []):
             db_assertion_results.append(

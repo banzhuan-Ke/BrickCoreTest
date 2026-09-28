@@ -372,12 +372,29 @@ export const aiRequirementApi = {
             data: { case_ids: caseIds }
         })
     },
+    async listCaseReviewQueue(params = {}) {
+        return await http.get('/ai/requirements/cases/review-queue', { params })
+    },
+    async reviewCases({ caseIds, decision, note = '', reasonTag = '', requirementId = null, projectId }) {
+        return await http.post(
+            '/ai/requirements/cases/review',
+            {
+                case_ids: caseIds,
+                decision,
+                note,
+                reason_tag: reasonTag || '',
+                requirement_id: requirementId
+            },
+            { params: { project_id: projectId } }
+        )
+    },
     importToLibrary(reqId, caseIds, projectId, options = {}) {
         return aiFunctionalCaseApi.importToLibrary(reqId, caseIds, projectId, options)
     },
-    exportXlsxUrl(id, projectId) {
+    exportXlsxUrl(id, projectId, { approvedOnly = true } = {}) {
         const base = import.meta.env.VITE_BASE_API || ''
-        return `${base}/ai/requirements/${id}/cases/export?project_id=${projectId}`
+        const ao = approvedOnly ? 'true' : 'false'
+        return `${base}/ai/requirements/${id}/cases/export?project_id=${projectId}&approved_only=${ao}`
     },
     async getExportTemplate() {
         return await http.get('/ai/requirements/export-template')

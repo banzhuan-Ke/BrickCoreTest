@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from typing import Any
 
 from app.core.infra.redis_client import redis_cli
@@ -11,7 +12,7 @@ from app.models.ui import UiCaseExecution, UiPlanExecution, UiSuiteExecution
 
 logger = logging.getLogger(__name__)
 
-CACHE_KEY = "system:platform_settings:v1"
+CACHE_KEY = "system:platform_settings:v4"
 CACHE_TTL_SECONDS = 120
 
 DELETE_MODE_LOGICAL = "logical"
@@ -19,9 +20,41 @@ DELETE_MODE_PHYSICAL = "physical"
 DELETE_MODE_RECYCLE_BIN = "recycle_bin"
 DELETE_MODES = frozenset({DELETE_MODE_LOGICAL, DELETE_MODE_PHYSICAL, DELETE_MODE_RECYCLE_BIN})
 
+# 小测护栏：平台配置优先；与 GuardConfig.from_env 范围对齐
+ASSIST_LLM_TIMEOUT_MIN = 20
+ASSIST_LLM_TIMEOUT_MAX = 600
+ASSIST_MAX_WALL_MIN = 30
+ASSIST_MAX_WALL_MAX = 600
+ASSIST_FAILURE_DIGEST_ROUNDS_MIN = 1
+ASSIST_FAILURE_DIGEST_ROUNDS_MAX = 8
+ASSIST_MAX_TOKENS_MIN = 8_000
+ASSIST_MAX_TOKENS_MAX = 200_000
+ASSIST_MAX_PLAN_ROUNDS_MIN = 1
+ASSIST_MAX_PLAN_ROUNDS_MAX = 12
+ASSIST_MAX_TOOLS_PER_ROUND_MIN = 1
+ASSIST_MAX_TOOLS_PER_ROUND_MAX = 8
+ASSIST_TOOL_RESULT_CHARS_MIN = 2_000
+ASSIST_TOOL_RESULT_CHARS_MAX = 20_000
+ASSIST_TOOL_LIST_LIMIT_MIN = 3
+ASSIST_TOOL_LIST_LIMIT_MAX = 30
+ASSIST_SUMMARY_TRIGGER_MIN = 8
+ASSIST_SUMMARY_TRIGGER_MAX = 40
+ASSIST_HISTORY_TURNS_MIN = 2
+ASSIST_HISTORY_TURNS_MAX = 12
+
 DEFAULT_SETTINGS: dict[str, Any] = {
     "ui_case_record_delete_mode": DELETE_MODE_LOGICAL,
     "knowledge_report_delete_mode": DELETE_MODE_LOGICAL,
+    "assist_llm_timeout_sec": 180,
+    "assist_max_wall_sec": 240,
+    "assist_failure_digest_max_rounds": 4,
+    "assist_max_tokens_total": 80_000,
+    "assist_max_plan_rounds": 5,
+    "assist_max_tools_per_round": 4,
+    "assist_tool_result_max_chars": 6_000,
+    "assist_tool_list_item_limit": 8,
+    "assist_session_summary_trigger": 16,
+    "assist_history_turns": 4,
 }
 
 
@@ -39,6 +72,100 @@ def normalize_knowledge_report_delete_mode(mode: str | None) -> str:
     return DEFAULT_SETTINGS["knowledge_report_delete_mode"]
 
 
+def normalize_assist_llm_timeout_sec(value: Any) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = int(DEFAULT_SETTINGS["assist_llm_timeout_sec"])
+    return max(ASSIST_LLM_TIMEOUT_MIN, min(ASSIST_LLM_TIMEOUT_MAX, n))
+
+
+def normalize_assist_max_wall_sec(value: Any) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = int(DEFAULT_SETTINGS["assist_max_wall_sec"])
+    return max(ASSIST_MAX_WALL_MIN, min(ASSIST_MAX_WALL_MAX, n))
+
+
+def normalize_assist_failure_digest_max_rounds(value: Any) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = int(DEFAULT_SETTINGS["assist_failure_digest_max_rounds"])
+    return max(ASSIST_FAILURE_DIGEST_ROUNDS_MIN, min(ASSIST_FAILURE_DIGEST_ROUNDS_MAX, n))
+
+
+def normalize_assist_max_tokens_total(value: Any) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = int(DEFAULT_SETTINGS["assist_max_tokens_total"])
+    return max(ASSIST_MAX_TOKENS_MIN, min(ASSIST_MAX_TOKENS_MAX, n))
+
+
+def _clamp_int(value: Any, *, default: int, lo: int, hi: int) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = default
+    return max(lo, min(hi, n))
+
+
+def normalize_assist_max_plan_rounds(value: Any) -> int:
+    return _clamp_int(
+        value,
+        default=int(DEFAULT_SETTINGS["assist_max_plan_rounds"]),
+        lo=ASSIST_MAX_PLAN_ROUNDS_MIN,
+        hi=ASSIST_MAX_PLAN_ROUNDS_MAX,
+    )
+
+
+def normalize_assist_max_tools_per_round(value: Any) -> int:
+    return _clamp_int(
+        value,
+        default=int(DEFAULT_SETTINGS["assist_max_tools_per_round"]),
+        lo=ASSIST_MAX_TOOLS_PER_ROUND_MIN,
+        hi=ASSIST_MAX_TOOLS_PER_ROUND_MAX,
+    )
+
+
+def normalize_assist_tool_result_max_chars(value: Any) -> int:
+    return _clamp_int(
+        value,
+        default=int(DEFAULT_SETTINGS["assist_tool_result_max_chars"]),
+        lo=ASSIST_TOOL_RESULT_CHARS_MIN,
+        hi=ASSIST_TOOL_RESULT_CHARS_MAX,
+    )
+
+
+def normalize_assist_tool_list_item_limit(value: Any) -> int:
+    return _clamp_int(
+        value,
+        default=int(DEFAULT_SETTINGS["assist_tool_list_item_limit"]),
+        lo=ASSIST_TOOL_LIST_LIMIT_MIN,
+        hi=ASSIST_TOOL_LIST_LIMIT_MAX,
+    )
+
+
+def normalize_assist_session_summary_trigger(value: Any) -> int:
+    return _clamp_int(
+        value,
+        default=int(DEFAULT_SETTINGS["assist_session_summary_trigger"]),
+        lo=ASSIST_SUMMARY_TRIGGER_MIN,
+        hi=ASSIST_SUMMARY_TRIGGER_MAX,
+    )
+
+
+def normalize_assist_history_turns(value: Any) -> int:
+    return _clamp_int(
+        value,
+        default=int(DEFAULT_SETTINGS["assist_history_turns"]),
+        lo=ASSIST_HISTORY_TURNS_MIN,
+        hi=ASSIST_HISTORY_TURNS_MAX,
+    )
+
+
 def _row_to_dict(row: SystemPlatformSettings | None) -> dict[str, Any]:
     if not row:
         return {**DEFAULT_SETTINGS, "update_by": "", "update_time": ""}
@@ -46,6 +173,36 @@ def _row_to_dict(row: SystemPlatformSettings | None) -> dict[str, Any]:
         "ui_case_record_delete_mode": normalize_ui_case_record_delete_mode(row.ui_case_record_delete_mode),
         "knowledge_report_delete_mode": normalize_knowledge_report_delete_mode(
             getattr(row, "knowledge_report_delete_mode", None)
+        ),
+        "assist_llm_timeout_sec": normalize_assist_llm_timeout_sec(
+            getattr(row, "assist_llm_timeout_sec", None)
+        ),
+        "assist_max_wall_sec": normalize_assist_max_wall_sec(
+            getattr(row, "assist_max_wall_sec", None)
+        ),
+        "assist_failure_digest_max_rounds": normalize_assist_failure_digest_max_rounds(
+            getattr(row, "assist_failure_digest_max_rounds", None)
+        ),
+        "assist_max_tokens_total": normalize_assist_max_tokens_total(
+            getattr(row, "assist_max_tokens_total", None)
+        ),
+        "assist_max_plan_rounds": normalize_assist_max_plan_rounds(
+            getattr(row, "assist_max_plan_rounds", None)
+        ),
+        "assist_max_tools_per_round": normalize_assist_max_tools_per_round(
+            getattr(row, "assist_max_tools_per_round", None)
+        ),
+        "assist_tool_result_max_chars": normalize_assist_tool_result_max_chars(
+            getattr(row, "assist_tool_result_max_chars", None)
+        ),
+        "assist_tool_list_item_limit": normalize_assist_tool_list_item_limit(
+            getattr(row, "assist_tool_list_item_limit", None)
+        ),
+        "assist_session_summary_trigger": normalize_assist_session_summary_trigger(
+            getattr(row, "assist_session_summary_trigger", None)
+        ),
+        "assist_history_turns": normalize_assist_history_turns(
+            getattr(row, "assist_history_turns", None)
         ),
         "update_by": row.update_by or "",
         "update_time": row.update_time.strftime("%Y-%m-%d %H:%M:%S") if row.update_time else "",
@@ -99,24 +256,125 @@ async def get_knowledge_report_delete_mode() -> str:
     return normalize_knowledge_report_delete_mode(settings.get("knowledge_report_delete_mode"))
 
 
+async def resolve_assist_guard_config():
+    """平台配置覆盖超时 / Token / 轮次 / 压缩参数；其余护栏仍读环境变量。"""
+    from brickcore_assist.orchestrator.guards import GuardConfig
+
+    base = GuardConfig.from_env()
+    try:
+        settings = await get_platform_settings()
+        llm_to = float(
+            normalize_assist_llm_timeout_sec(settings.get("assist_llm_timeout_sec"))
+        )
+        wall = float(normalize_assist_max_wall_sec(settings.get("assist_max_wall_sec")))
+        tokens = int(
+            normalize_assist_max_tokens_total(settings.get("assist_max_tokens_total"))
+        )
+        if wall < llm_to:
+            wall = llm_to
+        return replace(
+            base,
+            llm_timeout_sec=llm_to,
+            max_wall_sec=wall,
+            max_tokens_total=tokens,
+            max_plan_rounds=normalize_assist_max_plan_rounds(
+                settings.get("assist_max_plan_rounds")
+            ),
+            max_tools_per_round=normalize_assist_max_tools_per_round(
+                settings.get("assist_max_tools_per_round")
+            ),
+            tool_result_max_chars=normalize_assist_tool_result_max_chars(
+                settings.get("assist_tool_result_max_chars")
+            ),
+            tool_list_item_limit=normalize_assist_tool_list_item_limit(
+                settings.get("assist_tool_list_item_limit")
+            ),
+            history_turns=normalize_assist_history_turns(
+                settings.get("assist_history_turns")
+            ),
+        )
+    except Exception as exc:
+        logger.warning("读取小测护栏配置失败，回退环境变量: %s", exc)
+        return base
+
+
 async def save_platform_settings(
     *,
     ui_case_record_delete_mode: str | None = None,
     knowledge_report_delete_mode: str | None = None,
+    assist_llm_timeout_sec: int | None = None,
+    assist_max_wall_sec: int | None = None,
+    assist_failure_digest_max_rounds: int | None = None,
+    assist_max_tokens_total: int | None = None,
+    assist_max_plan_rounds: int | None = None,
+    assist_max_tools_per_round: int | None = None,
+    assist_tool_result_max_chars: int | None = None,
+    assist_tool_list_item_limit: int | None = None,
+    assist_session_summary_trigger: int | None = None,
+    assist_history_turns: int | None = None,
     username: str,
 ) -> dict[str, Any]:
     current = await get_platform_settings()
+
+    def _pick(key: str, incoming: Any, normalizer):
+        raw = incoming if incoming is not None else current.get(key)
+        return normalizer(raw)
+
     payload = {
         "ui_case_record_delete_mode": normalize_ui_case_record_delete_mode(
-            ui_case_record_delete_mode if ui_case_record_delete_mode is not None else current.get("ui_case_record_delete_mode")
+            ui_case_record_delete_mode
+            if ui_case_record_delete_mode is not None
+            else current.get("ui_case_record_delete_mode")
         ),
         "knowledge_report_delete_mode": normalize_knowledge_report_delete_mode(
             knowledge_report_delete_mode
             if knowledge_report_delete_mode is not None
             else current.get("knowledge_report_delete_mode")
         ),
+        "assist_llm_timeout_sec": _pick(
+            "assist_llm_timeout_sec", assist_llm_timeout_sec, normalize_assist_llm_timeout_sec
+        ),
+        "assist_max_wall_sec": _pick(
+            "assist_max_wall_sec", assist_max_wall_sec, normalize_assist_max_wall_sec
+        ),
+        "assist_failure_digest_max_rounds": _pick(
+            "assist_failure_digest_max_rounds",
+            assist_failure_digest_max_rounds,
+            normalize_assist_failure_digest_max_rounds,
+        ),
+        "assist_max_tokens_total": _pick(
+            "assist_max_tokens_total", assist_max_tokens_total, normalize_assist_max_tokens_total
+        ),
+        "assist_max_plan_rounds": _pick(
+            "assist_max_plan_rounds", assist_max_plan_rounds, normalize_assist_max_plan_rounds
+        ),
+        "assist_max_tools_per_round": _pick(
+            "assist_max_tools_per_round",
+            assist_max_tools_per_round,
+            normalize_assist_max_tools_per_round,
+        ),
+        "assist_tool_result_max_chars": _pick(
+            "assist_tool_result_max_chars",
+            assist_tool_result_max_chars,
+            normalize_assist_tool_result_max_chars,
+        ),
+        "assist_tool_list_item_limit": _pick(
+            "assist_tool_list_item_limit",
+            assist_tool_list_item_limit,
+            normalize_assist_tool_list_item_limit,
+        ),
+        "assist_session_summary_trigger": _pick(
+            "assist_session_summary_trigger",
+            assist_session_summary_trigger,
+            normalize_assist_session_summary_trigger,
+        ),
+        "assist_history_turns": _pick(
+            "assist_history_turns", assist_history_turns, normalize_assist_history_turns
+        ),
         "update_by": username,
     }
+    if payload["assist_max_wall_sec"] < payload["assist_llm_timeout_sec"]:
+        payload["assist_max_wall_sec"] = payload["assist_llm_timeout_sec"]
     row = await SystemPlatformSettings.first()
     if row:
         for key, value in payload.items():

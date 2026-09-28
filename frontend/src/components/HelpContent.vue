@@ -47,7 +47,7 @@
           <li><strong>组建套件</strong> → 按业务场景组合用例并执行</li>
           <li><strong>测试计划</strong> → 编排多个套件/单用例，支持串行/并行</li>
           <li><strong>执行记录</strong> → 查看报告、导出 HTML、邮件推送</li>
-          <li><strong>数据工厂</strong> → 配置数据源与 SQL 模板，支持套件前置/后置 SQL 与数据库断言</li>
+          <li><strong>数据工厂</strong> → 配置数据源、SQL 模板与查询控制台，支持套件前置/后置 SQL 与数据库断言</li>
         </ol>
 
         <h4>性能测试流程：</h4>
@@ -108,6 +108,7 @@
         <p>路径：任意页面右下角 <strong>小测 · 平台助手</strong>（需 <code>ai_test:view</code>）。</p>
         <ul>
           <li><strong>浮窗</strong>：可拖动、可放大、不遮挡主页面；Markdown 表格与列表正常渲染</li>
+          <li><strong>技能快捷入口</strong>：对话区上方一排技能按钮（如失败分析、功能用例→Web），点开补参数 → 预览确认后落库/跳转</li>
           <li><strong>查数</strong>：项目概览、接口/UI/压测、需求、最近失败等自然语言查询</li>
           <li><strong>执行</strong>：跑套件/计划/UI/压测等需 preview → 聊天内点「确认执行」</li>
           <li><strong>多会话</strong>：新建/切换/搜索历史；回答中 suite_id、plan_id 等可点击跳转</li>
@@ -553,14 +554,15 @@
           <li><strong>测试计划</strong> → 编排多个套件或单用例，串行/并行执行</li>
           <li><strong>定时任务</strong> → 对套件或计划配置 Interval / Date / Crontab</li>
           <li><strong>查看报告</strong> → 执行记录中查看详情、导出 HTML、发送邮件</li>
-          <li><strong>数据工厂</strong> → 管理数据源与 SQL 模板，套件/用例级库断言与 setup/teardown</li>
+          <li><strong>数据工厂</strong> → 管理数据源、SQL 模板与<strong>查询控制台</strong>，套件/用例级库断言与 setup/teardown</li>
         </ol>
 
         <h4>数据工厂（P1）：</h4>
         <ol>
-          <li><strong>数据源</strong> → 「接口自动化 → 数据工厂」配置 MySQL 等连接（按环境隔离）；<strong>密码 Fernet 加密存储</strong>，不回显明文</li>
+          <li><strong>数据源</strong> → 「接口自动化 → 数据工厂」配置 MySQL/PG/Redis/ES 等连接（按环境隔离）；<strong>密码 Fernet 加密存储</strong>，不回显明文</li>
           <li><strong>保存</strong> → 新建必填密码；编辑留空不修改；弹窗「测试连接」不落库，测试通过后须点「保存」</li>
-          <li><strong>SQL 模板</strong> → 维护 setup/teardown 脚本，支持 <code v-pre>${{变量}}</code> 替换</li>
+          <li><strong>查询控制台</strong> → 选环境/数据源后手写 SQL、Redis 或 ES DSL；结果表展示；写操作需二次确认；可另存为 SQL 模板</li>
+          <li><strong>SQL 模板</strong> → 维护 setup/teardown/query 脚本，支持 <code v-pre>${{变量}}</code> 替换</li>
           <li><strong>用例级断言</strong> → 用例编辑页「数据库断言」可调试后保存</li>
           <li><strong>套件级</strong> → 接口套件 / UI 套件可配置前置 SQL、后置 SQL 与套件级库断言</li>
           <li><strong>执行时机</strong> → 接口：setup 在用例前、teardown+断言在用例后；UI：setup 在派发前、teardown+断言在 Runner 完成后回调</li>
@@ -628,7 +630,7 @@
             </tr>
             <tr>
               <td>数据工厂</td>
-              <td>数据源（密码密文存储）、SQL 模板、库断言；HTML 报告展示 hooks 结果</td>
+              <td>数据源（含 ES，密码密文存储）、查询控制台、SQL 模板、库断言；HTML 报告展示 hooks 结果</td>
               <td>造数、清数、DB 校验与接口/UI 联动</td>
             </tr>
             <tr>
@@ -1055,7 +1057,7 @@ POST {{ baseUrl }}/mock/api/login</pre>
 
       <div class="help-footer">
         <p>📧 遇到问题？请联系系统管理员或查看接口文档获取更多技术支持。</p>
-        <p style="color: #999; font-size: 12px;">版本：v1.8.0 | 更新日期：2026-09-10</p>
+        <p style="color: #999; font-size: 12px;">版本：v1.9.0 | 更新日期：2026-09-14</p>
       </div>
     </el-scrollbar>
   </div>

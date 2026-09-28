@@ -184,8 +184,8 @@ import { fileApi } from '@/api/modules/sys'
 import { useFailureAnalysisGate } from '@/composables/useFailureAnalysisGate.js'
 import { makeTableRowIndex } from '@/utils/tableIndex'
 
-const { canAnalyzeExecution } = useFailureAnalysisGate(ref(null), { syncProject: true })
-const canAnalyzeRecord = (row) => canAnalyzeExecution(row)
+const { canActiveAnalyze } = useFailureAnalysisGate(ref(null), { syncProject: true })
+const canAnalyzeRecord = (_row) => canActiveAnalyze.value
 const aiAnalyzeVisible = ref(false)
 const aiAnalyzeTargetId = ref(null)
 

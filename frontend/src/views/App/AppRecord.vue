@@ -256,8 +256,8 @@ const detailLoading = ref(false)
 const aiAnalyzeVisible = ref(false)
 const aiAnalyzeTargetId = ref(null)
 
-const { canAnalyzeExecution } = useFailureAnalysisGate(ref(null), { syncProject: true })
-const canAnalyzeRecord = (row) => canAnalyzeExecution(row)
+const { canActiveAnalyze } = useFailureAnalysisGate(ref(null), { syncProject: true })
+const canAnalyzeRecord = (_row) => canActiveAnalyze.value
 
 function openAiAnalyze(recordId) {
   aiAnalyzeTargetId.value = recordId

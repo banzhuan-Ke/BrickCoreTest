@@ -325,6 +325,12 @@ export const MenuGroups = [
                 permission: 'ai_test:view'
             },
             {
+                name: '生成用例审核',
+                path: '/ai-case-review',
+                icon: 'Checked',
+                permission: 'ai_test:view'
+            },
+            {
                 name: '功能用例库',
                 path: '/ai-functional-cases',
                 icon: 'DocumentChecked',
@@ -367,6 +373,18 @@ export const MenuGroups = [
                 path: '/ai-usage',
                 icon: 'DataLine',
                 permission: 'ai_test:view'
+            },
+            {
+                name: '技能与助手',
+                path: '/ai-skills',
+                icon: 'Collection',
+                permission: 'ai_test:view'
+            },
+            {
+                name: '小测回合追踪',
+                path: '/ai-assistant-traces',
+                icon: 'List',
+                permission: 'ai_config:view'
             },
         ]
     },

@@ -1,15 +1,36 @@
 """
 录制步骤质量评估与 AI 优化后 locator 保护。
 
-- 新 Runner：meta.locatorRankedByRunner=True 时信任 candidates 顺序（排序 SOT 在 Runner）
+- 新 Runner：meta.locatorRankedByRunner=True 时信任「主定位决策」（best current），非混排首位
 - 旧 Runner / 旧数据：无排序标记时用本模块 _score_locator（含 strategy）做转换兜底
+- candidates 可为 str 或 {locator, source}（current/elevated/neighbor/ai）
+- 契约 SOT：app.core.shared.locator_candidate_contract
 """
 from __future__ import annotations
 
 import re
 from typing import Any, Optional
 
+from app.core.shared.locator_candidate_contract import (
+    DECISION_ASSIST,
+    DECISION_FAITHFUL_HIT,
+    DECISION_HEALED,
+    DECISION_USER_SELECTED,
+    MAX_LOCATOR_CANDIDATES,
+    apply_primary_meta,
+    candidate_locator as candidate_locator_of,
+    candidate_source as candidate_source_of,
+    has_object_candidates,
+    make_candidate,
+    normalize_candidates as normalize_candidates_preserving_source,
+    normalize_decision,
+    normalize_locator,
+    pick_default_from_candidates,
+    resolve_primary_source,
+    trim_candidates_for_storage,
+)
 from app.modules.ai.ai_project_settings import normalize_recording_locator_strategy
+
 COMMON_SHORT_TEXTS = frozenset({
     "登入", "登录", "确定", "取消", "提交", "保存", "新增", "删除", "编辑",
     "搜索", "查询", "重置", "下一步", "上一步", "完成", "关闭", "返回",
@@ -19,8 +40,19 @@ COMMON_SHORT_TEXTS = frozenset({
 })
 
 
+def candidate_locators_list(items: Any) -> list[str]:
+    return [c["locator"] for c in normalize_candidates_preserving_source(items)]
+
+
+def normalize_candidate_item(item: Any) -> Optional[dict[str, str]]:
+    loc = candidate_locator_of(item)
+    if not loc:
+        return None
+    return make_candidate(loc, candidate_source_of(item))
+
+
 def _unsafe_css_has_text(text: str) -> bool:
-    return bool(re.search(r"[\$\\]", text or ""))
+    return bool(re.search(r'[\$\\"]', text or ""))
 
 
 LOCATOR_METHODS = frozenset({
@@ -37,7 +69,8 @@ GENERIC_CLASS_HINTS = (
 )
 
 _DYNAMIC_ID_RE = re.compile(
-    r"^(ng-|_ngcontent-|ember\d+|jsx-|css-|radix-|:r\d+|el-id-|el-popover-|\d+$)",
+    r"^(ng-|_ngcontent-|ember\d+|jsx-|css-|radix-|:r\d+|el-id-|el-popover-|"
+    r"cdk-overlay-|el-popper-|el-overlay-|\d+$)",
     re.I,
 )
 
@@ -73,8 +106,8 @@ def _dedupe_candidates(candidates: list[str]) -> list[str]:
     return out
 
 
-def _build_candidates_from_meta(meta: dict) -> list[str]:
-    """与前端 LocatorSelector 对齐，从 meta 推导备选定位。"""
+def _build_identity_candidates_from_meta(meta: dict) -> list[str]:
+    """仅身份/结构类候选（不含 elevate/neighbor 关系候选）。"""
     opts: list[str] = []
     tag = (meta.get("tag") or "").lower()
     text = (meta.get("accessibleName") or meta.get("text") or "").strip()
@@ -143,7 +176,6 @@ def _build_candidates_from_meta(meta: dict) -> list[str]:
             opts.insert(0, f'//tr[contains(.,"{row_key}")]//input[@type="checkbox"]')
             opts.insert(0, f'//tr[contains(.,"{row_key}")]//span[contains(@class,"checkbox")]')
         if text and len(text) < 40:
-            # 勿用 contains(., text)：短词如「运行」会命中「运行错误」等状态列
             t = text[:32].replace('"', "")
             if role == "button" or tag == "button":
                 opts.insert(0, f'//tr[contains(.,"{row_key}")]//button[normalize-space()="{t}"]')
@@ -169,10 +201,52 @@ def _build_candidates_from_meta(meta: dict) -> list[str]:
     return _dedupe_candidates(opts)
 
 
+def build_tagged_derived_candidates(meta: dict) -> list[dict[str, str]]:
+    """从 meta 推导候选并正确标注 source（current / elevated / neighbor）。"""
+    meta = meta or {}
+    out: list[dict[str, str]] = []
+    seen: dict[str, int] = {}
+
+    def _push(loc: str, source: str) -> None:
+        loc_n = normalize_locator(loc)
+        if not loc_n:
+            return
+        if loc_n in seen:
+            idx = seen[loc_n]
+            # 忠实池：current 可被 elevated/neighbor 纠正（推导阶段显式来源优先）
+            old = out[idx]["source"]
+            if old == "current" and source in ("elevated", "neighbor"):
+                out[idx] = {"locator": loc_n, "source": source}
+            return
+        seen[loc_n] = len(out)
+        out.append({"locator": loc_n, "source": source})
+
+    for loc in _build_identity_candidates_from_meta(meta):
+        _push(loc, "current")
+    try:
+        from app.modules.ui.locator_assist.rules import (
+            build_elevated_candidates,
+            build_neighbor_candidates,
+        )
+
+        for loc in build_elevated_candidates(meta):
+            _push(loc, "elevated")
+        for loc in build_neighbor_candidates(meta):
+            _push(loc, "neighbor")
+    except Exception:
+        pass
+    return out
+
+
+def _build_candidates_from_meta(meta: dict) -> list[str]:
+    """与前端 LocatorSelector / 定位助手对齐，从 meta 推导备选定位（字符串列表）。"""
+    return [c["locator"] for c in build_tagged_derived_candidates(meta)]
+
+
 def collect_step_locator_candidates(step: dict) -> list[str]:
     """合并 meta.candidates 与 meta 推导项，供智能选 locator。"""
     meta = step.get("meta") or {}
-    merged = list(meta.get("candidates") or [])
+    merged = candidate_locators_list(meta.get("candidates") or [])
     merged.extend(_build_candidates_from_meta(meta))
     current = (step.get("params") or {}).get("locator") or ""
     if current:
@@ -335,6 +409,13 @@ def _candidates_ranked_by_runner(meta: dict) -> bool:
     return bool(meta.get("locatorRankedByRunner"))
 
 
+def _use_source_aware_pick(meta: dict) -> bool:
+    """对象形态 candidates（含 source）或 Runner 排序标记 → 走忠实命中路径。"""
+    if _candidates_ranked_by_runner(meta):
+        return True
+    return has_object_candidates(meta.get("candidates") or [])
+
+
 def pick_best_locator(
     step: dict,
     ai_locator: Optional[str] = None,
@@ -344,22 +425,46 @@ def pick_best_locator(
 ) -> tuple[str, str, dict[str, Any]]:
     """
     选择默认 locator。
-    - 新 Runner（meta.locatorRankedByRunner）：信任 candidates 顺序
-    - 旧 Runner / 旧数据：用含 strategy 的 _score_locator 重新排序
+    - 带 {locator, source} 或 locatorRankedByRunner：主定位 = best(current)，不偷换 elevated
+    - 纯字符串旧数据：用含 strategy 的 _score_locator 重新排序
     """
     strategy = normalize_recording_locator_strategy(strategy)
-    current = (step.get("params") or {}).get("locator") or original_locator or ""
+    current = normalize_locator(
+        (step.get("params") or {}).get("locator") or original_locator or ""
+    )
     meta = step.get("meta") or {}
+    tagged = normalize_candidates_preserving_source(meta.get("candidates") or [])
 
-    runner_candidates = [
-        str(c).strip() for c in (meta.get("candidates") or []) if str(c).strip()
-    ]
-    if runner_candidates and _candidates_ranked_by_runner(meta):
-        best = runner_candidates[0]
+    if tagged and _use_source_aware_pick(meta):
+        decision = normalize_decision(meta.get("primaryDecision") or DECISION_FAITHFUL_HIT)
+        if decision == DECISION_FAITHFUL_HIT:
+            # 若现有 primary 已是 current 候选，优先保留，不因排序换另一个 current
+            current_srcs = {
+                c["locator"]: c["source"] for c in tagged
+            }
+            if current and current_srcs.get(current) == "current":
+                best = current
+            else:
+                best = pick_default_from_candidates(tagged) or current
+            primary_src = "current"
+        else:
+            # 用户点选 / 自愈 / 助手：尊重现有 primary + primarySource
+            best = current or pick_default_from_candidates(tagged)
+            primary_src = resolve_primary_source(
+                best, tagged, explicit=meta.get("primarySource")
+            )
+        updates_base = apply_primary_meta(
+            {},
+            tagged,
+            best,
+            decision=decision,
+            primary_source=primary_src,
+        )
         if ai_locator and ai_locator == best:
             if ai_locator == current:
-                return ai_locator, "unchanged", {}
-            updates: dict[str, Any] = {
+                return ai_locator, "unchanged", updates_base
+            updates = {
+                **updates_base,
                 "locator_pick_source": "ai",
                 "locator_ai_chosen": ai_locator,
             }
@@ -367,8 +472,12 @@ def pick_best_locator(
                 updates["locator_original"] = original_locator
             return ai_locator, "ai", updates
         if best == current:
-            return best, "unchanged", {}
-        updates = {"locator_pick_source": "rule", "locator_rule_chosen": best}
+            return best, "unchanged", updates_base
+        updates = {
+            **updates_base,
+            "locator_pick_source": "rule",
+            "locator_rule_chosen": best,
+        }
         if ai_locator and ai_locator != best:
             updates["locator_ai_suggested"] = ai_locator
         if original_locator and original_locator != best:
@@ -508,19 +617,33 @@ def assess_step_quality(step: dict) -> dict[str, Any]:
     match_index = int(meta.get("matchIndex") or 0)
 
     if method in ("click_ele", "double_click_ele", "hover", "fill_value"):
-        existing = [
-            str(c).strip() for c in (meta.get("candidates") or []) if str(c).strip()
-        ]
-        if existing and _candidates_ranked_by_runner(meta):
-            # Runner SOT：保留排序，仅追加推导出的新候选
-            merged = collect_step_locator_candidates(step)
-            extras = [c for c in merged if c not in existing]
+        existing = normalize_candidates_preserving_source(meta.get("candidates") or [])
+        existing_locs = [c["locator"] for c in existing]
+        if existing and _use_source_aware_pick(meta):
+            # 带 source 或 Runner SOT：保留排序与来源，仅追加推导出的新候选（正确标 elevated/neighbor）
+            existing_set = {normalize_locator(x) for x in existing_locs}
+            extras = [
+                c
+                for c in build_tagged_derived_candidates(meta)
+                if c["locator"] not in existing_set
+            ]
             all_candidates = existing + extras
-            meta["candidates"] = all_candidates
         else:
-            all_candidates = collect_step_locator_candidates(step)
-            if all_candidates:
-                meta["candidates"] = all_candidates
+            # 无显式 source 时：字符串候选视为 current，推导项保留 elevated/neighbor
+            base = normalize_candidates_preserving_source(meta.get("candidates") or [])
+            derived = build_tagged_derived_candidates(meta)
+            seen = {c["locator"] for c in base}
+            all_candidates = base + [c for c in derived if c["locator"] not in seen]
+        primary_loc = normalize_locator(locator)
+        all_candidates = trim_candidates_for_storage(
+            all_candidates,
+            primary_locator=primary_loc,
+            max_n=MAX_LOCATOR_CANDIDATES,
+        )
+        if all_candidates:
+            meta["candidates"] = all_candidates
+        elif "candidates" in meta:
+            meta.pop("candidates", None)
         if not meta.get("dataTestid") and len(all_candidates) <= 2:
             reasons.append("无 data-testid 且候选较少，建议前端为关键按钮添加 data-testid")
         if not locator:
@@ -777,21 +900,19 @@ def resolve_locators_after_optimize(
             merged_meta = dict(orig.get("meta") or {})
             merged_meta.update(opt.get("meta") or {})
             # 主原始步 candidates 必须在前，避免错绑后的首位污染
-            orig_cands = [
-                str(c).strip()
-                for c in ((orig.get("meta") or {}).get("candidates") or [])
-                if str(c).strip()
-            ]
-            opt_cands = [
-                str(c).strip()
-                for c in (merged_meta.get("candidates") or [])
-                if str(c).strip()
-            ]
+            orig_cands = normalize_candidates_preserving_source(
+                ((orig.get("meta") or {}).get("candidates") or [])
+            )
+            opt_cands = normalize_candidates_preserving_source(
+                (merged_meta.get("candidates") or [])
+            )
             if orig_cands:
                 merged = list(orig_cands)
+                seen = {c["locator"] for c in merged}
                 for c in opt_cands:
-                    if c not in merged:
+                    if c["locator"] not in seen:
                         merged.append(c)
+                        seen.add(c["locator"])
                 merged_meta["candidates"] = merged
             opt["meta"] = merged_meta
 
@@ -825,11 +946,9 @@ def resolve_locators_after_optimize(
 
         # 意图匹配的原始定位优先于被污染的 AI/合并定位
         if orig and orig_loc and original_matches_opt_intent(opt, orig):
-            orig_cands = [
-                str(c).strip()
-                for c in ((orig.get("meta") or {}).get("candidates") or [])
-                if str(c).strip()
-            ]
+            orig_cands = candidate_locators_list(
+                ((orig.get("meta") or {}).get("candidates") or [])
+            )
             cur = str(ai_loc or "").strip()
             if cur and cur != orig_loc and cur not in orig_cands:
                 opt_params["locator"] = orig_loc

@@ -12,6 +12,106 @@ logger = logging.getLogger(__name__)
 
 MAX_SUMMARY_LEN = 2000
 
+SKILL_CODE_LABELS: dict[str, str] = {
+    "ui_failure_analysis": "失败分析",
+    "knowledge_qa": "资料库问答",
+    "project_health_digest": "项目健康摘要",
+}
+
+# 独立 AI 场景本身就是某个 Skill（旧记录 extra 可能没有 skill_code）
+SCENE_AS_SKILL: dict[str, str] = {
+    "knowledge_qa": "knowledge_qa",
+}
+
+
+def _skill_codes_from_extra(extra: dict[str, Any]) -> list[str]:
+    codes: list[str] = []
+    raw_skill = extra.get("skill_code")
+    if isinstance(raw_skill, str) and raw_skill.strip():
+        codes.append(raw_skill.strip())
+    used = extra.get("skills_used") or []
+    if isinstance(used, list):
+        for item in used:
+            if isinstance(item, str) and item.strip():
+                codes.append(item.strip())
+            elif isinstance(item, dict):
+                code = str(item.get("skill_code") or item.get("code") or "").strip()
+                if code:
+                    codes.append(code)
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in codes:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def _tools_from_extra(extra: dict[str, Any]) -> list[str]:
+    tools = extra.get("tools_used") or extra.get("tools") or []
+    if not isinstance(tools, list):
+        return []
+    out: list[str] = []
+    for t in tools:
+        name = str(t).strip() if not isinstance(t, dict) else str(t.get("name") or "").strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def summarize_usage_path(
+    *,
+    scene: str = "",
+    input_summary: str = "",
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """从 extra/scene 推导展示用路径：Agent / Skill / 确认 / 工具。旧记录也能推断。"""
+    extra = extra if isinstance(extra, dict) else {}
+    skills = _skill_codes_from_extra(extra)
+    scene_skill = SCENE_AS_SKILL.get(scene or "")
+    if scene_skill and scene_skill not in skills:
+        skills = [scene_skill, *skills]
+    tools = _tools_from_extra(extra)
+    mode = str(extra.get("mode") or "").strip().lower()
+    if mode not in ("lite", "standard"):
+        mode = ""
+    mode_label = {"lite": "精简", "standard": "标准"}.get(mode, "")
+    action = str(extra.get("action") or "").strip()
+    inp = (input_summary or "").strip()
+    if not action and inp.lower().startswith("confirm:"):
+        action = inp.split(":", 1)[-1].strip()
+
+    skill_names = [SKILL_CODE_LABELS.get(c, c) for c in skills]
+    if action:
+        kind = "confirm"
+        path_label = f"确认执行 · {action}"
+    elif scene == "platform_assistant":
+        kind = "agent"
+        path_label = "小测 Agent"
+        if mode_label:
+            path_label += f" · {mode_label}"
+        if skill_names:
+            path_label += " · " + "、".join(skill_names)
+    elif skills:
+        kind = "skill"
+        path_label = "Skill · " + "、".join(skill_names)
+    elif tools:
+        kind = "tool"
+        path_label = "工具 · " + "、".join(tools[:4])
+    else:
+        kind = "other"
+        path_label = ""
+
+    return {
+        "path_kind": kind,
+        "path_label": path_label,
+        "mode": mode or None,
+        "skills": skills,
+        "skill_labels": [SKILL_CODE_LABELS.get(c, c) for c in skills],
+        "tools": tools,
+        "action": action or None,
+    }
+
 
 @dataclass
 class AiUsageMeta:

@@ -48,7 +48,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'select-candidate', 'user-edit'])
 
 /** 绝对 XPath 必须以 xpath= 交给 Playwright，否则会当 CSS 解析报 Unexpected token "/" */
 function ensureLocatorEngine(value) {
@@ -60,6 +60,7 @@ function ensureLocatorEngine(value) {
 }
 
 const inputValue = ref(ensureLocatorEngine(props.modelValue || ''))
+let suppressUserEditUntil = 0
 
 watch(
   () => props.modelValue,
@@ -78,12 +79,19 @@ function commitValue() {
   const next = ensureLocatorEngine(inputValue.value || '')
   inputValue.value = next
   emit('update:modelValue', next)
+  if (Date.now() < suppressUserEditUntil) return
+  emit('user-edit', { locator: next })
 }
 
 function handleSelect(item) {
   const next = ensureLocatorEngine(item.value)
   inputValue.value = next
+  suppressUserEditUntil = Date.now() + 400
   emit('update:modelValue', next)
+  emit('select-candidate', {
+    locator: next,
+    source: item.source || 'current',
+  })
 }
 
 watch(inputValue, (val) => {
@@ -116,28 +124,47 @@ const DEFAULT_TEMPLATES = [
 ]
 
 function labelForCandidate(cand) {
-  const raw = cand
-  cand = ensureLocatorEngine(cand)
-  if (cand.startsWith('[data-testid=')) return `testid 定位: ${cand}`
-  if (cand.startsWith('#')) return `ID 定位: ${cand}`
-  if (cand.includes('el-select-dropdown__item') || cand.includes('ui-env-option') || cand.includes('ant-select-item')) {
-    return `下拉选项: ${cand}`
+  let sourcePrefix = ''
+  let raw = cand
+  if (cand && typeof cand === 'object') {
+    const src = String(cand.source || '').toLowerCase()
+    if (src === 'elevated') sourcePrefix = '抬升 · '
+    else if (src === 'neighbor') sourcePrefix = '相邻 · '
+    else if (src === 'ai') sourcePrefix = 'AI建议 · '
+    else if (
+      src === 'current'
+      || src === 'rule'
+      || src === 'params.locator'
+      || src === 'params.candidates'
+      || src === 'meta.candidates'
+    ) sourcePrefix = '当前所选 · '
+    raw = cand.locator || cand.value || cand.selector || ''
   }
-  if (cand.includes('el-table') || cand.includes('ant-table') || cand.includes('//tbody/tr[')) {
-    return `表格定位: ${cand}`
-  }
-  if ((cand.includes('nth-of-type(') || cand.includes(' > ')) && (cand.includes('.el-') || cand.includes('.ant-') || cand.includes('.ui-'))) {
-    return `组件路径: ${cand}`
-  }
-  if (cand.includes('nth-of-type(') && cand.includes(' > ')) return `结构路径: ${cand}`
-  if (cand.startsWith('xpath=/html') || cand.startsWith('/html')) return `绝对 XPath: ${cand}`
-  if (cand.startsWith('get_by_role=')) return `角色定位: ${cand}`
-  if (cand.startsWith('get_by_text=')) return `文本定位: ${cand}`
-  if (cand.startsWith('get_by_label=')) return `标签定位: ${cand}`
-  if (cand.startsWith('get_by_placeholder=')) return `placeholder 定位: ${cand}`
-  if (cand.startsWith('//') || cand.startsWith('(//')) return `XPath: ${cand}`
-  if (cand.includes('.')) return `class 定位: ${raw}`
-  return `定位: ${cand}`
+  let loc = ensureLocatorEngine(raw)
+  const body = (() => {
+    if (loc.startsWith('[data-testid=')) return `testid 定位: ${loc}`
+    if (loc.startsWith('#')) return `ID 定位: ${loc}`
+    if (loc.includes('el-select-dropdown__item') || loc.includes('ui-env-option') || loc.includes('ant-select-item')) {
+      return `下拉选项: ${loc}`
+    }
+    if (loc.includes('el-table') || loc.includes('ant-table') || loc.includes('//tbody/tr[')) {
+      return `表格定位: ${loc}`
+    }
+    if ((loc.includes('nth-of-type(') || loc.includes(' > ')) && (loc.includes('.el-') || loc.includes('.ant-') || loc.includes('.ui-'))) {
+      return `组件路径: ${loc}`
+    }
+    if (loc.includes('nth-of-type(') && loc.includes(' > ')) return `结构路径: ${loc}`
+    if (loc.startsWith('xpath=/html') || loc.startsWith('/html')) return `绝对 XPath: ${loc}`
+    if (loc.startsWith('get_by_role=')) return `角色定位: ${loc}`
+    if (loc.startsWith('get_by_text=')) return `文本定位: ${loc}`
+    if (loc.startsWith('get_by_label=')) return `标签定位: ${loc}`
+    if (loc.startsWith('get_by_placeholder=')) return `placeholder 定位: ${loc}`
+    if (loc.includes('following-sibling::') || loc.includes('preceding-sibling::')) return `相邻定位: ${loc}`
+    if (loc.startsWith('//') || loc.startsWith('(//')) return `XPath: ${loc}`
+    if (loc.includes('.')) return `class 定位: ${raw}`
+    return `定位: ${loc}`
+  })()
+  return sourcePrefix ? `${sourcePrefix}${body}` : body
 }
 
 function buildMetaFallbackOptions(m) {
@@ -172,6 +199,15 @@ function buildMetaFallbackOptions(m) {
     if (classList.length > 0) {
       const prefix = tag || '*'
       opts.push({ label: `class 定位: ${prefix}.${classList[0]}`, value: `${prefix}.${classList[0]}` })
+      const preferred = classList.find(c =>
+        /(menu-item|menuitem|dropdown-item|select-item|option|btn|button|item)/i.test(c)
+      ) || classList.find(c => /^(el-|ant-|nz-|ui-)/.test(c)) || classList[0]
+      if (text && text.length < 30 && !/\$|\\/.test(text) && preferred) {
+        opts.push({
+          label: `class+文本: ${prefix}.${preferred}:has-text("${text}")`,
+          value: `${prefix}.${preferred}:has-text("${text}")`,
+        })
+      }
     }
   }
   if (name) {
@@ -196,8 +232,15 @@ function buildMetaFallbackOptions(m) {
   }
   if (popupRoot && text && text.length < 40) {
     opts.push({ label: `弹窗内定位: ${popupRoot} >> get_by_text=${text}`, value: `${popupRoot} >> get_by_text=${text}` })
+    opts.push({ label: `弹窗内文本: ${popupRoot} >> text=${text}`, value: `${popupRoot} >> text=${text}` })
     if (role) {
       opts.push({ label: `弹窗内角色: ${popupRoot} >> get_by_role=${role}, ${text}`, value: `${popupRoot} >> get_by_role=${role}, ${text}` })
+    }
+    if (tag && text && !/\$|\\/.test(text)) {
+      opts.push({
+        label: `弹窗内 has-text: ${popupRoot} >> ${tag}:has-text("${text}")`,
+        value: `${popupRoot} >> ${tag}:has-text("${text}")`,
+      })
     }
   }
   const rowContext = (m.rowContext || '').trim()
@@ -275,19 +318,27 @@ const candidateOptions = computed(() => {
   const seen = new Set()
   const opts = []
 
-  const pushOpt = (label, value) => {
+  const pushOpt = (label, value, source = 'current') => {
     const normalized = ensureLocatorEngine(value)
     if (!normalized || seen.has(normalized)) return
     seen.add(normalized)
-    opts.push({ label: label || labelForCandidate(normalized), value: normalized })
+    opts.push({
+      label: label || labelForCandidate(normalized),
+      value: normalized,
+      source: source || 'current',
+    })
   }
 
   ;(m.candidates || []).forEach((cand) => {
-    pushOpt(labelForCandidate(cand), cand)
+    const value = typeof cand === 'object'
+      ? (cand.locator || cand.value || cand.selector || '')
+      : cand
+    const source = typeof cand === 'object' ? (cand.source || 'current') : 'current'
+    pushOpt(labelForCandidate(cand), value, source)
   })
 
   buildMetaFallbackOptions(m).forEach((opt) => {
-    pushOpt(opt.label, opt.value)
+    pushOpt(opt.label, opt.value, 'current')
   })
 
   if (opts.length === 0) {
@@ -303,7 +354,7 @@ function fetchSuggestions(queryString, cb) {
   const showAll = !q || q === model
   const list = candidateOptions.value
     .filter(opt => showAll || opt.label.toLowerCase().includes(q) || opt.value.toLowerCase().includes(q))
-    .map(opt => ({ value: opt.value, label: opt.label }))
+    .map(opt => ({ value: opt.value, label: opt.label, source: opt.source || 'current' }))
   cb(list)
 }
 </script>

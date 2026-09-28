@@ -995,6 +995,13 @@ async def import_requirement_cases_to_library_handler(
     if not src_cases:
         raise HTTPException(status_code=400, detail="未找到可复制的用例")
 
+    from app.modules.ai.requirement_case_review import assert_cases_approved_for_library
+
+    try:
+        assert_cases_approved_for_library(src_cases)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     if duplicate_title_mode not in ("skip", "overwrite"):
         raise HTTPException(status_code=400, detail="duplicate_title_mode 须为 skip 或 overwrite")
 

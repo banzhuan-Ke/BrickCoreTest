@@ -141,16 +141,19 @@
       </template>
 
       <template v-else-if="activeSection === 'failure'">
-        <p v-if="compactHint" class="section-lead">报告页失败 AI 分析入口与运行弹窗覆盖策略。</p>
+        <p v-if="compactHint" class="section-lead">
+          报告页失败 AI 分析入口与运行弹窗覆盖策略。小测 / Skill / 用例编辑 / 执行记录列表的主动分析只要求「启用失败 AI 分析」开启，不受「报告默认展示」与历史执行勾选影响。
+        </p>
         <el-form-item label="启用失败 AI 分析">
           <el-switch v-model="execSettings.failure_analysis_enabled" />
-          <div class="form-tip">关闭后，报告页不展示 AI 分析入口，且 API 拒绝分析请求</div>
+          <div class="form-tip">关闭后，报告页不展示入口，且 API / 小测拒绝分析</div>
         </el-form-item>
         <el-form-item label="报告默认展示">
           <el-switch
             v-model="execSettings.failure_analysis_default_on_report"
             :disabled="!execSettings.failure_analysis_enabled"
           />
+          <div class="form-tip">仅影响新执行的报告页入口；旧记录与小测主动分析不依赖此项</div>
         </el-form-item>
         <el-form-item label="允许运行弹窗覆盖">
           <el-switch
@@ -220,19 +223,19 @@
 
       <template v-else-if="activeSection === 'perf'">
         <p v-if="compactHint" class="section-lead">
-          压测报告 AI 分析总开关与启动弹窗默认勾选策略。
+          压测报告 AI 分析总开关与启动弹窗默认勾选策略。「启动时默认勾选」只影响压测结束后是否自动分析；报告页手动分析 / 小测报告叙事在总开关开启时可主动发起。
           绑定模型请到「AI 配置 → 场景绑定」中的「性能测试」分组（压测单次报告分析 / 压测增强报告分析）。
         </p>
         <el-form-item label="启用压测 AI 分析">
           <el-switch v-model="execSettings.perf_ai_analysis_enabled" />
-          <div class="form-tip">关闭后，启动弹窗不可勾选，报告页仍可手动尝试（API 会拒绝）或仅展示已有结果</div>
+          <div class="form-tip">关闭后，报告页与小测「报告叙事(压测)」拒绝新分析；已有结果仍可查看</div>
         </el-form-item>
         <el-form-item label="启动时默认勾选">
           <el-switch
             v-model="execSettings.perf_ai_analysis_default_on_run"
             :disabled="!execSettings.perf_ai_analysis_enabled"
           />
-          <div class="form-tip">开启后，执行压测弹窗默认勾选「执行完成后 AI 分析」</div>
+          <div class="form-tip">仅影响新压测结束后是否自动分析；不拦截报告页 / 小测主动分析</div>
         </el-form-item>
         <el-form-item label="允许启动弹窗覆盖">
           <el-switch

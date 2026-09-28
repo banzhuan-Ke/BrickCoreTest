@@ -11,6 +11,7 @@ from app.core.db.db_factory_service import (
     datasource_to_dict,
     encrypt_datasource_password,
     evaluate_db_assertions,
+    execute_console_on_datasource,
     execute_sql_on_datasource,
     get_datasource_by_id,
     resolve_datasource,
@@ -51,6 +52,7 @@ class DatasourceCreate(BaseModel):
     timeout_seconds: int = Field(default=10, ge=1, le=120)
     is_default: bool = False
     is_enabled: bool = True
+    worker_id: Optional[int] = Field(None, description="可选：经空闲 PerfWorker 本机测连/查询")
 
 
 class DatasourceUpdate(BaseModel):
@@ -70,6 +72,7 @@ class DatasourceUpdate(BaseModel):
 
 class DatasourceTestBody(BaseModel):
     password: Optional[str] = None
+    worker_id: Optional[int] = Field(None, description="可选：经空闲 PerfWorker 本机测连")
 
 
 def _datasource_for_test(
@@ -121,6 +124,36 @@ class SqlExecuteRequest(BaseModel):
     sql: str
     variables: dict[str, Any] = Field(default_factory=dict)
     for_assertion: bool = False
+    worker_id: Optional[int] = Field(None, description="可选：经空闲 PerfWorker 本机执行")
+
+
+class ConsoleExecuteRequest(BaseModel):
+    """查询控制台执行（人工工作台）。"""
+
+    project_id: int
+    environment_id: int
+    datasource_id: int
+    sql: str = Field(..., min_length=1, max_length=200_000, description="SQL 或 Redis 命令")
+    variables: dict[str, Any] = Field(default_factory=dict)
+    max_rows: Optional[int] = Field(None, ge=1, le=1000, description="可选行数上限，默认 ≤200 且不超过数据源配置")
+    confirm_write: bool = Field(False, description="写操作二次确认标记")
+    worker_id: Optional[int] = Field(None, description="可选：经空闲 PerfWorker 本机执行")
+
+
+class ConsoleCatalogRequest(BaseModel):
+    """查询控制台对象目录（只读）。"""
+
+    project_id: int
+    environment_id: int
+    datasource_id: int
+    scope: str = Field(
+        "objects",
+        description="objects|columns|indexes|ddl|sample；Redis 时 object_name 为 SCAN 前缀",
+    )
+    object_name: Optional[str] = Field(
+        None, description="表/索引/key 名；Redis objects 时为 SCAN 前缀"
+    )
+    worker_id: Optional[int] = Field(None, description="可选：经空闲 PerfWorker 本机读取")
 
 
 class SqlTemplateExecuteRequest(BaseModel):
@@ -128,6 +161,7 @@ class SqlTemplateExecuteRequest(BaseModel):
     environment_id: int
     template_id: int
     variables: dict[str, Any] = Field(default_factory=dict)
+    worker_id: Optional[int] = Field(None, description="可选：经空闲 PerfWorker 本机执行")
 
 
 class DbAssertionTestRequest(BaseModel):
@@ -192,12 +226,15 @@ async def list_datasources(
     project_id: int = Query(...),
     environment_id: Optional[int] = Query(None),
     keyword: Optional[str] = None,
+    enabled_only: bool = Query(False, description="仅返回已启用数据源（查询控制台用）"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
     qs = EnvDatasource.filter(project_id=project_id, is_del=False)
     if environment_id:
         qs = qs.filter(environment_id=environment_id)
+    if enabled_only:
+        qs = qs.filter(is_enabled=True)
     if keyword:
         qs = qs.filter(name__icontains=keyword)
     total = await qs.count()
@@ -220,14 +257,15 @@ async def create_datasource(body: DatasourceCreate, username: str = Depends(get_
         raise HTTPException(status_code=422, detail="同环境下数据源名称已存在")
 
     db_type = (body.db_type or "mysql").lower()
-    if db_type not in ("mysql", "postgresql", "redis"):
-        raise HTTPException(status_code=422, detail="db_type 须为 mysql、postgresql 或 redis")
+    if db_type not in ("mysql", "postgresql", "redis", "elasticsearch"):
+        raise HTTPException(status_code=422, detail="db_type 须为 mysql、postgresql、redis 或 elasticsearch")
 
     password_text = (body.password or "").strip()
     username = (body.username or "").strip()
-    if db_type != "redis" and not password_text:
+    auth_optional = db_type in ("redis", "elasticsearch")
+    if not auth_optional and not password_text:
         raise HTTPException(status_code=422, detail="请填写数据库密码")
-    if db_type != "redis" and not username:
+    if not auth_optional and not username:
         raise HTTPException(status_code=422, detail="请填写数据库用户名")
 
     if body.is_default:
@@ -273,8 +311,8 @@ async def update_datasource(ds_id: int, body: DatasourceUpdate, username: str = 
 
     if body.db_type is not None:
         db_type = (body.db_type or "mysql").lower()
-        if db_type not in ("mysql", "postgresql", "redis"):
-            raise HTTPException(status_code=422, detail="db_type 须为 mysql、postgresql 或 redis")
+        if db_type not in ("mysql", "postgresql", "redis", "elasticsearch"):
+            raise HTTPException(status_code=422, detail="db_type 须为 mysql、postgresql、redis 或 elasticsearch")
         ds.db_type = db_type
 
     for field in ("host", "port", "database_name", "username", "allow_write", "max_rows", "timeout_seconds", "is_enabled"):
@@ -312,9 +350,10 @@ async def test_connection_preview(body: DatasourceCreate):
     db_type = (body.db_type or "mysql").lower()
     password_text = (body.password or "").strip()
     username = (body.username or "").strip()
-    if db_type != "redis" and not password_text:
+    auth_optional = db_type in ("redis", "elasticsearch")
+    if not auth_optional and not password_text:
         raise HTTPException(status_code=422, detail="请填写数据库密码")
-    if db_type != "redis" and not username:
+    if not auth_optional and not username:
         raise HTTPException(status_code=422, detail="请填写数据库用户名")
     temp = _datasource_for_test(
         host=body.host,
@@ -325,6 +364,25 @@ async def test_connection_preview(body: DatasourceCreate):
         db_type=db_type,
         timeout_seconds=body.timeout_seconds,
     )
+    if body.worker_id:
+        from app.modules.http.worker_df_proxy import (
+            WorkerProxyError,
+            map_proxy_error_to_result,
+            require_df_proxy_worker,
+            send_df_probe_via_worker,
+        )
+
+        try:
+            worker = await require_df_proxy_worker(body.project_id, int(body.worker_id))
+            result = await send_df_probe_via_worker(
+                worker=worker,
+                ds=temp,
+                mode="ping",
+                password_override=password_text,
+            )
+        except WorkerProxyError as exc:
+            result = map_proxy_error_to_result(exc)
+        return StandardResponse(data=result)
     result = await test_datasource_connection(temp)
     return StandardResponse(data=result)
 
@@ -340,6 +398,26 @@ async def test_datasource(
     password_override = (body.password if body else None) or None
     if password_override is not None:
         password_override = password_override.strip() or None
+    worker_id = getattr(body, "worker_id", None) if body else None
+    if worker_id:
+        from app.modules.http.worker_df_proxy import (
+            WorkerProxyError,
+            map_proxy_error_to_result,
+            require_df_proxy_worker,
+            send_df_probe_via_worker,
+        )
+
+        try:
+            worker = await require_df_proxy_worker(int(ds.project_id), int(worker_id))
+            result = await send_df_probe_via_worker(
+                worker=worker,
+                ds=ds,
+                mode="ping",
+                password_override=password_override,
+            )
+        except WorkerProxyError as exc:
+            result = map_proxy_error_to_result(exc)
+        return StandardResponse(data=result)
     if password_override:
         temp = _datasource_for_test(
             host=ds.host,
@@ -457,10 +535,193 @@ async def execute_sql_debug(body: SqlExecuteRequest):
     ds, ds_err = await resolve_datasource(body.environment_id, body.project_id, body.datasource_id)
     if ds_err or not ds:
         raise HTTPException(status_code=422, detail=ds_err or "数据源不可用")
+    if body.worker_id:
+        from app.core.db.db_factory_service import substitute_sql
+        from app.modules.http.worker_df_proxy import (
+            WorkerProxyError,
+            require_df_proxy_worker_http,
+            send_df_probe_via_worker,
+        )
+        from app.modules.http.worker_http_proxy import to_http_exception
+
+        final_sql, replacements = substitute_sql(body.sql, body.variables or {})
+        try:
+            worker = await require_df_proxy_worker_http(body.project_id, int(body.worker_id))
+            result = await send_df_probe_via_worker(
+                worker=worker,
+                ds=ds,
+                mode="execute",
+                statement=final_sql,
+                allow_write=bool(ds.allow_write) and not body.for_assertion,
+                for_assertion=bool(body.for_assertion),
+                max_rows=int(ds.max_rows or 100),
+            )
+        except WorkerProxyError as exc:
+            raise to_http_exception(exc) from exc
+        result["sql"] = final_sql
+        result["replacements"] = replacements
+        return StandardResponse(data=result)
     result = await execute_sql_on_datasource(
         ds, body.sql, body.variables, for_assertion=body.for_assertion
     )
     return StandardResponse(data=result)
+
+
+@router.post(
+    "/console/execute",
+    summary="查询控制台执行",
+    dependencies=[Depends(require_permissions(DATA_FACTORY_EDIT))],
+)
+async def execute_console(body: ConsoleExecuteRequest):
+    """选环境/数据源后手写 SQL 或 Redis 命令；写操作需 confirm_write=true。"""
+    ds, ds_err = await resolve_datasource(body.environment_id, body.project_id, body.datasource_id)
+    if ds_err or not ds:
+        raise HTTPException(status_code=422, detail=ds_err or "数据源不可用")
+    if body.worker_id:
+        from app.core.db.db_drivers import enrich_execute_result, is_write_command
+        from app.core.db.db_factory_service import resolve_console_max_rows, substitute_sql
+        from app.modules.http.worker_df_proxy import (
+            WorkerProxyError,
+            require_df_proxy_worker_http,
+            send_df_probe_via_worker,
+        )
+        from app.modules.http.worker_http_proxy import to_http_exception
+
+        statement = (body.sql or "").strip()
+        db_type = (ds.db_type or "mysql").lower()
+        needs_write = is_write_command(statement, db_type=db_type)
+        if needs_write and not bool(ds.allow_write):
+            raise HTTPException(
+                status_code=422,
+                detail="当前数据源为只读，不允许执行写操作；请在数据源配置中开启「允许写操作」",
+            )
+        if needs_write and not body.confirm_write:
+            return StandardResponse(
+                data=enrich_execute_result(
+                    {
+                        "success": False,
+                        "error": "写操作需二次确认后重试",
+                        "rows": [],
+                        "row_count": 0,
+                        "affected_rows": 0,
+                        "elapsed_ms": 0,
+                        "requires_confirm": True,
+                        "is_write": True,
+                    }
+                )
+            )
+        final_sql, replacements = substitute_sql(statement, body.variables or {})
+        limit = resolve_console_max_rows(ds.max_rows, body.max_rows)
+        try:
+            worker = await require_df_proxy_worker_http(body.project_id, int(body.worker_id))
+            result = await send_df_probe_via_worker(
+                worker=worker,
+                ds=ds,
+                mode="execute",
+                statement=final_sql,
+                allow_write=bool(ds.allow_write),
+                for_assertion=False,
+                max_rows=limit,
+            )
+        except WorkerProxyError as exc:
+            raise to_http_exception(exc) from exc
+        result["sql"] = final_sql
+        result["replacements"] = replacements
+        result["is_write"] = needs_write
+        result["requires_confirm"] = False
+        result["max_rows_applied"] = limit
+        return StandardResponse(data=result)
+    result = await execute_console_on_datasource(
+        ds,
+        body.sql,
+        body.variables,
+        max_rows=body.max_rows,
+        confirm_write=bool(body.confirm_write),
+    )
+    # 只读源写操作：明确 422；需确认：200 + requires_confirm 由前端弹框后重试
+    if result.get("is_write") and not result.get("success") and not result.get("requires_confirm"):
+        err = str(result.get("error") or "不允许写操作")
+        if "只读" in err:
+            raise HTTPException(status_code=422, detail=err)
+    return StandardResponse(data=result)
+
+
+@router.post(
+    "/console/catalog",
+    summary="查询控制台对象目录",
+    dependencies=[Depends(require_permissions(DATA_FACTORY_EDIT))],
+)
+async def console_catalog(body: ConsoleCatalogRequest):
+    """只读列出表/索引/列/DDL/Redis SCAN；可选经执行机（与控制台执行同一台）。"""
+    from app.core.db.db_factory_service import (
+        _catalog_sql_statements,
+        fetch_catalog_on_datasource,
+        reshape_catalog_execute_result,
+    )
+
+    ds, ds_err = await resolve_datasource(body.environment_id, body.project_id, body.datasource_id)
+    if ds_err or not ds:
+        raise HTTPException(status_code=422, detail=ds_err or "数据源不可用")
+    scope = (body.scope or "objects").strip().lower()
+    if scope not in ("objects", "columns", "fields", "indexes", "ddl", "sample"):
+        raise HTTPException(
+            status_code=422,
+            detail="scope 须为 objects、columns、fields、indexes、ddl 或 sample",
+        )
+
+    if body.worker_id:
+        from app.core.db.db_drivers import CATALOG_OBJECT_LIMIT, CATALOG_REDIS_LIMIT
+        from app.modules.http.worker_df_proxy import (
+            WorkerProxyError,
+            require_df_proxy_worker_http,
+            send_df_probe_via_worker,
+        )
+        from app.modules.http.worker_http_proxy import to_http_exception
+
+        try:
+            statement = _catalog_sql_statements(ds, scope=scope, object_name=body.object_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        max_rows = (
+            CATALOG_REDIS_LIMIT
+            if (ds.db_type or "").lower() == "redis"
+            else CATALOG_OBJECT_LIMIT
+        )
+        try:
+            worker = await require_df_proxy_worker_http(body.project_id, int(body.worker_id))
+            result = await send_df_probe_via_worker(
+                worker=worker,
+                ds=ds,
+                mode="execute",
+                statement=statement,
+                allow_write=False,
+                for_assertion=True,
+                max_rows=max_rows,
+            )
+        except WorkerProxyError as exc:
+            raise to_http_exception(exc) from exc
+        return StandardResponse(
+            data=reshape_catalog_execute_result(
+                ds,
+                scope=scope,
+                execute_result=result,
+                object_name=body.object_name,
+            )
+        )
+
+    # 非法参数与经执行机路径一致：422；连接/查询失败仍 200 + success=false
+    if scope in ("columns", "fields", "indexes", "ddl", "sample") or (
+        ds.db_type or ""
+    ).lower() in ("redis", "elasticsearch"):
+        try:
+            _catalog_sql_statements(ds, scope=scope, object_name=body.object_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    data = await fetch_catalog_on_datasource(
+        ds, scope=scope, object_name=body.object_name
+    )
+    return StandardResponse(data=data)
 
 
 @router.post("/sql-templates/execute", summary="调试执行 SQL 模板", dependencies=[Depends(require_permissions(DATA_FACTORY_EDIT))])
@@ -471,6 +732,34 @@ async def execute_template_debug(body: SqlTemplateExecuteRequest):
     ds = await get_datasource_by_id(tpl.datasource_id, body.project_id)
     if not ds:
         raise HTTPException(status_code=422, detail="关联数据源不存在")
+    if body.worker_id:
+        from app.core.db.db_factory_service import substitute_sql
+        from app.modules.http.worker_df_proxy import (
+            WorkerProxyError,
+            require_df_proxy_worker_http,
+            send_df_probe_via_worker,
+        )
+        from app.modules.http.worker_http_proxy import to_http_exception
+
+        final_sql, replacements = substitute_sql(tpl.sql_text, body.variables or {})
+        try:
+            worker = await require_df_proxy_worker_http(body.project_id, int(body.worker_id))
+            result = await send_df_probe_via_worker(
+                worker=worker,
+                ds=ds,
+                mode="execute",
+                statement=final_sql,
+                allow_write=bool(ds.allow_write),
+                for_assertion=False,
+                max_rows=int(ds.max_rows or 100),
+            )
+        except WorkerProxyError as exc:
+            raise to_http_exception(exc) from exc
+        result["sql"] = final_sql
+        result["replacements"] = replacements
+        result["template_id"] = tpl.id
+        result["template_name"] = tpl.name
+        return StandardResponse(data=result)
     result = await execute_sql_on_datasource(ds, tpl.sql_text, body.variables, for_assertion=False)
     result["template_id"] = tpl.id
     result["template_name"] = tpl.name
@@ -480,7 +769,7 @@ async def execute_template_debug(body: SqlTemplateExecuteRequest):
 @router.post("/db-assertions/test", summary="调试数据库断言", dependencies=[Depends(require_permissions(DATA_FACTORY_EDIT))])
 async def test_db_assertions(body: DbAssertionTestRequest):
     result = await evaluate_db_assertions(
-        body.assertions, body.variables, body.environment_id, body.project_id
+        body.assertions, body.variables, body.environment_id, body.project_id, use_env_default=True
     )
     return StandardResponse(data=result)
 
@@ -496,6 +785,7 @@ async def internal_evaluate_assertion(body: EvaluateAssertionRequest):
         body.variables,
         body.environment_id,
         body.project_id,
+        use_env_default=True,
     )
     item = (result.get("results") or [{}])[0]
     return StandardResponse(

@@ -61,12 +61,14 @@ def needs_openai_compat_for_browser_use(config: AiConfig) -> bool:
 
 
 def browser_use_supports_vision(config: AiConfig) -> bool:
-    """browser-use 内置：DeepSeek 系列暂不支持 vision。"""
+    """browser-use Vision：须显式 supports_vision，且 DeepSeek 系列不可用。"""
+    from app.modules.ai.vision_capability import config_supports_vision
+
     provider = (config.provider or "").lower()
     model = _model_lower(config)
     if provider == "deepseek" or "deepseek" in model:
         return False
-    return True
+    return config_supports_vision(config)
 
 
 def _usage_from_openai_raw(usage: Any):

@@ -1623,7 +1623,7 @@ const applyRouteQuery = async () => {
     searchForm.keyword = qKeyword
   }
   await getCaseList()
-  const editId = route.query.edit_case_id
+  const editId = route.query.edit_case_id || route.query.case_id
   if (editId) {
     const row = caseList.value.find((c) => String(c.id) === String(editId))
     if (row) {
@@ -1650,7 +1650,7 @@ onMounted(() => {
 })
 
 watch(
-  () => [route.query.api_id, route.query.edit_case_id, route.query.keyword],
+  () => [route.query.api_id, route.query.edit_case_id, route.query.case_id, route.query.keyword],
   () => {
     applyRouteQuery()
   },

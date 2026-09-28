@@ -267,9 +267,9 @@ chmod +x start.sh stop.sh
 
 | 配置 | 当前推荐值 | 说明 |
 |------|------------|------|
-| BrickCoreRunner 客户端 | **≥ 1.8.0**（推荐） | 与 `runner_client/__init__.py`、`VERSION.txt` 一致；最低上线 `RUNNER_CLIENT_VERSION_MIN=1.3.8` |
-| `RUNNER_CLIENT_VERSION_LATEST` | `1.8.0` | 服务器 `.env` / `docker-compose.yml` |
-| `RUNNER_ENGINE_VERSION` | `1.8.0` | 与 `runner/settings.py` 中 `RUNNER_VERSION` 一致；引擎最低 `RUNNER_ENGINE_VERSION_MIN` 默认 ≥1.0.0 |
+| BrickCoreRunner 客户端 | **≥ 1.8.2**（推荐） | 与 `runner_client/__init__.py`、`VERSION.txt` 一致；最低上线 `RUNNER_CLIENT_VERSION_MIN=1.3.8` |
+| `RUNNER_CLIENT_VERSION_LATEST` | `1.8.2` | 服务器 `.env` / `docker-compose.yml` |
+| `RUNNER_ENGINE_VERSION` | `1.8.2` | 与 `runner/settings.py` 中 `RUNNER_VERSION` 一致；引擎最低 `RUNNER_ENGINE_VERSION_MIN` 默认 ≥1.0.0 |
 
 生产环境浏览器访问平台一般为 **80 端口**（Nginx），`--master` / 客户端服务器地址 **不要写 :8000**（8000 为容器内 Backend）。
 

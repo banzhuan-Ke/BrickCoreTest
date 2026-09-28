@@ -24,7 +24,7 @@
         <div class="help-h">怎么用</div>
         <ol class="help-list">
           <li>选择与<strong>当前调试/执行环境</strong>一致的数据源（不一致会直接失败）</li>
-          <li>填写只读 SQL（MySQL/PG 一般为 <code>SELECT</code>）；可用 <code v-pre>${{变量名}}</code> 引用环境/用例变量</li>
+          <li>填写只读查询（MySQL/PG 用 <code>SELECT</code>；Redis 用 GET 等；ES 用 JSON <code>_search</code> 或 <code>GET index/_doc/id</code>）；可用 <code v-pre>${{变量名}}</code> 引用环境/用例变量</li>
           <li>字段比较（等于、包含等）只取查询结果的<strong>首行</strong>；字段留空或不存在时回退<strong>首行首列</strong>；多行请用 <code>WHERE</code> 收窄</li>
           <li>配好后点「调试断言」可先核对实际值与近 10 行预览，再保存执行</li>
         </ol>
@@ -219,6 +219,7 @@ const operators = [
 
 const hasRedis = computed(() => (props.datasources || []).some((d) => (d.db_type || '').toLowerCase() === 'redis'))
 const hasPg = computed(() => (props.datasources || []).some((d) => (d.db_type || '').toLowerCase() === 'postgresql'))
+const hasEs = computed(() => (props.datasources || []).some((d) => (d.db_type || '').toLowerCase() === 'elasticsearch'))
 
 const availableIds = computed(() => new Set(
   (props.datasources || []).map((d) => Number(d.id)).filter((n) => Number.isFinite(n))
@@ -256,12 +257,18 @@ const tipText = computed(() => {
     '数据源须与顶部调试环境一致',
   ]
   if (hasRedis.value) parts.push('Redis 用 GET/HGET 等只读命令')
+  if (hasEs.value) parts.push('ES 用 JSON _search 或 GET index/_doc/id')
   if (hasPg.value) parts.push('PostgreSQL 支持 SELECT')
   else parts.push('MySQL/PostgreSQL 仅 SELECT')
   return parts.join('；')
 })
 
-const sqlColumnLabel = computed(() => (hasRedis.value ? 'SQL / Redis 命令' : 'SQL (SELECT)'))
+const sqlColumnLabel = computed(() => {
+  if (hasEs.value && hasRedis.value) return 'SQL / 命令 / ES DSL'
+  if (hasEs.value) return 'SQL / ES DSL'
+  if (hasRedis.value) return 'SQL / Redis 命令'
+  return 'SQL (SELECT)'
+})
 
 const sqlExpandTitle = computed(() => {
   const name = props.modelValue?.[sqlExpandIndex.value]?.name
@@ -280,14 +287,17 @@ function dsById(id) {
 
 function dsLabel(ds) {
   const t = (ds.db_type || 'mysql').toLowerCase()
-  const tag = { mysql: 'MySQL', postgresql: 'PG', redis: 'Redis' }[t] || t
+  const tag = { mysql: 'MySQL', postgresql: 'PG', redis: 'Redis', elasticsearch: 'ES' }[t] || t
   const env = ds.environment_name ? ` · ${ds.environment_name}` : ''
   return `${ds.name} [${tag}]${env}`
 }
 
 function fieldPlaceholder(index) {
   const ds = dsById(props.modelValue?.[index]?.datasource_id)
-  return (ds?.db_type || '').toLowerCase() === 'redis' ? '可选' : '结果列名，如 username'
+  const t = (ds?.db_type || '').toLowerCase()
+  if (t === 'redis') return '可选'
+  if (t === 'elasticsearch') return '如 _id 或扁平字段 user.name'
+  return '结果列名，如 username'
 }
 
 function addRow() {

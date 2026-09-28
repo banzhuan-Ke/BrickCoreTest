@@ -555,17 +555,21 @@ def _normalize_ui_steps(steps: list) -> tuple[list[dict], list[str]]:
             if backups:
                 params["locator"] = primary
                 step_meta = step.get("meta") if isinstance(step.get("meta"), dict) else {}
-                existing = [
-                    str(c).strip()
-                    for c in (step_meta.get("candidates") or [])
-                    if str(c).strip()
-                ]
-                merged_candidates: list[str] = []
-                seen_candidates: set[str] = set()
-                for cand in backups + existing:
-                    if cand and cand not in seen_candidates and cand != primary:
-                        seen_candidates.add(cand)
-                        merged_candidates.append(cand)
+                from app.modules.ai.recorder_quality import (
+                    normalize_candidates_preserving_source,
+                )
+
+                # 已有带 source 的候选优先保留，再追加从 locator 拆出的备用串
+                existing_items = normalize_candidates_preserving_source(
+                    step_meta.get("candidates") or []
+                )
+                existing_locs = {c["locator"] for c in existing_items}
+                merged_candidates: list[dict] = list(existing_items)
+                for cand in backups:
+                    loc = str(cand or "").strip()
+                    if loc and loc not in existing_locs and loc != primary:
+                        merged_candidates.append({"locator": loc, "source": "current"})
+                        existing_locs.add(loc)
                 if merged_candidates:
                     step_meta = {**step_meta, "candidates": merged_candidates}
                     step["meta"] = step_meta
@@ -1388,11 +1392,60 @@ async def apply_healed_locator_to_case(
 
     locator_key = "selector" if "selector" in params and "locator" not in params else "locator"
     old_locator = params.get(locator_key) or params.get("locator") or params.get("selector")
-    params[locator_key] = body.new_locator.strip()
+    new_loc = body.new_locator.strip()
+    params[locator_key] = new_loc
     if locator_key == "locator" and "selector" in params:
         params.pop("selector", None)
     elif locator_key == "selector" and "locator" in params:
         params.pop("locator", None)
+
+    # 与 Runner apply_healed_locator 对齐：ai / current / 相邻按 climb 重算
+    from app.core.shared.locator_candidate_contract import (
+        DECISION_HEALED,
+        apply_primary_meta,
+        normalize_candidates,
+        normalize_locator,
+        normalize_source,
+    )
+    from app.modules.ui.locator_assist.rules import build_neighbor_candidates
+
+    meta = step.get("meta") if isinstance(step.get("meta"), dict) else {}
+    old_n = normalize_locator(str(old_locator or ""))
+    new_n = normalize_locator(new_loc)
+    head = [{"locator": new_n, "source": "ai"}]
+    if old_n and old_n != new_n:
+        head.append({"locator": old_n, "source": "current"})
+    seen = {new_n}
+    if old_n:
+        seen.add(old_n)
+    elevated = []
+    others = []
+    for item in normalize_candidates(meta.get("candidates") or [], max_n=24):
+        loc = item["locator"]
+        if not loc or loc in seen:
+            continue
+        seen.add(loc)
+        src = normalize_source(item.get("source"))
+        if src == "neighbor":
+            continue
+        if src == "elevated":
+            elevated.append({"locator": loc, "source": src})
+        else:
+            others.append({"locator": loc, "source": src})
+    regenerated = []
+    for loc in build_neighbor_candidates(meta):
+        loc_n = normalize_locator(loc)
+        if not loc_n or loc_n in seen:
+            continue
+        seen.add(loc_n)
+        regenerated.append({"locator": loc_n, "source": "neighbor"})
+    step["meta"] = apply_primary_meta(
+        meta,
+        head + elevated + regenerated + others,
+        new_n,
+        decision=DECISION_HEALED,
+        primary_source="ai",
+    )
 
     steps[body.step_index] = step
     case.steps = steps
@@ -1723,6 +1776,7 @@ class ImportApiCaseRequest(BaseModel):
     api_definition_id: int = Field(..., description="接口定义ID")
     cases: list[dict] = Field(..., description="AI 生成的用例列表")
     catalog_id: Optional[int] = Field(default=None, description="目标目录ID")
+    record_id: Optional[int] = Field(default=None, description="对应的 AiGenerateRecord ID")
 
 
 EXISTING_CASES_LIMIT = 8
@@ -1779,6 +1833,8 @@ async def generate_api_case(
     api_def = await ApiDefinition.get_or_none(id=body.api_definition_id, is_del=False)
     if not api_def:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="接口定义不存在")
+    if project_id and int(api_def.project_id) != int(project_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="接口不属于当前项目")
 
     # 2. 获取 LLM 配置
     config = await _get_ai_config(body.ai_config_id, scene="api_case_generate")
@@ -1981,6 +2037,18 @@ async def import_api_cases(
     api_def = await ApiDefinition.get_or_none(id=body.api_definition_id, is_del=False)
     if not api_def:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="接口定义不存在")
+    expected_pid = user_info.get("project_id") or user_info.get("current_project_id")
+    if expected_pid and int(api_def.project_id) != int(expected_pid):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="接口不属于当前项目")
+
+    if body.catalog_id is not None:
+        from app.models.sys import TestCatalog
+
+        cat = await TestCatalog.get_or_none(id=int(body.catalog_id), is_del=False)
+        if not cat:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="目标目录不存在")
+        if int(cat.project_id) != int(api_def.project_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="目标目录不属于当前项目")
 
     # 校验用例（导入时同样按接口 body_type 纠偏）
     _, valid_cases = _validate_api_cases(
@@ -2012,11 +2080,21 @@ async def import_api_cases(
         )
         imported_ids.append(case.id)
 
-    # 更新生成记录状态
-    # 查找最近的 api_case 生成记录
-    record = await AiGenerateRecord.filter(
-        generate_type="api_case",
-    ).order_by("-id").first()
+    # 更新生成记录：优先 record_id；否则仅更新本项目+本人最近 pending，禁止全局扫最近一条
+    record = None
+    if body.record_id:
+        record = await AiGenerateRecord.get_or_none(id=int(body.record_id), generate_type="api_case")
+        if record and int(record.project_id) != int(api_def.project_id):
+            record = None
+    if record is None:
+        qs = AiGenerateRecord.filter(
+            generate_type="api_case",
+            project_id=api_def.project_id,
+            status="pending",
+        )
+        if username:
+            qs = qs.filter(create_by=username)
+        record = await qs.order_by("-id").first()
     if record:
         record.status = "imported"
         record.imported_target_id = imported_ids[0] if imported_ids else None

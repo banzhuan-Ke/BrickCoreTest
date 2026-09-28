@@ -277,7 +277,7 @@
 
 <script setup>
 import { reactive, ref, onMounted, computed, provide, watch, nextTick, onBeforeUnmount } from 'vue'
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter, isNavigationFailure } from 'vue-router'
 import { StepEditor, KeywordSidebar } from '@/components/StepEditor'
 import UiCaseGenerator from '@/views/AI/components/UiCaseGenerator.vue'
 import UiCaseRecorder from '@/views/AI/components/UiCaseRecorder.vue'
@@ -609,10 +609,13 @@ async function saveCase() {
   }
 }
 
-// 返回列表
-function goBack() {
-  router.back()
-  userStore.deleteTabs(route.path)
+// 返回列表（显式跳转，避免 router.back() 在无历史/刷新后原地不动）
+async function goBack() {
+  const editPath = route.path
+  const failure = await router.push({ name: 'caseList' })
+  if (!isNavigationFailure(failure)) {
+    userStore.deleteTabs(editPath)
+  }
 }
 
 // AI 生成/录制步骤应用到用例（编辑页：替换全部步骤）

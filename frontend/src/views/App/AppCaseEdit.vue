@@ -156,7 +156,7 @@
 
 <script setup>
 import { computed, onActivated, onMounted, provide, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, isNavigationFailure } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { StepEditor, KeywordSidebar } from '@/components/StepEditor'
 import CatalogTreeSelect from '@/components/CatalogTreeSelect.vue'
@@ -405,9 +405,12 @@ async function onQuarantineChange(enabled) {
 
 const formatTime = (value) => dateTools.rTime(value)
 
-function goBack() {
-  router.back()
-  uStore.deleteTabs(route.path)
+async function goBack() {
+  const editPath = route.path
+  const failure = await router.push({ name: 'appCaseList' })
+  if (!isNavigationFailure(failure)) {
+    uStore.deleteTabs(editPath)
+  }
 }
 
 async function save() {

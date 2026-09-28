@@ -134,12 +134,14 @@ async def workbench_overview(
         source_functional_case_id__not_isnull=True,
     ).count()
 
+    from app.modules.ai.vision_capability import config_supports_vision
+
     configs = await AiConfig.filter(is_del=False).order_by("-is_default", "-id")
     enabled_configs = [c for c in configs if c.is_enabled]
     default_cfg = next((c for c in enabled_configs if c.is_default), None) or (
         enabled_configs[0] if enabled_configs else None
     )
-    vision_cfg = next((c for c in enabled_configs if _is_likely_vision_model(c.model)), None)
+    vision_cfg = next((c for c in enabled_configs if config_supports_vision(c)), None)
 
     config_summary = {
         "enabled_count": len(enabled_configs),
@@ -152,7 +154,7 @@ async def workbench_overview(
             "name": default_cfg.name,
             "model": default_cfg.model,
             "provider": default_cfg.provider,
-            "is_vision": _is_likely_vision_model(default_cfg.model),
+            "is_vision": config_supports_vision(default_cfg),
         }
     if vision_cfg and (not default_cfg or vision_cfg.id != default_cfg.id):
         config_summary["vision"] = {

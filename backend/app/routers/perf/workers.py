@@ -602,6 +602,50 @@ async def receive_api_debug_result(data: WorkerApiDebugResult):
     return {"message": "ok"}
 
 
+class WorkerDfDatasourceResult(BaseModel):
+    worker_id: int
+    token: str
+    request_id: str
+    success: bool = False
+    error: Optional[str] = None
+    rows: list = []
+    columns: Optional[list] = None
+    row_count: int = 0
+    affected_rows: int = 0
+    truncated: bool = False
+    elapsed_ms: Optional[int] = None
+    sql: Optional[str] = None
+
+
+@public_router.post("/df-datasource-result", summary="接收执行机数据工厂探针结果")
+async def receive_df_datasource_result(data: WorkerDfDatasourceResult):
+    """Worker 完成 task_type=df_datasource_probe 后回传。"""
+    from app.routers.perf import df_datasource_bridge
+
+    worker = await PerfWorker.get_or_none(id=data.worker_id)
+    if not worker or worker.token != data.token:
+        raise HTTPException(status_code=403, detail="Token 无效")
+
+    payload = {
+        "success": bool(data.success),
+        "error": data.error,
+        "rows": data.rows or [],
+        "columns": data.columns,
+        "row_count": int(data.row_count or 0),
+        "affected_rows": int(data.affected_rows or 0),
+        "truncated": bool(data.truncated),
+        "elapsed_ms": data.elapsed_ms,
+        "sql": data.sql,
+    }
+    ok = await df_datasource_bridge.complete(data.request_id, payload)
+    if not worker.current_record_id:
+        worker.status = "idle"
+        await worker.save()
+    if not ok:
+        raise HTTPException(status_code=404, detail="数据源探针请求已过期或不存在")
+    return {"message": "ok"}
+
+
 class WorkerApiSuiteBatchItem(BaseModel):
     index: int
     status_code: Optional[int] = None

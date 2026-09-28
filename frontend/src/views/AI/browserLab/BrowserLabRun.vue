@@ -127,6 +127,7 @@ import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
 import { useBrowserLabTaskPoll } from '@/composables/useBrowserLabTaskPoll.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+import { configSupportsVision, visionUnsupportedTip } from '@/utils/aiVision.js'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import {
   browserLabLiveHint,
@@ -316,6 +317,18 @@ async function startTask(execOverride = null) {
     execForm = execOverride.execForm
     form.value.device_id = execOverride.device_id
     form.value.headless = execOverride.execForm.headless !== false
+  }
+
+  if (execForm.use_vision !== false) {
+    const cfg = enabledConfigs.value.find((c) => c.id === (aiConfigId.value || execForm.ai_config_id))
+      || enabledConfigs.value.find((c) => c.is_default)
+      || enabledConfigs.value[0]
+    if (cfg && !configSupportsVision(cfg)) {
+      ElMessage.warning(
+        visionUnsupportedTip(cfg, '智能浏览器 Vision') + ' 也可关闭「Vision 截图理解」后重试。'
+      )
+      return
+    }
   }
 
   revokeScreenshots()

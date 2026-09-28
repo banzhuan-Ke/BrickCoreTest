@@ -7,6 +7,8 @@ from typing import Any, Optional
 
 import re
 
+from tortoise import connections
+
 from app.models.ai import (
     AiFunctionalCase,
     AiGenerateRecord,
@@ -18,7 +20,7 @@ from app.models.ai import (
 from app.modules.ai.ai_scene_config import AI_SCENE_DEFINITIONS, resolve_scene_label
 from app.models.http import ApiRunRecord, ApiSuiteRunRecord
 from app.models.perf import PerfRecord
-from app.models.sys import Device, OperationLog, User
+from app.models.sys import Device, User
 from app.models.ui import UiPlanExecution
 from app.models.app import AppCaseExecution, AppPlanExecution, AppSuiteExecution
 
@@ -69,8 +71,10 @@ async def _latest_requirement_id_for_draft_points(project_id: int) -> Optional[i
 
 
 async def _latest_requirement_id_for_draft_cases(project_id: int) -> Optional[int]:
+    from app.modules.ai.requirement_case_review import PENDING_STATUSES
+
     row = await AiRequirementCase.filter(
-        project_id=project_id, is_del=False, status="draft",
+        project_id=project_id, is_del=False, status__in=list(PENDING_STATUSES),
     ).order_by("-update_time", "-id").first()
     return row.requirement_id if row else None
 
@@ -95,11 +99,13 @@ async def _latest_failed_job_requirement_id(project_id: int) -> Optional[int]:
 
 
 async def build_workbench_todos(project_id: int) -> list[dict[str, Any]]:
+    from app.modules.ai.requirement_case_review import PENDING_STATUSES
+
     draft_points = await AiRequirementTestPoint.filter(
         project_id=project_id, is_del=False, status="draft",
     ).count()
     draft_cases = await AiRequirementCase.filter(
-        project_id=project_id, is_del=False, status="draft",
+        project_id=project_id, is_del=False, status__in=list(PENDING_STATUSES),
     ).count()
 
     imported_ids = await AiFunctionalCase.filter(
@@ -143,11 +149,11 @@ async def build_workbench_todos(project_id: int) -> list[dict[str, Any]]:
         req_id = await _latest_requirement_id_for_draft_cases(project_id)
         todos.append({
             "type": "draft_cases",
-            "title": "工作区草稿用例",
+            "title": "待审核工作区用例",
             "count": draft_cases,
-            "path": "/ai-testing/requirements/" + str(req_id) if req_id else "/ai-testing",
-            "query": {"tab": "cases"} if req_id else {},
-            "hint": "打开需求工作区继续编辑用例",
+            "path": "/ai-case-review",
+            "query": {"requirement_id": str(req_id)} if req_id else {},
+            "hint": "在「生成用例审核」通过/驳回后再入库",
             "level": "warning",
         })
     if not_in_library:
@@ -158,7 +164,7 @@ async def build_workbench_todos(project_id: int) -> list[dict[str, Any]]:
             "count": not_in_library,
             "path": "/ai-testing/requirements/" + str(req_id) if req_id else "/ai-testing",
             "query": {"tab": "cases"} if req_id else {},
-            "hint": "将工作区用例复制到功能用例库",
+            "hint": "将已通过的工作区用例复制到功能用例库",
             "level": "info",
         })
     if pending_ui:
@@ -204,29 +210,31 @@ async def collect_token_stats(
     if start_dt is None or end_dt is None:
         start_dt, end_dt = _default_period_range(30)
 
-    log_q = AiUsageLog.filter(create_time__gte=start_dt, create_time__lte=end_dt)
-    rec_q = AiGenerateRecord.filter(create_time__gte=start_dt, create_time__lte=end_dt)
-    job_q = AiRequirementGenerateJob.filter(create_time__gte=start_dt, create_time__lte=end_dt)
-    if project_id:
-        log_q = log_q.filter(project_id=project_id)
-        rec_q = rec_q.filter(project_id=project_id)
-        job_q = job_q.filter(project_id=project_id)
+    async def _count_tokens(table: str) -> tuple[int, int]:
+        sql = (
+            f"SELECT COUNT(*) AS n, COALESCE(SUM(tokens_used), 0) AS total "
+            f"FROM {table} WHERE create_time >= %s AND create_time <= %s"
+        )
+        params: list[Any] = [start_dt, end_dt]
+        if project_id:
+            sql += " AND project_id = %s"
+            params.append(project_id)
+        rows = await connections.get("default").execute_query_dict(sql, params)
+        row = rows[0] if rows else {}
+        return int(row.get("n") or 0), int(row.get("total") or 0)
 
-    logs = await log_q.all()
-    records = await rec_q.all()
-    jobs = await job_q.all()
-    log_tokens = sum(l.tokens_used or 0 for l in logs)
-    record_tokens = sum(r.tokens_used or 0 for r in records)
-    job_tokens = sum(j.tokens_used or 0 for j in jobs)
+    log_count, log_tokens = await _count_tokens("ai_usage_log")
+    record_count, record_tokens = await _count_tokens("ai_generate_record")
+    job_count, job_tokens = await _count_tokens("ai_requirement_generate_job")
     legacy_tokens = record_tokens + job_tokens
     return {
-        "month_generate_count": len(records),
-        "month_job_count": len(jobs),
-        "month_usage_log_count": len(logs),
+        "month_generate_count": record_count,
+        "month_job_count": job_count,
+        "month_usage_log_count": log_count,
         "month_usage_log_tokens": log_tokens,
         "month_record_tokens": record_tokens,
         "month_job_tokens": job_tokens,
-        "month_tokens_used": log_tokens if logs else legacy_tokens,
+        "month_tokens_used": log_tokens if log_count else legacy_tokens,
     }
 
 
@@ -434,11 +442,16 @@ async def collect_user_activity_top(
         if key:
             counts[key] += weight
 
-    log_q = OperationLog.filter(create_time__gte=start_dt, create_time__lte=end_dt).exclude(
-        path__startswith="/runner/"
+    # 按人聚合。操作日志表很大且 params 是 JSON，禁止把明细行拉进进程。
+    log_rows = await connections.get("default").execute_query_dict(
+        "SELECT username, COUNT(*) AS cnt FROM operation_log "
+        "WHERE create_time >= %s AND create_time <= %s "
+        "AND path NOT LIKE %s "
+        "GROUP BY username",
+        [start_dt, end_dt, "/runner/%"],
     )
-    for row in await log_q.values("username"):
-        bump(row.get("username") or "", 1)
+    for row in log_rows:
+        bump(row.get("username") or "", int(row.get("cnt") or 0))
 
     ui_q = UiPlanExecution.filter(start_time__gte=start_dt, start_time__lte=end_dt, is_del=False)
     if project_id:

@@ -13,7 +13,11 @@ from fastapi import HTTPException
 from app.modules.ai.ai_scene_config import resolve_config_for_scene
 from app.core.llm.ai_usage_log import record_ai_usage
 from app.modules.assistant.assistant_execution_watch import schedule_execution_watch
-from app.modules.assistant.assistant_session import load_session_messages, save_session_messages
+from app.modules.assistant.assistant_session import (
+    assert_session_belongs_to_project,
+    load_session_messages,
+    save_session_messages,
+)
 from app.modules.assistant.assistant_tools import (
     get_tool_selection_schemas,
     compact_tools_payload,
@@ -69,7 +73,7 @@ _RECORD_HINTS = ("执行记录", "跑测", "运行记录", "最近执行", "测�
 _API_PLAN_HINTS = ("测试计划", "接口计划", "编排计划", "api计划")
 _MOCK_HINTS = ("mock", "Mock", "模拟接口")
 _CRON_HINTS = ("定时", "cron", "调度", "Cron")
-_DATA_FACTORY_HINTS = ("数据工厂", "数据源", "SQL模板", "SQL 模板", "sql模板", "造数", "数据准备")
+_DATA_FACTORY_HINTS = ("数据工厂", "数据源", "SQL模板", "SQL 模板", "sql模板", "造数", "数据准备", "查询控制台", "查库", "elasticsearch", "es")
 _LOOP_ANALYZE_HINTS = ("失败闭环", "继续失败闭环", "分析闭环", "失败分析闭环")
 _LOOP_RUN_HINTS = ("执行闭环", "接口执行闭环", "跑测闭环")
 
@@ -95,12 +99,12 @@ TOOL_SELECT_PROMPT = """你是 BrickCore 平台工具规划器。根据用户问
 - **接口管理概览/汇总**（未要求逐条列举）：优先 list_api_categories + list_api_suites，**不要**同时拉全量 list_api_definitions + list_api_test_cases
 - **接口管理/接口用例详情**：用 list_api_categories + list_api_definitions + list_api_test_cases（可选 list_api_suites），**禁止**用 list_requirements
 - 查单个接口详情用 get_api_definition
-- 查 UI 计划/用例用 list_ui_tasks / list_ui_cases；UI 执行记录用 list_ui_run_records
+- 查 UI 计划/用例用 list_ui_tasks / list_ui_cases；**某 UI/App/接口用例的最新失败详情**用 get_case_latest_failure(case_name 或 case_id)；list_ui_run_records 仅为**测试计划**执行列表，不要用来查单用例错误
 - App 移动端用 list_app_cases / list_app_suites / list_app_plans；App 执行记录用 list_app_run_records；App 定时用 list_app_cron_jobs
 - 接口测试计划用 list_api_plans；接口执行记录用 list_api_run_records
 - 压测场景/记录/定时/Worker 用 list_perf_scenes / list_perf_records / list_perf_cron_jobs / list_perf_workers
 - UI 套件/定时用 list_ui_suites / list_ui_cron_jobs
-- Mock 接口用 list_mock_apis；数据工厂数据源/SQL 模板用 list_data_factory_datasources / list_sql_templates / get_sql_template
+- Mock 接口用 list_mock_apis；数据工厂数据源/SQL 模板用 list_data_factory_datasources / list_sql_templates / get_sql_template；只读查库用 query_datasource（禁止写）
 - 执行接口套件/计划用 preview_run_api_suite / preview_run_api_plan（需用户 confirm，执行记录触发方式为「小测」）
 - 执行单条接口用例用 preview_run_api_case（case_id 或 case_name + env_id，确认后同步返回结果）
 - 执行单条 Web UI 用例用 preview_run_ui_case（case_id 或 case_name + env_id + device_id）
@@ -109,7 +113,7 @@ TOOL_SELECT_PROMPT = """你是 BrickCore 平台工具规划器。根据用户问
 - Web UI 执行前可先 list_online_devices 获取在线 Runner 的 device_id；App 执行需 App Runner 及 app_udid
 - 执行 UI 测试计划用 preview_run_ui_task；Web UI 套件用 preview_run_ui_suite（均需 env_id、device_id）
 - 启动压测场景用 preview_run_perf_scene（需 env_id；施压必须有在线 Worker，不再支持本机直跑）
-- 查单条执行详情用 get_execution_record（record_type: api_suite/api_plan/ui_plan/ui_case/app_plan/app_suite/app_case/perf）
+- 查单条执行详情用 get_execution_record（record_type: api_suite/api_plan/ui_plan/ui_case/app_plan/app_suite/app_case/perf）；ui_case/app_case 含错误摘要
 - 用户明确要求执行/生成/分析时，调用对应的 preview_* 工具（不要直接 confirm）
 - **执行能力咨询**（如「你能执行用例吗」「可以直接帮我跑吗」，且未给用例/套件 ID）：调用 list_environments，涉及 UI/App 时加 list_online_devices；涉及接口时加 list_api_test_cases；涉及 Web UI 时加 list_ui_cases；**不要**仅查执行记录 list_*_run_records / get_execution_record
 - 只选择与问题相关的工具；当前项目 ID 已给定，project_id 请使用该值
@@ -141,7 +145,8 @@ async def resolve_project_context(project_id: int | None) -> tuple[int | None, s
         return None, "未选择项目"
     project = await Project.get_or_none(id=project_id, is_del=False)
     if not project:
-        return project_id, f"ID={project_id}（不存在）"
+        # 不存在则返回 None，避免下游把假 project_id 当成有效项目继续执行
+        return None, f"项目不存在（id={project_id}）"
     return project_id, f"{project.name} (id={project.id})"
 
 
@@ -416,6 +421,8 @@ def _format_page_context_hint(page_context: dict[str, Any] | None) -> str:
         ("template_id", "SQL 模板 ID"),
         ("datasource_id", "数据源 ID"),
         ("set_id", "问答评测集 ID"),
+        ("env_id", "环境 ID"),
+        ("device_id", "设备 ID"),
     ):
         val = page_context.get(key)
         if val:
@@ -428,6 +435,29 @@ def _format_page_context_hint(page_context: dict[str, Any] | None) -> str:
     return (
         "\n当前页面上下文：" + "；".join(parts)
         + "。用户可能针对当前页面提问，优先调用与上述 ID/页面类型相关的工具。\n"
+    )
+
+
+def _format_pinned_context_hint(pinned_context: dict[str, Any] | None) -> str:
+    if not isinstance(pinned_context, dict):
+        return ""
+    items = pinned_context.get("items")
+    if not isinstance(items, list) or not items:
+        return ""
+    parts: list[str] = []
+    for it in items[:8]:
+        if not isinstance(it, dict):
+            continue
+        etype = it.get("type") or "?"
+        eid = it.get("id")
+        label = it.get("label") or f"{etype}#{eid}"
+        parts.append(f"{label}（{etype}={eid}）")
+    if not parts:
+        return ""
+    return (
+        "\n钉住上下文（优先使用；缺环境/设备时向用户确认，禁止编造）："
+        + "；".join(parts)
+        + "。\n"
     )
 
 
@@ -979,8 +1009,9 @@ async def _llm_answer(
     start: float,
     pending_confirm: dict[str, Any] | None = None,
     page_context: dict[str, Any] | None = None,
+    pinned_context: dict[str, Any] | None = None,
     execution_capability_inquiry: bool = False,
-) -> tuple[str, int]:
+) -> tuple[str, int, str]:
     if time.monotonic() - start > ASSISTANT_MAX_SECONDS:
         raise TimeoutError(f"助手响应超时（超过 {ASSISTANT_MAX_SECONDS} 秒）")
 
@@ -1003,6 +1034,7 @@ async def _llm_answer(
     user_content = (
         f"用户：{username}\n当前项目：{project_label}\n"
         f"{_format_page_context_hint(page_context)}"
+        f"{_format_pinned_context_hint(pinned_context)}"
         f"平台查询结果（JSON，按工具名分组）：\n"
         f"{truncate_tool_result(compact_tools_payload(tools_payload))}\n"
         f"{history_lines}\n\n用户问题：{user_message}\n"
@@ -1017,23 +1049,43 @@ async def _llm_answer(
     temperature = min(config.temperature, 0.5)
     max_tokens = min(config.max_tokens, 4096)
 
+    create_kwargs: dict[str, Any] = {
+        "model": config.model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+
     resp = await asyncio.wait_for(
-        client.chat.completions.create(
-            model=config.model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=False,
-        ),
+        client.chat.completions.create(**create_kwargs),
         timeout=LLM_CALL_TIMEOUT,
     )
     tokens = resp.usage.total_tokens if resp.usage else 0
-    content = (resp.choices[0].message.content or "").strip()
-    return content or "（模型未返回内容）", tokens
+    from app.modules.knowledge.knowledge_qa import split_qa_reasoning
+
+    raw = (resp.choices[0].message.content or "").strip()
+    # 部分网关把思考放在 reasoning_content
+    reasoning_attr = getattr(resp.choices[0].message, "reasoning_content", None) or ""
+    thinking, content = split_qa_reasoning(raw)
+    if not thinking and reasoning_attr:
+        thinking = str(reasoning_attr).strip()
+    if not content:
+        if thinking:
+            content = "（回答未完成：模型输出在思考阶段被截断。请重试或换更短的问题。）"
+        else:
+            from app.modules.knowledge.knowledge_qa import clean_qa_answer
+
+            content = clean_qa_answer(raw) or "（模型未返回内容）"
+    return content or "（模型未返回内容）", tokens, thinking
 
 
 def _message_to_session(role: str, content: str, **extra: Any) -> dict[str, Any]:
+    import uuid
+
     msg: dict[str, Any] = {"role": role, "content": content}
+    if role == "assistant" and "message_id" not in extra:
+        msg["message_id"] = f"m-{uuid.uuid4().hex[:16]}"
     msg.update(extra)
     return msg
 
@@ -1080,20 +1132,37 @@ async def run_assistant_chat(
     resolved_pid, project_label = await resolve_project_context(project_id)
     project_name = project_label.split(" (id=")[0] if resolved_pid else ""
 
+    if resolved_pid and ctx.user_id:
+        from brickcore_assist.skills.access import require_project_access
+
+        await require_project_access(ctx, resolved_pid)
+
     chat_history = history
+    stored_full: list[dict[str, Any]] = []
     active_session_id = session_id
     if use_server_history and ctx.user_id:
         stored_sid, stored_msgs = await load_session_messages(
             ctx.user_id, resolved_pid, session_id=active_session_id
         )
         if stored_msgs:
+            stored_full = [m for m in stored_msgs if isinstance(m, dict)]
             chat_history = [
                 {"role": m.get("role", "user"), "content": m.get("content", "")}
-                for m in stored_msgs
-                if isinstance(m, dict)
+                for m in stored_full
             ]
         if stored_sid:
             active_session_id = stored_sid
+
+    pinned_context: dict[str, Any] | None = None
+    if active_session_id and ctx.user_id:
+        try:
+            from app.modules.assistant.assistant_session import get_pinned_context
+
+            pinned_raw = await get_pinned_context(ctx.user_id, int(active_session_id))
+            if isinstance(pinned_raw, dict) and pinned_raw.get("items"):
+                pinned_context = pinned_raw
+        except Exception:
+            pinned_context = None
 
     if not resolved_pid:
         content = "请先在页面顶部选择一个项目，或在问题中说明 project_id。"
@@ -1110,6 +1179,7 @@ async def run_assistant_chat(
             "tokens_used": 0,
             "model": config.model,
             "session_id": sid,
+            "pinned_context": pinned_context,
         }
 
     api_key = decrypt_value(config.api_key)
@@ -1178,7 +1248,7 @@ async def run_assistant_chat(
         }
 
     try:
-        content, tokens = await _llm_answer(
+        content, tokens, thinking = await _llm_answer(
             llm.client,
             config,
             username=ctx.username,
@@ -1189,6 +1259,7 @@ async def run_assistant_chat(
             start=start,
             pending_confirm=pending_confirm,
             page_context=page_context,
+            pinned_context=pinned_context,
             execution_capability_inquiry=is_exec_capability,
         )
     except asyncio.TimeoutError as exc:
@@ -1206,7 +1277,7 @@ async def run_assistant_chat(
             status="failed",
             input_summary=user_message,
             output_summary="LLM 调用超时",
-            extra={"tools_used": tools_used},
+            extra={"tools_used": tools_used, "mode": "lite"},
         )
         raise TimeoutError("LLM 调用超时，请稍后重试") from exc
 
@@ -1225,17 +1296,26 @@ async def run_assistant_chat(
         status="success",
         input_summary=user_message,
         output_summary=content,
-        extra={"tools_used": tools_used, "has_pending_confirm": bool(pending_confirm), "page": (page_context or {}).get("page")},
+        extra={
+            "tools_used": tools_used,
+            "has_pending_confirm": bool(pending_confirm),
+            "page": (page_context or {}).get("page"),
+            "mode": "lite",
+        },
     )
 
     assistant_msg = _message_to_session("assistant", content, tools=tools_used)
+    assistant_msg["mode"] = "lite"
+    if thinking:
+        assistant_msg["thinking"] = thinking
     if pending_confirm:
         assistant_msg["pending_confirm"] = pending_confirm
 
     sid = await save_session_messages(
         ctx.user_id,
         resolved_pid,
-        chat_history + [_message_to_session("user", user_message), assistant_msg],
+        (stored_full if use_server_history else list(chat_history or []))
+        + [_message_to_session("user", user_message), assistant_msg],
         session_id=active_session_id,
         title_hint=user_message,
     )
@@ -1247,9 +1327,31 @@ async def run_assistant_chat(
         "model": config.model,
         "duration_ms": duration_ms,
         "session_id": sid,
+        "mode": "lite",
+        "pinned_context": pinned_context,
     }
+    if thinking:
+        result["thinking"] = thinking
     if pending_confirm:
         result["pending_confirm"] = pending_confirm
+    try:
+        from app.modules.assistant.assistant_trace import record_turn_trace
+
+        await record_turn_trace(
+            session_id=sid,
+            user_id=ctx.user_id,
+            project_id=resolved_pid,
+            mode="lite",
+            trace={"stop_reason": "completed", "rounds": [{"i": 0}]},
+            tools_used=tools_used,
+            skills_used=[],
+            tokens_used=tokens,
+            duration_ms=duration_ms,
+            has_pending_confirm=bool(pending_confirm),
+            has_pending_ask_user=False,
+        )
+    except Exception:
+        logger.debug("[assistant] record_turn_trace lite skipped", exc_info=True)
     return result
 
 
@@ -1263,8 +1365,23 @@ async def run_assistant_confirm(
     session_id: int | None = None,
 ) -> dict[str, Any]:
     start = time.monotonic()
-    resolved_pid, project_label = await resolve_project_context(project_id)
+    args = dict(confirm_args or {})
+    # 套件/计划等 confirm_args 可能不带 project_id，尽量从 impact/args 补齐
+    effective_pid = project_id if project_id is not None else args.get("project_id")
+    resolved_pid, project_label = await resolve_project_context(effective_pid)
     project_name = project_label.split(" (id=")[0] if resolved_pid else ""
+
+    # 先校验会话归属与项目成员，避免写操作已成功但会话写入失败（token 已消费）
+    if resolved_pid and ctx.user_id:
+        from app.core.platform.project_access import PROJECT_ROLE_MEMBER
+        from brickcore_assist.skills.access import require_project_access
+
+        await require_project_access(ctx, resolved_pid, min_role=PROJECT_ROLE_MEMBER)
+    elif ctx.user_id and not resolved_pid:
+        # 无 project_id 时仍允许进入工具层（工具内按实体再校验），但禁止跳过会话隔离
+        pass
+    if session_id and ctx.user_id:
+        await assert_session_belongs_to_project(ctx.user_id, int(session_id), resolved_pid)
 
     try:
         result = await invoke_confirm_tool(ctx, action, confirm_token, confirm_args or {})
@@ -1272,6 +1389,10 @@ async def run_assistant_confirm(
         raise ValueError(str(exc)) from exc
 
     content = f"操作已执行。\n\n```json\n{truncate_tool_result(result)}\n```"
+    if isinstance(result, dict):
+        summary = (result.get("summary") or result.get("message") or "").strip()
+        if summary:
+            content = f"{summary}\n\n```json\n{truncate_tool_result(result)}\n```"
     duration_ms = int((time.monotonic() - start) * 1000)
 
     await record_ai_usage(
@@ -1288,15 +1409,30 @@ async def run_assistant_confirm(
         status="success",
         input_summary=f"confirm:{action}",
         output_summary=truncate_tool_result(result)[:500],
-        extra={"action": action, "confirm_args": confirm_args},
+        extra={"action": action, "confirm_args": confirm_args, "kind": "confirm"},
     )
 
     _, stored_msgs = await load_session_messages(ctx.user_id, resolved_pid, session_id=session_id)
+    # 将原消息上的 pending_confirm 标为已完成，避免前端 reload 后确认卡回魂
+    token = (confirm_token or "").strip()
+    for m in stored_msgs:
+        if not isinstance(m, dict):
+            continue
+        pc = m.get("pending_confirm")
+        if not isinstance(pc, dict):
+            continue
+        if pc.get("action") != action:
+            continue
+        if token and pc.get("confirm_token") and str(pc.get("confirm_token")) != token:
+            continue
+        m["confirm_done"] = True
+        # 保留 pending_confirm 便于回看影响摘要，但前端靠 confirm_done 隐藏按钮
+
     confirm_msg = _message_to_session(
         "assistant",
         content,
         tools=[f"confirm:{action}"],
-        confirm_result={"action": action, "result": result},
+        confirm_result={"action": action, "result": result, "confirm_token": token or None},
     )
     sid = await save_session_messages(
         ctx.user_id,
@@ -1313,6 +1449,18 @@ async def run_assistant_confirm(
         result=result if isinstance(result, dict) else {},
     )
 
+    job = None
+    try:
+        from app.modules.assistant.assistant_jobs import link_after_confirm
+
+        job = await link_after_confirm(
+            session_id=sid,
+            action=action,
+            result=result if isinstance(result, dict) else {},
+        )
+    except Exception:
+        logger.exception("[assistant] create job_link failed action=%s session=%s", action, sid)
+
     return {
         "content": content,
         "result": result,
@@ -1320,4 +1468,6 @@ async def run_assistant_confirm(
         "duration_ms": duration_ms,
         "session_id": sid,
         "execution_watch": execution_watch,
+        "job": job,
+        "navigate": (result.get("navigate") if isinstance(result, dict) else None),
     }

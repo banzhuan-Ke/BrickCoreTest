@@ -554,6 +554,7 @@ import {
   buildWebPlaywrightHint,
 } from '@/utils/appWebviewLocator.js'
 import { copyToClipboard } from '@/utils/clipboard.js'
+import { configSupportsVision, visionUnsupportedTip } from '@/utils/aiVision.js'
 import {
   clearAppInspectorContext,
   clearAppInspectorCaseDraft,
@@ -870,12 +871,11 @@ const extraAttributes = computed(() => getExtraAttributes(selectedNode.value))
 const canSave = computed(() => !!(saveForm.name.trim() && nativeLocatorPayload.value))
 const canSaveWeb = computed(() => !!(saveForm.name.trim() && webLocatorPayload.value))
 
-function isVisionModel(model) {
-  const m = (model || '').toLowerCase()
-  return m.includes('vl') || m.includes('vision') || m.includes('gpt-4o')
+function isVisionModel(c) {
+  return configSupportsVision(typeof c === 'string' ? { model: c } : c)
 }
 
-const visionConfigs = computed(() => aiConfigList.value.filter((c) => isVisionModel(c.model)))
+const visionConfigs = computed(() => aiConfigList.value.filter((c) => configSupportsVision(c)))
 
 async function loadAiConfigs() {
   if (aiConfigList.value.length) return
@@ -919,6 +919,19 @@ function buildNodeAttributes(node) {
 async function runAiSuggest(intent) {
   if (!selectedNode.value) return
   await loadAiConfigs()
+  if (aiUseVision.value && sessionId.value) {
+    const vCfg = visionConfigId.value
+      ? aiConfigList.value.find((c) => c.id === visionConfigId.value)
+      : visionConfigs.value[0]
+    if (!vCfg || !visionConfigs.value.length) {
+      ElMessage.warning('已开启读图，但没有标记「支持多模态」的模型，请先在 AI 模型配置中开启')
+      return
+    }
+    if (!configSupportsVision(vCfg)) {
+      ElMessage.warning(visionUnsupportedTip(vCfg, 'App 元素探查读图'))
+      return
+    }
+  }
   aiSuggesting.value = intent
   try {
     const res = await aiGenerateApi.suggestAppInspector({

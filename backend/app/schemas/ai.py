@@ -18,6 +18,7 @@ class AiConfigBase(BaseModel):
     timeout: int = Field(default=60, ge=5, le=1800, description="请求超时(秒)，最长 30 分钟")
     thinking_enabled: bool = Field(default=False, description="是否启用思考模式")
     reasoning_effort: Optional[str] = Field(default="medium", description="推理努力程度(low/medium/high)")
+    supports_vision: bool = Field(default=False, description="是否支持多模态（Vision/读图）")
     is_enabled: bool = True
 
 
@@ -36,6 +37,7 @@ class AiConfigUpdate(BaseModel):
     timeout: Optional[int] = Field(default=None, ge=5, le=1800)
     thinking_enabled: Optional[bool] = Field(default=None, description="是否启用思考模式")
     reasoning_effort: Optional[str] = Field(default=None, description="推理努力程度(low/medium/high)")
+    supports_vision: Optional[bool] = Field(default=None, description="是否支持多模态（Vision/读图）")
     is_enabled: Optional[bool] = None
 
 
@@ -50,6 +52,7 @@ class AiConfigOut(BaseModel):
     timeout: int
     thinking_enabled: bool
     reasoning_effort: Optional[str]
+    supports_vision: bool = False
     is_default: bool
     is_enabled: bool
     create_time: str
@@ -65,6 +68,7 @@ class AiConfigListOut(BaseModel):
     name: str
     provider: str
     model: str
+    supports_vision: bool = False
     is_default: bool
     is_enabled: bool
     create_time: str

@@ -1123,6 +1123,7 @@ const loadDatasources = async () => {
     const res = await dataFactoryApi.listDatasources({
       project_id: projectId,
       environment_id: envId,
+      enabled_only: true,
       size: 100,
     })
     if (seq !== datasourcesSeq) return

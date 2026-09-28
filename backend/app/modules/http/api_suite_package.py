@@ -232,6 +232,7 @@ async def _build_case_step_skeleton(
         "extractors": case.extractors or [],
         "assertions": case.assertions or [],
         "assertion_groups": case.assertion_groups or [],
+        "db_assertions": getattr(case, "db_assertions", None) or [],
         "data_run_index": data_run_index,
         "data_row_label": data_row_label,
         "row_vars": dict(row_vars or {}),
@@ -368,6 +369,8 @@ async def _finalize_step_to_record(
     username: str,
     project_id: int,
     auto_validate_schema: bool,
+    env_id: int | None = None,
+    worker_id: int | None = None,
 ) -> ApiRunResult:
     from app.modules.http.http_utils import run_case_assertions, extract_variables
 
@@ -420,6 +423,31 @@ async def _finalize_step_to_record(
                 response_body, step.get("extractors"), headers=headers
             )
             extracted = merge_suite_extracted_vars(extracted, extracted2)
+
+        # 用例级库断言：与 HTTP 同 worker_id（整包路径此前漏跑）
+        db_asserts = step.get("db_assertions") or []
+        if db_asserts and env_id:
+            from app.core.db.db_factory_service import evaluate_db_assertions
+
+            script_vars = {**(step.get("row_vars") or {}), **extracted}
+            db_eval = await evaluate_db_assertions(
+                db_asserts,
+                script_vars,
+                int(env_id),
+                project_id,
+                worker_id=worker_id,
+            )
+            for dr in db_eval.get("results") or []:
+                assertions_result.append(ApiAssertionResult(
+                    type="db",
+                    target=dr.get("target"),
+                    operator=dr.get("operator") or "equals",
+                    expected=dr.get("expected"),
+                    actual=dr.get("actual"),
+                    passed=bool(dr.get("passed")),
+                ))
+                if not dr.get("passed"):
+                    all_passed = False
 
     status = "success" if all_passed and not err else "failed"
     request_detail = build_suite_request_detail(step, item)
@@ -662,6 +690,8 @@ async def execute_suite_via_worker(
             username=username,
             project_id=suite.project_id,
             auto_validate_schema=auto_validate_schema,
+            env_id=env.id,
+            worker_id=worker_id,
         )
         case_results.append(result)
         if result.status == "success":

@@ -1,8 +1,42 @@
 # 版本更新记录
 
-本文记录 BrickCore 各版本的主要功能变更、问题修复与升级指引。当前平台版本可在页脚查看（**BrickCore v1.8.0**）。
+本文记录 BrickCore 各版本的主要功能变更、问题修复与升级指引。当前平台版本可在页脚查看（**BrickCore v1.9.0**）。
 
 > **说明：** **迭代资料库**通用能力已开放（文件夹、检索、报告向导等）。**定制文档**页签已预留，未开通时请联系管理员进行定制开发。详见 [迭代资料库](./knowledge-base.md)。
+
+---
+
+## v1.9.0（数据工厂深化 · 小测扩展包 · MCP / Skills）
+
+> **适用**：自 **v1.8.0** 升级  
+> **平台版本号**：**v1.9.0**  
+> **建议执行器**：BrickCoreRunner / BrickCorePerf **客户端 / 引擎 1.8.2**（含数据工厂经执行机探测；沿用旧包时相关能力不可用）
+
+### 新增 / 增强
+
+- **数据工厂查询控制台**：以数据源为主；对象浏览器（SQL 表列/索引、ES 字段与样例、Redis SCAN）——目录不自动加载，选源后点「刷新」（内网常先勾经执行机）；结果复制/导出、本机语句历史；写操作二次确认；可另存为 SQL 模板
+- **数据工厂 Elasticsearch**：数据源类型支持 ES；库断言与模板可读 hits；写 API 默认关闭并需确认
+- **数据工厂经执行机代发**：测连/控制台/模板调试；接口套件 setup·teardown·库断言可与 HTTP 同执行机（引擎 ≥ 1.8.2）；环境「默认接口执行机」可用于 UI/App 库断言与小测只读查询
+- **小测 × 数据源**：助手/MCP 只读 `query_datasource`；技能快捷入口「NL→SQL模板」预览确认后写入模板
+- **小测扩展包 `brickcore_assist`（可选）**：安装后可启用多轮 standard、Skill、任务进度桥等；未安装时仍可用基础助手。见 [小测扩展包](./brickcore-assist-pack.md)
+- **生成与分析 Skill**（需扩展包）：UI 失败分析、资料库问答、项目健康摘要；需求→测试点、接口定义→用例、测试点→功能用例、Mock、一句话压测场景、自然语言 UI 步骤等（预览确认后落库或跳转）
+- **页面 AI 技能快捷入口**：功能用例→Web/App、接口套件→压测 journey、失败记录→缺陷草稿等
+- **会话钉住 / AskUser 卡片 / 进度卡**：缺参结构化提问；智能浏览器等任务可挂会话进度
+- **AI 用例审核队列**：生成用例默认待审核，通过/驳回后入库
+- **MCP 增强**：任务进度与停止、模型/用量只读、目录与显式创建、Skill 预览确认、管理类写操作须确认；首页复制 JSON 使用当前登录 JWT
+- **Skills / Agent 可见面**：菜单「AI 测试 → Skills / Agent」；可按技能/状态筛选执行记录
+- **执行器 1.8.2**：含录制 SPA 重注、数据工厂 `df_datasource_probe`；**Mac 执行器**设备字段扩容避免内核版本串过长导致连接失败
+- **Web 智能进视口 / 录制定位质量**：弹窗列表条件滚动；拾取忠实命中与候选来源标识；定位助手 / 智能浏览器 / 自愈对齐
+
+### 升级说明
+
+1. 执行 **`aerich upgrade`**（含小测相关 **162～165**、Mac 字段 **172** 等），重启 Backend，**重建前端**；`PLATFORM_VERSION=1.9.0`  
+2. 将 `RUNNER_CLIENT_VERSION_LATEST` / `RUNNER_ENGINE_VERSION` 设为 **1.8.2**，并更新网盘执行器包  
+3. compose 确认已挂载 `backend/ext_packages`，并按需设置 `ASSIST_STANDARD_ENABLED=1`  
+4. （可选）安装 [测试管理扩展包](./brickcore-tm-pack.md)、[小测扩展包](./brickcore-assist-pack.md) 的 **linux-amd64-cp311**（Docker）或对应本机包后重启 backend  
+5. 测试管理扩展包：平台已兼容 **1.9** 前缀，可继续使用声明兼容 1.9 的 **1.8.x** 包  
+
+**验证**：页脚 **v1.9.0**；数据工厂控制台/ES 可测；未装小测扩展包时基础助手可用；装包后 `import brickcore_assist` 成功；设备管理推荐执行器 **1.8.2**。
 
 ---
 
@@ -26,6 +60,7 @@
 - **执行机真实负载窗**：final 上报 `load_started_ms` / `load_stopped_ms` / `drain_until_ms`，被测资源切片优先采用
 - **App 设备性能（Android）**：执行弹窗「采集设备性能」与菜单「设备性能监控」；CPU/内存/网络/FPS/Jank/电池等；断言与双记录对比；需 migration **160/161** + **执行器 1.8.0**
 - **文档**：Windows 局域网访问（`CORS_ALLOWED_ORIGINS` / build+Nginx）；执行器 VC++ 运行库（[微软官网](https://aka.ms/vs/17/release/vc_redist.x64.exe) 或网盘官方镜像）
+- **可选扩展包**：测试管理高级能力见 [测试管理扩展包](./brickcore-tm-pack.md)；小测完整能力见 [小测扩展包](./brickcore-assist-pack.md)（网盘/Release 下载 `.bcpack`，装至 `backend/ext_packages`）
 
 ### 升级说明
 
@@ -35,6 +70,7 @@
 4. **自建 Nginx**：反代 **`/mock/`**；**`/perf/sut-agent/`** 建议 `client_max_body_size 256k`（仓库 conf 已含）  
 5. **被测服务器**：在被测机安装采集器（见仓库 `tools/sut_metrics_agent/`）；Token 只显示一次；若迁移报 `agent_uid` 重复，先清理重复再升级  
 6. 历史增强报告需 **重新导出 HTML** 才能看到新目录结构与版式  
+7. （可选）安装 TM / 小测扩展包后，确认 compose 已挂载 `backend/ext_packages` 且 `ASSIST_STANDARD_ENABLED=1`，再重启 backend  
 
 **验证**：页脚 **v1.8.0**；设备管理推荐版本 **1.8.0**；Mock 短别名可访问；压测增强报告版式可选；有 App 设备时可试采集设备性能。
 

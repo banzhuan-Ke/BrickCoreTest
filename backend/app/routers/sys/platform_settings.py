@@ -24,6 +24,16 @@ class PlatformSettingsForm(BaseModel):
         default=None,
         description="资料库删除模式（生成记录、上传文档）：logical|physical",
     )
+    assist_llm_timeout_sec: int | None = Field(default=None, ge=20, le=600)
+    assist_max_wall_sec: int | None = Field(default=None, ge=30, le=600)
+    assist_failure_digest_max_rounds: int | None = Field(default=None, ge=1, le=8)
+    assist_max_tokens_total: int | None = Field(default=None, ge=8000, le=200000)
+    assist_max_plan_rounds: int | None = Field(default=None, ge=1, le=12)
+    assist_max_tools_per_round: int | None = Field(default=None, ge=1, le=8)
+    assist_tool_result_max_chars: int | None = Field(default=None, ge=2000, le=20000)
+    assist_tool_list_item_limit: int | None = Field(default=None, ge=3, le=30)
+    assist_session_summary_trigger: int | None = Field(default=None, ge=8, le=40)
+    assist_history_turns: int | None = Field(default=None, ge=2, le=12)
 
 
 @router.get(
@@ -53,5 +63,15 @@ async def update_platform_settings(
     return await save_platform_settings(
         ui_case_record_delete_mode=ui_mode,
         knowledge_report_delete_mode=report_mode,
+        assist_llm_timeout_sec=item.assist_llm_timeout_sec,
+        assist_max_wall_sec=item.assist_max_wall_sec,
+        assist_failure_digest_max_rounds=item.assist_failure_digest_max_rounds,
+        assist_max_tokens_total=item.assist_max_tokens_total,
+        assist_max_plan_rounds=item.assist_max_plan_rounds,
+        assist_max_tools_per_round=item.assist_max_tools_per_round,
+        assist_tool_result_max_chars=item.assist_tool_result_max_chars,
+        assist_tool_list_item_limit=item.assist_tool_list_item_limit,
+        assist_session_summary_trigger=item.assist_session_summary_trigger,
+        assist_history_turns=item.assist_history_turns,
         username=username,
     )

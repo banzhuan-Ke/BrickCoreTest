@@ -28,6 +28,7 @@ async def _build_info_payload(request: Request) -> dict:
     cfg = await get_mcp_runtime_config()
     base = resolve_public_base_url(cfg, str(request.base_url).rstrip("/"))
     endpoint = f"{base}{MCP_HTTP_PATH}" if base else MCP_HTTP_PATH
+    # 不下发 JWT / MCP API Key：由前端用本地登录 Token 填入复制 JSON，避免响应日志二次暴露
     return {
         "enabled": cfg.enabled,
         "endpoint": endpoint,
@@ -35,10 +36,10 @@ async def _build_info_payload(request: Request) -> dict:
         "has_api_key": bool(cfg.api_key),
         "config_source": cfg.source,
         "transport": "streamable-http",
-        "auth_hint": "Authorization: Bearer <JWT 或 MCP API Key>，也可使用 X-MCP-API-Key 头",
+        "auth_hint": "一键复制 JSON 由前端填入当前登录 JWT（与网页权限一致，过期后请重新复制）。也可改用 MCP API Key 或 X-MCP-API-Key",
         "tool_count": get_registered_tool_count(),
         "tool_groups": list(MCP_TOOL_GROUPS),
-        "client_config": build_client_config(base or "http://localhost:8000", cfg.api_key),
+        "client_config": build_client_config(base or "http://localhost:8000", ""),
         "dangerous_ops": list(MCP_DANGEROUS_OPS),
     }
 

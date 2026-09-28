@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Optional
 from app.core.shared.locator_utils import normalize_locator, prefer_popup_elements, resolve_locator_on_page
 from app.modules.ui.scroll_page_js import SCROLL_PAGE_JS
+from app.modules.ui.ensure_in_view_js import ENSURE_IN_VIEW_SMART_JS
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
@@ -768,9 +769,9 @@ class SmartPageExplorer:
             logger.debug(f"[wait_for_element] visible 等待失败: {e1}")
 
         try:
-            await loc.scroll_into_view_if_needed(timeout=3000)
+            await loc.evaluate(ENSURE_IN_VIEW_SMART_JS, {"pad": 40})
             await loc.wait_for(timeout=chunk, state="visible")
-            logger.info("[wait_for_element] scroll 后可见")
+            logger.info("[wait_for_element] 智能进视口后可见")
             return
         except Exception:
             pass
@@ -1073,7 +1074,9 @@ class SmartPageExplorer:
                 locator = params.get("locator", "")
                 if locator:
                     loc = self.page.locator(locator)
-                    await loc.first.scroll_into_view_if_needed(timeout=params.get("timeout", 20000))
+                    target = loc.first
+                    await target.wait_for(state="attached", timeout=params.get("timeout", 20000))
+                    await target.evaluate(ENSURE_IN_VIEW_SMART_JS, {"pad": 40})
 
             elif method == "click_by_text":
                 text = params.get("text", "")

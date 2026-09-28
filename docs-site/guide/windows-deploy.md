@@ -171,6 +171,8 @@ DATABASE_NAME=fastapi
 
 MQ_HOST=127.0.0.1
 MQ_PORT=5672
+MQ_MANAGEMENT_HOST=127.0.0.1
+MQ_MANAGEMENT_PORT=15672
 MQ_USERNAME=admin
 MQ_PASSWORD=BrickCore123456
 
@@ -192,10 +194,10 @@ AI_REQUIREMENT_BUCKET=ai-requirements
 DOC_USERNAME=admin
 DOC_PASSWORD=BrickCore123456
 INTERNAL_API_KEY=brickcore-internal-demo
-PLATFORM_VERSION=1.8.0
-RUNNER_CLIENT_VERSION_LATEST=1.8.0
+PLATFORM_VERSION=1.9.0
+RUNNER_CLIENT_VERSION_LATEST=1.8.2
 RUNNER_CLIENT_VERSION_MIN=1.3.8
-RUNNER_ENGINE_VERSION=1.8.0
+RUNNER_ENGINE_VERSION=1.8.2
 RUNNER_ENGINE_VERSION_MIN=1.0.0
 ```
 
@@ -400,8 +402,10 @@ docker compose -f docker-services.yml ps
 |------|----------|-------------|
 | MySQL | 3306 | `admin` / `BrickCore123456` |
 | Redis | **26379** | 密码 `BrickCore123456` |
-| RabbitMQ | **25672**（管理台 35672） | `admin` / `BrickCore123456` |
+| RabbitMQ | **25672**（管理台 **35672**） | `admin` / `BrickCore123456` |
 | MinIO | **9200**（控制台 9001） | `admin` / `BrickCore123456` |
+
+> **易漏点**：执行器「上线」时 Backend 会调 RabbitMQ **管理台 HTTP** 发临时账号。`backend/.env` 须带 `MQ_MANAGEMENT_HOST=localhost`、`MQ_MANAGEMENT_PORT=35672`（与上表管理台一致）。只配 `MQ_PORT=25672`、漏管理台端口时，登录成功但上线报「中间件凭证初始化失败…All connection attempts failed」。浏览器能打开 `http://localhost:35672` 只说明管理台通，不能代替 `.env` 里的端口配置。
 
 ### 2. Backend / Frontend（先建表，再导种子）
 
@@ -411,7 +415,10 @@ python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 copy .env.example .env
-# 保持 REDIS_PORT=26379、MQ_PORT=25672（与 docker-services.yml 一致）
+# 保持 REDIS_PORT=26379、MQ_PORT=25672，并设置管理台端口（与 docker-services.yml 一致）：
+# MQ_MANAGEMENT_HOST=localhost
+# MQ_MANAGEMENT_PORT=35672
+# 漏配时上线会报「中间件凭证初始化失败…All connection attempts failed」
 aerich upgrade
 ```
 
@@ -506,6 +513,7 @@ docker compose logs -f backend
 |------|------|
 | 不想装 Docker | 用 **方式一** |
 | Redis / MQ 连不上 | 核对 `.env` 端口：无 Docker 用 6379/5672；Docker 中间件用 26379/25672 |
+| 上线报「中间件凭证初始化失败」/ Management 连不上 | 方式二须在 `backend/.env` 写 `MQ_MANAGEMENT_PORT=35672`（管理台映射口，不是 AMQP 的 25672）；方式一用 `15672`；改完重启 Backend |
 | 导入 SQL 失败 / `Table 'fastapi.user' doesn't exist` | 先 `aerich upgrade` 建表，再导 `database.sql`；并确认已建库、`admin` 用户与 utf8mb4 |
 | `aerich` 报 Access denied / 用户 `fastapi` | 确认 `backend/.env` 已保存且 `DATABASE_USER=admin`；在 `backend` 目录执行；先跑上面的自检打印；并确认 MySQL 服务已启动 |
 | 登录失败 | 确认已 `aerich upgrade` 且导入 `database.sql`；账号 **admin / BrickCore123456** |

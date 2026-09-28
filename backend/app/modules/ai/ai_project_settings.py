@@ -463,7 +463,11 @@ async def assert_failure_analysis_enabled(project_id: int) -> None:
 
 
 def assert_failure_analysis_for_execution_env(settings: dict, env: dict | None) -> None:
-    """校验单次执行是否允许失败 AI 分析（env 由执行时写入）。"""
+    """校验「报告页是否展示失败 AI 入口」（执行 env 快照）。
+
+    主动分析 API / 小测 Skill 不再调用本函数；它们只校验项目
+    ``failure_analysis_enabled``。本函数留给报告入口可见性与相关单测。
+    """
     if not evaluate_failure_analysis_visibility(settings, env):
         if not settings.get("failure_analysis_enabled", True):
             raise ValueError("项目已关闭失败 AI 分析")

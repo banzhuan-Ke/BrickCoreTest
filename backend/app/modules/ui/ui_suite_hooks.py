@@ -40,6 +40,7 @@ async def run_ui_suite_post_hooks(
         environment_id,
         suite.project_id,
         phase="teardown",
+        use_env_default=True,
     )
     hooks_result["teardown"] = teardown.get("logs", [])
 
@@ -48,6 +49,7 @@ async def run_ui_suite_post_hooks(
         variables,
         environment_id,
         suite.project_id,
+        use_env_default=True,
     )
     hooks_result["db_assertions"] = db_result.get("results", [])
 

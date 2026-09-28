@@ -131,6 +131,7 @@ import { ElMessage } from 'element-plus'
 import { aiAnalyzeApi, aiConfigApi } from '@/api/modules/ai.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+import { configSupportsVision, visionUnsupportedTip } from '@/utils/aiVision.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -156,13 +157,8 @@ const visible = computed({
   set: (v) => emit('update:modelValue', v)
 })
 
-const isVisionModel = (model) => {
-  const m = (model || '').toLowerCase()
-  return m.includes('vl') || m.includes('vision') || m.includes('gpt-4o')
-}
-
-const visionConfigs = computed(() => configList.value.filter(c => isVisionModel(c.model)))
-const textConfigs = computed(() => configList.value.filter(c => !isVisionModel(c.model)))
+const visionConfigs = computed(() => configList.value.filter(c => configSupportsVision(c)))
+const textConfigs = computed(() => configList.value.filter(c => !configSupportsVision(c)))
 
 const projectId = computed(() => proStore.projectInfo?.id)
 
@@ -217,6 +213,19 @@ const runAnalyze = async (force = false) => {
   if (!props.targetId || !projectId.value) {
     ElMessage.warning('请先选择项目')
     return
+  }
+  if (useVision.value && (props.targetType === 'ui' || props.targetType === 'app')) {
+    const vCfg = visionConfigId.value
+      ? configList.value.find((c) => c.id === visionConfigId.value)
+      : visionConfigs.value[0]
+    if (vCfg && !configSupportsVision(vCfg)) {
+      ElMessage.warning(visionUnsupportedTip(vCfg, '失败分析截图识图'))
+      return
+    }
+    if (!vCfg && !visionConfigs.value.length) {
+      ElMessage.warning('已开启截图识图，但没有标记「支持多模态」的模型，请先在 AI 模型配置中开启')
+      return
+    }
   }
   loading.value = true
   parseFailed.value = false

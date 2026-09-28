@@ -96,9 +96,9 @@
 
 ## 版本与更新
 
-- 版本号：窗口旁 **vX.Y.Z** 与 `VERSION.txt`（当前推荐客户端 **1.8.0**）
+- 版本号：窗口旁 **vX.Y.Z** 与 `VERSION.txt`（当前推荐客户端 **1.8.2**）
 - **GUI / exe 变更**：关闭客户端后，用新 zip **整目录覆盖**（最稳妥）
-- **引擎**：平台 `RUNNER_ENGINE_VERSION` 建议 **1.8.0**（与客户端对齐；含 App `device_apm`、流式∩用例断言、真实负载窗、以及既有 form-data 代发 / 套件整包等）；与客户端版本独立配置但发版宜同号
+- **引擎**：平台 `RUNNER_ENGINE_VERSION` 建议 **1.8.2**（与客户端对齐；含数据工厂 `df_datasource_probe`、App `device_apm`、流式∩用例断言、真实负载窗、以及既有 form-data 代发 / 套件整包等）；与客户端版本独立配置但发版宜同号
 - **1.1.0+**：支持 UI 套件执行完成后自动触发后置 SQL / 库断言（需 Backend 配置 `INTERNAL_API_KEY`）
 - **当前主线**：另含 UI 用例步骤关键字 **「数据库断言」**（`kw_db_assert`），执行到该步时回调 `/internal/evaluate-assertion`
 - **1.1.1**：UI 执行中断 MQ 加固（计划/套件/单用例停止、状态「已停止」、精准 device 投递）

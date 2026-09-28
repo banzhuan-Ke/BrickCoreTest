@@ -358,8 +358,9 @@ SCENE_OVERRIDE_KEYS = frozenset({"max_tokens", "temperature", "timeout", "min_ti
 
 
 def is_likely_vision_model(model: str) -> bool:
-    m = (model or "").lower()
-    return "vl" in m or "vision" in m or "gpt-4o" in m
+    from app.modules.ai.vision_capability import is_likely_vision_model as _likely
+
+    return _likely(model)
 
 
 async def _pick_default_config() -> Optional[AiConfig]:
@@ -408,11 +409,45 @@ async def resolve_config_for_scene(
     return config
 
 
+def client_ai_config_override_allowed() -> bool:
+    """W1.1：默认禁止客户端任意指定昂贵模型；显式开 ASSIST_ALLOW_CLIENT_AI_CONFIG=1。"""
+    import os
+
+    return os.getenv("ASSIST_ALLOW_CLIENT_AI_CONFIG", "0").strip().lower() in (
+        "1",
+        "true",
+        "on",
+        "yes",
+    )
+
+
+async def resolve_assist_config_for_scene(
+    scene: str,
+    config_id: Optional[int] = None,
+) -> AiConfig:
+    """小测 / Skill 用：未开放 override 时仅允许场景绑定（或与绑定相同的 id）。"""
+    if not config_id:
+        return await resolve_config_for_scene(scene, None)
+    if client_ai_config_override_allowed():
+        return await resolve_config_for_scene(scene, config_id)
+    bound = await resolve_config_for_scene(scene, None)
+    if int(config_id) == int(bound.id):
+        return bound
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "当前未开放自定义 AI 配置，请使用场景绑定模型；"
+            "或由管理员设置 ASSIST_ALLOW_CLIENT_AI_CONFIG=1 后重启。"
+        ),
+    )
+
 async def resolve_vision_config(
     config_id: Optional[int] = None,
     scene: str = "failure_analysis_vision",
 ) -> Optional[AiConfig]:
-    """Vision 场景：绑定优先，其次显式 ID，再扫描 Vision 模型。"""
+    """Vision 场景：绑定优先，其次显式 ID，再扫描支持多模态的配置。不回退到纯文本默认。"""
+    from app.modules.ai.vision_capability import config_supports_vision
+
     if config_id:
         return await _get_config_by_id(config_id)
 
@@ -421,27 +456,35 @@ async def resolve_vision_config(
         cfg = await AiConfig.get_or_none(
             id=binding.config_id, is_del=False, is_enabled=True
         )
-        if cfg:
+        if cfg and config_supports_vision(cfg):
             return cfg
 
     configs = await AiConfig.filter(is_del=False, is_enabled=True).order_by("-is_default", "-id")
     for cfg in configs:
-        if is_likely_vision_model(cfg.model):
+        if config_supports_vision(cfg):
             return cfg
-    return await _pick_default_config()
-
+    return None
 
 async def list_scene_bindings() -> dict[str, Any]:
     rows = {r.scene: r for r in await AiSceneBinding.all()}
     enabled = await AiConfig.filter(is_del=False, is_enabled=True).order_by("-is_default", "-id")
     enabled_ids = {c.id for c in enabled}
     config_options = [
-        {"id": c.id, "name": c.name, "model": c.model, "provider": c.provider, "is_default": c.is_default}
+        {
+            "id": c.id,
+            "name": c.name,
+            "model": c.model,
+            "provider": c.provider,
+            "is_default": c.is_default,
+            "supports_vision": bool(getattr(c, "supports_vision", False)),
+        }
         for c in enabled
     ]
     result: list[dict[str, Any]] = []
     unbound = 0
     stale_cleared = 0
+    from app.modules.ai.vision_capability import VISION_REQUIRED_SCENES
+
     for scene, (label, desc) in visible_scene_definitions().items():
         row = rows.get(scene)
         config_id = row.config_id if row else None
@@ -461,7 +504,7 @@ async def list_scene_bindings() -> dict[str, Any]:
             "description": desc,
             "config_id": config_id,
             "overrides": overrides,
-            "vision_only": scene == "failure_analysis_vision",
+            "vision_only": scene in VISION_REQUIRED_SCENES,
             "group": rec.get("group", "other"),
             "recommended_provider": rec.get("recommended_provider", ""),
             "recommended_model": rec.get("recommended_model", ""),
@@ -491,7 +534,9 @@ def _pick_config_for_recommendation(
     preferred_provider = (rec.get("recommended_provider") or "").strip()
     candidates = enabled
     if vision_only:
-        candidates = [c for c in enabled if is_likely_vision_model(c.model)]
+        from app.modules.ai.vision_capability import config_supports_vision
+
+        candidates = [c for c in enabled if config_supports_vision(c)]
         if not candidates:
             return None
     for c in candidates:
@@ -506,6 +551,8 @@ def _pick_config_for_recommendation(
 
 async def apply_scene_recommendations(username: str) -> dict[str, Any]:
     """将未绑定场景按推荐 provider/model 匹配到已有启用配置。"""
+    from app.modules.ai.vision_capability import VISION_REQUIRED_SCENES
+
     payload = await list_scene_bindings()
     enabled_rows = await AiConfig.filter(is_del=False, is_enabled=True).order_by("-is_default", "-id")
     enabled = list(enabled_rows)
@@ -519,7 +566,7 @@ async def apply_scene_recommendations(username: str) -> dict[str, Any]:
         match = _pick_config_for_recommendation(
             enabled,
             rec,
-            vision_only=scene == "failure_analysis_vision",
+            vision_only=scene in VISION_REQUIRED_SCENES,
         )
         if not match:
             skipped.append(item["label"])
@@ -552,6 +599,11 @@ def _normalize_binding_config_id(raw: Any) -> Optional[int]:
 
 
 async def save_scene_bindings(items: list[dict[str, Any]], username: str) -> None:
+    from app.modules.ai.vision_capability import (
+        VISION_REQUIRED_SCENES,
+        raise_if_vision_unsupported,
+    )
+
     enabled_ids = set(
         await AiConfig.filter(is_del=False, is_enabled=True).values_list("id", flat=True)
     )
@@ -575,6 +627,10 @@ async def save_scene_bindings(items: list[dict[str, Any]], username: str) -> Non
             if row:
                 await row.delete()
             continue
+        if scene in VISION_REQUIRED_SCENES:
+            cfg = await AiConfig.get_or_none(id=config_id, is_del=False, is_enabled=True)
+            label = AI_SCENE_DEFINITIONS.get(scene, (scene, ""))[0]
+            raise_if_vision_unsupported(cfg, action=f"场景「{label}」绑定")
         if not row:
             row = AiSceneBinding(
                 scene=scene, config_id=config_id, overrides=overrides, update_by=username

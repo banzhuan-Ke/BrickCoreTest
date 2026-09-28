@@ -91,7 +91,7 @@ import secrets
 import base64
 import os
 
-# CORS：本地默认 + Pro 正式机；额外来源可用 CORS_ALLOWED_ORIGINS 追加（逗号分隔）
+# CORS：本地默认；线上/局域网来源请用环境变量 CORS_ALLOWED_ORIGINS（逗号分隔）追加
 def _cors_allowed_origins() -> list[str]:
     defaults = [
         "http://localhost:8080",
@@ -99,10 +99,6 @@ def _cors_allowed_origins() -> list[str]:
         "http://localhost",
         "http://127.0.0.1:8080",
         "http://127.0.0.1:8000",
-        "http://47.111.226.241",
-        "http://47.111.226.241:8000",
-        "http://47.111.226.241:81",
-        "http://47.111.226.241:80",
     ]
     raw = (os.getenv("CORS_ALLOWED_ORIGINS") or "").strip()
     extras = [x.strip() for x in raw.split(",") if x.strip()]
@@ -253,6 +249,12 @@ async def _core_lifespan(app: FastAPI):
             await recover_stale_ui_agent_jobs_on_startup()
         except Exception as exc:
             logging.getLogger(__name__).warning("UI Agent 本地任务恢复失败: %s", exc)
+        try:
+            from app.modules.assistant.assist_run_stale import recover_stale_skill_runs_on_startup
+
+            await recover_stale_skill_runs_on_startup()
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Skill RunRecord 僵死清理失败: %s", exc)
         yield
     finally:
         scheduler.shutdown()

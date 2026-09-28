@@ -509,25 +509,42 @@ def should_schedule_image_parse(sections_json: Any, mode: str) -> bool:
 
 
 async def _resolve_vision_config(settings: dict[str, Any]):
+    """优先资料库读图场景，再回退需求文档读图场景。"""
     from app.modules.ai.ai_scene_config import resolve_vision_config
 
     config_id = settings.get("knowledge_doc_vision_ai_config_id")
     if config_id:
-        return await resolve_vision_config(int(config_id), scene="requirement_doc_understand")
+        return await resolve_vision_config(
+            int(config_id), scene="knowledge_doc_image_vision"
+        )
+    cfg = await resolve_vision_config(None, scene="knowledge_doc_image_vision")
+    if cfg:
+        return cfg
     return await resolve_vision_config(None, scene="requirement_doc_understand")
 
 
 async def _resolve_run_ocr_and_vision(mode: str, settings: dict[str, Any]) -> tuple[bool, bool, Optional[Any]]:
-    """解析是否执行本地 OCR 与 Vision。"""
+    """解析是否执行本地 OCR 与 Vision；需 Vision 却无多模态配置时抛 ValueError。"""
+    from app.modules.ai.vision_capability import (
+        config_supports_vision,
+        vision_unsupported_message,
+    )
+
     run_vision = mode in (IMAGE_PARSE_VISION, IMAGE_PARSE_OCR_THEN_VISION)
     run_ocr = mode in (IMAGE_PARSE_OCR, IMAGE_PARSE_OCR_THEN_VISION)
     vision_config = None
     if run_vision:
         vision_config = await _resolve_vision_config(settings)
         if vision_config is None:
-            run_vision = False
+            raise ValueError(
+                "资料库 Vision 读图未找到支持多模态的模型。"
+                "请在「AI 模型配置」开启「支持多模态」，并绑定「资料库文档读图」场景。"
+            )
+        if not config_supports_vision(vision_config):
+            raise ValueError(
+                vision_unsupported_message(vision_config, action="资料库文档读图")
+            )
     return run_ocr, run_vision, vision_config
-
 
 async def _persist_image_parse_doc(
     doc: AiKnowledgeDocument,
@@ -654,7 +671,15 @@ async def parse_document_images_background(
     await doc.save()
 
     ocr_concurrency = max(1, int(settings.get("knowledge_image_ocr_concurrency") or 1))
-    run_ocr, run_vision, vision_config = await _resolve_run_ocr_and_vision(mode, settings)
+    try:
+        run_ocr, run_vision, vision_config = await _resolve_run_ocr_and_vision(mode, settings)
+    except ValueError as ex:
+        ip.update({"status": IMAGE_PARSE_STATUS_FAILED, "error": str(ex)[:500]})
+        meta["image_parse"] = ip
+        sections_json["_meta"] = compact_loader_meta(meta)
+        doc.sections_json = sections_json
+        await doc.save()
+        return
     ocr_engine_label = OCR_ENGINE_LABEL if rapidocr_available() else "unavailable"
     ip["ocr_engine_label"] = ocr_engine_label
     meta["image_parse"] = ip
@@ -941,14 +966,24 @@ async def reparse_document_image_background(
     raw_sections = loader.get("sections") or _strip_section_buffers(loaded.sections or [])
 
     if scope == "vision":
-        run_ocr, run_vision = False, mode in (IMAGE_PARSE_VISION, IMAGE_PARSE_OCR_THEN_VISION)
-        vision_config = await _resolve_vision_config(settings) if run_vision else None
-        run_vision = bool(vision_config)
+        run_ocr, run_vision = False, True
+        try:
+            _, _, vision_config = await _resolve_run_ocr_and_vision(
+                IMAGE_PARSE_VISION, settings
+            )
+            run_vision = True
+        except ValueError as ex:
+            logger.warning("[knowledge_image_parse] single vision resolve failed: %s", ex)
+            return
     elif scope == "ocr":
         run_ocr = mode in (IMAGE_PARSE_OCR, IMAGE_PARSE_OCR_THEN_VISION)
         run_vision, vision_config = False, None
     else:
-        run_ocr, run_vision, vision_config = await _resolve_run_ocr_and_vision(mode, settings)
+        try:
+            run_ocr, run_vision, vision_config = await _resolve_run_ocr_and_vision(mode, settings)
+        except ValueError as ex:
+            logger.warning("[knowledge_image_parse] single reparse resolve failed: %s", ex)
+            return
 
     meta = dict(sections_json.get("_meta") or {})
     ip = dict(meta.get("image_parse") or {})
@@ -1017,9 +1052,11 @@ async def reparse_document_image_background(
         ocr_items = list(ocr_item_by_idx.values())
 
     if run_vision:
+        from app.modules.ai.vision_capability import config_supports_vision
+
         vision_config = await _resolve_vision_config(settings)
-        if vision_config is None:
-            item["vision_error"] = "未配置 Vision 模型"
+        if vision_config is None or not config_supports_vision(vision_config):
+            item["vision_error"] = "未配置支持多模态的 Vision 模型，请在 AI 模型配置中开启「支持多模态」"
         elif image_too_small_for_recognition(data):
             w, h = _image_dimensions(data)
             vision_by_index.pop(idx, None)

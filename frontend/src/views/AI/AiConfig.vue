@@ -19,6 +19,12 @@
               </template>
             </el-table-column>
             <el-table-column prop="model" label="模型" min-width="140"/>
+            <el-table-column prop="supports_vision" label="多模态" width="90">
+              <template #default="{row}">
+                <el-tag v-if="row.supports_vision" type="success" size="small">支持</el-tag>
+                <span v-else class="text-muted">—</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="api_key" label="API Key" min-width="140">
               <template #default="{row}">
                 <span class="key-mask">{{ row.api_key }}</span>
@@ -119,9 +125,9 @@
                   filterable
                 >
                   <el-option
-                    v-for="c in sceneConfigOptions"
+                    v-for="c in sceneConfigOptionsFor(row)"
                     :key="c.id"
-                    :label="`${c.name} (${c.model})`"
+                    :label="sceneOptionLabel(c)"
                     :value="c.id"
                   />
                 </el-select>
@@ -324,7 +330,13 @@
             <el-input v-model="configForm.api_base" placeholder="可选，留空使用默认地址"/>
           </el-form-item>
           <el-form-item label="模型：" prop="model">
-            <el-input v-model="configForm.model" placeholder="如：gpt-4o / deepseek-v4-flash"/>
+            <el-input v-model="configForm.model" placeholder="如：gpt-4o / deepseek-v4-flash" @change="onModelChange"/>
+          </el-form-item>
+          <el-form-item label="支持多模态：">
+            <el-switch v-model="configForm.supports_vision" active-text="是" inactive-text="否"/>
+            <div style="font-size: 12px; color: #999; margin-top: 4px;">
+              读图 / 失败截图识图 / 智能浏览器 Vision 等必须勾选。文本模型（如 DeepSeek、纯 Qwen3）请保持关闭。
+            </div>
           </el-form-item>
           <el-form-item label="思考模式：">
             <el-switch v-model="configForm.thinking_enabled" active-text="开启" inactive-text="关闭"/>
@@ -446,6 +458,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { aiConfigApi, aiPromptApi } from "@/api/modules/ai.js"
 import { UserStore } from "@/stores/module/UserStore.js"
+import { configSupportsVision, isLikelyVisionModelName, visionUnsupportedTip } from '@/utils/aiVision.js'
 
 const activeTab = ref('config')
 const route = useRoute()
@@ -477,6 +490,7 @@ const configForm = reactive({
   timeout: 60,
   thinking_enabled: false,
   reasoning_effort: 'medium',
+  supports_vision: false,
   is_default: false,
   is_enabled: true
 })
@@ -527,9 +541,17 @@ const groupedSceneBindings = computed(() =>
 
 const sceneGroupLabel = (group) => sceneGroupLabels[group] || group || '其他'
 
-const isVisionOption = (c) => {
-  const m = (c.model || '').toLowerCase()
-  return m.includes('vl') || m.includes('vision') || m.includes('gpt-4o')
+const isVisionOption = (c) => configSupportsVision(c)
+
+const sceneOptionLabel = (c) => {
+  const base = `${c.name} (${c.model})`
+  return configSupportsVision(c) ? `${base} · 多模态` : base
+}
+
+const sceneConfigOptionsFor = (row) => {
+  if (!row?.vision_only) return sceneConfigOptions.value
+  const visionOnes = sceneConfigOptions.value.filter((c) => configSupportsVision(c))
+  return visionOnes.length ? visionOnes : sceneConfigOptions.value
 }
 
 const sceneOverrideSummary = (row) => {
@@ -599,6 +621,14 @@ const loadSceneBindings = async () => {
 }
 
 const saveSceneBindings = async () => {
+  for (const b of sceneBindings.value) {
+    if (!b.vision_only || !b.config_id) continue
+    const cfg = sceneConfigOptions.value.find((c) => c.id === b.config_id)
+    if (cfg && !configSupportsVision(cfg)) {
+      ElMessage.warning(visionUnsupportedTip(cfg, `场景「${b.label}」绑定`))
+      return
+    }
+  }
   sceneSaving.value = true
   try {
     const optionIds = new Set(sceneConfigOptions.value.map((c) => c.id))
@@ -664,6 +694,21 @@ const onProviderChange = (val) => {
     configForm.model = defaults.model
     configForm.api_base = defaults.base_url
   }
+  if (val === 'deepseek') {
+    configForm.supports_vision = false
+  } else if (!configForm.id && isLikelyVisionModelName(configForm.model)) {
+    configForm.supports_vision = true
+  }
+}
+
+const onModelChange = () => {
+  if (configForm.provider === 'deepseek') {
+    configForm.supports_vision = false
+    return
+  }
+  if (!configForm.id) {
+    configForm.supports_vision = isLikelyVisionModelName(configForm.model)
+  }
 }
 
 const resetConfigForm = () => {
@@ -679,6 +724,7 @@ const resetConfigForm = () => {
     timeout: 60,
     thinking_enabled: false,
     reasoning_effort: 'medium',
+    supports_vision: false,
     is_default: false,
     is_enabled: true
   })
@@ -701,7 +747,7 @@ const loadConfigs = async () => {
 const openConfigDialog = (row) => {
   resetConfigForm()
   if (row) {
-    Object.assign(configForm, { ...row })
+    Object.assign(configForm, { ...row, supports_vision: !!row.supports_vision })
   }
   configDialogVisible.value = true
   nextTick(() => configFormRef.value?.clearValidate())

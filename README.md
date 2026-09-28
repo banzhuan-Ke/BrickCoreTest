@@ -1,6 +1,6 @@
 # BrickCore 自动化测试平台
 
-> **当前版本 v1.8.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
+> **当前版本 v1.9.0** · 基于 **FastAPI + Vue3** 的一体化自动化测试平台
 
 覆盖 **Web UI、App、接口、性能、AI** 等测试能力，支持私有化部署、文档中心与执行器网盘分发。平台源码见本仓库；Web / App / 压测执行请配合下方 **BrickCoreRunner** 安装包使用。
 
@@ -39,10 +39,10 @@
 |------|------|
 | **Web 自动化** | 用例/套件/计划、录制回放、步骤片段、测试文件库、定位器自愈 / 定位助手、定时任务、HTML 报告 |
 | **App 自动化** | 用例/元素库/元素探查/套件/计划/定时任务/片段；**设备性能监控**（Android）；真机调度需 Runner 勾选 **App 自动化** |
-| **接口自动化** | Swagger/Postman 导入、测试计划、WebSocket、数据工厂、Mock（同路径多场景 / 短别名 `/mock/`）、定时执行 |
+| **接口自动化** | Swagger/Postman 导入、测试计划、WebSocket、数据工厂（ES / 查询控制台 / 经执行机）、Mock（同路径多场景 / 短别名 `/mock/`）、定时执行 |
 | **性能测试** | 流式/SSE、业务链路、**CSV 数据集**、分布式 Worker、增强报告；**被测服务器 / 被测应用** 资源监控 |
 | **测试管理** | 版本范围、评审、计划运行、缺陷、质量门禁 / 敏捷向导、追溯矩阵；高级能力见扩展包 |
-| **AI 测试** | 需求→功能用例、智能浏览器、失败分析、平台助手「小测」、MCP 外部接入、**迭代资料库** |
+| **AI 测试** | 需求→功能用例、智能浏览器、失败分析、平台助手「小测」（完整能力见小测扩展包）、MCP、**迭代资料库** |
 | **平台能力** | 统一测试目录、数据看板、RBAC、文档中心、邮件/钉钉/企微通知 |
 
 > **定制文档** 页签已预留；行业定制方案/报告等需联系管理员开通定制开发，默认不可生成下载。
@@ -64,6 +64,10 @@
 资源与设备监控（左：被测服务器 · 右：App 设备性能）。
 
 ![资源与设备监控](assets/readme/collage-resource-monitor.png)
+
+技能与助手（上：技能清单 · 下：小测技能快捷入口）。
+
+![技能与助手](assets/readme/collage-skills.png)
 
 ## 功能演示
 
@@ -88,7 +92,7 @@
 
 ## 执行器下载（BrickCoreRunner）
 
-**Web 录制、UI 执行、App 真机、分布式压测 Worker** 需安装 **BrickCoreRunner** 客户端（建议 **v1.8.0**，引擎 **1.8.0**）。
+**Web 录制、UI 执行、App 真机、分布式压测 Worker** 需安装 **BrickCoreRunner** 客户端（建议 **v1.8.2**，引擎 **1.8.2**）。
 
 **百度网盘**（提取码 **`9gbi`**）：
 
@@ -116,9 +120,13 @@
 
 ### 测试管理扩展包（可选）
 
-质量门禁、指派通知、版本智能化、导出版本包等高级能力由 **brickcore_tm** 扩展包提供。从源码自建且提示未安装扩展包时，请从与执行器**同一百度网盘**（提取码 **`9gbi`**）下载 `.bcpack` 并安装；步骤见 [测试管理扩展包](docs-site/guide/brickcore-tm-pack.md)。
+质量门禁、指派通知、版本智能化、导出版本包等高级能力由 **brickcore_tm** 扩展包提供。从源码自建且提示未安装扩展包时，请按 [测试管理扩展包](docs-site/guide/brickcore-tm-pack.md) 下载 `.bcpack` 并安装。
 
-👉 [百度网盘下载](https://pan.baidu.com/s/1pObFpG-Mt7-Pxo58hklOlg?pwd=9gbi)
+### 小测扩展包（可选）
+
+平台助手「小测」的多轮 / Skill / 任务桥等完整能力由 **brickcore_assist** 扩展包提供。未安装时仍可用基础助手。安装步骤见 [小测扩展包](docs-site/guide/brickcore-assist-pack.md)。
+
+> 维护者：更新网盘后请同步本 README，并在 **系统管理 → 执行器发布** 填写相同外链。
 
 ---
 
@@ -161,7 +169,7 @@ docker exec -it fastapi_backend aerich upgrade
 | 平台 | admin | BrickCore123456 |
 | MySQL | admin | BrickCore123456 |
 
-升级至 **v1.8.0** 时务必执行 `aerich upgrade`，并重新构建前端；执行器请同步更新至 **1.8.0**。
+升级至 **v1.9.0** 时务必执行 `aerich upgrade`，并重新构建前端；执行器请同步更新至 **1.8.2**。
 
 ---
 
@@ -182,12 +190,12 @@ docker exec -it fastapi_backend aerich upgrade
 | 文档 | 说明 |
 |------|------|
 | [docs-site/](docs-site/) | 平台使用说明（与登录后「文档中心」内置文档同源） |
-| [版本更新记录](docs-site/guide/release-notes.md) | **v1.8.0** 变更与升级指引 |
+| [版本更新记录](docs-site/guide/release-notes.md) | **v1.9.0** 变更与升级指引 |
 | [亮点功能](docs-site/guide/highlights.md) | 能力总览与快速跳转 |
 | [Docker 部署](docs-site/guide/docker-deploy.md) | 云服务器自建（Linux） |
 | [Windows 部署](docs-site/guide/windows-deploy.md) | Windows 本机 Docker / 无 Docker 开发 |
 
-当前公开仓为 **v1.8.0**。通用迭代资料库已开放；定制文档页签预留，需联系管理员开通定制开发。
+当前公开仓为 **v1.9.0**。通用迭代资料库已开放；定制文档页签预留，需联系管理员开通定制开发。
 
 问题与建议：[Gitee Issues](https://gitee.com/BanZhuanKeOrz/BrickCore/issues) · [GitHub](https://github.com/banzhuan-Ke/BrickCoreTest) 或下方交流群。
 
@@ -207,7 +215,7 @@ BrickCoreRunner 安装包为配套客户端（网盘 / 平台内下载），使�
 
 <p align="center">
   <img src="assets/readme/image-wechat-group-brickcore.png" width="260" alt="BrickCoreAI 测试平台交流群" /><br />
-  <sub>微信扫码加入 · 交流部署、用例编写与版本动态 · 二维码约 7 天有效（当前至 9 月 28 日前）</sub>
+  <sub>微信扫码加入 · 交流部署、用例编写与版本动态 · 二维码约 7 天有效（当前至 8 月 29 日前）</sub>
 </p>
 
 ---

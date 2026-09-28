@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, date
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, Query, status
+from tortoise import connections
 
 from app.core.platform.auth import is_authenticated
 from app.core.ops.dashboard_extra import (
@@ -18,8 +19,8 @@ from app.modules.ai.ai_dashboard_stats import (
     collect_user_activity_top,
     enrich_run_by_display,
 )
-from app.models.ui import Case as UiCase, Suite as UiSuite, UiCaseExecution, UiPlanExecution
-from app.models.http import ApiTestCase, ApiTestSuite, ApiRunRecord, ApiSuiteRunRecord, ApiCronJob
+from app.models.ui import Case as UiCase, Suite as UiSuite, UiPlanExecution
+from app.models.http import ApiTestCase, ApiTestSuite, ApiSuiteRunRecord, ApiCronJob
 from app.models.perf import PerfScene, PerfRecord, PerfCronJob
 from app.models.app import AppCase, AppSuite, AppCaseExecution, AppPlanExecution, AppSuiteExecution, AppCronJob
 from app.models.schedule import Cronjob
@@ -51,6 +52,89 @@ def _generate_date_list(start: date, end: date) -> List[str]:
         res.append(cur.strftime("%Y-%m-%d"))
         cur += timedelta(days=1)
     return res
+
+
+def _row_date_key(value) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+    text = str(value)
+    return text[:10] if len(text) >= 10 else None
+
+
+def fold_daily_status_counts(
+    rows: List[Dict[str, Any]],
+    date_list: List[str],
+    success_statuses: set,
+    fail_statuses: set,
+) -> List[Dict[str, Any]]:
+    """把 SQL 的 (日期, 状态, 条数) 折成首页趋势，不把执行明细拉进进程。"""
+    trend_map = {d: {"success": 0, "fail": 0} for d in date_list}
+    for row in rows:
+        day = _row_date_key(row.get("d"))
+        if not day or day not in trend_map:
+            continue
+        status_name = row.get("status")
+        count = int(row.get("cnt") or 0)
+        if status_name in success_statuses:
+            trend_map[day]["success"] += count
+        elif status_name in fail_statuses:
+            trend_map[day]["fail"] += count
+    return [{"date": day, **trend_map[day]} for day in date_list]
+
+
+async def _sql_rows(sql: str, params: List[Any]) -> List[Dict[str, Any]]:
+    conn = connections.get("default")
+    return await conn.execute_query_dict(sql, params)
+
+
+async def _daily_status_rows(
+    table: str,
+    time_col: str,
+    s_dt: datetime,
+    e_dt: datetime,
+    *,
+    join_sql: str = "",
+    extra_where: str = "",
+    extra_params: Optional[List[Any]] = None,
+) -> List[Dict[str, Any]]:
+    sql = (
+        f"SELECT DATE(t.{time_col}) AS d, t.status AS status, COUNT(*) AS cnt "
+        f"FROM {table} t {join_sql} "
+        f"WHERE t.{time_col} >= %s AND t.{time_col} <= %s {extra_where} "
+        f"GROUP BY DATE(t.{time_col}), t.status"
+    )
+    params: List[Any] = [s_dt, e_dt, *(extra_params or [])]
+    return await _sql_rows(sql, params)
+
+
+async def _failed_case_counts(
+    table: str,
+    case_table: str,
+    s_dt: datetime,
+    e_dt: datetime,
+    statuses: List[str],
+    *,
+    project_id: Optional[int],
+    extra_where: str = "",
+) -> List[Dict[str, Any]]:
+    placeholders = ", ".join(["%s"] * len(statuses))
+    join = f"LEFT JOIN {case_table} c ON c.id = t.case_id"
+    where = f"AND t.status IN ({placeholders}) {extra_where}"
+    params: List[Any] = [s_dt, e_dt, *statuses]
+    if project_id:
+        where += " AND c.project_id = %s"
+        params.append(project_id)
+    sql = (
+        "SELECT t.case_id AS case_id, MAX(c.name) AS name, COUNT(*) AS cnt "
+        f"FROM {table} t {join} "
+        f"WHERE t.start_time >= %s AND t.start_time <= %s {where} "
+        "GROUP BY t.case_id ORDER BY cnt DESC LIMIT 20"
+    )
+    return await _sql_rows(sql, params)
 
 
 async def _collect_pending_cron_jobs(project_id: Optional[int], limit: int = 5) -> List[Dict[str, Any]]:
@@ -183,77 +267,48 @@ async def get_dashboard(
     s_dt = datetime.combine(s, datetime.min.time())
     e_dt = datetime.combine(e, datetime.max.time())
 
-    # ========== 执行趋势（按日聚合） ==========
-    # UI 用例执行记录（经 case 关联项目；勿用 values_list flat，部分驱动会 KeyError）
-    ui_q = UiCaseExecution.filter(start_time__gte=s_dt, start_time__lte=e_dt)
+    # ========== 执行趋势（数据库按日聚合，禁止把执行明细/大 JSON 拉进进程） ==========
+    ui_join = "INNER JOIN `case` c ON c.id = t.case_id" if project_id else ""
+    ui_extra = "AND c.project_id = %s" if project_id else ""
+    ui_rows = await _daily_status_rows(
+        "ui_case_execution", "start_time", s_dt, e_dt,
+        join_sql=ui_join, extra_where=ui_extra, extra_params=[project_id] if project_id else None,
+    )
+    ui_execution_trend = fold_daily_status_counts(
+        ui_rows, date_list, {"success"}, {"fail", "error", "failed"},
+    )
+
+    api_extra = "AND t.project_id = %s" if project_id else ""
+    api_rows = await _daily_status_rows(
+        "api_run_record", "start_time", s_dt, e_dt,
+        extra_where=api_extra, extra_params=[project_id] if project_id else None,
+    )
+    api_execution_trend = fold_daily_status_counts(
+        api_rows, date_list, {"success"}, {"failed"},
+    )
+
+    app_join = "INNER JOIN app_case c ON c.id = t.case_id" if project_id else ""
+    app_extra = "AND t.is_del = 0"
+    app_params: List[Any] = []
     if project_id:
-        ui_q = ui_q.filter(case__project_id=project_id)
-    ui_records = await ui_q.all()
+        app_extra += " AND c.project_id = %s"
+        app_params.append(project_id)
+    app_rows = await _daily_status_rows(
+        "app_case_execution", "start_time", s_dt, e_dt,
+        join_sql=app_join, extra_where=app_extra, extra_params=app_params or None,
+    )
+    app_execution_trend = fold_daily_status_counts(
+        app_rows, date_list, {"success"}, {"fail", "error", "failed"},
+    )
 
-    ui_trend_map = {d: {"success": 0, "fail": 0} for d in date_list}
-    for r in ui_records:
-        d = r.start_time.strftime("%Y-%m-%d") if r.start_time else None
-        if d and d in ui_trend_map:
-            if r.status == "success":
-                ui_trend_map[d]["success"] += 1
-            elif r.status in ("fail", "error", "failed"):
-                ui_trend_map[d]["fail"] += 1
-
-    ui_execution_trend = [{"date": d, **ui_trend_map[d]} for d in date_list]
-
-    # API 用例执行记录
-    api_q = ApiRunRecord.filter(start_time__gte=s_dt, start_time__lte=e_dt)
-    if project_id:
-        api_q = api_q.filter(project_id=project_id)
-    api_records = await api_q.all()
-
-    api_trend_map = {d: {"success": 0, "fail": 0} for d in date_list}
-    for r in api_records:
-        d = r.start_time.strftime("%Y-%m-%d") if r.start_time else None
-        if d and d in api_trend_map:
-            if r.status == "success":
-                api_trend_map[d]["success"] += 1
-            elif r.status == "failed":
-                api_trend_map[d]["fail"] += 1
-
-    api_execution_trend = [{"date": d, **api_trend_map[d]} for d in date_list]
-
-    # App 用例执行记录
-    app_q = AppCaseExecution.filter(start_time__gte=s_dt, start_time__lte=e_dt, is_del=False)
-    if project_id:
-        app_q = app_q.filter(case__project_id=project_id)
-    app_records = await app_q.all()
-
-    app_trend_map = {d: {"success": 0, "fail": 0} for d in date_list}
-    for r in app_records:
-        d = r.start_time.strftime("%Y-%m-%d") if r.start_time else None
-        if d and d in app_trend_map:
-            if r.status == "success":
-                app_trend_map[d]["success"] += 1
-            elif r.status in ("fail", "error", "failed"):
-                app_trend_map[d]["fail"] += 1
-
-    app_execution_trend = [{"date": d, **app_trend_map[d]} for d in date_list]
-
-    # 性能测试执行记录
-    perf_q = PerfRecord.filter(started_at__gte=s_dt, started_at__lte=e_dt)
-    if project_id:
-        perf_q = perf_q.filter(project_id=project_id)
-    perf_records = await perf_q.only(
-        "id", "started_at", "status", "qps", "error_rate",
-        "scene_id", "fail_count", "total_requests",
-    ).prefetch_related("scene").all()
-
-    perf_trend_map = {d: {"success": 0, "fail": 0} for d in date_list}
-    for r in perf_records:
-        d = r.started_at.strftime("%Y-%m-%d") if r.started_at else None
-        if d and d in perf_trend_map:
-            if r.status == "success":
-                perf_trend_map[d]["success"] += 1
-            elif r.status in ("failed", "stopped"):
-                perf_trend_map[d]["fail"] += 1
-
-    perf_execution_trend = [{"date": d, **perf_trend_map[d]} for d in date_list]
+    perf_extra = "AND t.project_id = %s" if project_id else ""
+    perf_rows = await _daily_status_rows(
+        "perf_record", "started_at", s_dt, e_dt,
+        extra_where=perf_extra, extra_params=[project_id] if project_id else None,
+    )
+    perf_execution_trend = fold_daily_status_counts(
+        perf_rows, date_list, {"success"}, {"failed", "stopped"},
+    )
 
     # ========== 用例/套件总数统计 ==========
     ui_case_filter = {"is_del": False}
@@ -280,11 +335,22 @@ async def get_dashboard(
     api_suite_total = await ApiTestSuite.filter(**api_suite_filter).count()
     perf_scene_total = await PerfScene.filter(**perf_scene_filter).count()
 
-    # 性能测试平均指标（只统计有结果的记录）
-    perf_success_records = [r for r in perf_records if r.status in ("success", "failed", "stopped")]
-    perf_avg_qps = round(sum(r.qps for r in perf_success_records) / len(perf_success_records), 2) if perf_success_records else 0
-    perf_avg_error_rate = round(sum(r.error_rate for r in perf_success_records) / len(perf_success_records), 2) if perf_success_records else 0
-    perf_exec_total = len(perf_success_records)
+    # 性能测试平均指标（只统计有结果的记录；只取数值列，不读时序 JSON）
+    perf_avg_sql = (
+        "SELECT COUNT(*) AS cnt, COALESCE(AVG(qps), 0) AS avg_qps, "
+        "COALESCE(AVG(error_rate), 0) AS avg_err "
+        "FROM perf_record WHERE started_at >= %s AND started_at <= %s "
+        "AND status IN ('success', 'failed', 'stopped')"
+    )
+    perf_avg_params: List[Any] = [s_dt, e_dt]
+    if project_id:
+        perf_avg_sql += " AND project_id = %s"
+        perf_avg_params.append(project_id)
+    perf_avg_rows = await _sql_rows(perf_avg_sql, perf_avg_params)
+    perf_avg = perf_avg_rows[0] if perf_avg_rows else {}
+    perf_exec_total = int(perf_avg.get("cnt") or 0)
+    perf_avg_qps = round(float(perf_avg.get("avg_qps") or 0), 2) if perf_exec_total else 0
+    perf_avg_error_rate = round(float(perf_avg.get("avg_err") or 0), 2) if perf_exec_total else 0
 
     stats = {
         "ui_case_total": ui_case_total,
@@ -301,75 +367,67 @@ async def get_dashboard(
         "total_suite": ui_suite_total + app_suite_total + api_suite_total,
     }
 
-    # ========== Top 5 失败用例（时间范围内） ==========
-    top_failed_cases = []
-
-    # UI 失败用例聚合
-    ui_failed_q = UiCaseExecution.filter(
-        start_time__gte=s_dt, start_time__lte=e_dt, status__in=["fail", "error", "failed"]
+    # ========== Top 5 失败用例（按用例 GROUP BY，不读响应体） ==========
+    ui_fail_rows = await _failed_case_counts(
+        "ui_case_execution", "`case`", s_dt, e_dt, ["fail", "error", "failed"], project_id=project_id,
     )
+    api_fail_where = "AND t.project_id = %s" if project_id else ""
+    api_fail_sql_statuses = ["failed"]
+    api_fail_params: List[Any] = [s_dt, e_dt, *api_fail_sql_statuses]
     if project_id:
-        ui_failed_q = ui_failed_q.filter(case__project_id=project_id)
-    ui_failed_records = await ui_failed_q.prefetch_related("case").all()
-
-    ui_fail_map: Dict[int, Dict] = {}
-    for r in ui_failed_records:
-        cid = r.case_id
-        case = await r.case
-        if cid not in ui_fail_map:
-            ui_fail_map[cid] = {"case_name": case.name if case else "未知", "type": "Web", "count": 0}
-        ui_fail_map[cid]["count"] += 1
-
-    # API 失败用例聚合
-    api_failed_q = ApiRunRecord.filter(start_time__gte=s_dt, start_time__lte=e_dt, status="failed")
-    if project_id:
-        api_failed_q = api_failed_q.filter(project_id=project_id)
-    api_failed_records = await api_failed_q.prefetch_related("case").all()
-
-    api_fail_map: Dict[int, Dict] = {}
-    for r in api_failed_records:
-        cid = r.case_id
-        case = await r.case
-        if cid not in api_fail_map:
-            api_fail_map[cid] = {"case_name": case.name if case else "未知", "type": "接口", "count": 0}
-        api_fail_map[cid]["count"] += 1
-
-    # App 失败用例聚合
-    app_failed_q = AppCaseExecution.filter(
-        start_time__gte=s_dt, start_time__lte=e_dt, status__in=["fail", "error", "failed"], is_del=False,
+        api_fail_params.append(project_id)
+    api_fail_rows = await _sql_rows(
+        "SELECT t.case_id AS case_id, MAX(c.name) AS name, COUNT(*) AS cnt "
+        "FROM api_run_record t LEFT JOIN api_test_case c ON c.id = t.case_id "
+        "WHERE t.start_time >= %s AND t.start_time <= %s AND t.status IN (%s) "
+        f"{api_fail_where} GROUP BY t.case_id ORDER BY cnt DESC LIMIT 20",
+        api_fail_params,
     )
-    if project_id:
-        app_failed_q = app_failed_q.filter(case__project_id=project_id)
-    app_failed_records = await app_failed_q.prefetch_related("case").all()
+    app_fail_rows = await _failed_case_counts(
+        "app_case_execution", "app_case", s_dt, e_dt, ["fail", "error", "failed"],
+        project_id=project_id, extra_where="AND t.is_del = 0",
+    )
 
-    app_fail_map: Dict[int, Dict] = {}
-    for r in app_failed_records:
-        cid = r.case_id
-        case = await r.case
-        if cid not in app_fail_map:
-            app_fail_map[cid] = {"case_name": case.name if case else "未知", "type": "App", "count": 0}
-        app_fail_map[cid]["count"] += 1
+    def _named_fails(rows: List[Dict[str, Any]], type_label: str) -> List[Dict[str, Any]]:
+        return [
+            {"case_name": row.get("name") or "未知", "type": type_label, "count": int(row.get("cnt") or 0)}
+            for row in rows
+        ]
 
-    all_fails = list(ui_fail_map.values()) + list(app_fail_map.values()) + list(api_fail_map.values())
+    all_fails = (
+        _named_fails(ui_fail_rows, "Web")
+        + _named_fails(app_fail_rows, "App")
+        + _named_fails(api_fail_rows, "接口")
+    )
     all_fails.sort(key=lambda x: x["count"], reverse=True)
     top_failed_cases = all_fails[:5]
 
-    # ========== Top 5 性能测试失败场景（按错误率）==========
-    # 复用上方已加载的 perf_records，避免 DB 对大表按 error_rate 排序导致 sort buffer 溢出
-    perf_top_candidates = sorted(
-        (r for r in perf_records if r.status in ("success", "failed") and r.error_rate > 0),
-        key=lambda r: r.error_rate,
-        reverse=True,
-    )[:5]
-    perf_top_failed_scenes = []
-    for r in perf_top_candidates:
-        scene = await r.scene
-        perf_top_failed_scenes.append({
-            "scene_name": scene.name if scene else "未知场景",
-            "error_rate": round(r.error_rate, 2),
-            "fail_count": r.fail_count,
-            "total_requests": r.total_requests
-        })
+    # ========== Top 5 性能测试失败场景（只取数值列，避免大 JSON 进排序）==========
+    perf_top_sql = (
+        "SELECT scene_id, error_rate, fail_count, total_requests "
+        "FROM perf_record WHERE started_at >= %s AND started_at <= %s "
+        "AND status IN ('success', 'failed') AND error_rate > 0"
+    )
+    perf_top_params: List[Any] = [s_dt, e_dt]
+    if project_id:
+        perf_top_sql += " AND project_id = %s"
+        perf_top_params.append(project_id)
+    perf_top_sql += " ORDER BY error_rate DESC LIMIT 5"
+    perf_top_rows = await _sql_rows(perf_top_sql, perf_top_params)
+    scene_ids = [row["scene_id"] for row in perf_top_rows if row.get("scene_id")]
+    scene_names = {}
+    if scene_ids:
+        for scene in await PerfScene.filter(id__in=scene_ids).only("id", "name"):
+            scene_names[scene.id] = scene.name
+    perf_top_failed_scenes = [
+        {
+            "scene_name": scene_names.get(row.get("scene_id")) or "未知场景",
+            "error_rate": round(float(row.get("error_rate") or 0), 2),
+            "fail_count": row.get("fail_count") or 0,
+            "total_requests": row.get("total_requests") or 0,
+        }
+        for row in perf_top_rows
+    ]
 
     # ========== 最近执行记录 ==========
     recent_executions = []

@@ -5,7 +5,11 @@ from typing import Any, Optional
 
 from app.modules.ai.recorder_quality import (
     DRAG_METHODS,
+    candidate_locator_of,
+    candidate_locators_list,
     extract_desc_targets,
+    normalize_candidate_item,
+    normalize_candidates_preserving_source,
     _normalize_desc,
 )
 
@@ -229,13 +233,19 @@ def merge_meta_from_originals(opt: dict, originals: list[dict]) -> bool:
         om = orig.get("meta") or {}
         if not om:
             continue
-        # candidates 合并去重（主步在前）
+        # candidates 按 locator 去重合并（主步在前），保留 {locator,source}
         existing = list(merged.get("candidates") or [])
+        seen = {candidate_locator_of(c) for c in existing if candidate_locator_of(c)}
         for c in om.get("candidates") or []:
-            if c and c not in existing:
-                existing.append(c)
+            loc = candidate_locator_of(c)
+            if not loc or loc in seen:
+                continue
+            seen.add(loc)
+            norm = normalize_candidate_item(c)
+            if norm:
+                existing.append(norm)
         if existing:
-            merged["candidates"] = existing
+            merged["candidates"] = normalize_candidates_preserving_source(existing)
         for key, val in om.items():
             if key == "candidates":
                 continue
@@ -309,11 +319,9 @@ def merge_params_from_originals(opt: dict, originals: list[dict]) -> int:
         primary_loc = str((primary.get("params") or {}).get("locator") or "").strip()
         if primary_loc:
             cur = str(opt_params.get("locator") or "").strip()
-            primary_cands = [
-                str(c).strip()
-                for c in ((primary.get("meta") or {}).get("candidates") or [])
-                if str(c).strip()
-            ]
+            primary_cands = candidate_locators_list(
+                ((primary.get("meta") or {}).get("candidates") or [])
+            )
             if not cur or (cur != primary_loc and cur not in primary_cands):
                 opt_params["locator"] = primary_loc
                 restored += 1

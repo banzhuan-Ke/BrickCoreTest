@@ -910,18 +910,15 @@ async def batch_update_status(
     return StandardResponse(message=f"已更新 {updated} 条", data={"updated": updated})
 
 
-@router.post(
-    "/requirements/{req_id}/test-points/generate-cases",
-    summary="基于测试点 AI 生成功能测试用例",
-    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
-)
-async def generate_cases_from_test_points(
+async def execute_cases_from_test_points(
     req_id: int,
     body: GenerateCasesFromTestPointsRequest,
-    project_id: Optional[int] = Query(None),
-    user_info: dict = Depends(is_authenticated),
-):
-    project_id = _resolve_project_id(user_info, project_id)
+    project_id: int,
+    user_info: dict,
+    *,
+    persist: bool = True,
+) -> dict:
+    """测试点 → 功能用例：LLM 生成；persist=False 时不落库（供 Assist Skill 预览）。"""
     req = await _get_requirement(req_id, project_id)
     await assert_requirement_design_allowed(req)
     start_time = time.time()
@@ -1087,54 +1084,51 @@ async def generate_cases_from_test_points(
     if not cases_data:
         raise HTTPException(status_code=500, detail="AI 返回内容无法解析为用例 JSON，请重试")
 
+    username = user_info.get("username") or user_info.get("sub") or "system"
+    batch_section_ids = [s.get("id") for s in selected_sections if s.get("id")]
+    duration_ms = int((time.time() - start_time) * 1000)
+
+    if not persist:
+        await log_ai_usage(
+            gen_config,
+            "requirement_test_point_case",
+            user_info=user_info,
+            project_id=project_id,
+            tokens_used=total_tokens,
+            duration_ms=duration_ms,
+            input_summary=f"需求#{req_id} {len(pt_dicts)} 测试点→用例(preview)"[:500],
+            output_summary=f"预览 {len(cases_data)} 条用例",
+            requirement_id=req_id,
+            source_ref=source_ref,
+        )
+        return {
+            "created_count": 0,
+            "cases": cases_data,
+            "source_ref": source_ref,
+            "batch_section_ids": batch_section_ids,
+            "test_point_count": len(pt_dicts),
+            "naming_warnings": naming_warnings[:20],
+            "tokens_used": total_tokens,
+            "duration_ms": duration_ms,
+            "requirement_id": req.id,
+            "requirement_name": req.name,
+        }
+
     if body.replace_existing and not body.supplement:
         await AiRequirementCase.filter(
             requirement_id=req_id, source_ref=source_ref, is_del=False
         ).update(is_del=True)
 
-    username = user_info.get("username") or user_info.get("sub") or "system"
-    batch_section_ids = [s.get("id") for s in selected_sections if s.get("id")]
-    created = []
-    for item in cases_data:
-        tp_ids = item.get("test_point_ids") or []
-        if isinstance(tp_ids, (int, str)):
-            tp_ids = [int(tp_ids)] if str(tp_ids).isdigit() else []
-        tp_ids = [int(x) for x in tp_ids if str(x).isdigit()]
-        keywords = _merge_test_point_keywords(item.get("keywords", ""), tp_ids)
-        extra_seed: dict = {}
-        if tp_ids:
-            extra_seed["test_point_ids"] = tp_ids
-        if item.get("test_design"):
-            extra_seed["test_design"] = item["test_design"]
-        case_extra = build_requirement_case_extra(
-            effective,
-            existing=extra_seed or None,
-        )
-        case = await AiRequirementCase.create(
-            requirement_id=req.id,
-            project_id=project_id,
-            product=item.get("product", ""),
-            module=item["module"],
-            related_story=item.get("related_story", ""),
-            title=item["title"],
-            naming_template_id=item.get("naming_template_id"),
-            naming_template_version=item.get("naming_template_version"),
-            naming_slots=item.get("naming_slots") or {},
-            precondition=item["precondition"],
-            steps=item["steps"],
-            priority=item["priority"],
-            type=item["type"],
-            stage=item.get("stage", "系统测试阶段"),
-            keywords=keywords,
-            status="draft",
-            source_ref=source_ref,
-            section_ids=batch_section_ids,
-            extra=case_extra,
-            create_by=username,
-        )
-        created.append(_case_to_dict(case))
+    created = await persist_requirement_cases_from_preview(
+        req=req,
+        project_id=project_id,
+        username=username,
+        cases_data=cases_data,
+        source_ref=source_ref,
+        batch_section_ids=batch_section_ids,
+        effective=effective,
+    )
 
-    duration_ms = int((time.time() - start_time) * 1000)
     await AiGenerateRecord.create(
         project_id=project_id,
         generate_type="requirement_test_point_case",
@@ -1164,17 +1158,127 @@ async def generate_cases_from_test_points(
         source_ref=source_ref,
     )
 
+    return {
+        "created_count": len(created),
+        "cases": created,
+        "source_ref": source_ref,
+        "batch_section_ids": batch_section_ids,
+        "test_point_count": len(pt_dicts),
+        "naming_warnings": naming_warnings[:20],
+        "tokens_used": total_tokens,
+        "duration_ms": duration_ms,
+        "requirement_id": req.id,
+        "requirement_name": req.name,
+    }
+
+
+async def persist_requirement_cases_from_preview(
+    *,
+    req: AiRequirement,
+    project_id: int,
+    username: str,
+    cases_data: list,
+    source_ref: str,
+    batch_section_ids: list,
+    effective: Optional[dict] = None,
+) -> list:
+    """将 preview 阶段的功能用例草稿写入库（status=needs_review）。"""
+    from app.modules.ai.requirement_case_quality import (
+        attach_quality_checks,
+        run_case_quality_checks,
+    )
+
+    created = []
+    bindings = effective if isinstance(effective, dict) else {}
+    prepared: list[dict] = []
+    for item in cases_data or []:
+        if not isinstance(item, dict):
+            continue
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+        prepared.append(item)
+
+    peer_for_qc = []
+    for item in prepared:
+        peer_for_qc.append(
+            {
+                "title": item.get("title"),
+                "module": item.get("module"),
+                "precondition": item.get("precondition"),
+                "steps": item.get("steps"),
+                "section_ids": batch_section_ids or item.get("section_ids") or [],
+            }
+        )
+
+    for idx, item in enumerate(prepared):
+        tp_ids = item.get("test_point_ids") or []
+        if isinstance(tp_ids, (int, str)):
+            tp_ids = [int(tp_ids)] if str(tp_ids).isdigit() else []
+        tp_ids = [int(x) for x in tp_ids if str(x).isdigit()]
+        keywords = _merge_test_point_keywords(item.get("keywords", ""), tp_ids)
+        extra_seed: dict = {}
+        if tp_ids:
+            extra_seed["test_point_ids"] = tp_ids
+        if item.get("test_design"):
+            extra_seed["test_design"] = item["test_design"]
+        if isinstance(item.get("extra"), dict):
+            extra_seed = {**item["extra"], **extra_seed}
+        quality = run_case_quality_checks(
+            peer_for_qc[idx],
+            peer_cases=peer_for_qc,
+            selected_section_ids=batch_section_ids or [],
+            peer_index=idx,
+        )
+        case_extra = build_requirement_case_extra(
+            bindings,
+            existing=extra_seed or None,
+        )
+        case_extra = attach_quality_checks(case_extra, quality)
+        case = await AiRequirementCase.create(
+            requirement_id=req.id,
+            project_id=project_id,
+            product=item.get("product", ""),
+            module=item.get("module") or "",
+            related_story=item.get("related_story", ""),
+            title=(item.get("title") or "").strip(),
+            naming_template_id=item.get("naming_template_id"),
+            naming_template_version=item.get("naming_template_version"),
+            naming_slots=item.get("naming_slots") or {},
+            precondition=item.get("precondition") or "",
+            steps=item.get("steps") or [],
+            priority=item.get("priority") or "P2",
+            type=item.get("type") or "功能测试",
+            stage=item.get("stage", "系统测试阶段"),
+            keywords=keywords,
+            status="needs_review",
+            source_ref=source_ref,
+            section_ids=batch_section_ids or [],
+            extra=case_extra,
+            create_by=username,
+        )
+        created.append(_case_to_dict(case))
+    return created
+
+
+@router.post(
+    "/requirements/{req_id}/test-points/generate-cases",
+    summary="基于测试点 AI 生成功能测试用例",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def generate_cases_from_test_points(
+    req_id: int,
+    body: GenerateCasesFromTestPointsRequest,
+    project_id: Optional[int] = Query(None),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    data = await execute_cases_from_test_points(
+        req_id, body, project_id, user_info, persist=True
+    )
     return StandardResponse(
-        message=f"已生成 {len(created)} 条功能用例",
-        data={
-            "created_count": len(created),
-            "cases": created,
-            "source_ref": source_ref,
-            "test_point_count": len(pt_dicts),
-            "naming_warnings": naming_warnings[:20],
-            "tokens_used": total_tokens,
-            "duration_ms": duration_ms,
-        },
+        message=f"已生成 {data.get('created_count') or 0} 条功能用例",
+        data=data,
     )
 
 

@@ -215,7 +215,7 @@ const loadFactoryMeta = async () => {
   if (!proStore.projectInfo?.id) return
   try {
     const [dsRes, tplRes] = await Promise.all([
-      dataFactoryApi.listDatasources({ project_id: proStore.projectInfo.id, size: 100 }),
+      dataFactoryApi.listDatasources({ project_id: proStore.projectInfo.id, enabled_only: true, size: 100 }),
       dataFactoryApi.listSqlTemplates({ project_id: proStore.projectInfo.id, size: 200 }),
     ])
     datasources.value = dsRes.data?.list || []

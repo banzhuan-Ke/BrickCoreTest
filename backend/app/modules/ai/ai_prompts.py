@@ -344,7 +344,8 @@ SSE 样例（每行一条，可能含 data: / event: / id: 前缀）：
 - desc: 步骤中文描述
 - params: 参数对象（参数名必须严格匹配）
 - children: 子步骤数组（通常为 []）
-- 每个需要 locator 的步骤只能填写**一个**主定位表达式；若有多个备选，请写入 meta.candidates 字符串数组，**禁止**用英文逗号拼接多个 CSS 选择器到 locator 字段
+- 每个需要 locator 的步骤只能填写**一个**主定位表达式；若有多个备选，请写入 meta.candidates 数组，元素可为字符串，或 `{locator, source}` 对象（source 取 `current`/`elevated`/`neighbor`/`ai`），**禁止**用英文逗号拼接多个 CSS 选择器到 locator 字段
+- source 含义：current=忠实命中（主定位池）；elevated=抬升宿主（仅备用）；neighbor=相邻文案锚定（文案嵌套时用 ancestor::*[N]/following-sibling，勿对内层文案直接 following-sibling）；ai=助手/自愈
 
 【页面操作】
 - open_url: {url, wait_until:"domcontentloaded", timeout:30000}
@@ -576,7 +577,8 @@ Snapshot 类型：{{snapshot_type}}
 - 错误：get_by_placeholder("密码")、page.get_by_role(...)、get_by_role=button, name="登入"
 - 优先 data-testid、#id、get_by_role、get_by_placeholder、get_by_label；get_by_text 次之
 - 可用区域链式 scope >> get_by_*；iframe 用 iframe||locator
-- 最多返回 6 条，按推荐程度排序；index 按意图填写，默认 {{ suggested_index }}
+- **相邻锚定**：文案在兄弟容器内时用 `get_by_text=文案 >> xpath=./ancestor::*[N]/following-sibling::tag[1]`，勿对内层文案节点直接 following-sibling
+- 候选可带来源语义（current/elevated/neighbor/ai）；最多返回 6 条，按推荐程度排序；index 按意图填写，默认 {{ suggested_index }}
 """,
             "variables": [
                 "step_method", "intent", "suggested_index",
@@ -617,6 +619,7 @@ Snapshot 类型：{{snapshot_type}}
 - get_by_text= 对 **真实 input/textarea 的 placeholder 属性**无效；此时改用 get_by_placeholder=
 - **严禁**把组件展示层文案（如「请选择 / Please select」）当成 placeholder 改写成 get_by_placeholder=
 - 严禁返回与失败定位器完全相同的字符串
+- **相邻相对定位**：若目标靠旁侧文案锚定（如表头文案旁的排序图标），文案在兄弟容器内时用 `get_by_text=文案 >> xpath=./ancestor::*[N]/following-sibling::tag[1]`（N=文案叶节点到该兄弟容器的层数）；禁止对内层文案节点直接 `following-sibling`（易指到筛选图标等）
 - **错误含 intercepts pointer events 时（R1）**：禁止继续推荐与失败定位器等价的「纯文案 / 展示占位节点」；应推荐能完成点击的控件（报错中的拦截者，或其 combobox / button / listbox 祖先）
 - **placeholder vs 展示文案（R2）**：
   - 对：`<input placeholder="请输入">` → get_by_placeholder=请输入；错：get_by_text=请输入
@@ -878,6 +881,7 @@ Snapshot 类型：{{snapshot_type}}
             "user_prompt_template": """请基于以下需求文档内容，生成约 {{count}} 条测试点（参考目标，可略多或略少，以覆盖要点为准）。
 
 需求名称：{{requirement_name}}
+（名称仅作标识；测试点必须严格依据下方【正文】，不得因名称字样臆造无关功能。）
 
 【本次分析范围 · 仅限以下章节（勿涉及范围外功能）】
 {{scope_section_titles}}

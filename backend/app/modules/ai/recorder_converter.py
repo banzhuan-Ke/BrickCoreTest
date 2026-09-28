@@ -13,7 +13,8 @@ from typing import List, Dict, Any
 from app.modules.ai.recorder_quality import (
     apply_index_from_meta,
     assess_step_quality,
-    collect_step_locator_candidates,
+    build_tagged_derived_candidates,
+    normalize_candidates_preserving_source,
     pick_best_locator,
     should_repick_locator,
 )
@@ -419,24 +420,24 @@ def _action_to_step(
                 meta[key] = action.get(key)
     if action.get("timestamp") is not None:
         meta["timestamp"] = int(action.get("timestamp", 0))
-    runner_candidates = [
-        str(c).strip() for c in (action.get("candidates") or []) if str(c).strip()
-    ]
-    if runner_candidates:
-        # 新 Runner 已按策略排序；标记后转换/评估不得打乱首位
-        meta["candidates"] = list(runner_candidates)
+    runner_cands = normalize_candidates_preserving_source(action.get("candidates") or [])
+    if runner_cands:
+        # 新 Runner 已按策略排序；标记后转换/评估不得打乱首位；保留 source
+        meta["candidates"] = list(runner_cands)
         meta["locatorRankedByRunner"] = True
-        pre_step = {"meta": meta, "params": params}
-        merged = collect_step_locator_candidates(pre_step)
-        extras = [c for c in merged if c not in meta["candidates"]]
+        existing_locs = {c["locator"] for c in runner_cands}
+        extras = [
+            c
+            for c in build_tagged_derived_candidates(meta)
+            if c["locator"] not in existing_locs
+        ]
         if extras:
             meta["candidates"] = meta["candidates"] + extras
     else:
-        # 旧 Runner / 无 candidates：推导候选，交由 pick_best_locator 按 strategy 打分
-        pre_step = {"meta": meta, "params": params}
-        merged_candidates = collect_step_locator_candidates(pre_step)
-        if merged_candidates:
-            meta["candidates"] = merged_candidates
+        # 旧 Runner / 无 candidates：推导候选并正确标 source，交由 pick_best 按 strategy 打分
+        tagged = build_tagged_derived_candidates(meta)
+        if tagged:
+            meta["candidates"] = tagged
         meta.pop("locatorRankedByRunner", None)
 
     step = {
@@ -460,6 +461,20 @@ def _action_to_step(
                 step["params"]["locator"] = best
                 meta.update(updates)
                 step["meta"] = meta
+        else:
+            # 即使不重选，也补齐 primarySource / recommended
+            from app.core.shared.locator_candidate_contract import (
+                DECISION_FAITHFUL_HIT,
+                apply_primary_meta,
+            )
+
+            step["meta"] = apply_primary_meta(
+                meta,
+                meta.get("candidates") or [],
+                params.get("locator") or "",
+                decision=meta.get("primaryDecision") or DECISION_FAITHFUL_HIT,
+                primary_source=meta.get("primarySource"),
+            )
     step = apply_index_from_meta(step)
     return assess_step_quality(step)
 

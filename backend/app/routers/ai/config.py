@@ -36,6 +36,7 @@ def _mask_config(config: AiConfig) -> dict:
         "timeout": config.timeout,
         "thinking_enabled": config.thinking_enabled,
         "reasoning_effort": config.reasoning_effort,
+        "supports_vision": bool(getattr(config, "supports_vision", False)),
         "is_default": config.is_default,
         "is_enabled": config.is_enabled,
         "create_time": config.create_time.strftime("%Y-%m-%d %H:%M:%S") if config.create_time else "",
@@ -107,6 +108,7 @@ async def list_config_select_options(
                 "name": c.name,
                 "model": c.model,
                 "provider": c.provider,
+                "supports_vision": bool(getattr(c, "supports_vision", False)),
                 "is_default": c.is_default,
                 "is_enabled": c.is_enabled,
             }

@@ -1,17 +1,25 @@
-"""定位助手编排：解析 → 规则 → 可选 AI → 合并校验。"""
+"""定位助手编排：解析 → 规则（当前/抬升/相邻）→ 可选 AI → 合并校验。"""
 from __future__ import annotations
 
 from typing import Any, Optional
 
 from app.modules.ui.locator_assist.ai_enhance import enhance_candidates_with_ai
 from app.modules.ui.locator_assist.parse import apply_frame_prefix, parse_raw_element
-from app.modules.ui.locator_assist.rules import build_rule_candidates, extract_suggested_index
+from app.modules.ui.locator_assist.rules import build_tagged_candidates, extract_suggested_index
 from app.modules.ui.locator_assist.validate import (
     MAX_CANDIDATES,
     confidence_for_locator,
     merge_candidates,
     normalize_locator,
+    normalize_source,
 )
+
+
+_SOURCE_REASON = {
+    "current": "当前所选",
+    "elevated": "抬升（更稳祖先）",
+    "neighbor": "相邻明显文案",
+}
 
 
 def _element_summary(element: dict[str, Any]) -> dict[str, Any]:
@@ -19,6 +27,7 @@ def _element_summary(element: dict[str, Any]) -> dict[str, Any]:
         "tag", "text", "accessibleName", "id", "class", "name", "title",
         "placeholder", "role", "ariaLabel", "dataTestid", "inputType",
         "region", "popupRoot", "parseWeak", "framePrefix", "frameChain",
+        "neighborText", "neighborRelation", "elevateTag", "elevateText",
     )
     return {k: element.get(k) for k in keys if element.get(k) not in (None, "", [])}
 
@@ -40,20 +49,26 @@ async def suggest_locators(
     frame_prefix = (element.get("framePrefix") or "").strip()
     frame_chain = element.get("frameChain") or []
 
-    rule_locs = build_rule_candidates(element)
-    if frame_prefix:
-        rule_locs = [apply_frame_prefix(loc, frame_prefix) for loc in rule_locs]
-    rule_items = [
-        {
-            "locator": normalize_locator(loc),
+    tagged = build_tagged_candidates(element)
+    rule_items: list[dict[str, Any]] = []
+    for item in tagged:
+        loc = normalize_locator(item.get("locator") or "")
+        if not loc:
+            continue
+        if frame_prefix:
+            loc = apply_frame_prefix(loc, frame_prefix)
+        source = normalize_source(item.get("source") or "current")
+        rule_items.append({
+            "locator": loc,
             "index": suggested_index,
-            "source": "rule",
+            "source": source,
             "confidence": confidence_for_locator(loc),
-            "reason": "规则生成（含 iframe 前缀）" if frame_prefix else "规则生成",
-        }
-        for loc in rule_locs
-        if normalize_locator(loc)
-    ]
+            "reason": (
+                f"{_SOURCE_REASON.get(source, '规则生成')}（含 iframe 前缀）"
+                if frame_prefix
+                else _SOURCE_REASON.get(source, "规则生成")
+            ),
+        })
 
     warnings: list[str] = []
     ai_used = False
@@ -68,6 +83,11 @@ async def suggest_locators(
             warnings.append(
                 "若按钮还在更内层 iframe（常见：业务壳套编辑器），请把内层 <iframe> 的 outerHTML 也一并粘贴"
             )
+
+    if any(i.get("source") == "elevated" for i in rule_items):
+        warnings.append("已生成「抬升」候选（如菜单整项），仅作备用，不替换当前所选主定位")
+    if any(i.get("source") == "neighbor" for i in rule_items):
+        warnings.append("已生成「相邻」候选（相对旁侧明显文案），仅作备用")
 
     if ai_enabled:
         ai_items, ai_used, warn = await enhance_candidates_with_ai(
@@ -86,8 +106,9 @@ async def suggest_locators(
         if frame_prefix and ai_items:
             for item in ai_items:
                 item["locator"] = apply_frame_prefix(str(item.get("locator") or ""), frame_prefix)
+                item["source"] = "ai"
     else:
-        warnings.append("未启用 AI，仅返回规则候选")
+        warnings.append("未启用 AI，仅返回规则候选（当前/抬升/相邻）")
 
     candidates = merge_candidates(rule_items, ai_items, max_n=max(1, min(int(max_candidates or 8), 12)))
     if not candidates and raw_element.strip():

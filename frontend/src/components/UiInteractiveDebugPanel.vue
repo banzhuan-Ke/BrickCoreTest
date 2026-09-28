@@ -403,17 +403,12 @@
         class="pick-shell-warning"
         title="当前定位停在输入组件外壳，fill 可能失败；建议改选带「语义 / 可填」标签的候选，或落到 input.el-input__inner。"
       />
-      <div v-if="pickPreview.candidates?.length" class="pick-candidates">
-        <span class="pick-label">候选定位器（点击选用）：</span>
-        <el-tag
-          v-for="(item, idx) in pickPreview.candidates"
-          :key="idx"
-          size="small"
-          :type="item === pickPreview.locator ? 'primary' : 'info'"
-          class="pick-tag"
-          @click="selectPickCandidate(item)"
-        >{{ formatPickCandidateLabel(item) }}</el-tag>
-      </div>
+      <LocatorCandidateGroups
+        v-if="pickPreview.candidates?.length"
+        :candidates="pickPreview.candidates"
+        :active-locators="[pickPreview.locator, pickPreview.element_locator]"
+        @select="selectPickCandidate"
+      />
       <template #footer>
         <el-button @click="pickDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="confirmApplyPick">
@@ -450,7 +445,9 @@ import { buildDebugRunningHints, buildOptimisticRunningHints, buildDebugExecutio
 
 import { resolveDefaultStartUrl } from '@/utils/caseDescription.js'
 
-import { formatLocatorActionSummary, formatPickCandidateLabel, isInputShellLocator, pickResultKey, splitCombinedLocator, stepHasLocator, suggestPickStepTemplate } from '@/utils/debugLocator.js'
+import { formatLocatorActionSummary, isInputShellLocator, pickResultKey, splitCombinedLocator, stepHasLocator, suggestPickStepTemplate } from '@/utils/debugLocator.js'
+import { candidateLocatorOf, candidateSourceOf } from '@/utils/locatorCandidates.js'
+import LocatorCandidateGroups from '@/components/LocatorCandidateGroups.vue'
 
 import {
   DEFAULT_HOTKEYS,
@@ -1895,17 +1892,25 @@ function stopPickPolling() {
 }
 
 function selectPickCandidate(item) {
-  const split = splitCombinedLocator(item)
-  pickPreview.locator = item
+  const loc = candidateLocatorOf(item)
+  const split = splitCombinedLocator(loc)
+  pickPreview.locator = loc
   if (split.frame) {
     pickPreview.frame = split.frame
     pickPreview.element_locator = split.locator
   } else {
     // 候选通常无 iframe|| 前缀；保留拾取时已解析的 frame，避免切候选后丢失
-    pickPreview.element_locator = split.locator || item
+    pickPreview.element_locator = split.locator || loc
     if (pickPreview.frame) {
       pickPreview.locator = `${pickPreview.frame}||${pickPreview.element_locator}`
     }
+  }
+  // 用户显式点选候选：写入 primarySource，避免回填后又被当成 faithful current
+  const src = candidateSourceOf(item)
+  pickPreview.meta = {
+    ...(pickPreview.meta || {}),
+    primarySource: src,
+    primaryDecision: src === 'current' ? 'faithful_hit' : 'user_selected',
   }
 }
 
@@ -2446,25 +2451,6 @@ defineExpose({
 }
 .pick-shell-warning {
   margin-top: 10px;
-}
-.pick-candidates {
-  margin-top: 12px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-.pick-label {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-.pick-tag {
-  cursor: pointer;
-  max-width: 100%;
-  height: auto;
-  white-space: normal;
-  line-height: 1.4;
-  padding: 4px 8px;
 }
 
 .stale-alert {

@@ -264,11 +264,22 @@
             <el-tag v-for="g in mcpToolGroups" :key="g" size="small" effect="plain">{{ g }}</el-tag>
           </div>
         </div>
-        <div class="mcp-danger">
+        <div class="mcp-danger" v-if="dangerousOps.length">
           <span class="mcp-label">危险操作</span>
-          <ul>
-            <li v-for="d in mcpInfo.dangerous_ops || []" :key="d">{{ d }}</li>
-          </ul>
+          <div class="mcp-danger-body">
+            <ul>
+              <li v-for="d in visibleDangerousOps" :key="d">{{ d }}</li>
+            </ul>
+            <el-button
+              v-if="dangerousOps.length > dangerOpsPreviewCount"
+              link
+              type="primary"
+              size="small"
+              @click="dangerOpsExpanded = !dangerOpsExpanded"
+            >
+              {{ dangerOpsExpanded ? '收起' : `展开其余 ${dangerousOps.length - dangerOpsPreviewCount} 条` }}
+            </el-button>
+          </div>
         </div>
       </div>
       <el-empty v-else description="MCP Server 未启用，请设置环境变量 MCP_ENABLED=true" :image-size="60" />
@@ -448,6 +459,7 @@ import { useRouter } from 'vue-router'
 import http from '@/api/index'
 import { mcpApi } from '@/api/modules/sys.js'
 import { ProjectStore } from '@/stores/module/ProjectStore'
+import { UserStore } from '@/stores/module/UserStore'
 import { copyToClipboard } from '@/utils/clipboard.js'
 
 // 注册 echarts 组件
@@ -561,7 +573,19 @@ const copyMcpConfig = async () => {
     ElMessage.warning('客户端配置尚未加载，请刷新页面后重试')
     return
   }
-  await copyText(JSON.stringify(cfg, null, 2))
+  const token = (UserStore().token || '').trim()
+  if (!token) {
+    ElMessage.warning('未获取到登录凭证，请重新登录后再复制')
+    return
+  }
+  const next = JSON.parse(JSON.stringify(cfg))
+  const server = next?.mcpServers?.brickcore
+  if (!server || typeof server !== 'object') {
+    ElMessage.warning('客户端配置格式异常，请刷新页面后重试')
+    return
+  }
+  server.headers = { ...(server.headers || {}), Authorization: `Bearer ${token}` }
+  await copyText(JSON.stringify(next, null, 2))
 }
 
 // 默认近7天
@@ -622,6 +646,14 @@ const mcpToolGroups = computed(() => {
   if (Array.isArray(groups) && groups.length) return groups
   return ['项目上下文', '需求用例', '功能用例库', '接口与 UI 测试', '执行记录与压测', '测试执行', '失败分析']
 })
+const dangerOpsPreviewCount = 3
+const dangerOpsExpanded = ref(false)
+const dangerousOps = computed(() => (
+  Array.isArray(mcpInfo.dangerous_ops) ? mcpInfo.dangerous_ops : []
+))
+const visibleDangerousOps = computed(() => (
+  dangerOpsExpanded.value ? dangerousOps.value : dangerousOps.value.slice(0, dangerOpsPreviewCount)
+))
 
 const displayStats = computed(() => {
   if (activeTab.value === 'perf') {
@@ -1349,11 +1381,19 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 6px;
 }
+.mcp-danger-body {
+  flex: 1;
+  min-width: 0;
+}
 .mcp-danger ul {
   margin: 0;
   padding-left: 18px;
   color: #606266;
   line-height: 1.6;
+}
+.mcp-danger-body .el-button {
+  margin-top: 2px;
+  padding-left: 0;
 }
 
 /* 图表区 */

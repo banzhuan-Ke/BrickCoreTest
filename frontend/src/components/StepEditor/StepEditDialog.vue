@@ -339,6 +339,8 @@
                   <LocatorSelector
                     v-model="form.params[key]"
                     :meta="locatorSelectorMeta"
+                    @select-candidate="onLocatorSelectCandidate"
+                    @user-edit="onLocatorUserEdit"
                   />
                   <el-button
                     v-if="!isAppStep"
@@ -357,6 +359,8 @@
                   v-if="!isAppStep && key === 'locator'"
                   v-model="editCandidates"
                   :primary="form.params.locator || ''"
+                  :primary-source="editPrimarySource"
+                  :recommended="editRecommended"
                   :primary-changed-hint="primaryLocatorDirty"
                   @promote="onPromoteCandidate"
                 />
@@ -649,9 +653,13 @@ import LocatorSelector from '@/components/LocatorSelector.vue'
 import LocatorCandidatesEditor from '@/components/LocatorCandidatesEditor.vue'
 import LocatorAssistDialog from '@/components/LocatorAssistDialog.vue'
 import {
+  applyPrimaryMetaFields,
   normalizeCandidates,
+  normalizeDecision,
   normalizeLocatorValue,
   mergeAssistIntoStep,
+  mergeHealedLocatorCandidates,
+  PRIMARY_DECISION,
 } from '@/utils/locatorCandidates.js'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
@@ -755,6 +763,8 @@ const healDialogVisible = ref(false)
 const healMode = ref('replay')
 const healReplayThrough = ref(1)
 const editCandidates = ref([])
+const editPrimarySource = ref('current')
+const editRecommended = ref(null)
 const baselinePrimaryLocator = ref('')
 const primaryLocatorDirty = ref(false)
 const assistVisible = ref(false)
@@ -1288,8 +1298,10 @@ watch(() => props.step, (newStep) => {
     primaryLocatorDirty.value = false
     editCandidates.value = normalizeCandidates(
       newStep.meta?.candidates || newStep.params?.candidates || [],
-      { excludePrimary: primaryLoc },
+      { excludePrimary: primaryLoc, keepObjects: true },
     )
+    editPrimarySource.value = newStep.meta?.primarySource || 'current'
+    editRecommended.value = newStep.meta?.recommended || null
     // 历史 params.timeout：同步到 config.timeout；非模板默认值视为用户手工超时
     if (!isAppStep.value) {
       const pt = form.value.params?.timeout
@@ -1373,26 +1385,78 @@ function openLocatorAssist(key) {
   assistVisible.value = true
 }
 
-function onPromoteCandidate({ primary, candidates }) {
-  form.value.params.locator = primary
-  editCandidates.value = candidates || []
+function onPromoteCandidate(payload) {
+  form.value.params.locator = payload.primary
+  editCandidates.value = payload.candidates || []
+  editPrimarySource.value = payload.primarySource || 'current'
+  editRecommended.value = payload.recommended || null
   primaryLocatorDirty.value = false
-  baselinePrimaryLocator.value = normalizeLocatorValue(primary)
+  baselinePrimaryLocator.value = normalizeLocatorValue(payload.primary)
+}
+
+function onLocatorSelectCandidate(payload) {
+  if (!payload?.locator) return
+  const prev = normalizeLocatorValue(form.value.params?.locator || '')
+  const prevSrc = editPrimarySource.value || 'current'
+  const next = normalizeLocatorValue(payload.locator)
+  const nextSrc = payload.source || 'current'
+  if (prev && prev !== next) {
+    const rest = normalizeCandidates(
+      [{ locator: prev, source: prevSrc }, ...(editCandidates.value || [])],
+      { excludePrimary: next, keepObjects: true },
+    )
+    editCandidates.value = rest
+  }
+  form.value.params.locator = next
+  editPrimarySource.value = nextSrc
+  editRecommended.value = null
+  baselinePrimaryLocator.value = next
+  primaryLocatorDirty.value = false
+  // 显式点选候选：decision 一律 user_selected（source 仍表达来源）
+  form.value._locatorUserEdited = true
+}
+
+function onLocatorUserEdit(payload) {
+  const next = normalizeLocatorValue(payload?.locator || form.value.params?.locator || '')
+  if (!next) return
+  const prev = baselinePrimaryLocator.value
+  const prevSrc = editPrimarySource.value || 'current'
+  if (prev && prev !== next) {
+    const rest = normalizeCandidates(
+      [{ locator: prev, source: prevSrc }, ...(editCandidates.value || [])],
+      { excludePrimary: next, keepObjects: true },
+    )
+    editCandidates.value = rest
+  }
+  // 手写新串：不继承旧 ai/elevated；若命中备用候选则用其 source
+  const hit = (editCandidates.value || []).find(
+    (c) => normalizeLocatorValue(typeof c === 'object' ? c.locator : c) === next,
+  )
+  editPrimarySource.value = (hit && typeof hit === 'object' && hit.source) ? hit.source : 'current'
+  form.value._locatorUserEdited = true
+  editRecommended.value = null
+  baselinePrimaryLocator.value = next
 }
 
 function onAssistApply(payload) {
   const key = assistTargetKey.value || 'locator'
-  const { primary, candidates } = mergeAssistIntoStep(
+  const result = mergeAssistIntoStep(
     form.value.params?.[key],
     key === 'locator' ? editCandidates.value : [],
     payload.candidates || [{ locator: payload.locator }],
-    { applyAll: payload.applyAll !== false && key === 'locator' },
+    {
+      applyAll: payload.applyAll !== false && key === 'locator',
+      primarySource: editPrimarySource.value || 'current',
+    },
   )
-  form.value.params[key] = primary
+  form.value.params[key] = result.primary
   if (key === 'locator') {
-    editCandidates.value = candidates
-    baselinePrimaryLocator.value = normalizeLocatorValue(primary)
+    editCandidates.value = result.candidates
+    editPrimarySource.value = result.primarySource || 'ai'
+    editRecommended.value = result.recommended || null
+    baselinePrimaryLocator.value = normalizeLocatorValue(result.primary)
     primaryLocatorDirty.value = false
+    form.value._locatorUserEdited = false
     const idx = Number(payload.index)
     if (Number.isFinite(idx) && idx >= 1) {
       form.value.params.index = idx
@@ -1772,7 +1836,29 @@ async function confirmHeal() {
   try {
     const res = await aiGenerateApi.healLocator(payload)
     if (res.data?.code === 200 && res.data.data?.locator) {
-      form.value.params[locatorKey] = res.data.data.locator
+      const healed = normalizeLocatorValue(res.data.data.locator)
+      const failedNorm = normalizeLocatorValue(failed)
+      // 与 Runner apply_healed_locator 对齐：新 ai、旧 current、相邻按 climb 重算
+      const meta = {
+        ...(form.value.meta || {}),
+      }
+      editCandidates.value = mergeHealedLocatorCandidates({
+        healed,
+        failed: failedNorm,
+        existingCandidates: editCandidates.value || [],
+        meta,
+      })
+      form.value.params[locatorKey] = healed
+      editPrimarySource.value = 'ai'
+      editRecommended.value = null
+      baselinePrimaryLocator.value = healed
+      primaryLocatorDirty.value = false
+      form.value._locatorUserEdited = false
+      if (!form.value.meta || typeof form.value.meta !== 'object') {
+        form.value.meta = {}
+      }
+      form.value.meta.primaryDecision = PRIMARY_DECISION.healed
+      form.value.meta.primarySource = 'ai'
       ElMessage.success(`已应用新定位器（${res.data.data.confidence || 'medium'}）`)
       healDialogVisible.value = false
     } else {
@@ -1996,9 +2082,36 @@ async function handleSave() {
   }
   // Web 才维护备用定位；App 另有 meta.candidates 语义，勿用空列表覆盖
   if (!isAppStep.value) {
-    savedMeta.candidates = normalizeCandidates(editCandidates.value, {
-      excludePrimary: saveParams.locator || form.value.params?.locator || '',
-    })
+    const loc = saveParams.locator || form.value.params?.locator || ''
+    // 保留已有 decision（如 healed）；手改/点选覆盖；自愈 ai 保持 healed
+    let decision = normalizeDecision(savedMeta.primaryDecision || PRIMARY_DECISION.faithful_hit)
+    const src = editPrimarySource.value || savedMeta.primarySource || 'current'
+    if (form.value._locatorUserEdited) {
+      decision = PRIMARY_DECISION.user_selected
+    } else if (editPrimarySource.value) {
+      if (src === 'ai') {
+        decision = (normalizeDecision(savedMeta.primaryDecision) === PRIMARY_DECISION.healed)
+          ? PRIMARY_DECISION.healed
+          : PRIMARY_DECISION.assist
+      } else if (src !== 'current') {
+        decision = PRIMARY_DECISION.user_selected
+      } else if (!savedMeta.primaryDecision) {
+        decision = PRIMARY_DECISION.faithful_hit
+      }
+    }
+    const stamped = applyPrimaryMetaFields(
+      savedMeta,
+      editCandidates.value,
+      loc,
+      {
+        decision,
+        primarySource: src,
+        clearCandidatesIfEmpty: true,
+      },
+    )
+    Object.assign(savedMeta, stamped)
+    // recommended 以最新 candidates+primary 为准，不用旧 editRecommended 覆盖
+    delete form.value._locatorUserEdited
   }
   const savedStep = {
     ...form.value,

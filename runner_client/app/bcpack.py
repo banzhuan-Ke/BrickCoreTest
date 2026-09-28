@@ -162,6 +162,40 @@ def read_installed_package_version(install_root: Path, *, fallback: str = "0.0.0
     return fallback
 
 
+def patches_ready_for_advertised_latest(
+    version_info: Mapping[str, Any] | None,
+) -> tuple[bool, str]:
+    """客户端侧二次校验：增量是否对齐平台推荐版本。"""
+    info = version_info if isinstance(version_info, Mapping) else {}
+    # 新版后端直接给出结论
+    if "update_patches_block_reason" in info or "update_patches_present" in info:
+        if bool(info.get("update_patches_available")):
+            return True, ""
+        reason = str(info.get("update_patches_block_reason") or "").strip()
+        return False, reason or "服务器增量包尚未对齐推荐版本，请改用完整安装包"
+
+    advertised = str(info.get("runner_client_version_latest") or "").strip()
+    channels = [c for c in (info.get("update_channels") or []) if isinstance(c, Mapping)]
+    manifest = info.get("update_manifest")
+    manifest_latest = ""
+    if isinstance(manifest, Mapping):
+        manifest_latest = str(manifest.get("latest") or "").strip()
+
+    if not channels or not any(bool(c.get("available")) for c in channels):
+        return False, "服务器未上传可用增量包"
+    missing = [str(c.get("id") or "?") for c in channels if not c.get("available")]
+    if missing:
+        return False, f"增量通道文件不完整：{', '.join(missing)}"
+    if advertised and manifest_latest and compare_version(manifest_latest, advertised) != 0:
+        return (
+            False,
+            f"服务器增量包版本为 {manifest_latest}，尚未对齐平台推荐版本 {advertised}",
+        )
+    if bool(info.get("update_patches_available")):
+        return True, ""
+    return False, "服务器增量包不可用，请改用完整安装包"
+
+
 def load_manifest_dict(raw: Any) -> dict[str, Any] | None:
     if isinstance(raw, dict):
         return raw

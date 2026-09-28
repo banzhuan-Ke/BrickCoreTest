@@ -105,10 +105,10 @@ async def ensure_ui_agent_usage_logged(
         if row:
             row.tokens_used = max(int(row.tokens_used or 0), resolved_tokens)
             if job.started_at and job.finished_at:
-                row.duration_ms = max(
-                    int(row.duration_ms or 0),
-                    int((job.finished_at - job.started_at).total_seconds() * 1000),
-                )
+                from app.core.platform.datetime_utils import duration_ms_between
+
+                delta_ms = duration_ms_between(job.started_at, job.finished_at) or 0
+                row.duration_ms = max(int(row.duration_ms or 0), delta_ms)
             row.status = status
             steps = job.steps_json if isinstance(job.steps_json, list) else []
             if job.status == "done":
@@ -134,9 +134,9 @@ async def ensure_ui_agent_usage_logged(
             logger.warning("[ui_agent] resolve config for usage log failed job=%s: %s", job.id, exc)
             return False
 
-    duration_ms = 0
-    if job.started_at and job.finished_at:
-        duration_ms = int((job.finished_at - job.started_at).total_seconds() * 1000)
+    from app.core.platform.datetime_utils import duration_ms_between
+
+    duration_ms = duration_ms_between(job.started_at, job.finished_at) or 0
 
     steps = job.steps_json if isinstance(job.steps_json, list) else []
     actor = (username or job.created_by or "").strip()

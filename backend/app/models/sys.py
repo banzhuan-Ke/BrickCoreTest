@@ -147,8 +147,8 @@ class Device(models.Model):
     system = fields.CharField(max_length=50, description="操作系统")
     status = fields.CharField(max_length=20, description="设备状态", default="离线")
     username = fields.CharField(max_length=50, description="创建人")
-    version = fields.CharField(max_length=50, description="设备版本", default="")
-    hostname = fields.CharField(max_length=50, description="设备主机名", default="")
+    version = fields.CharField(max_length=255, description="设备版本（macOS Darwin 内核串可能较长）", default="")
+    hostname = fields.CharField(max_length=255, description="设备主机名", default="")
     create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
     update_time = fields.DatetimeField(auto_now=True, description="更新时间")
     is_del = fields.BooleanField(description="是否删除", default=False)
@@ -326,7 +326,7 @@ class SystemLoginPageConfig(models.Model):
 
 
 class SystemPlatformSettings(models.Model):
-    """平台全局设置（数据保留策略等）"""
+    """平台全局设置（数据保留策略、小测助手护栏等）"""
     id = fields.IntField(pk=True, auto_increment=True, description="配置ID")
     ui_case_record_delete_mode = fields.CharField(
         max_length=20,
@@ -337,6 +337,46 @@ class SystemPlatformSettings(models.Model):
         max_length=20,
         default="logical",
         description="资料库删除模式（生成记录、上传文档）：logical|physical",
+    )
+    assist_llm_timeout_sec = fields.IntField(
+        default=180,
+        description="小测多轮单次 LLM 调用超时（秒），对应 ASSIST_LLM_TIMEOUT",
+    )
+    assist_max_wall_sec = fields.IntField(
+        default=240,
+        description="小测多轮整轮墙钟上限（秒），对应 ASSIST_MAX_WALL_SEC",
+    )
+    assist_failure_digest_max_rounds = fields.IntField(
+        default=4,
+        description="失败分析分批汇总最大轮次（map-reduce），超出则保留剩余批次原文",
+    )
+    assist_max_tokens_total = fields.IntField(
+        default=80000,
+        description="小测多轮累计 Token 上限，对应 ASSIST_MAX_TOKENS_TOTAL",
+    )
+    assist_max_plan_rounds = fields.IntField(
+        default=5,
+        description="小测多轮最大规划轮次",
+    )
+    assist_max_tools_per_round = fields.IntField(
+        default=4,
+        description="小测每轮最多工具数",
+    )
+    assist_tool_result_max_chars = fields.IntField(
+        default=6000,
+        description="工具结果注入 LLM 的最大字符数",
+    )
+    assist_tool_list_item_limit = fields.IntField(
+        default=8,
+        description="工具结果列表最多保留条数",
+    )
+    assist_session_summary_trigger = fields.IntField(
+        default=16,
+        description="会话消息数超过后折叠进摘要",
+    )
+    assist_history_turns = fields.IntField(
+        default=4,
+        description="Agent Loop 注入的近期对话轮数",
     )
     update_by = fields.CharField(max_length=50, default="", description="最后修改人")
     create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")

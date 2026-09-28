@@ -152,6 +152,7 @@ async function loadDatasources() {
     const res = await dataFactoryApi.listDatasources({
       project_id: props.projectId,
       environment_id: props.envId || undefined,
+      enabled_only: true,
       size: 100,
     })
     datasources.value = res.data?.list || []

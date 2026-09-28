@@ -34,3 +34,20 @@ def app_dt_to_epoch_ms(dt: datetime | None) -> int | None:
     if utc is None:
         return None
     return int(utc.timestamp() * 1000)
+
+
+def duration_ms_between(start: datetime | None, end: datetime | None) -> int | None:
+    """两时刻差值（毫秒）；兼容 naive 墙钟与 aware，避免混减 TypeError。"""
+    a = as_utc(start)
+    b = as_utc(end)
+    if a is None or b is None:
+        return None
+    return max(0, int((b - a).total_seconds() * 1000))
+
+
+def duration_sec_between(start: datetime | None, end: datetime | None) -> int | None:
+    """两时刻差值（秒）；见 duration_ms_between。"""
+    ms = duration_ms_between(start, end)
+    if ms is None:
+        return None
+    return ms // 1000

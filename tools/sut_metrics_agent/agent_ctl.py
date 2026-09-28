@@ -102,7 +102,7 @@ def interactive_config(existing: Optional[dict[str, Any]] = None) -> dict[str, A
             print(f"已保存 → {CONFIG_PATH}")
             return cfg
 
-    platform = _ask("测试平台地址（如 http://47.111.226.241）", str(existing.get("platform") or ""))
+    platform = _ask("测试平台地址（如 http://127.0.0.1:8000 或 http://你的公网IP）", str(existing.get("platform") or ""))
     platform = _validate_platform(platform)
     token = _ask("Token（控制台创建被测服务器时复制）")
     if len(token) < 16:

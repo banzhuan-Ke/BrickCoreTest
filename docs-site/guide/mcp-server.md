@@ -4,6 +4,8 @@
 
 团队使用 **Kimi Code、Cursor** 等支持 MCP 的 AI 客户端时，可通过本功能让 AI **直接查询项目、需求、用例，触发测试执行与失败分析**，无需反复切换浏览器手工点选。
 
+它解决的是「人在 IDE 里，数据在平台里」：改接口或用例时直接问 BrickCore，不必把环境、计划编号抄出来。跑测试、批量生成、Skill 落库仍要先预览再确认，模型不能直接开跑。网页里不想配客户端时，用右下角 [小测](./platform-assistant.md)，登录即可，不必走 MCP。
+
 这与平台内部的「UI Agent（MCP 思路）」不同：后者用于**平台内**生成 UI 步骤；本文说的是 **BrickCore MCP Server**，供**外部 AI 客户端**远程调用。
 
 ## 在平台哪里配置、哪里查看接入信息？
@@ -19,7 +21,7 @@
 
 1. 左侧菜单 **数据看板** → **首页看板**  
 2. 页面向下滚动，找到 **BrickCore MCP Server** 卡片（标题旁有「已启用 / 未启用」状态）  
-3. 可复制 **接入地址**，或点击 **一键复制 JSON**，粘贴到 AI 客户端配置中  
+3. 可复制 **接入地址**，或点击 **一键复制 JSON**（已填入**当前登录 JWT**，不是平台 MCP API Key），粘贴到 AI 客户端配置中  
 
 > 接入路径默认 `/brickcore/agent-hub`，由部署环境变量控制；修改需同步 Nginx，一般使用者无需改动。
 
@@ -76,7 +78,7 @@ kimi mcp add --transport http brickcore http://localhost:8000/brickcore/agent-hu
 
 ## 其他客户端（Cursor / Claude Desktop）
 
-1. 打开 **数据看板 → 首页看板**，在 **BrickCore MCP Server** 卡片点击 **一键复制 JSON**  
+1. 打开 **数据看板 → 首页看板**，在 **BrickCore MCP Server** 卡片点击 **一键复制 JSON**（当前登录 JWT）  
 2. 粘贴到客户端 MCP 配置（`mcpServers` 下的 `url` 与 `headers`）  
 3. 重启客户端  
 
@@ -100,14 +102,17 @@ Claude Desktop 配置文件（Windows）：`%APPDATA%\Claude\claude_desktop_conf
 | 查 UI/压测 | 「列出 UI 套件和定时任务」「压测 Worker 在线情况」 |
 | 执行测试 | 「先预览执行接口套件 3，确认后再真正执行」 |
 | 执行接口计划 | 「先 preview 接口测试计划 5，确认后执行」 |
+| **列出 Skill** | 「调用 list_skills 看看有哪些能力」 |
+| **需求→测试点** | 「用 preview_run_skill 对需求 9 生成测试点，确认后再写入」 |
+| **接口→用例** | 「对接口定义 12 预览生成用例，确认后导入」 |
 
-危险操作（跑测试、批量生成用例）会自动走 **先预览、再确认** 两步，避免误触发。
+危险操作（跑测试、批量生成用例、**生成 Skill 落库**）会自动走 **先预览、再确认** 两步，避免误触发。
 
 ## 平台内助手（无需 MCP 配置）
 
 登录平台后，右下角 **小测 · 平台助手** 可直接问答（**Phase 3**）：项目概览、需求/用例、接口/UI/压测全域查询、最近失败等；执行/生成/分析类操作会弹出 **确认卡片**；支持 **多会话**、**消息全文搜索**、回答内 **可点击跳转**（suite_id / plan_id 等）；**可拖动放大浮窗**，表格 Markdown 正常渲染。
 <!-- mcp-tools:auto:assistant-stats:start -->
-与对外 MCP 共用同一套后端工具（MCP 共 **58** 个，助手只读白名单 **38** 个 + **10** 个 preview）；外部 Kimi/Cursor 仍走 MCP 接入。
+与对外 MCP 共用同一套后端工具（MCP 共 **190** 个，助手只读白名单 **92** 个 + **17** 个 preview）；外部 Kimi/Cursor 仍走 MCP 接入。
 <!-- mcp-tools:auto:assistant-stats:end -->
 
 **AI 模型配置 → 场景绑定**：为各 AI 场景指定默认模型，支持推荐配置与「一键套用」。

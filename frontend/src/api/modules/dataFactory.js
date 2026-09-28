@@ -25,6 +25,8 @@ async function apiDelete(url, config) {
     return unwrap(await http.delete(url, config))
 }
 
+const DF_PROXY_TIMEOUT_MS = 150000 // 与后端 timeout_seconds(≤120)+20 对齐并留余量
+
 export const dataFactoryApi = {
     listDatasources(params) {
         return apiGet('/api-module/data-factory/datasources', { params })
@@ -39,10 +41,13 @@ export const dataFactoryApi = {
         return apiDelete(`/api-module/data-factory/datasources/${id}`)
     },
     testDatasource(id, data) {
-        return apiPost(`/api-module/data-factory/datasources/${id}/test`, data || {})
+        const body = data || {}
+        const cfg = body.worker_id ? { timeout: DF_PROXY_TIMEOUT_MS } : undefined
+        return apiPost(`/api-module/data-factory/datasources/${id}/test`, body, cfg)
     },
     testConnectionPreview(data) {
-        return apiPost('/api-module/data-factory/datasources/test-connection', data)
+        const cfg = data?.worker_id ? { timeout: DF_PROXY_TIMEOUT_MS } : undefined
+        return apiPost('/api-module/data-factory/datasources/test-connection', data, cfg)
     },
     listSqlTemplates(params) {
         return apiGet('/api-module/data-factory/sql-templates', { params })
@@ -57,10 +62,20 @@ export const dataFactoryApi = {
         return apiDelete(`/api-module/data-factory/sql-templates/${id}`)
     },
     executeSql(data) {
-        return apiPost('/api-module/data-factory/sql/execute', data)
+        const cfg = data?.worker_id ? { timeout: DF_PROXY_TIMEOUT_MS } : undefined
+        return apiPost('/api-module/data-factory/sql/execute', data, cfg)
+    },
+    executeConsole(data) {
+        const cfg = data?.worker_id ? { timeout: DF_PROXY_TIMEOUT_MS } : undefined
+        return apiPost('/api-module/data-factory/console/execute', data, cfg)
+    },
+    fetchConsoleCatalog(data) {
+        const cfg = data?.worker_id ? { timeout: DF_PROXY_TIMEOUT_MS } : undefined
+        return apiPost('/api-module/data-factory/console/catalog', data, cfg)
     },
     executeTemplate(data) {
-        return apiPost('/api-module/data-factory/sql-templates/execute', data)
+        const cfg = data?.worker_id ? { timeout: DF_PROXY_TIMEOUT_MS } : undefined
+        return apiPost('/api-module/data-factory/sql-templates/execute', data, cfg)
     },
     testDbAssertions(data) {
         return apiPost('/api-module/data-factory/db-assertions/test', data)

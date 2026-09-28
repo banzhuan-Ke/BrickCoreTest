@@ -1004,8 +1004,13 @@ async def run_perf_record_analysis(
     username: str = "system",
     ai_config_id: Optional[int] = None,
     force_refresh: bool = False,
+    enforce_project_gate: bool = True,
 ) -> dict[str, Any]:
-    """同步执行单报告分析并写回 PerfRecord.ai_analysis。"""
+    """同步执行单报告分析并写回 PerfRecord.ai_analysis。
+
+    enforce_project_gate：报告页 / 压测 AI 入口默认 True。
+    失败分析 Skill 主动分析压测失败时可传 False（改由 failure_analysis 项目开关闸门）。
+    """
     from app.models.perf import PerfRecord
     from app.models.ai import AiGenerateRecord
     from app.modules.ai.ai_prompts import PromptManager
@@ -1018,9 +1023,10 @@ async def run_perf_record_analysis(
     if not record:
         raise ValueError("压测记录不存在")
 
-    settings = await load_ai_project_settings(record.project_id)
-    if not settings.get("perf_ai_analysis_enabled", False):
-        raise ValueError("项目已关闭压测 AI 分析")
+    if enforce_project_gate:
+        settings = await load_ai_project_settings(record.project_id)
+        if not settings.get("perf_ai_analysis_enabled", False):
+            raise ValueError("项目已关闭压测 AI 分析")
 
     existing = record.ai_analysis if isinstance(record.ai_analysis, dict) else None
     if (

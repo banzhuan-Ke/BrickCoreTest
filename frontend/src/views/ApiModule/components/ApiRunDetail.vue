@@ -223,7 +223,6 @@ import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { getHttpResponseMs, sumHttpResponseMs, sumHttpFromPlanItems } from '../utils/runTiming'
 
 const proStore = ProjectStore()
-const { canShowFailureAnalysis: canAiAnalyze, loadExecSettings, canAnalyzeExecution } = useFailureAnalysisGate(ref(null), { syncProject: true })
 const projectId = computed(() => proStore.projectInfo?.id)
 
 const props = defineProps({
@@ -239,6 +238,14 @@ const props = defineProps({
 
 const loading = ref(false)
 const record = ref(null)
+const reportRunInfo = computed(() => ({
+  env: record.value?.env && typeof record.value.env === 'object' ? record.value.env : null,
+}))
+const {
+  canShowFailureAnalysis: canAiAnalyze,
+  loadExecSettings,
+  canAnalyzeExecution,
+} = useFailureAnalysisGate(reportRunInfo, { syncProject: true })
 const canAnalyzeRecord = (row) => canAnalyzeExecution(row, record.value?.env)
 const caseResults = ref([])
 const activeNames = ref([0])

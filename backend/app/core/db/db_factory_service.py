@@ -12,7 +12,14 @@ import re
 from decimal import Decimal
 from typing import Any, Optional
 
-from app.core.db.db_drivers import execute_on_datasource, test_connection as driver_test_connection, validate_command
+from app.core.db.db_drivers import (
+    enrich_execute_result,
+    execute_on_datasource,
+    is_write_command,
+    resolve_console_max_rows,
+    test_connection as driver_test_connection,
+    validate_command,
+)
 from app.core.platform.encryption import decrypt_value, encrypt_value
 from app.core.case.variable_resolver import VariableResolver
 from app.models.http import EnvDatasource, SqlTemplate
@@ -293,26 +300,456 @@ def substitute_sql(sql: str, variables: dict[str, Any]) -> tuple[str, list[dict]
     return final_sql, []
 
 
+async def resolve_env_default_df_worker_id(environment_id: int | None) -> int | None:
+    """环境「默认接口执行机」。未配置则 None，调用方继续本机连库。"""
+    if not environment_id:
+        return None
+    from app.core.shared.global_vars_validate import ENV_DEFAULT_PERF_WORKER_ID_KEY
+    from app.models.sys import Environment
+
+    env = await Environment.get_or_none(id=int(environment_id), is_del=False)
+    if not env:
+        return None
+    vars_ = env.global_vars if isinstance(env.global_vars, dict) else {}
+    raw = vars_.get(ENV_DEFAULT_PERF_WORKER_ID_KEY)
+    if isinstance(raw, dict):
+        raw = raw.get("value")
+    try:
+        wid = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return wid if wid > 0 else None
+
+
 async def execute_sql_on_datasource(
     ds: EnvDatasource,
     sql: str,
     variables: dict[str, Any],
     *,
     for_assertion: bool = False,
+    max_rows: int | None = None,
+    worker_id: int | None = None,
 ) -> dict[str, Any]:
+    import time
+
     final_sql, replacements = substitute_sql(sql, variables)
     allow_write = bool(ds.allow_write) and not for_assertion
+    limit = int(max_rows) if max_rows is not None else int(ds.max_rows or 100)
+    limit = max(1, min(limit, 1000))
+    start = time.monotonic()
+
+    if worker_id:
+        from app.modules.http.worker_df_proxy import (
+            WorkerProxyError,
+            map_proxy_error_to_result,
+            require_df_proxy_worker,
+            send_df_probe_via_worker,
+        )
+
+        try:
+            worker = await require_df_proxy_worker(int(ds.project_id), int(worker_id))
+            result = await send_df_probe_via_worker(
+                worker=worker,
+                ds=ds,
+                mode="execute",
+                statement=final_sql,
+                allow_write=allow_write,
+                for_assertion=for_assertion,
+                max_rows=limit,
+            )
+        except WorkerProxyError as exc:
+            result = map_proxy_error_to_result(exc)
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        out = enrich_execute_result(result if isinstance(result, dict) else {})
+        out["sql"] = final_sql
+        out["replacements"] = replacements
+        out["elapsed_ms"] = elapsed_ms
+        return out
+
     result = await asyncio.to_thread(
         _execute_sql_sync,
         ds,
         final_sql,
         allow_write=allow_write,
         for_assertion=for_assertion,
-        max_rows=int(ds.max_rows or 100),
+        max_rows=limit,
     )
-    result["sql"] = final_sql
-    result["replacements"] = replacements
-    return result
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    out = enrich_execute_result(result)
+    out["sql"] = final_sql
+    out["replacements"] = replacements
+    out["elapsed_ms"] = elapsed_ms
+    return out
+
+
+async def execute_console_on_datasource(
+    ds: EnvDatasource,
+    sql: str,
+    variables: dict[str, Any] | None = None,
+    *,
+    max_rows: int | None = None,
+    confirm_write: bool = False,
+) -> dict[str, Any]:
+    """查询控制台执行：写操作需 confirm_write；默认行数更保守。"""
+    statement = (sql or "").strip()
+    if not statement:
+        return enrich_execute_result(
+            {
+                "success": False,
+                "error": "语句不能为空",
+                "rows": [],
+                "row_count": 0,
+                "affected_rows": 0,
+                "elapsed_ms": 0,
+            }
+        )
+
+    db_type = (ds.db_type or "mysql").lower()
+    needs_write = is_write_command(statement, db_type=db_type)
+    if needs_write and not bool(ds.allow_write):
+        return enrich_execute_result(
+            {
+                "success": False,
+                "error": "当前数据源为只读，不允许执行写操作；请在数据源配置中开启「允许写操作」",
+                "rows": [],
+                "row_count": 0,
+                "affected_rows": 0,
+                "elapsed_ms": 0,
+                "requires_confirm": False,
+                "is_write": True,
+            }
+        )
+    if needs_write and not confirm_write:
+        return enrich_execute_result(
+            {
+                "success": False,
+                "error": "写操作需二次确认后重试",
+                "rows": [],
+                "row_count": 0,
+                "affected_rows": 0,
+                "elapsed_ms": 0,
+                "requires_confirm": True,
+                "is_write": True,
+            }
+        )
+
+    limit = resolve_console_max_rows(ds.max_rows, max_rows)
+    out = await execute_sql_on_datasource(
+        ds, statement, variables or {}, for_assertion=False, max_rows=limit
+    )
+    out["is_write"] = needs_write
+    out["requires_confirm"] = False
+    out["max_rows_applied"] = limit
+    return out
+
+
+def _catalog_sql_statements(ds: EnvDatasource, *, scope: str, object_name: str | None) -> str:
+    """生成 catalog 用的只读语句（可经执行机 execute）。"""
+    from app.core.db.db_drivers import (
+        CATALOG_OBJECT_LIMIT,
+        CATALOG_REDIS_LIMIT,
+        _SAFE_ES_INDEX,
+        _SAFE_REDIS_PREFIX,
+        _SAFE_SQL_IDENT,
+        _redis_scan_match,
+        es_cat_indices_statement,
+        quote_sql_ident,
+    )
+
+    db_type = (ds.db_type or "mysql").lower()
+    scope_n = (scope or "objects").strip().lower()
+    if db_type == "elasticsearch":
+        if scope_n in ("indexes", "ddl"):
+            raise ValueError("Elasticsearch 不支持 indexes/ddl 目录")
+        if scope_n == "sample":
+            idx = (object_name or "").strip()
+            if not idx or not _SAFE_ES_INDEX.match(idx):
+                raise ValueError("请指定合法索引名")
+            from app.core.db.db_drivers import sample_es_search
+
+            return sample_es_search(idx, size=1)
+        if scope_n in ("columns", "fields"):
+            idx = (object_name or "").strip()
+            if not idx or not _SAFE_ES_INDEX.match(idx):
+                raise ValueError("请指定合法索引名")
+            return f"GET {idx}/_field_caps?fields=*"
+        return es_cat_indices_statement(object_name)
+    if db_type == "redis":
+        if scope_n in ("indexes", "ddl", "sample"):
+            raise ValueError("Redis 不支持 indexes/ddl/sample 目录；请用 objects（SCAN）或 columns（TYPE）")
+        if scope_n in ("columns", "fields"):
+            key = (object_name or "").strip()
+            if not key or "*" in key or not _SAFE_REDIS_PREFIX.match(key):
+                raise ValueError("请指定合法 Redis key")
+            return f"TYPE {key}"
+        match = _redis_scan_match(object_name)
+        return f"SCAN 0 MATCH {match} COUNT {CATALOG_REDIS_LIMIT}"
+    if scope_n == "sample":
+        raise ValueError("sample 仅支持 Elasticsearch；SQL 请用 objects/columns/indexes/ddl")
+    if scope_n == "indexes":
+        table = (object_name or "").strip()
+        if not _SAFE_SQL_IDENT.match(table):
+            raise ValueError("请指定合法表名")
+        if db_type == "postgresql":
+            return (
+                "SELECT indexname AS name, indexdef AS definition "
+                "FROM pg_indexes "
+                f"WHERE schemaname = current_schema() AND tablename = '{table}' "
+                "ORDER BY indexname"
+            )
+        return (
+            "SELECT INDEX_NAME AS name, GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS columns, "
+            "MAX(NON_UNIQUE) AS non_unique, MAX(INDEX_TYPE) AS index_type "
+            "FROM information_schema.STATISTICS "
+            f"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' "
+            "GROUP BY INDEX_NAME ORDER BY INDEX_NAME"
+        )
+    if scope_n == "ddl":
+        table = (object_name or "").strip()
+        if not _SAFE_SQL_IDENT.match(table):
+            raise ValueError("请指定合法表名")
+        if db_type == "postgresql":
+            return (
+                "SELECT column_name AS name, data_type AS type, is_nullable AS nullable "
+                "FROM information_schema.columns "
+                f"WHERE table_schema = current_schema() AND table_name = '{table}' "
+                "ORDER BY ordinal_position"
+            )
+        q = quote_sql_ident(table, db_type="mysql")
+        return f"SHOW CREATE TABLE {q}"
+    if scope_n in ("columns", "fields"):
+        table = (object_name or "").strip()
+        if not _SAFE_SQL_IDENT.match(table):
+            raise ValueError("请指定合法表名")
+        if db_type == "postgresql":
+            return (
+                "SELECT column_name AS name, data_type AS type, is_nullable AS nullable, "
+                "'' AS col_key, '' AS comment "
+                "FROM information_schema.columns "
+                f"WHERE table_schema = current_schema() AND table_name = '{table}' "
+                "ORDER BY ordinal_position"
+            )
+        return (
+            "SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable, "
+            "COLUMN_KEY AS col_key, COLUMN_COMMENT AS comment "
+            "FROM information_schema.COLUMNS "
+            f"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' "
+            "ORDER BY ORDINAL_POSITION"
+        )
+    if db_type == "postgresql":
+        return (
+            "SELECT table_name AS name, table_type AS kind "
+            "FROM information_schema.tables "
+            "WHERE table_schema = current_schema() "
+            "ORDER BY table_name "
+            f"LIMIT {CATALOG_OBJECT_LIMIT}"
+        )
+    return (
+        "SELECT TABLE_NAME AS name, TABLE_TYPE AS kind, TABLE_ROWS AS approx_rows, "
+        "TABLE_COMMENT AS comment "
+        "FROM information_schema.TABLES "
+        "WHERE TABLE_SCHEMA = DATABASE() "
+        "ORDER BY TABLE_NAME "
+        f"LIMIT {CATALOG_OBJECT_LIMIT}"
+    )
+
+
+def reshape_catalog_execute_result(
+    ds: EnvDatasource,
+    *,
+    scope: str,
+    execute_result: dict[str, Any],
+    object_name: str | None = None,
+) -> dict[str, Any]:
+    """把 execute 结果折成 catalog 结构（经执行机与直连共用）。"""
+    from app.core.db.db_drivers import _SAFE_SQL_IDENT, collect_es_catalog_objects, quote_sql_ident
+
+    db_type = (ds.db_type or "mysql").lower()
+    default_target = (ds.database_name or "").strip()
+    if db_type == "elasticsearch" and not default_target:
+        default_target = "_all"
+    if db_type == "redis" and not default_target:
+        default_target = "0"
+    base: dict[str, Any] = {
+        "success": True,
+        "db_type": db_type,
+        "default_target": default_target,
+        "objects": [],
+        "columns": [],
+        "indexes": [],
+        "ddl": None,
+        "sample": None,
+        "hint": "",
+        "error": None,
+        "via_worker": bool(execute_result.get("via_worker")),
+    }
+    if not execute_result.get("success"):
+        base["success"] = False
+        base["error"] = execute_result.get("error") or "读取目录失败"
+        return base
+    scope_n = (scope or "objects").strip().lower()
+    rows = execute_result.get("rows") or []
+    if db_type == "redis":
+        if scope_n in ("columns", "fields"):
+            typ = "string"
+            if rows:
+                typ = str(rows[0].get("type") or "string")
+            key = (object_name or "").strip()
+            base["columns"] = [
+                {
+                    "name": key or "key",
+                    "type": typ,
+                    "nullable": True,
+                    "key": "",
+                    "comment": "",
+                }
+            ]
+            return base
+        objects = []
+        for row in rows:
+            name = str(row.get("key") or row.get("name") or "").strip()
+            if not name:
+                continue
+            objects.append({"name": name, "kind": str(row.get("type") or "key"), "meta": {}})
+        objects.sort(key=lambda x: x["name"])
+        base["objects"] = objects
+        base["hint"] = "经执行机 SCAN 单轮结果；类型可能需双击后按 string 处理，或直连刷新。"
+        return base
+    if db_type == "elasticsearch":
+        if scope_n == "sample":
+            base["sample"] = rows[0] if rows else None
+            base["hint"] = "已取至多 1 条样例文档（match_all）。"
+            return base
+        if scope_n in ("columns", "fields"):
+            cols = []
+            for row in rows:
+                name = str(row.get("name") or "").strip()
+                if not name:
+                    continue
+                cols.append(
+                    {
+                        "name": name,
+                        "type": str(row.get("type") or ""),
+                        "nullable": True,
+                        "key": "",
+                        "comment": "",
+                    }
+                )
+            base["columns"] = cols
+            return base
+        objects, hint = collect_es_catalog_objects(rows, object_name)
+        if not hint and execute_result.get("truncated") and not (object_name or "").strip():
+            hint = (
+                f"集群索引很多，经执行机这次只带回前 {len(objects)} 个。"
+                "在左侧筛选框输入索引名后回车或点刷新，会按名字向 Elasticsearch 查询。"
+            )
+        base["objects"] = objects
+        if hint:
+            base["hint"] = hint
+        return base
+    if scope_n == "indexes":
+        indexes = []
+        for row in rows:
+            name = str(row.get("name") or "").strip()
+            if not name:
+                continue
+            if db_type == "postgresql":
+                definition = str(row.get("definition") or "")
+                indexes.append(
+                    {
+                        "name": name,
+                        "definition": definition,
+                        "columns": "",
+                        "unique": "UNIQUE" in definition.upper(),
+                        "type": "",
+                    }
+                )
+            else:
+                indexes.append(
+                    {
+                        "name": name,
+                        "definition": "",
+                        "columns": str(row.get("columns") or ""),
+                        "unique": str(row.get("non_unique")).lower() in ("0", "false"),
+                        "type": str(row.get("index_type") or ""),
+                    }
+                )
+        base["indexes"] = indexes
+        return base
+    if scope_n == "ddl":
+        table = (object_name or "").strip()
+        if db_type == "postgresql":
+            lines = []
+            for row in rows:
+                cname = str(row.get("name") or "")
+                ctype = str(row.get("type") or "text")
+                null_ok = str(row.get("nullable") or "").upper() in ("YES", "Y", "TRUE", "1")
+                if not cname:
+                    continue
+                lines.append(f'  "{cname}" {ctype}{"" if null_ok else " NOT NULL"}')
+            q = quote_sql_ident(table or "t", db_type="postgresql")
+            base["ddl"] = (
+                f"CREATE TABLE {q} (\n" + ",\n".join(lines) + "\n);"
+                if lines
+                else f"-- 无列: {table}"
+            )
+            return base
+        ddl = ""
+        for row in rows:
+            for k, v in row.items():
+                if "create" in str(k).lower() and v:
+                    ddl = str(v)
+                    break
+            if ddl:
+                break
+        base["ddl"] = ddl or None
+        if not base["ddl"]:
+            base["success"] = False
+            base["error"] = "未返回建表语句"
+        return base
+    if scope_n in ("columns", "fields"):
+        cols = []
+        for row in rows:
+            cols.append(
+                {
+                    "name": str(row.get("name") or ""),
+                    "type": str(row.get("type") or ""),
+                    "nullable": str(row.get("nullable") or "").upper() in ("YES", "Y", "TRUE", "1"),
+                    "key": str(row.get("col_key") or ""),
+                    "comment": str(row.get("comment") or ""),
+                }
+            )
+        base["columns"] = [c for c in cols if c["name"]]
+        return base
+    objects = []
+    for row in rows:
+        kind_raw = str(row.get("kind") or "BASE TABLE").upper()
+        kind = "view" if "VIEW" in kind_raw else "table"
+        name = str(row.get("name") or "")
+        if not name or not _SAFE_SQL_IDENT.match(name):
+            continue
+        objects.append(
+            {
+                "name": name,
+                "kind": kind,
+                "meta": {"rows": row.get("approx_rows"), "comment": row.get("comment") or ""},
+            }
+        )
+    base["objects"] = objects
+    return base
+
+
+async def fetch_catalog_on_datasource(
+    ds: EnvDatasource,
+    *,
+    scope: str = "objects",
+    object_name: str | None = None,
+) -> dict[str, Any]:
+    from app.core.db.db_drivers import fetch_catalog
+
+    return await asyncio.to_thread(
+        fetch_catalog, ds, scope=scope, object_name=object_name
+    )
 
 
 async def run_sql_templates_by_ids(
@@ -322,10 +759,14 @@ async def run_sql_templates_by_ids(
     project_id: int,
     *,
     phase: str = "setup",
+    worker_id: int | None = None,
+    use_env_default: bool = False,
 ) -> dict[str, Any]:
     logs: list[dict[str, Any]] = []
     success = True
     extracted_vars = dict(variables or {})
+    if worker_id is None and use_env_default:
+        worker_id = await resolve_env_default_df_worker_id(env_id)
 
     for tpl_id in template_ids or []:
         tpl = await SqlTemplate.get_or_none(id=tpl_id, project_id=project_id, is_del=False, is_enabled=True)
@@ -344,7 +785,9 @@ async def run_sql_templates_by_ids(
             success = False
             continue
 
-        exec_result = await execute_sql_on_datasource(ds, tpl.sql_text, extracted_vars, for_assertion=False)
+        exec_result = await execute_sql_on_datasource(
+            ds, tpl.sql_text, extracted_vars, for_assertion=False, worker_id=worker_id
+        )
         log_item = {
             "phase": phase,
             "template_id": tpl.id,
@@ -356,6 +799,7 @@ async def run_sql_templates_by_ids(
             "row_count": exec_result.get("row_count", 0),
             "affected_rows": exec_result.get("affected_rows", 0),
             "error": exec_result.get("error"),
+            "via_worker": bool(exec_result.get("via_worker")),
         }
         logs.append(log_item)
         if not exec_result.get("success"):
@@ -450,9 +894,14 @@ async def evaluate_db_assertions(
     variables: dict[str, Any],
     env_id: int,
     project_id: int,
+    *,
+    worker_id: int | None = None,
+    use_env_default: bool = False,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     all_passed = True
+    if worker_id is None and use_env_default:
+        worker_id = await resolve_env_default_df_worker_id(env_id)
 
     for raw in assertions or []:
         if not isinstance(raw, dict):
@@ -519,7 +968,9 @@ async def evaluate_db_assertions(
             all_passed = False
             continue
 
-        exec_result = await execute_sql_on_datasource(ds, sql, variables, for_assertion=True)
+        exec_result = await execute_sql_on_datasource(
+            ds, sql, variables, for_assertion=True, worker_id=worker_id
+        )
         if not exec_result.get("success"):
             err = exec_result.get("error")
             results.append({
@@ -536,6 +987,7 @@ async def evaluate_db_assertions(
                 "row_count": 0,
                 "rows_preview": [],
                 "preview_truncated": False,
+                "via_worker": bool(exec_result.get("via_worker")),
             })
             all_passed = False
             continue
@@ -568,6 +1020,7 @@ async def evaluate_db_assertions(
             "row_count": len(rows),
             "rows_preview": preview,
             "preview_truncated": truncated,
+            "via_worker": bool(exec_result.get("via_worker")),
         })
 
     return {"all_passed": all_passed, "results": results}
@@ -578,8 +1031,12 @@ async def run_suite_db_assertions(
     variables: dict[str, Any],
     env_id: int,
     project_id: int,
+    *,
+    worker_id: int | None = None,
 ) -> dict[str, Any]:
-    return await evaluate_db_assertions(assertions, variables, env_id, project_id)
+    return await evaluate_db_assertions(
+        assertions, variables, env_id, project_id, worker_id=worker_id
+    )
 
 
 def encrypt_datasource_password(password: Optional[str]) -> Optional[str]:

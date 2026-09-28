@@ -35,6 +35,7 @@ async def run_suite_hooks(
     *,
     setup: bool = False,
     teardown: bool = False,
+    worker_id: int | None = None,
 ) -> dict:
     """执行套件级 setup/teardown SQL 与库断言，返回 hooks_result。"""
     if not suite:
@@ -46,7 +47,12 @@ async def run_suite_hooks(
 
     if setup and (suite.setup_sql_ids or []):
         setup_res = await run_sql_templates_by_ids(
-            suite.setup_sql_ids, variables, env_id, suite.project_id, phase="setup"
+            suite.setup_sql_ids,
+            variables,
+            env_id,
+            suite.project_id,
+            phase="setup",
+            worker_id=worker_id,
         )
         hooks_result["setup"] = setup_res.get("logs", [])
         if not setup_res.get("success"):
@@ -55,7 +61,12 @@ async def run_suite_hooks(
     if teardown:
         if suite.teardown_sql_ids:
             td_res = await run_sql_templates_by_ids(
-                suite.teardown_sql_ids, variables, env_id, suite.project_id, phase="teardown"
+                suite.teardown_sql_ids,
+                variables,
+                env_id,
+                suite.project_id,
+                phase="teardown",
+                worker_id=worker_id,
             )
             hooks_result["teardown"] = td_res.get("logs", [])
             if not td_res.get("success"):
@@ -63,7 +74,11 @@ async def run_suite_hooks(
 
         if suite.db_assertions:
             db_res = await run_suite_db_assertions(
-                suite.db_assertions, variables, env_id, suite.project_id
+                suite.db_assertions,
+                variables,
+                env_id,
+                suite.project_id,
+                worker_id=worker_id,
             )
             hooks_result["db_assertions"] = db_res.get("results", [])
             if not db_res.get("all_passed"):
@@ -184,7 +199,7 @@ async def execute_api_suite_cases(
     quarantine_skip = len(quarantined_ids)
 
     merged = await merge_exec_variables(env, project_global_vars, accumulated_vars)
-    setup_hooks = await run_suite_hooks(suite, env.id, merged, setup=True)
+    setup_hooks = await run_suite_hooks(suite, env.id, merged, setup=True, worker_id=worker_id)
     hooks_result["setup"] = setup_hooks.get("setup", [])
     if not setup_hooks.get("success"):
         hooks_result["success"] = False
@@ -262,7 +277,9 @@ async def execute_api_suite_cases(
             case_results = list(quarantine_results) + list(run_results)
     finally:
         merged = await merge_exec_variables(env, project_global_vars, accumulated_vars)
-        teardown_hooks = await run_suite_hooks(suite, env.id, merged, teardown=True)
+        teardown_hooks = await run_suite_hooks(
+            suite, env.id, merged, teardown=True, worker_id=worker_id
+        )
         hooks_result["teardown"] = teardown_hooks.get("teardown", [])
         hooks_result["db_assertions"] = teardown_hooks.get("db_assertions", [])
         if not teardown_hooks.get("success"):

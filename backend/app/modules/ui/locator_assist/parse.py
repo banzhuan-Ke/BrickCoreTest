@@ -177,7 +177,7 @@ def parse_raw_element(raw: str) -> dict[str, Any]:
                 if fp:
                     out["framePrefix"] = fp
                     out["frameChain"] = [p for p in fp.split("||") if p.strip()]
-                return out
+                return enrich_relation_hints(out, text)
         except json.JSONDecodeError:
             pass
 
@@ -198,7 +198,7 @@ def parse_raw_element(raw: str) -> dict[str, Any]:
             if frames:
                 out["frameChain"] = frames
                 out["framePrefix"] = "||".join(frames)
-            return out
+            return enrich_relation_hints(out, text)
         # 只贴了 iframe：仍返回弱解析 + frame 信息
         if frames:
             return {
@@ -220,7 +220,10 @@ def parse_raw_element(raw: str) -> dict[str, Any]:
                 attrs[m.group("k").lower()] = m.group("v").strip().strip("\"'")
         tag = (attrs.pop("tag", None) or attrs.pop("tagname", None) or "div").lower()
         text_val = attrs.pop("text", "") or attrs.pop("innertext", "") or attrs.get("aria-label", "")
-        return _attrs_to_element(tag, attrs, text_val, raw_preview=text[:2000])
+        return enrich_relation_hints(
+            _attrs_to_element(tag, attrs, text_val, raw_preview=text[:2000]),
+            text,
+        )
 
     return {"tag": "", "text": text[:80], "rawPreview": text[:2000], "parseWeak": True}
 
@@ -257,6 +260,21 @@ def _normalize_dict_element(data: dict[str, Any]) -> dict[str, Any]:
         "rowContext": "rowContext",
         "framePrefix": "framePrefix",
         "frame": "framePrefix",
+        "neighborText": "neighborText",
+        "neighborRelation": "neighborRelation",
+        "neighborTag": "neighborTag",
+        "neighborSiblingIndex": "neighborSiblingIndex",
+        "neighborClimb": "neighborClimb",
+        "neighborClimbLevels": "neighborClimb",
+        "neighborTargetTag": "neighborTargetTag",
+        "elevateTag": "elevateTag",
+        "elevateClass": "elevateClass",
+        "elevateText": "elevateText",
+        "elevateRole": "elevateRole",
+        "elevateDataTestid": "elevateDataTestid",
+        "elevateCssPath": "elevateCssPath",
+        "elevateMatchIndex": "elevateMatchIndex",
+        "ancestorRole": "ancestorRole",
     }
     for src, dst in mapping.items():
         if src in data and data[src] not in (None, ""):
@@ -293,6 +311,84 @@ def _attrs_to_element(
     }
     if raw_preview:
         out["rawPreview"] = raw_preview
+    return out
+
+
+_MENU_HOST_HINT = re.compile(
+    r"menu-item|dropdown-menu__item|dropdown-item|select-dropdown__item|ant-select-item",
+    re.I,
+)
+
+
+def enrich_relation_hints(element: dict[str, Any], raw: str = "") -> dict[str, Any]:
+    """从 outerHTML / 已有字段补 elevate*、neighbor*（供抬升/相邻候选）。"""
+    if not element:
+        return element
+    out = dict(element)
+    raw = raw or str(element.get("rawPreview") or "")
+    cls = str(out.get("class") or "")
+    text = (out.get("accessibleName") or out.get("text") or "").strip()
+
+    # 邻接：span 文案 + 后随 anticon / tip 图标（不依赖当前解析到的 tag）
+    if not out.get("neighborText"):
+        m = re.search(
+            r"<(?P<ntag>span|label|div|p)\b[^>]*>\s*(?P<ntxt>[^<]{2,40}?)\s*</(?P=ntag)>\s*"
+            r"<(?:i|span|em|svg)\b[^>]*class=\"[^\"]*(?:anticon|question|info-circle|el-icon)[^\"]*\"",
+            raw,
+            re.I | re.S,
+        )
+        if m:
+            ntxt = re.sub(r"\s+", " ", (m.group("ntxt") or "").strip())
+            if 1 < len(ntxt) <= 40:
+                out["neighborText"] = ntxt
+                out["neighborRelation"] = "following-sibling"
+                out["neighborTag"] = (m.group("ntag") or "span").lower()
+                # 图标真实 tag（供相对定位目标，勿用外层 div）
+                window = raw[m.start() : m.start() + len(m.group(0)) + 80]
+                icon_m = re.search(
+                    r"<(?P<itag>i|span|em|svg)\b[^>]*class=\"[^\"]*(?:anticon|question|info-circle|el-icon)",
+                    window,
+                    re.I,
+                )
+                if icon_m:
+                    out["neighborTargetTag"] = (icon_m.group("itag") or "i").lower()
+                # 只补 neighbor* 字段，不静默改当前 tag/class（点中什么就是什么）
+
+    # 抬升：当前不是菜单项，但目标附近能看到 menu-item 宿主（勿扫整页无关菜单）
+    if not out.get("elevateTag"):
+        role = (out.get("role") or "").lower()
+        already_host = role in ("menuitem", "option") or bool(_MENU_HOST_HINT.search(cls))
+        if not already_host:
+            # 优先在含当前 class/text 的局部窗口内找祖先菜单项
+            search_raw = raw
+            anchor = ""
+            if cls:
+                first_cls = str(cls).split()[0] if str(cls).split() else ""
+                if first_cls and len(first_cls) >= 3:
+                    pos = raw.lower().find(first_cls.lower())
+                    if pos >= 0:
+                        search_raw = raw[max(0, pos - 400) : pos + 600]
+                        anchor = first_cls
+            if text and len(text) >= 2 and not anchor:
+                pos = raw.find(text)
+                if pos >= 0:
+                    search_raw = raw[max(0, pos - 400) : pos + 600]
+            m2 = re.search(
+                r"<(?P<etag>li|div|span)\b([^>]*class=\"([^\"]*(?:menu-item|dropdown-menu__item|"
+                r"dropdown-item|select-dropdown__item|ant-select-item)[^\"]*)\"[^>]*)>",
+                search_raw,
+                re.I,
+            )
+            if m2:
+                etag = (m2.group("etag") or "li").lower()
+                ecls = m2.group(3) or ""
+                etext = text
+                if out.get("neighborText"):
+                    etext = str(out.get("neighborText"))
+                out["elevateTag"] = etag
+                out["elevateClass"] = ecls
+                out["elevateText"] = (etext or "")[:40]
+                out["ancestorRole"] = out.get("ancestorRole") or "menu"
     return out
 
 

@@ -112,11 +112,12 @@ class ExecutionService:
 
         variables = await merge_execution_variables(suite_.project_id, env_id)
         setup_res = await run_sql_templates_by_ids(
-            suite_.setup_sql_ids, variables, env_id, suite_.project_id, phase="setup"
+            suite_.setup_sql_ids, variables, env_id, suite_.project_id, phase="setup", use_env_default=True
         )
         if not setup_res.get("success"):
             logs = setup_res.get("logs") or []
-            detail = logs[0].get("message") if logs else "前置 SQL 执行失败"
+            first = logs[0] if logs else {}
+            detail = first.get("error") or first.get("message") or "前置 SQL 执行失败"
             raise HTTPException(status_code=422, detail=f"套件前置 SQL 执行失败: {detail}")
 
     @staticmethod

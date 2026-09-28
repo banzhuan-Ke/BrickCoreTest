@@ -879,7 +879,15 @@ function restoreMetaForStep(step, maps) {
       const m = maps.byIndex.get(Number(id))
       if (!m) return
       Object.assign(merged, m)
-      ;(m.candidates || []).forEach((c) => { if (c && !cands.includes(c)) cands.push(c) })
+      ;(m.candidates || []).forEach((c) => {
+        if (!c) return
+        const key = typeof c === 'object' ? (c.locator || c.value || c.selector || '') : String(c)
+        if (!key || cands.some((x) => {
+          const xk = typeof x === 'object' ? (x.locator || x.value || x.selector || '') : String(x)
+          return xk === key
+        })) return
+        cands.push(c)
+      })
     })
     if (cands.length) merged.candidates = cands
     if (Object.keys(merged).length) return merged

@@ -15,6 +15,95 @@ PERF_PACKAGE_FILENAME_MAC = os.getenv("PERF_PACKAGE_FILENAME_MAC", "BrickCorePer
 UPDATE_MANIFEST_FILENAME = "update_manifest.json"
 
 
+def compare_version(left: str, right: str) -> int:
+    def _parts(v: str) -> tuple[int, ...]:
+        out: list[int] = []
+        for segment in (v or "0").strip().split("."):
+            token = segment.split("-")[0].split("+")[0]
+            try:
+                out.append(int(token))
+            except ValueError:
+                out.append(0)
+        return tuple(out or (0,))
+
+    a = _parts(left)
+    b = _parts(right)
+    length = max(len(a), len(b))
+    a = a + (0,) * (length - len(a))
+    b = b + (0,) * (length - len(b))
+    if a > b:
+        return 1
+    if a < b:
+        return -1
+    return 0
+
+
+def evaluate_update_patches(
+    channels: list[dict[str, Any]],
+    manifest: dict[str, Any] | None,
+    advertised_latest: str,
+) -> dict[str, Any]:
+    """判断增量包是否可对齐平台推荐版本（供客户端「一键增量」开关）。"""
+    advertised = (advertised_latest or "").strip()
+    present = any(bool(c.get("available")) for c in channels)
+    manifest_latest = ""
+    if isinstance(manifest, dict):
+        manifest_latest = str(manifest.get("latest") or "").strip()
+
+    if not channels:
+        return {
+            "update_patches_present": False,
+            "update_patches_available": False,
+            "update_manifest_latest": manifest_latest,
+            "update_patches_block_reason": "服务器未上传增量清单（update_manifest.json）",
+        }
+    if not present:
+        return {
+            "update_patches_present": False,
+            "update_patches_available": False,
+            "update_manifest_latest": manifest_latest,
+            "update_patches_block_reason": "清单已配置但 .bcpack 文件缺失",
+        }
+    missing = [str(c.get("id") or "?") for c in channels if not c.get("available")]
+    if missing:
+        return {
+            "update_patches_present": True,
+            "update_patches_available": False,
+            "update_manifest_latest": manifest_latest,
+            "update_patches_block_reason": f"增量通道文件不完整：{', '.join(missing)}",
+        }
+    if not advertised:
+        return {
+            "update_patches_present": True,
+            "update_patches_available": True,
+            "update_manifest_latest": manifest_latest,
+            "update_patches_block_reason": "",
+        }
+    if not manifest_latest:
+        return {
+            "update_patches_present": True,
+            "update_patches_available": False,
+            "update_manifest_latest": "",
+            "update_patches_block_reason": "增量清单缺少 latest 字段",
+        }
+    if compare_version(manifest_latest, advertised) != 0:
+        return {
+            "update_patches_present": True,
+            "update_patches_available": False,
+            "update_manifest_latest": manifest_latest,
+            "update_patches_block_reason": (
+                f"服务器增量包版本为 {manifest_latest}，尚未对齐平台推荐版本 {advertised}；"
+                "请上传对应 dist/patches 后再用一键增量"
+            ),
+        }
+    return {
+        "update_patches_present": True,
+        "update_patches_available": True,
+        "update_manifest_latest": manifest_latest,
+        "update_patches_block_reason": "",
+    }
+
+
 def runner_package_dir() -> Path:
     path = Path(settings.STATIC_DIR) / "runner"
     path.mkdir(parents=True, exist_ok=True)
@@ -121,10 +210,12 @@ def build_client_release_info(request_base_url: str = "") -> dict[str, Any]:
     perf_mac_ok = perf_mac.is_file()
     manifest = load_update_manifest()
     channels = patch_channels_summary()
+    advertised = settings.RUNNER_CLIENT_VERSION_LATEST
+    patch_status = evaluate_update_patches(channels, manifest, advertised)
     base = {
         "runner_engine_version": settings.RUNNER_ENGINE_VERSION,
         "runner_client_version_min": settings.RUNNER_CLIENT_VERSION_MIN,
-        "runner_client_version_latest": settings.RUNNER_CLIENT_VERSION_LATEST,
+        "runner_client_version_latest": advertised,
         "runner_client_download_url": "",
         "package_filename": PACKAGE_FILENAME,
         "package_available": available,
@@ -147,7 +238,10 @@ def build_client_release_info(request_base_url: str = "") -> dict[str, Any]:
         "perf_package_mac_download_url": "",
         "update_manifest": manifest,
         "update_channels": channels,
-        "update_patches_available": any(c.get("available") for c in channels),
+        "update_patches_available": patch_status["update_patches_available"],
+        "update_patches_present": patch_status["update_patches_present"],
+        "update_manifest_latest": patch_status["update_manifest_latest"],
+        "update_patches_block_reason": patch_status["update_patches_block_reason"],
         "update_patches_hint": str(runner_patches_dir()),
     }
     return merge_notices_into_release(base)

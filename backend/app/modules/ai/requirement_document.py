@@ -15,6 +15,47 @@ FALLBACK_SECTION_CHARS = 4500
 _HEADING_MD = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 
 
+def ensure_text_document_meta(
+    original_content: str | None,
+    parsed_content: Any = None,
+) -> dict[str, Any]:
+    """保证纯文本/粘贴需求具备 blocks+sections，供章节树与 scope 预估使用。
+
+    小测粘贴确认若只写 original_content、parsed_content={}，工作台会合成「全文」章节，
+    但 estimate-scope 仍读空 sections →「请至少选择一个章节」。
+    """
+    meta: dict[str, Any] = dict(parsed_content) if isinstance(parsed_content, dict) else {}
+    text = original_content or ""
+    blocks = list(meta.get("blocks") or [])
+    sections = list(meta.get("sections") or [])
+
+    if not blocks and text:
+        block_id = "blk-text-1"
+        blocks = [{"id": block_id, "type": "text", "text": text}]
+        meta["blocks"] = blocks
+        for sec in sections:
+            if isinstance(sec, dict) and not (sec.get("block_ids") or []):
+                sec["block_ids"] = [block_id]
+
+    if not sections:
+        block_ids = [b.get("id") for b in (meta.get("blocks") or []) if b.get("id")]
+        meta["sections"] = [
+            {
+                "id": "sec-1",
+                "title": "全文",
+                "level": 1,
+                "block_ids": block_ids,
+                "char_count": len(text),
+                "image_indices": list(range(int(meta.get("image_count") or 0))),
+            }
+        ]
+    else:
+        meta["sections"] = sections
+
+    meta.setdefault("image_count", int(meta.get("image_count") or 0))
+    return meta
+
+
 def blocks_to_sections(blocks: list[dict], source_type: str) -> list[dict]:
     """由块列表构建章节树（扁平列表，含 level）"""
     if not blocks:

@@ -85,6 +85,19 @@ async def run_browser_lab_task(task_id: int, username: str = "") -> None:
         cfg = dict(task.config_json or {})
         device_id = (cfg.get("device_id") or "").strip()
 
+        if bool(cfg.get("use_vision", True)):
+            from app.modules.ai.browser_use_llm import browser_use_supports_vision
+            from app.modules.ai.vision_capability import vision_unsupported_message
+
+            if not browser_use_supports_vision(config):
+                await _fail_task(
+                    task_id,
+                    vision_unsupported_message(config, action="智能浏览器 Vision 截图理解")
+                    + " 也可关闭「Vision 截图理解」后重试。",
+                )
+                _stop_flags.pop(task_id, None)
+                return
+
         if _should_stop(task_id):
             task.status = "stopped"
             task.error_message = "用户已停止"

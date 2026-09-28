@@ -78,13 +78,29 @@
         <el-checkbox v-model="applyAllBackups" style="margin-left: 12px">采用时写入全部备用</el-checkbox>
       </div>
       <el-radio-group v-model="selectedIdx" class="assist-radio-group">
-        <div v-for="(c, idx) in candidates" :key="idx" class="assist-cand">
-          <el-radio :value="idx">
-            <code>{{ c.locator }}</code>
-            <el-tag size="small" :type="c.source === 'ai' ? 'warning' : 'info'">{{ c.source }}</el-tag>
-            <el-tag size="small" type="success" effect="plain">{{ c.confidence }}</el-tag>
-            <span class="assist-reason">{{ c.reason }}</span>
-          </el-radio>
+        <div v-for="group in assistGroups" :key="group.source" class="assist-group">
+          <div class="assist-group-head">
+            <span class="assist-group-label">{{ group.label }}</span>
+            <el-tooltip
+              v-if="group.tip"
+              :content="group.tip"
+              placement="top"
+              :show-after="200"
+            >
+              <el-icon class="assist-group-help" :size="14"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </div>
+          <div
+            v-for="item in group.items"
+            :key="item._idx"
+            class="assist-cand"
+          >
+            <el-radio :value="item._idx">
+              <code>{{ item.locator }}</code>
+              <el-tag size="small" type="success" effect="plain">{{ item.confidence }}</el-tag>
+              <span class="assist-reason">{{ item.reason }}</span>
+            </el-radio>
+          </div>
         </div>
       </el-radio-group>
     </div>
@@ -108,10 +124,17 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { QuestionFilled } from '@element-plus/icons-vue'
 import { locatorAssistApi } from '@/api/modules/ui'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
+import {
+  LOCATOR_SOURCE_ORDER,
+  LOCATOR_SOURCE_LABELS,
+  LOCATOR_SOURCE_TIPS,
+  candidateSourceOf,
+} from '@/utils/locatorCandidates.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -133,6 +156,24 @@ const suggestedIndex = ref(1)
 const selectedIdx = ref(-1)
 const applyAllBackups = ref(true)
 const helpOpen = ref([])
+
+const assistGroups = computed(() => {
+  const buckets = { current: [], elevated: [], neighbor: [], ai: [] }
+  candidates.value.forEach((c, idx) => {
+    const src = candidateSourceOf(c)
+    const row = { ...c, _idx: idx }
+    if (buckets[src]) buckets[src].push(row)
+    else buckets.current.push(row)
+  })
+  return LOCATOR_SOURCE_ORDER
+    .filter((key) => buckets[key].length)
+    .map((key) => ({
+      source: key,
+      label: LOCATOR_SOURCE_LABELS[key],
+      tip: LOCATOR_SOURCE_TIPS[key] || '',
+      items: buckets[key],
+    }))
+})
 
 function resetForm() {
   rawElement.value = ''
@@ -289,8 +330,33 @@ async function onVerify() {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
+}
+.assist-group {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assist-group-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.assist-group-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.assist-group-help {
+  color: var(--el-text-color-secondary);
+  cursor: help;
+}
+.assist-group-help:hover {
+  color: var(--el-color-primary);
 }
 .assist-cand :deep(.el-radio) {
   height: auto;

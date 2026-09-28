@@ -114,10 +114,10 @@ async def ensure_browser_lab_usage_logged(
         if row:
             row.tokens_used = max(int(row.tokens_used or 0), resolved_tokens)
             if task.started_at and task.finished_at:
-                row.duration_ms = max(
-                    int(row.duration_ms or 0),
-                    int((task.finished_at - task.started_at).total_seconds() * 1000),
-                )
+                from app.core.platform.datetime_utils import duration_ms_between
+
+                delta_ms = duration_ms_between(task.started_at, task.finished_at) or 0
+                row.duration_ms = max(int(row.duration_ms or 0), delta_ms)
             row.status = status
             summary = (task.result_summary or task.error_message or "")[:500]
             if summary:
@@ -142,9 +142,9 @@ async def ensure_browser_lab_usage_logged(
             logger.warning("[browser_lab] resolve config for usage log failed task=%s: %s", task.id, exc)
             return False
 
-    duration_ms = 0
-    if task.started_at and task.finished_at:
-        duration_ms = int((task.finished_at - task.started_at).total_seconds() * 1000)
+    from app.core.platform.datetime_utils import duration_ms_between
+
+    duration_ms = duration_ms_between(task.started_at, task.finished_at) or 0
 
     actor = (username or task.created_by or "").strip()
     output_summary = (task.result_summary or task.error_message or "")[:500]

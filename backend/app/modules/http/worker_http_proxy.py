@@ -22,6 +22,8 @@ MIN_API_PROXY_ENGINE = "1.0.0"
 # 带文件 form-data / 套件整包：与建议执行器 1.6.2 对齐（1.6.1 外发包不含这些能力）
 MIN_API_PROXY_ENGINE_WITH_FILES = "1.6.2"
 MIN_API_SUITE_ENGINE = "1.6.2"
+# 数据工厂经执行机代发（df_datasource_probe）
+MIN_DF_PROXY_ENGINE = "1.8.2"
 NO_LOCAL_FALLBACK = "未回退为本机发送"
 # Redis / 长轮询 JSON 体积保护（测试文件库上传默认可达 50MB，经执行机更严）
 MAX_WORKER_FORM_FILE_BYTES = 10 * 1024 * 1024
@@ -338,6 +340,7 @@ async def list_idle_api_proxy_workers(project_id: int) -> list[dict]:
             "status": "busy" if busy_id else "online",
             "supports_file_form": compare_version(engine_ver, MIN_API_PROXY_ENGINE_WITH_FILES) >= 0,
             "supports_api_suite": compare_version(engine_ver, MIN_API_SUITE_ENGINE) >= 0,
+            "supports_df_proxy": compare_version(engine_ver, MIN_DF_PROXY_ENGINE) >= 0,
         })
     out.sort(key=lambda x: x["id"], reverse=True)
     return out

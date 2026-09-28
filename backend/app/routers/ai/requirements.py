@@ -55,6 +55,7 @@ from app.modules.ai.requirement_document import (
     build_interleaved_content,
     collect_image_indices,
     compute_section_coverage,
+    ensure_text_document_meta,
     estimate_scope,
     recommend_case_count,
     resolve_sections,
@@ -231,10 +232,17 @@ def _requirement_to_dict(req: AiRequirement) -> dict:
 
 
 def _case_to_dict(case: AiRequirementCase) -> dict:
+    from app.modules.ai.requirement_case_quality import (
+        first_issue_message,
+        quality_summary_from_extra,
+    )
+    from app.modules.ai.requirement_case_review import status_label
+
     tp_ids = _case_test_point_ids(case)
     extra = getattr(case, "extra", None) or {}
     if not isinstance(extra, dict):
         extra = {}
+    quality = quality_summary_from_extra(extra)
     return {
         "id": case.id,
         "requirement_id": case.requirement_id,
@@ -251,6 +259,18 @@ def _case_to_dict(case: AiRequirementCase) -> dict:
         "stage": getattr(case, "stage", None) or "系统测试阶段",
         "keywords": case.keywords,
         "status": case.status,
+        "status_label": status_label(case.status),
+        "review_note": getattr(case, "review_note", None) or extra.get("review_note") or "",
+        "reviewed_by": getattr(case, "reviewed_by", None) or extra.get("reviewed_by") or "",
+        "reviewed_at": (
+            case.reviewed_at.isoformat()
+            if getattr(case, "reviewed_at", None)
+            else (extra.get("reviewed_at") or None)
+        ),
+        "review_reason_tag": extra.get("review_reason_tag") or "",
+        "quality_checks": quality,
+        "quality_summary": first_issue_message(quality) if quality else "",
+        "quality_severity": (quality or {}).get("severity") if quality else None,
         "source_ref": case.source_ref,
         "section_ids": getattr(case, "section_ids", None) or [],
         "test_point_ids": tp_ids,
@@ -1114,6 +1134,84 @@ class BatchDeleteCasesRequest(BaseModel):
     case_ids: list[int] = Field(default_factory=list)
 
 
+class CaseReviewRequest(BaseModel):
+    case_ids: list[int] = Field(..., min_length=1, description="工作区用例 ID 列表")
+    decision: str = Field(..., description="approved | rejected")
+    note: str = Field(default="", max_length=500)
+    reason_tag: str = Field(default="", max_length=40, description="驳回原因标签")
+    requirement_id: Optional[int] = None
+
+
+@router.get(
+    "/cases/review-reason-tags",
+    summary="用例驳回原因标签（AI-REQ）",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def list_case_review_reason_tags():
+    from app.modules.ai.requirement_case_review import REVIEW_REASON_TAGS
+
+    return StandardResponse(data={"items": list(REVIEW_REASON_TAGS)})
+
+
+@router.get(
+    "/cases/review-queue",
+    summary="项目用例审核队列（AI-REQ）",
+    dependencies=[Depends(require_permissions(AI_TEST_VIEW))],
+)
+async def list_case_review_queue(
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    status: Optional[str] = Query(
+        "pending",
+        description="pending|needs_review|approved|rejected；默认 pending=待审核",
+    ),
+    requirement_id: Optional[int] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    from app.modules.ai.requirement_case_review import list_review_queue
+
+    data = await list_review_queue(
+        project_id=int(project_id),
+        status=status,
+        requirement_id=requirement_id,
+        limit=limit,
+        offset=offset,
+    )
+    return StandardResponse(data=data)
+
+
+@router.post(
+    "/cases/review",
+    summary="批量通过/驳回工作区用例（AI-REQ）",
+    dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))],
+)
+async def review_requirement_cases(
+    body: CaseReviewRequest,
+    project_id: Optional[int] = Query(None, description="项目ID"),
+    user_info: dict = Depends(is_authenticated),
+):
+    project_id = _resolve_project_id(user_info, project_id)
+    from app.modules.ai.requirement_case_review import apply_case_review
+
+    try:
+        data = await apply_case_review(
+            project_id=int(project_id),
+            case_ids=body.case_ids,
+            decision=body.decision,
+            note=body.note or "",
+            username=user_info.get("username") or "",
+            requirement_id=body.requirement_id,
+            reason_tag=body.reason_tag or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    decision = data.get("decision")
+    msg = "已通过" if decision == "approved" else "已驳回"
+    return StandardResponse(data=data, message=f"{msg} {data.get('updated', 0)} 条")
+
+
 @router.post("/upload", summary="上传需求文档", dependencies=[Depends(require_permissions(AI_TEST_EXECUTE))])
 async def upload_requirement(
     file: UploadFile = File(...),
@@ -1645,17 +1743,9 @@ async def get_document_structure(
     req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
     if not req:
         raise HTTPException(status_code=404, detail="需求不存在")
-    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    meta = ensure_text_document_meta(req.original_content, req.parsed_content)
     sections = meta.get("sections") or []
-    if not sections and req.original_content:
-        sections = [{
-            "id": "sec-1",
-            "title": "全文",
-            "level": 1,
-            "char_count": len(req.original_content or ""),
-            "image_indices": list(range(meta.get("image_count", 0))),
-        }]
-    else:
+    if sections:
         sections = attach_section_parents([dict(s) for s in sections])
     scoped = resolve_sections(sections, None)
     blocks = meta.get("blocks") or []
@@ -1690,7 +1780,7 @@ async def estimate_generate_scope(
     req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
     if not req:
         raise HTTPException(status_code=404, detail="需求不存在")
-    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    meta = ensure_text_document_meta(req.original_content, req.parsed_content)
     sections = meta.get("sections") or []
     blocks = meta.get("blocks") or []
     selected = resolve_sections(sections, body.scope_section_ids)
@@ -1698,6 +1788,8 @@ async def estimate_generate_scope(
         raise HTTPException(status_code=400, detail="请至少选择一个章节")
     img_n = len(collect_image_indices(selected, blocks))
     text = build_interleaved_content(blocks, selected, {})
+    if not re.sub(r"(?m)^##\s+.*$", "", text or "").strip():
+        text = (req.original_content or "")[:8000]
     text, _ = truncate_scope_text(text)
     est = estimate_scope(text, img_n, section_count=len(selected))
     est["selected_section_count"] = len(selected)
@@ -1726,7 +1818,7 @@ async def get_section_coverage(
     req = await AiRequirement.get_or_none(id=req_id, project_id=project_id, is_del=False)
     if not req:
         raise HTTPException(status_code=404, detail="需求不存在")
-    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    meta = ensure_text_document_meta(req.original_content, req.parsed_content)
     sections = meta.get("sections") or []
     if sections:
         sections = attach_section_parents([dict(s) for s in sections])
@@ -1831,18 +1923,9 @@ async def _execute_generate_cases(
     if is_supplement and not batch_name:
         batch_name = supplement_name
 
-    meta = req.parsed_content if isinstance(req.parsed_content, dict) else {}
+    meta = ensure_text_document_meta(req.original_content, req.parsed_content)
     blocks = meta.get("blocks") or []
     all_sections = meta.get("sections") or []
-    if not all_sections:
-        all_sections = [{
-            "id": "sec-1",
-            "title": "全文",
-            "level": 1,
-            "block_ids": [b.get("id") for b in blocks if b.get("id")],
-            "char_count": len(req.original_content or ""),
-            "image_indices": list(range(meta.get("image_count", 0))),
-        }]
     selected_sections = resolve_sections(all_sections, body.scope_section_ids)
     if not selected_sections:
         raise HTTPException(status_code=400, detail="请至少选择一个章节/范围")
@@ -1882,23 +1965,22 @@ async def _execute_generate_cases(
                 detail=f"选中范围包含 {image_count} 张图片，请选择 Vision 模型配置（如通义 qwen-vl）",
             )
         from app.modules.ai.ai_scene_config import resolve_vision_config
+        from app.modules.ai.vision_capability import (
+            config_supports_vision,
+            raise_if_vision_unsupported,
+        )
+
         vision_config = await resolve_vision_config(vision_config_id)
         if not vision_config:
             raise HTTPException(status_code=400, detail="未配置 Vision 模型，请在场景绑定或模型配置中设置")
+        raise_if_vision_unsupported(vision_config, action="需求文档读图")
         vision_report = {
             "skipped": False,
             "config_name": vision_config.name,
             "model": vision_config.model,
             "provider": vision_config.provider,
-            "likely_vision": LLMClientFactory.is_likely_vision_model(vision_config.model),
+            "likely_vision": config_supports_vision(vision_config),
         }
-        if not vision_report["likely_vision"]:
-            logger.warning(
-                f"[requirements] 配置 {vision_config.model} 可能不支持 Vision，仍尝试调用"
-            )
-            vision_report["warning"] = (
-                f"模型 {vision_config.model} 可能不支持读图，建议使用 qwen-vl-max 等 VL 模型"
-            )
         images = load_images_from_meta(meta)
         vision_report["image_count_doc"] = image_count
         vision_report["scope_section_ids"] = body.scope_section_ids
@@ -2231,7 +2313,33 @@ async def _execute_generate_cases(
     username = user_info.get("username", "")
     source_ref = f"batch:{batch_name}" if batch_name else None
     batch_section_ids = [s.get("id") for s in selected_sections if s.get("id")]
+    from app.modules.ai.requirement_case_quality import (
+        attach_quality_checks,
+        run_case_quality_checks,
+    )
+
+    peer_for_qc = []
     for item in cases_data:
+        peer_for_qc.append(
+            {
+                "title": item.get("title"),
+                "module": item.get("module"),
+                "precondition": item.get("precondition"),
+                "steps": item.get("steps"),
+                "section_ids": batch_section_ids,
+            }
+        )
+    for idx, item in enumerate(cases_data):
+        qc_input = dict(peer_for_qc[idx])
+        quality = run_case_quality_checks(
+            qc_input,
+            peer_cases=peer_for_qc,
+            selected_section_ids=batch_section_ids,
+            peer_index=idx,
+        )
+        seed = {"test_design": item["test_design"]} if item.get("test_design") else None
+        extra = build_requirement_case_extra(effective, existing=seed)
+        extra = attach_quality_checks(extra, quality)
         case = await AiRequirementCase.create(
             requirement_id=req.id,
             project_id=project_id,
@@ -2248,13 +2356,10 @@ async def _execute_generate_cases(
             type=item["type"],
             stage=item.get("stage", "系统测试阶段"),
             keywords=item["keywords"],
-            status="draft",
+            status="needs_review",
             source_ref=source_ref,
             section_ids=batch_section_ids,
-            extra=build_requirement_case_extra(
-                effective,
-                existing={"test_design": item["test_design"]} if item.get("test_design") else None,
-            ),
+            extra=extra,
             create_by=username,
         )
         created.append(_case_to_dict(case))
@@ -2461,6 +2566,10 @@ async def _run_batch_generate_core(
     vision_reports: list[dict] = []
 
     for idx, item in enumerate(body.batches):
+        if job:
+            fresh = await AiRequirementGenerateJob.get_or_none(id=job.id)
+            if fresh and fresh.status == "cancelled":
+                return
         batch_name = (item.name or "").strip() or f"批次{idx + 1}"
         if job:
             job.current_batch_name = batch_name
@@ -2656,6 +2765,10 @@ async def _run_batch_generate_core(
     }
 
     if job:
+        # 用户取消后不要覆盖为 completed/failed
+        fresh = await AiRequirementGenerateJob.get_or_none(id=job.id)
+        if fresh and fresh.status == "cancelled":
+            return result
         job.current_batch_name = ""
         job.tokens_used = total_tokens
         job.duration_ms = duration_ms
@@ -2743,6 +2856,10 @@ async def _sync_job_report_from_batch_results(
             job.error = f"部分批次失败（{success_count}/{len(batch_results)} 批成功）"
         else:
             job.error = None
+    # 条件写：已取消则不覆盖终态
+    fresh = await AiRequirementGenerateJob.get_or_none(id=job.id)
+    if fresh and fresh.status == "cancelled":
+        return
     await job.save()
 
 
@@ -3305,12 +3422,19 @@ async def recalc_case_titles(
 
     _, template = await _resolve_naming_template(project_id, req)
     effective = await _effective_zentao_bindings(project_id, req)
-    q = AiRequirementCase.filter(requirement_id=req_id, project_id=project_id, is_del=False, status="draft")
+    from app.modules.ai.requirement_case_review import PENDING_STATUSES
+
+    q = AiRequirementCase.filter(
+        requirement_id=req_id,
+        project_id=project_id,
+        is_del=False,
+        status__in=list(PENDING_STATUSES),
+    )
     if body.case_ids:
         q = q.filter(id__in=body.case_ids)
     cases = await q.order_by("id")
     if not cases:
-        raise HTTPException(status_code=400, detail="没有可重算的草稿用例")
+        raise HTTPException(status_code=400, detail="没有可重算的待审核用例")
 
     updated = 0
     warnings: list[str] = []
@@ -3372,6 +3496,10 @@ async def recalc_case_titles(
 async def export_cases_xlsx(
     req_id: int,
     project_id: Optional[int] = Query(None, description="项目ID"),
+    approved_only: bool = Query(
+        True,
+        description="默认仅导出已通过审核的用例；传 false 可含待审/驳回（文件仍为草稿口径）",
+    ),
     user_info: dict = Depends(is_authenticated),
 ):
     project_id = _resolve_project_id(user_info, project_id)
@@ -3379,9 +3507,18 @@ async def export_cases_xlsx(
     if not req:
         raise HTTPException(status_code=404, detail="需求不存在")
 
+    from app.modules.ai.requirement_case_review import is_approved_for_library
+
     cases = await AiRequirementCase.filter(requirement_id=req_id, is_del=False).order_by("id")
+    if approved_only:
+        cases = [c for c in cases if is_approved_for_library(c.status)]
     if not cases:
-        raise HTTPException(status_code=400, detail="暂无用例可导出")
+        detail = (
+            "暂无已通过审核的用例可导出；请先在审核队列通过，或传 approved_only=false 导出草稿"
+            if approved_only
+            else "暂无用例可导出"
+        )
+        raise HTTPException(status_code=400, detail=detail)
 
     effective = await _effective_zentao_bindings(project_id, req)
     export_profile = get_export_profile(effective)

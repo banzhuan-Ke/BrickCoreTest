@@ -26,6 +26,7 @@
         <div class="lc-primary">
           <div class="lc-primary-meta">
             <el-tag size="small" type="success" effect="dark">当前主定位</el-tag>
+            <el-tag v-if="primarySourceLabel" size="small" type="info" effect="plain">{{ primarySourceLabel }}</el-tag>
             <span class="lc-primary-note">执行优先用它；失败后再依次试备用</span>
           </div>
           <el-tooltip
@@ -38,7 +39,21 @@
           >
             <code class="lc-primary-code" @click="copyLocator(primaryLocator)">{{ primaryLocator }}</code>
           </el-tooltip>
-          <div v-else class="lc-primary-empty">尚未填写，请在上方「元素定位表达式」中输入</div>
+          <div v-if="!primaryLocator" class="lc-empty">暂无主定位</div>
+          <div v-if="recommendedHint" class="lc-recommend">
+            <el-tag size="small" type="warning" effect="plain">更稳推荐</el-tag>
+            <span class="lc-recommend-src">{{ recommendedHint.sourceLabel }}</span>
+            <el-tooltip
+              :content="recommendedHint.locator"
+              placement="top"
+              :show-after="400"
+              :disabled="recommendedHint.locator.length < 40"
+              popper-class="lc-tooltip"
+            >
+              <code class="lc-recommend-code" @click="copyLocator(recommendedHint.locator)">{{ recommendedHint.locator }}</code>
+            </el-tooltip>
+            <el-button type="primary" link size="small" @click="adoptRecommended">采用推荐</el-button>
+          </div>
         </div>
 
         <div class="lc-section-label">
@@ -74,31 +89,50 @@
             <el-button size="small" type="primary" plain :icon="Plus" @click="startAdd">继续添加</el-button>
             <el-button size="small" plain @click="clearAll">清空全部</el-button>
           </div>
-          <ul class="lc-list">
-            <li v-for="(item, idx) in localList" :key="`${idx}-${item}`" class="lc-item">
-              <span class="lc-idx">{{ idx + 1 }}</span>
+          <div v-for="group in groupedList" :key="group.source" class="lc-group">
+            <div class="lc-group-head">
+              <span class="lc-group-label">{{ group.label }}</span>
               <el-tooltip
-                :content="item"
+                v-if="group.tip"
+                :content="group.tip"
                 placement="top"
-                :show-after="400"
-                :disabled="item.length < 48"
-                popper-class="lc-tooltip"
+                :show-after="200"
               >
-                <code class="lc-code" @click="copyLocator(item)">{{ item }}</code>
+                <el-icon class="lc-group-help" :size="14"><QuestionFilled /></el-icon>
               </el-tooltip>
-              <div class="lc-actions">
-                <el-tooltip content="提升为主定位（原主定位会进入备用）" placement="top" :show-after="300">
-                  <el-button type="primary" link size="small" @click="promote(idx)">设为主</el-button>
-                </el-tooltip>
-                <el-tooltip content="编辑" placement="top" :show-after="300">
-                  <el-button type="primary" link size="small" :icon="EditPen" @click="startEdit(idx)" />
-                </el-tooltip>
-                <el-tooltip content="删除" placement="top" :show-after="300">
-                  <el-button type="danger" link size="small" :icon="Delete" @click="removeAt(idx)" />
-                </el-tooltip>
-              </div>
-            </li>
-          </ul>
+            </div>
+            <ul class="lc-list">
+              <li
+                v-for="{ item, idx } in group.rows"
+                :key="`${idx}-${candidateLocatorOf(item)}`"
+                class="lc-item"
+              >
+                <span class="lc-idx">{{ idx + 1 }}</span>
+                <div class="lc-main">
+                  <el-tooltip
+                    :content="candidateLocatorOf(item)"
+                    placement="top"
+                    :show-after="400"
+                    :disabled="candidateLocatorOf(item).length < 48"
+                    popper-class="lc-tooltip"
+                  >
+                    <code class="lc-code" @click="copyLocator(candidateLocatorOf(item))">{{ candidateLocatorOf(item) }}</code>
+                  </el-tooltip>
+                </div>
+                <div class="lc-actions">
+                  <el-tooltip content="提升为主定位（原主定位会进入备用）" placement="top" :show-after="300">
+                    <el-button type="primary" link size="small" @click="promote(idx)">设为主</el-button>
+                  </el-tooltip>
+                  <el-tooltip content="编辑" placement="top" :show-after="300">
+                    <el-button type="primary" link size="small" :icon="EditPen" @click="startEdit(idx)" />
+                  </el-tooltip>
+                  <el-tooltip content="删除" placement="top" :show-after="300">
+                    <el-button type="danger" link size="small" :icon="Delete" @click="removeAt(idx)" />
+                  </el-tooltip>
+                </div>
+              </li>
+            </ul>
+          </div>
         </template>
       </el-collapse-item>
     </el-collapse>
@@ -108,16 +142,24 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, EditPen, Plus } from '@element-plus/icons-vue'
+import { Delete, EditPen, Plus, QuestionFilled } from '@element-plus/icons-vue'
 import {
+  LOCATOR_SOURCE_LABELS,
+  LOCATOR_SOURCE_ORDER,
+  LOCATOR_SOURCE_TIPS,
+  candidateLocatorOf,
+  candidateSourceOf,
   normalizeCandidates,
   normalizeLocatorValue,
+  pickRecommendedCandidate,
   promoteToPrimary,
 } from '@/utils/locatorCandidates.js'
 
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
   primary: { type: String, default: '' },
+  primarySource: { type: String, default: 'current' },
+  recommended: { type: Object, default: null },
   primaryChangedHint: { type: Boolean, default: false },
   defaultExpand: { type: Boolean, default: true },
 })
@@ -131,10 +173,47 @@ const editingIndex = ref(-1)
 const draftInputRef = ref(null)
 
 const localList = computed(() =>
-  normalizeCandidates(props.modelValue, { excludePrimary: props.primary }),
+  normalizeCandidates(props.modelValue, { excludePrimary: props.primary, keepObjects: true }),
 )
 
+const groupedList = computed(() => {
+  const buckets = { current: [], elevated: [], neighbor: [], ai: [] }
+  localList.value.forEach((item, idx) => {
+    const src = candidateSourceOf(item)
+    const row = { item, idx }
+    if (buckets[src]) buckets[src].push(row)
+    else buckets.current.push(row)
+  })
+  return LOCATOR_SOURCE_ORDER
+    .filter((key) => buckets[key].length)
+    .map((key) => ({
+      source: key,
+      label: LOCATOR_SOURCE_LABELS[key],
+      tip: LOCATOR_SOURCE_TIPS[key] || '',
+      rows: buckets[key],
+    }))
+})
+
 const primaryLocator = computed(() => normalizeLocatorValue(props.primary))
+
+const primarySourceLabel = computed(() => {
+  const s = candidateSourceOf({ source: props.primarySource || 'current' })
+  return LOCATOR_SOURCE_LABELS[s] || ''
+})
+
+const recommendedHint = computed(() => {
+  const rec = props.recommended && props.recommended.locator
+    ? props.recommended
+    : pickRecommendedCandidate(localList.value, primaryLocator.value)
+  if (!rec || !rec.locator) return null
+  if (normalizeLocatorValue(rec.locator) === primaryLocator.value) return null
+  return {
+    locator: normalizeLocatorValue(rec.locator),
+    source: candidateSourceOf(rec),
+    sourceLabel: LOCATOR_SOURCE_LABELS[candidateSourceOf(rec)] || '',
+    reason: rec.reason || '',
+  }
+})
 
 watch(
   () => props.modelValue?.length,
@@ -146,7 +225,7 @@ watch(
 )
 
 function emitList(list) {
-  emit('update:modelValue', normalizeCandidates(list, { excludePrimary: props.primary }))
+  emit('update:modelValue', normalizeCandidates(list, { excludePrimary: props.primary, keepObjects: true }))
 }
 
 async function focusDraft() {
@@ -170,7 +249,7 @@ function startEdit(idx) {
     openNames.value = ['backup']
   }
   editingIndex.value = idx
-  draft.value = localList.value[idx] || ''
+  draft.value = candidateLocatorOf(localList.value[idx]) || ''
   draftVisible.value = true
   focusDraft()
 }
@@ -195,13 +274,19 @@ function commitDraft() {
   const wasEdit = editingIndex.value >= 0
   const next = [...localList.value]
   if (wasEdit) {
-    next[editingIndex.value] = loc
+    const prev = next[editingIndex.value]
+    const prevLoc = candidateLocatorOf(prev)
+    // 用户改了 locator 字符串后，不再沿用 elevated/neighbor/ai 来源
+    const src = (prevLoc && prevLoc === loc && typeof prev === 'object' && prev.source)
+      ? prev.source
+      : 'current'
+    next[editingIndex.value] = { locator: loc, source: src || 'current' }
   } else {
-    if (next.includes(loc)) {
+    if (next.some((x) => candidateLocatorOf(x) === loc)) {
       ElMessage.warning('该备用定位已存在')
       return
     }
-    next.push(loc)
+    next.push({ locator: loc, source: 'current' })
   }
   emitList(next)
   cancelDraft()
@@ -226,10 +311,26 @@ async function clearAll() {
 function promote(idx) {
   const target = localList.value[idx]
   if (!target) return
-  const { primary, candidates } = promoteToPrimary(props.primary, localList.value, target)
-  emit('promote', { primary, candidates })
-  emit('update:modelValue', candidates)
+  const result = promoteToPrimary(props.primary, localList.value, target, {
+    primarySource: props.primarySource || 'current',
+  })
+  emit('promote', result)
+  emit('update:modelValue', result.candidates)
   ElMessage.success('已切换主定位，原主定位已移入备用')
+}
+
+function adoptRecommended() {
+  if (!recommendedHint.value) return
+  const target = {
+    locator: recommendedHint.value.locator,
+    source: recommendedHint.value.source,
+  }
+  const result = promoteToPrimary(props.primary, localList.value, target, {
+    primarySource: props.primarySource || 'current',
+  })
+  emit('promote', result)
+  emit('update:modelValue', result.candidates)
+  ElMessage.success('已采用更稳推荐作为主定位')
 }
 
 async function copyLocator(text) {
@@ -358,6 +459,31 @@ async function copyLocator(text) {
   color: var(--el-color-primary);
 }
 
+.lc-recommend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+.lc-recommend-src {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.lc-recommend-code {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
 .lc-primary-empty {
   font-size: 12px;
   color: var(--el-text-color-secondary);
@@ -383,6 +509,40 @@ async function copyLocator(text) {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.lc-group {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.lc-group:last-child {
+  margin-bottom: 0;
+}
+
+.lc-group-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.lc-group-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.lc-group-help {
+  color: var(--el-text-color-secondary);
+  cursor: help;
+}
+
+.lc-group-help:hover {
+  color: var(--el-color-primary);
 }
 
 .lc-draft {
@@ -456,6 +616,17 @@ async function copyLocator(text) {
 
 .lc-item:hover {
   background: var(--el-fill-color-lighter);
+}
+
+.lc-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lc-source {
+  flex-shrink: 0;
 }
 
 .lc-idx {

@@ -116,6 +116,7 @@
       </el-form-item>
       <el-form-item label="默认接口执行机">
         <ViaWorkerSelect v-model="addEnvForm.default_perf_worker_id" variant="env" />
+        <div class="field-hint">接口执行弹窗会预填，仍可改。选中后，数据工厂的 UI/App 库断言、套件前后 SQL 和小测查库也走这台执行机（引擎 ≥ 1.8.2），失败不改回平台本机。</div>
       </el-form-item>
 
       <el-collapse v-model="uiStrategyActive" class="ui-strategy-collapse">

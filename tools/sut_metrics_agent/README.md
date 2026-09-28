@@ -79,7 +79,7 @@ python sut_metrics_agent.py -c agent_config.json
 
 ```json
 {
-  "platform": "http://47.111.226.241",
+  "platform": "http://127.0.0.1:8000",
   "token": "<粘贴一次性 Token>",
   "allow_insecure_http": true,
   "interval_sec": 5,

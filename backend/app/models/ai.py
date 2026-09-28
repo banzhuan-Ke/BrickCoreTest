@@ -41,6 +41,11 @@ class AiConfig(models.Model):
         choices=[("low", "低"), ("medium", "中"), ("high", "高")],
     )
 
+    # 多模态：读图 / Browser Lab Vision 等；勿依赖模型名猜测
+    supports_vision = fields.BooleanField(
+        default=False, description="是否支持多模态（Vision/读图）"
+    )
+
     # 状态
     is_default = fields.BooleanField(default=False, description="是否为默认配置")
     is_enabled = fields.BooleanField(default=True, description="是否启用")
@@ -257,9 +262,12 @@ class AiRequirementCase(models.Model):
 
     status = fields.CharField(
         max_length=20,
-        default="draft",
-        description="状态: draft/confirmed/exported",
+        default="needs_review",
+        description="状态: draft/needs_review/approved/rejected（历史 confirmed/exported 视同已通过）",
     )
+    review_note = fields.CharField(max_length=500, null=True, description="审核备注")
+    reviewed_by = fields.CharField(max_length=50, null=True, description="审核人")
+    reviewed_at = fields.DatetimeField(null=True, description="审核时间")
     source_ref = fields.CharField(max_length=200, null=True, description="来源引用")
     section_ids = fields.JSONField(default=list, description="来源章节ID列表")
     extra = fields.JSONField(default=dict, description="扩展字段（如 test_point_ids）")
@@ -719,9 +727,126 @@ class AssistantSession(models.Model):
     project_id = fields.IntField(null=True, description="项目ID")
     title = fields.CharField(max_length=200, default="", description="会话标题")
     messages = fields.JSONField(default=list, description="消息列表（最多 40 条）")
+    pinned_context_json = fields.JSONField(
+        null=True,
+        description="钉住的实体上下文（W2）；W0 预留列",
+    )
+    summary_text = fields.TextField(null=True, description="会话摘要（W6 长会话压缩）")
     create_time = fields.DatetimeField(auto_now_add=True, description="创建时间")
     update_time = fields.DatetimeField(auto_now=True, description="更新时间")
 
     class Meta:
         table = "assistant_session"
         table_description = "平台 AI 助手会话"
+
+
+class AiSkillRunRecord(models.Model):
+    """Skill 执行记录（平台表；不存 Prompt 正文）"""
+
+    id = fields.IntField(pk=True)
+    skill_code = fields.CharField(max_length=64, description="技能编码")
+    skill_version = fields.CharField(max_length=32, null=True, description="技能版本")
+    prompt_key = fields.CharField(max_length=64, null=True, description="Prompt 引用 key")
+    prompt_version = fields.CharField(max_length=32, null=True, description="Prompt 版本")
+    project_id = fields.IntField(null=True, description="项目ID")
+    target_type = fields.CharField(max_length=64, null=True)
+    target_id = fields.CharField(max_length=64, null=True)
+    entry_source = fields.CharField(max_length=32, null=True, description="page/assistant/mcp/job")
+    run_mode = fields.CharField(max_length=16, null=True, description="preview/confirm/direct")
+    status = fields.CharField(max_length=32, default="running")
+    input_summary = fields.TextField(null=True)
+    tool_calls = fields.JSONField(null=True)
+    output_summary = fields.TextField(null=True)
+    error_message = fields.TextField(null=True)
+    duration_ms = fields.IntField(null=True)
+    scene = fields.CharField(max_length=64, null=True)
+    username = fields.CharField(max_length=64, null=True)
+    # W1.1 治理字段
+    user_id = fields.IntField(null=True, description="用户ID（审计主键）")
+    session_id = fields.IntField(null=True, description="assistant_session.id")
+    ai_config_id = fields.IntField(null=True, description="实际使用的 AI 配置")
+    tokens_used = fields.IntField(null=True, description="本 Skill 汇总 token")
+    prompt_tokens = fields.IntField(null=True)
+    completion_tokens = fields.IntField(null=True)
+    create_time = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "ai_skill_run_record"
+        table_description = "AI Skill 执行记录（无 Prompt 正文）"
+
+
+class AssistantJobLink(models.Model):
+    """小测会话与长任务关联（W3；W0 建表）"""
+
+    id = fields.IntField(pk=True)
+    session_id = fields.IntField(description="assistant_session.id")
+    job_type = fields.CharField(max_length=64, description="browser_lab/ui_agent/...")
+    job_id = fields.CharField(max_length=64, description="外部任务 ID")
+    status = fields.CharField(max_length=32, default="pending")
+    payload_json = fields.JSONField(null=True)
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "assistant_job_link"
+        table_description = "小测会话 Job 关联"
+
+
+class AssistantMemory(models.Model):
+    """项目级小测记忆（W6）：按用户+项目+key"""
+
+    id = fields.IntField(pk=True)
+    project_id = fields.IntField(description="项目ID")
+    user_id = fields.IntField(description="用户ID")
+    mem_key = fields.CharField(max_length=64, description="记忆键")
+    mem_value = fields.TextField(description="记忆值")
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "assistant_memory"
+        table_description = "小测项目记忆"
+        unique_together = (("project_id", "user_id", "mem_key"),)
+
+
+class AssistantFeedback(models.Model):
+    """小测回复反馈（W6）：点赞/点踩"""
+
+    id = fields.IntField(pk=True)
+    session_id = fields.IntField(description="assistant_session.id")
+    message_id = fields.CharField(max_length=64, description="消息标识（会话内）")
+    user_id = fields.IntField(description="用户ID")
+    project_id = fields.IntField(null=True)
+    score = fields.IntField(description="1=赞 -1=踩")
+    note = fields.CharField(max_length=500, null=True, description="可选备注")
+    create_time = fields.DatetimeField(auto_now_add=True)
+    update_time = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "assistant_feedback"
+        table_description = "小测回复反馈"
+        unique_together = (("session_id", "message_id", "user_id"),)
+
+
+class AssistantTurnTrace(models.Model):
+    """小测一轮对话脱敏追踪（W6；禁止存 Prompt 正文）"""
+
+    id = fields.IntField(pk=True)
+    session_id = fields.IntField(null=True)
+    user_id = fields.IntField(null=True)
+    project_id = fields.IntField(null=True)
+    mode = fields.CharField(max_length=16, default="standard")
+    stop_reason = fields.CharField(max_length=64, null=True)
+    tools_used = fields.JSONField(null=True)
+    skills_used = fields.JSONField(null=True)
+    rounds = fields.IntField(null=True)
+    tokens_used = fields.IntField(null=True)
+    duration_ms = fields.IntField(null=True)
+    has_pending_confirm = fields.BooleanField(default=False)
+    has_pending_ask_user = fields.BooleanField(default=False)
+    error_code = fields.CharField(max_length=64, null=True)
+    create_time = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "assistant_turn_trace"
+        table_description = "小测回合追踪（脱敏）"

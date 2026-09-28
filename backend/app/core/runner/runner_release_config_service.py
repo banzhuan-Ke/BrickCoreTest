@@ -78,12 +78,25 @@ async def get_runner_release_config_for_admin() -> dict[str, Any]:
         "perf_package_mac_available": perf_mac_ok,
         "perf_package_mac_size_bytes": perf_mac.stat().st_size if perf_mac_ok else 0,
     }
-    from app.core.runner.runner_release import patch_channels_summary, runner_patches_dir
+    from app.core.runner.runner_release import (
+        evaluate_update_patches,
+        load_update_manifest,
+        patch_channels_summary,
+        runner_patches_dir,
+    )
 
     channels = patch_channels_summary()
+    manifest = load_update_manifest()
+    patch_status = evaluate_update_patches(
+        channels, manifest, settings.RUNNER_CLIENT_VERSION_LATEST
+    )
     common["update_channels"] = channels
-    common["update_patches_available"] = any(c.get("available") for c in channels)
+    common["update_patches_available"] = patch_status["update_patches_available"]
+    common["update_patches_present"] = patch_status["update_patches_present"]
+    common["update_manifest_latest"] = patch_status["update_manifest_latest"]
+    common["update_patches_block_reason"] = patch_status["update_patches_block_reason"]
     common["update_patches_hint"] = str(runner_patches_dir())
+    common["runner_client_version_latest"] = settings.RUNNER_CLIENT_VERSION_LATEST
     if not row:
         env_url = (settings.RUNNER_CLIENT_DOWNLOAD_URL or "").strip()
         return {

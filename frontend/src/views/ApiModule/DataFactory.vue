@@ -8,12 +8,21 @@
     <template #main>
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px;">
         <template #title>
-          配置环境级数据库连接、SQL 模板与通用数据工具；保存标签后可在接口/Web/性能场景用例中引用（见通用工具 Tab）。
+          配置环境级数据库连接、SQL 模板与通用数据工具；「查询控制台」可对手写 SQL/命令做调试，写操作受数据源「允许写操作」开关约束。
         </template>
         <p class="page-tip">SQL 工厂：断言仅允许 SELECT；造数/清数需启用「允许写操作」数据源。通用工具可「保存为标签」<code v-pre>${{df:标签名}}</code>，或在接口/Web/压测编辑页用 **「插入工具」** 直接写 <code v-pre>${{dt:...}}</code>（无需保存）。</p>
       </el-alert>
 
       <el-tabs v-model="activeTab">
+        <el-tab-pane label="查询控制台" name="console">
+          <DataFactoryQueryConsole
+            :project-id="projectId"
+            :env-list="proStore.envList || []"
+            :datasource-list="datasourceList"
+            :initial-datasource-id="initialDatasourceId"
+            @saved-template="loadTemplates"
+          />
+        </el-tab-pane>
         <el-tab-pane label="通用工具" name="toolbox">
           <DataToolBoxPanel :project-id="projectId" @saved="loadToolRecords" />
         </el-tab-pane>
@@ -100,6 +109,14 @@
             <el-select v-model="dsFilterEnvId" clearable placeholder="筛选环境" style="width: 200px;" @change="loadDatasources">
               <el-option v-for="e in proStore.envList" :key="e.id" :label="e.name" :value="e.id" />
             </el-select>
+            <ViaWorkerSelect
+              v-model="listTestWorkerId"
+              size="small"
+              checkbox-label="列表测试经执行机"
+              :require-df-proxy="true"
+              min-engine="1.8.2"
+              hint-text="行内「测试」走此勾选；引擎 ≥ 1.8.2。未勾选则平台本机测连。"
+            />
             <el-button type="primary" icon="Plus" @click="openDsDialog()">新建数据源</el-button>
             <el-button icon="RefreshRight" @click="loadDatasources">刷新</el-button>
           </div>
@@ -119,15 +136,28 @@
                 <el-tag size="small" :type="row.allow_write ? 'warning' : 'success'">{{ row.allow_write ? '允许' : '只读' }}</el-tag>
               </template>
             </el-table-column>
+            <el-table-column label="状态" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.is_enabled ? 'success' : 'info'">
+                  {{ row.is_enabled ? '已启用' : '已停用' }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="默认" width="70" align="center">
               <template #default="{ row }">
                 <el-tag v-if="row.is_default" size="small" type="primary">默认</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="220" fixed="right">
+            <el-table-column label="操作" width="280" fixed="right">
               <template #default="{ row }">
                 <el-button size="small" type="success" link @click="testDs(row)">测试</el-button>
                 <el-button size="small" type="primary" link @click="openDsDialog(row)">编辑</el-button>
+                <el-button
+                  size="small"
+                  :type="row.is_enabled ? 'warning' : 'success'"
+                  link
+                  @click="toggleDsEnabled(row)"
+                >{{ row.is_enabled ? '停用' : '启用' }}</el-button>
                 <el-button size="small" type="danger" link @click="deleteDs(row)">删除</el-button>
               </template>
             </el-table-column>
@@ -144,6 +174,14 @@
               <el-option label="后置 teardown" value="teardown" />
               <el-option label="查询 query" value="query" />
             </el-select>
+            <ViaWorkerSelect
+              v-model="tplViaWorkerId"
+              size="small"
+              checkbox-label="调试经执行机"
+              :require-df-proxy="true"
+              min-engine="1.8.2"
+              hint-text="模板调试经空闲压测执行机代发（需引擎 ≥ 1.8.2）"
+            />
             <el-button type="primary" icon="Plus" @click="openTplDialog()">新建模板</el-button>
             <el-button icon="RefreshRight" @click="loadTemplates">刷新</el-button>
           </div>
@@ -184,10 +222,14 @@
           <el-option label="MySQL" value="mysql" />
           <el-option label="PostgreSQL" value="postgresql" />
           <el-option label="Redis" value="redis" />
+          <el-option label="Elasticsearch" value="elasticsearch" />
         </el-select>
       </el-form-item>
       <el-form-item label="主机" prop="host">
-        <el-input v-model="dsForm.host" placeholder="Docker 部署填 mysql；本机填 127.0.0.1" />
+        <el-input
+          v-model="dsForm.host"
+          :placeholder="dsHostPlaceholder"
+        />
       </el-form-item>
       <el-form-item label="端口" prop="port">
         <el-input-number
@@ -202,9 +244,12 @@
         <el-input v-model="dsForm.database_name" :placeholder="dsDbPlaceholder" />
       </el-form-item>
       <el-form-item v-if="dsForm.db_type !== 'redis'" label="用户名" prop="username">
-        <el-input v-model="dsForm.username" />
+        <el-input
+          v-model="dsForm.username"
+          :placeholder="dsForm.db_type === 'elasticsearch' ? 'Basic Auth 用户名，无认证可留空' : ''"
+        />
       </el-form-item>
-      <el-form-item :label="dsForm.db_type === 'redis' ? '密码(可选)' : '密码'" prop="password">
+      <el-form-item :label="authOptionalType ? '密码(可选)' : '密码'" prop="password">
         <el-input
           v-model="dsForm.password"
           type="password"
@@ -222,6 +267,17 @@
         <el-checkbox v-model="dsForm.allow_write">{{ dsWriteHint }}</el-checkbox>
         <el-checkbox v-model="dsForm.is_default">设为环境默认数据源</el-checkbox>
         <el-checkbox v-model="dsForm.is_enabled">启用</el-checkbox>
+      </el-form-item>
+      <el-form-item label="测连方式">
+        <ViaWorkerSelect
+          v-model="dsTestWorkerId"
+          :env-id="dsForm.environment_id"
+          size="small"
+          checkbox-label="经执行机连接"
+          :require-df-proxy="true"
+          min-engine="1.8.2"
+          hint-text="平台访问不到数据源（如内网 ES）时勾选，由本机空闲压测执行机代连。需引擎 ≥ 1.8.2。失败不会静默改回平台直连。"
+        />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -247,8 +303,14 @@
           <el-option v-for="ds in datasourceList" :key="ds.id" :label="`${ds.name} (${ds.environment_name})`" :value="ds.id" />
         </el-select>
       </el-form-item>
-      <el-form-item label="SQL" prop="sql_text">
-        <MonacoEditor v-if="tplDialogVisible" v-model="tplForm.sql_text" language="sql" height="220px" />
+      <el-form-item :label="tplSqlLabel" prop="sql_text">
+        <MonacoEditor
+          v-if="tplDialogVisible"
+          :key="tplEditorLanguage + '-' + (tplForm.datasource_id || 0)"
+          v-model="tplForm.sql_text"
+          :language="tplEditorLanguage"
+          height="220px"
+        />
         <div class="sql-insert-toolbar">
           <VarInsertButton
             :env-id="tplInsertEnvId"
@@ -256,9 +318,9 @@
             label="插入变量"
           />
           <ToolInsertButton :env-id="tplInsertEnvId" label="插入工具" />
-          <span class="sql-insert-hint">先点 SQL 编辑区再插入；引用与数据源所属环境对齐</span>
+          <span class="sql-insert-hint">先点编辑区再插入；引用与数据源所属环境对齐</span>
         </div>
-        <p class="field-hint">支持 <code v-pre>${{变量名}}</code> / <code v-pre>${{dt:md5|text=@password}}</code>；Redis 请写命令如 SET key value</p>
+        <p class="field-hint">{{ tplSqlHint }}</p>
       </el-form-item>
       <el-form-item label="描述"><el-input v-model="tplForm.description" type="textarea" :rows="2" /></el-form-item>
     </el-form>
@@ -301,14 +363,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import MonacoEditor from '@/components/MonacoEditor'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ProjectStore } from '@/stores/module/ProjectStore'
 import { dataFactoryApi } from '@/api/modules/dataFactory'
 import PageCard from '@/components/PageCard.vue'
+import ViaWorkerSelect from '@/components/ViaWorkerSelect.vue'
 import DataToolBoxPanel from './components/DataToolBoxPanel.vue'
+import DataFactoryQueryConsole from './components/DataFactoryQueryConsole.vue'
 import DfEnvScopeSelect from '@/components/DfEnvScopeSelect.vue'
 import VarInsertButton from '@/components/VarInsertButton.vue'
 import ToolInsertButton from '@/components/ToolInsertButton.vue'
@@ -317,7 +381,8 @@ const route = useRoute()
 const proStore = ProjectStore()
 const projectId = computed(() => Number(route.params.projectId) || proStore.projectInfo.id)
 
-const activeTab = ref('toolbox')
+const activeTab = ref('console')
+const initialDatasourceId = ref(null)
 const recordLoading = ref(false)
 const toolRecordList = ref([])
 const recordFilterEnvId = ref(null)
@@ -335,6 +400,9 @@ const dsEditingId = ref(null)
 const dsHasPassword = ref(false)
 const dsSaving = ref(false)
 const dsTesting = ref(false)
+const dsTestWorkerId = ref(null)
+const listTestWorkerId = ref(null)
+const tplViaWorkerId = ref(null)
 const dsFormRef = ref()
 const favoriteTags = ref(new Set())
 const favoriteTagList = computed(() => Array.from(favoriteTags.value))
@@ -345,14 +413,32 @@ const dsForm = reactive({
   max_rows: 100, timeout_seconds: 10, is_default: false, is_enabled: true,
 })
 
-const dsDbLabel = computed(() => (dsForm.db_type === 'redis' ? 'DB Index' : '数据库'))
-const dsDbPlaceholder = computed(() => (dsForm.db_type === 'redis' ? '0' : ''))
+const dsDbLabel = computed(() => {
+  if (dsForm.db_type === 'redis') return 'DB Index'
+  if (dsForm.db_type === 'elasticsearch') return '默认索引'
+  return '数据库'
+})
+const dsDbPlaceholder = computed(() => {
+  if (dsForm.db_type === 'redis') return '0'
+  if (dsForm.db_type === 'elasticsearch') return 'logs-* 或 _all'
+  return ''
+})
+const authOptionalType = computed(() =>
+  ['redis', 'elasticsearch'].includes(dsForm.db_type)
+)
+const dsHostPlaceholder = computed(() => {
+  if (dsForm.db_type === 'elasticsearch') {
+    return 'es 主机；HTTPS 填 https://host；自签可用 insecure:host'
+  }
+  return 'Docker 部署填 mysql；本机填 127.0.0.1'
+})
 const dsPasswordPlaceholder = computed(() => {
-  if (dsForm.db_type === 'redis') return dsEditingId.value ? '留空则不修改' : '无密码可留空'
+  if (authOptionalType.value) return dsEditingId.value ? '留空则不修改' : '无密码可留空'
   return dsEditingId.value ? (dsHasPassword.value ? '留空则不修改' : '请填写数据库密码') : '请填写数据库密码'
 })
 const dsWriteHint = computed(() => {
   if (dsForm.db_type === 'redis') return '允许写操作 (SET/DEL 等)'
+  if (dsForm.db_type === 'elasticsearch') return '允许写操作 (_doc/_bulk 等，默认关闭)'
   return '允许写操作 (INSERT/UPDATE/DELETE)'
 })
 const dsRules = {
@@ -360,11 +446,10 @@ const dsRules = {
   environment_id: [{ required: true, message: '请选择环境', trigger: 'change' }],
   host: [{ required: true, message: '请输入主机', trigger: 'blur' }],
   port: [{ required: true, message: '请输入端口', trigger: 'change' }],
-  database_name: [{ required: true, message: '请输入数据库名', trigger: 'blur' }],
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+  database_name: [{ required: true, message: '请输入数据库名/索引', trigger: 'blur' }],
   password: [{
     validator: (_rule, value, callback) => {
-      if (dsEditingId.value || dsForm.db_type === 'redis') {
+      if (dsEditingId.value || authOptionalType.value) {
         callback()
         return
       }
@@ -378,7 +463,7 @@ const dsRules = {
   }],
   username: [{
     validator: (_rule, value, callback) => {
-      if (dsForm.db_type === 'redis') {
+      if (authOptionalType.value || dsForm.db_type === 'redis') {
         callback()
         return
       }
@@ -393,7 +478,12 @@ const dsRules = {
 }
 
 function dbTypeLabel(t) {
-  return { mysql: 'MySQL', postgresql: 'PostgreSQL', redis: 'Redis' }[(t || 'mysql').toLowerCase()] || t
+  return {
+    mysql: 'MySQL',
+    postgresql: 'PostgreSQL',
+    redis: 'Redis',
+    elasticsearch: 'Elasticsearch',
+  }[(t || 'mysql').toLowerCase()] || t
 }
 
 function onDbTypeChange(type) {
@@ -401,6 +491,10 @@ function onDbTypeChange(type) {
     dsForm.port = 6379
     dsForm.database_name = dsForm.database_name || '0'
     dsForm.username = ''
+  } else if (type === 'elasticsearch') {
+    dsForm.port = 9200
+    dsForm.database_name = dsForm.database_name || '_all'
+    dsForm.host = dsForm.host === 'mysql' ? '127.0.0.1' : dsForm.host
   } else if (type === 'postgresql') {
     dsForm.port = 5432
   } else {
@@ -458,6 +552,29 @@ const tplForm = reactive({
 const tplInsertEnvId = computed(() => {
   const ds = datasourceList.value.find((d) => d.id === tplForm.datasource_id)
   return ds?.environment_id || tplFilterEnvId.value || null
+})
+const tplSelectedDbType = computed(() => {
+  const ds = datasourceList.value.find((d) => d.id === tplForm.datasource_id)
+  return (ds?.db_type || 'mysql').toLowerCase()
+})
+const tplEditorLanguage = computed(() => {
+  if (tplSelectedDbType.value === 'elasticsearch') return 'json'
+  if (tplSelectedDbType.value === 'redis') return 'plaintext'
+  return 'sql'
+})
+const tplSqlLabel = computed(() => {
+  if (tplSelectedDbType.value === 'elasticsearch') return '查询体'
+  if (tplSelectedDbType.value === 'redis') return '命令'
+  return 'SQL'
+})
+const tplSqlHint = computed(() => {
+  if (tplSelectedDbType.value === 'elasticsearch') {
+    return 'ES：纯 JSON 走默认索引 _search；或首行 METHOD path + JSON body。支持 ${{变量名}}'
+  }
+  if (tplSelectedDbType.value === 'redis') {
+    return 'Redis 请写命令如 GET key / SET key value；支持 ${{变量名}}'
+  }
+  return '支持 ${{变量名}} / ${{dt:md5|text=@password}}'
 })
 const tplRules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
@@ -619,12 +736,18 @@ function buildDsPayload() {
   } else {
     delete payload.password
   }
+  if (dsTestWorkerId.value) {
+    payload.worker_id = Number(dsTestWorkerId.value)
+  } else {
+    delete payload.worker_id
+  }
   return payload
 }
 
 function openDsDialog(row) {
   dsEditingId.value = row?.id || null
   dsHasPassword.value = !!row?.has_password
+  dsTestWorkerId.value = null
   if (row) {
     Object.assign(dsForm, {
       name: row.name, environment_id: row.environment_id, db_type: row.db_type || 'mysql',
@@ -641,7 +764,7 @@ function openDsDialog(row) {
 
 async function saveDs() {
   await dsFormRef.value.validate()
-  if (dsForm.db_type !== 'redis' && !dsEditingId.value && !dsForm.password?.trim()) {
+  if (!authOptionalType.value && !dsEditingId.value && !dsForm.password?.trim()) {
     ElMessage.warning('请填写数据库密码')
     return
   }
@@ -651,7 +774,7 @@ async function saveDs() {
     if (dsEditingId.value) {
       await dataFactoryApi.updateDatasource(dsEditingId.value, payload)
     } else {
-      if (!payload.password) {
+      if (!authOptionalType.value && !payload.password) {
         ElMessage.warning('请填写数据库密码')
         return
       }
@@ -666,35 +789,56 @@ async function saveDs() {
 }
 
 async function testDs(row) {
-  const res = await dataFactoryApi.testDatasource(row.id)
-  if (res.data?.success) ElMessage.success('连接成功')
-  else ElMessage.error(res.data?.error || '连接失败')
+  const via = listTestWorkerId.value ? { worker_id: Number(listTestWorkerId.value) } : {}
+  const res = await dataFactoryApi.testDatasource(row.id, via)
+  if (res.data?.success) {
+    ElMessage.success(res.data?.via_worker ? '连接成功（经执行机）' : '连接成功')
+  } else {
+    ElMessage.error(res.data?.error || '连接失败')
+  }
 }
 
 async function testDsForm() {
   await dsFormRef.value.validate()
   const pwd = dsForm.password?.trim()
-  if (dsForm.db_type !== 'redis' && !dsEditingId.value && !pwd) {
+  if (!authOptionalType.value && !dsEditingId.value && !pwd) {
     ElMessage.warning('请填写数据库密码')
     return
   }
-  if (dsForm.db_type !== 'redis' && dsEditingId.value && !pwd && !dsHasPassword.value) {
+  if (!authOptionalType.value && dsEditingId.value && !pwd && !dsHasPassword.value) {
     ElMessage.warning('请填写数据库密码')
     return
   }
   dsTesting.value = true
   try {
     let res
+    const via = dsTestWorkerId.value ? { worker_id: Number(dsTestWorkerId.value) } : {}
     if (dsEditingId.value) {
-      res = await dataFactoryApi.testDatasource(dsEditingId.value, pwd ? { password: pwd } : {})
+      res = await dataFactoryApi.testDatasource(dsEditingId.value, {
+        ...(pwd ? { password: pwd } : {}),
+        ...via,
+      })
     } else {
       res = await dataFactoryApi.testConnectionPreview(buildDsPayload())
     }
-    if (res.data?.success) ElMessage.success('连接成功')
+    if (res.data?.success) ElMessage.success(res.data?.via_worker ? '连接成功（经执行机）' : '连接成功')
     else ElMessage.error(res.data?.error || '连接失败')
   } finally {
     dsTesting.value = false
   }
+}
+
+async function toggleDsEnabled(row) {
+  const next = !row.is_enabled
+  const action = next ? '启用' : '停用'
+  await ElMessageBox.confirm(
+    `确定${action}数据源「${row.name}」？${next ? '' : '停用后查询控制台将不可选。'}`,
+    action,
+    { type: next ? 'info' : 'warning' }
+  )
+  await dataFactoryApi.updateDatasource(row.id, { is_enabled: next })
+  ElMessage.success(`已${action}`)
+  loadDatasources()
 }
 
 async function deleteDs(row) {
@@ -746,18 +890,34 @@ async function debugTpl(row) {
     environment_id: envId,
     template_id: row.id,
     variables: {},
+    ...(tplViaWorkerId.value ? { worker_id: Number(tplViaWorkerId.value) } : {}),
   })
   debugResultText.value = JSON.stringify(res.data, null, 2)
   debugVisible.value = true
 }
 
+function syncFromRoute() {
+  const tab = String(route.query.tab || '').trim()
+  if (['console', 'toolbox', 'records', 'datasource', 'template'].includes(tab)) {
+    activeTab.value = tab
+  }
+  const ds = Number(route.query.datasource_id)
+  initialDatasourceId.value = ds > 0 ? ds : null
+}
+
 onMounted(async () => {
+  syncFromRoute()
   await loadFavorites()
   if (!proStore.envList?.length) await proStore.getEnvList(projectId.value)
   await loadToolRecords()
   await loadDatasources()
   await loadTemplates()
 })
+
+watch(
+  () => [route.query.tab, route.query.datasource_id],
+  () => syncFromRoute()
+)
 </script>
 
 <style scoped>

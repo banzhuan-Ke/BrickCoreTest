@@ -59,8 +59,8 @@ def build_locator_bundle(
     goal: str,
     payload: dict | None,
     action_key: str = "",
-) -> tuple[str, str, list[str], dict[str, Any]]:
-    """返回 (primary_locator, strength, candidates, element_meta)。"""
+) -> tuple[str, str, list[dict[str, str]], dict[str, Any]]:
+    """返回 (primary_locator, strength, tagged_candidates, element_meta)。"""
     payload = payload or {}
     element_meta = payload.get("element_meta") if isinstance(payload.get("element_meta"), dict) else {}
     primary, strength = _resolve_selector(goal, payload)
@@ -78,6 +78,12 @@ def build_locator_bundle(
         for item in fallbacks:
             if isinstance(item, str) and item.strip():
                 candidates.append(item.strip())
+            elif isinstance(item, dict):
+                loc = str(
+                    item.get("locator") or item.get("value") or item.get("selector") or ""
+                ).strip()
+                if loc:
+                    candidates.append(loc)
 
     candidates = _dedupe_candidates(candidates)
     if primary:
@@ -92,7 +98,55 @@ def build_locator_bundle(
         strength = "weak"
 
     alts = [c for c in candidates if c != primary_loc][:12]
-    return primary_loc, strength, alts, element_meta
+    # 对齐录制：候选带 source；若 meta 含 elevate/neighbor 再补抬升/相邻
+    tagged: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def _push(loc: str, source: str = "current") -> None:
+        loc = (loc or "").strip()
+        if not loc or loc in seen:
+            return
+        seen.add(loc)
+        tagged.append({"locator": loc, "source": source})
+
+    # 先打标抬升/相邻，再补其余为 current（避免被 current 占坑后无法改标）
+    try:
+        from app.modules.ui.locator_assist.rules import (
+            build_elevated_candidates,
+            build_neighbor_candidates,
+        )
+
+        for loc in build_elevated_candidates(element_meta or {}):
+            if loc != primary_loc:
+                _push(loc, "elevated")
+        for loc in build_neighbor_candidates(element_meta or {}):
+            if loc != primary_loc:
+                _push(loc, "neighbor")
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "browser_lab elevated/neighbor candidates failed", exc_info=True
+        )
+
+    # 若上游 fallback 已带 source，尽量保留
+    if isinstance(fallbacks, list):
+        for item in fallbacks:
+            if isinstance(item, dict):
+                loc = str(
+                    item.get("locator") or item.get("value") or item.get("selector") or ""
+                ).strip()
+                if loc and loc != primary_loc:
+                    src = str(item.get("source") or "current").strip().lower()
+                    if src == "rule":
+                        src = "current"
+                    if src not in ("current", "elevated", "neighbor", "ai"):
+                        src = "current"
+                    _push(loc, src)
+
+    for loc in alts:
+        _push(loc, "current")
+    return primary_loc, strength, tagged, element_meta
 
 
 def apply_locator_bundle_to_step(
@@ -112,18 +166,30 @@ def apply_locator_bundle_to_step(
         action_key=action_key,
     )
     params = dict(step.get("params") or {})
-    params["locator"] = primary
     meta = dict(step.get("meta") or {})
     meta["locator_strength"] = strength
     meta["source"] = meta.get("source") or "browser_lab"
     if element_meta:
         meta["element_harvest"] = True
         meta["harvest_source"] = element_meta.get("harvest_source") or "browser_use"
-    if alts:
-        meta["candidates"] = alts
+    from app.core.shared.locator_candidate_contract import (
+        DECISION_FAITHFUL_HIT,
+        apply_primary_meta,
+        normalize_locator,
+    )
+
+    primary = normalize_locator(primary)
+    params["locator"] = primary
+    # alts 已带 source；补齐 primarySource / recommended
+    meta = apply_primary_meta(
+        meta,
+        alts or [],
+        primary,
+        decision=DECISION_FAITHFUL_HIT,
+    )
     if strength == "strong":
         meta.pop("needs_manual_locator", None)
-    elif element_meta and alts:
+    elif element_meta and meta.get("candidates"):
         meta.pop("needs_manual_locator", None)
     elif strength == "weak" or _parse_element_index(payload) is not None:
         meta["needs_manual_locator"] = True

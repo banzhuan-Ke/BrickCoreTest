@@ -137,6 +137,7 @@ import { useAiConfigSelect } from '@/composables/useAiConfigSelect.js'
 import { useBrowserLabTaskPoll } from '@/composables/useBrowserLabTaskPoll.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import { UserStore } from '@/stores/module/UserStore.js'
+import { configSupportsVision, visionUnsupportedTip } from '@/utils/aiVision.js'
 import {
   browserLabLiveHint,
   browserLabStepLabel,
@@ -281,6 +282,17 @@ async function startTask() {
   if (!canExecute.value) {
     ElMessage.warning('需要 ai_test:execute 权限才能创建任务')
     return
+  }
+  if (form.value.use_vision !== false) {
+    const cfg = enabledConfigs.value.find((c) => c.id === aiConfigId.value)
+      || enabledConfigs.value.find((c) => c.is_default)
+      || enabledConfigs.value[0]
+    if (cfg && !configSupportsVision(cfg)) {
+      ElMessage.warning(
+        visionUnsupportedTip(cfg, '智能浏览器 Vision') + ' 也可关闭「Vision 截图理解」后重试。'
+      )
+      return
+    }
   }
   revokeScreenshots()
   stepLogs.value = []

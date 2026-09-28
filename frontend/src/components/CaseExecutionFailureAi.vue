@@ -1,5 +1,5 @@
 <template>
-  <div v-if="executionId && canShowFailureAnalysis" class="case-failure-ai">
+  <div v-if="executionId && canActiveAnalyze" class="case-failure-ai">
     <div v-if="analysis?.root_cause" class="case-failure-ai-summary">
       <div class="case-failure-ai-head">
         <span class="case-failure-ai-label">AI 根因分析</span>
@@ -39,7 +39,7 @@ const props = defineProps({
 
 const emit = defineEmits(['loaded'])
 
-const { canShowFailureAnalysis } = useFailureAnalysisGate(ref(null), { syncProject: true })
+const { canActiveAnalyze } = useFailureAnalysisGate(ref(null), { syncProject: true })
 
 const loading = ref(false)
 const analysis = ref(null)
@@ -49,7 +49,7 @@ const topSuggestions = computed(() => (analysis.value?.suggestions || []).slice(
 
 async function loadAnalysis() {
   analysis.value = null
-  if (!props.executionId || !props.projectId || !canShowFailureAnalysis.value) {
+  if (!props.executionId || !props.projectId || !canActiveAnalyze.value) {
     emit('loaded', null)
     return
   }
@@ -77,7 +77,7 @@ function openDrawer() {
 }
 
 watch(
-  () => [props.executionId, props.projectId, canShowFailureAnalysis.value],
+  () => [props.executionId, props.projectId, canActiveAnalyze.value],
   () => loadAnalysis(),
   { immediate: true }
 )

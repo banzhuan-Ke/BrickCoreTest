@@ -1,5 +1,10 @@
 /** 交互调试：定位器回填与步骤能力判断 */
 import { buildStepFromKeyword } from '@/utils/stepHelper.js'
+import {
+  PRIMARY_DECISION,
+  applyPrimaryMetaFields,
+  normalizeCandidates,
+} from '@/utils/locatorCandidates.js'
 
 const LOCATOR_KEYS = ['locator', 'selector', 'start_selector', 'first_locator', 'second_locator']
 const FRAME_KEYS = ['frame', 'iframe']
@@ -70,19 +75,30 @@ export function isInputShellLocator(locator = '') {
   return /(^|[\s>])div\.(el-input|el-textarea|ant-input-affix-wrapper)(\.[a-zA-Z0-9_-]+)*$/i.test(core)
 }
 
-/** 候选列表展示短标签（语义 / 结构） */
+/** 候选列表展示短标签（来源 / 语义 / 结构） */
 export function formatPickCandidateLabel(candidate = '') {
-  const c = String(candidate || '')
+  let sourcePrefix = ''
+  let c = ''
+  if (candidate && typeof candidate === 'object') {
+    const src = String(candidate.source || '').toLowerCase()
+    if (src === 'elevated') sourcePrefix = '抬升 · '
+    else if (src === 'neighbor') sourcePrefix = '相邻 · '
+    else if (src === 'ai') sourcePrefix = 'AI 建议 · '
+    else if (src === 'current' || src === 'rule') sourcePrefix = '当前所选 · '
+    c = String(candidate.locator || candidate.value || candidate.selector || '')
+  } else {
+    c = String(candidate || '')
+  }
   if (c.startsWith('get_by_role=textbox') || c.startsWith('get_by_placeholder=')) {
-    return `语义 · ${c}`
+    return `${sourcePrefix}语义 · ${c}`
   }
   if (c.includes('input.el-input__inner') || c.includes('textarea.el-textarea__inner')) {
-    return `可填 · ${c}`
+    return `${sourcePrefix}可填 · ${c}`
   }
   if (isInputShellLocator(c)) {
-    return `外壳 · ${c}`
+    return `${sourcePrefix}外壳 · ${c}`
   }
-  return c
+  return sourcePrefix ? `${sourcePrefix}${c}` : c
 }
 
 /** 根据拾取元素类型推荐步骤关键字模板 */
@@ -191,13 +207,23 @@ export function applyWebLocatorToStep(steps, stepIndex, payload) {
   copy[stepIndex] = {
     ...step,
     params: nextParams,
-    meta: {
-      ...(step.meta || {}),
-      ...(payload.meta || {}),
-      candidates: payload.candidates || payload.meta?.candidates || step.meta?.candidates || [],
-      matchIndex,
-      pickedFrame: frame || undefined,
-    },
+    meta: applyPrimaryMetaFields(
+      {
+        ...(step.meta || {}),
+        ...(payload.meta || {}),
+        matchIndex,
+        pickedFrame: frame || undefined,
+      },
+      normalizeCandidates(
+        payload.candidates || payload.meta?.candidates || step.meta?.candidates || [],
+        { keepObjects: true, maxN: null },
+      ),
+      nextParams.locator,
+      {
+        decision: payload.meta?.primaryDecision || PRIMARY_DECISION.faithful_hit,
+        primarySource: payload.meta?.primarySource || 'current',
+      },
+    ),
   }
   return { steps: copy, updated: true }
 }

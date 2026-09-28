@@ -25,7 +25,40 @@ SENSITIVE_HEADER_KEYS = frozenset(
 
 MAX_BODY_CHARS = 8000
 MAX_LOG_CHARS = 4000
-MAX_STEPS_JSON_CHARS = 6000
+MAX_STEPS_JSON_CHARS = 48000
+
+
+def _serialize_steps_for_prompt(step_summaries: list[dict[str, Any]]) -> str:
+    """优先保留全量标题；超长时先压非邻域 message，再压 detail，最后才截字符串。"""
+    text = json.dumps(step_summaries, ensure_ascii=False, default=str)
+    if len(text) <= MAX_STEPS_JSON_CHARS:
+        return text
+    slim = []
+    for item in step_summaries:
+        if not isinstance(item, dict):
+            continue
+        row = {
+            "index": item.get("index"),
+            "keyword": item.get("keyword"),
+            "status": item.get("status"),
+        }
+        if item.get("detail"):
+            row["detail"] = True
+            row["message"] = str(item.get("message") or "")[:200]
+        slim.append(row)
+    text = json.dumps(slim, ensure_ascii=False, default=str)
+    if len(text) <= MAX_STEPS_JSON_CHARS:
+        return text
+    outline = [
+        {"index": x.get("index"), "keyword": x.get("keyword"), "status": x.get("status")}
+        for x in slim
+        if isinstance(x, dict)
+    ]
+    return _truncate(json.dumps(outline, ensure_ascii=False), MAX_STEPS_JSON_CHARS)
+# 失败步前后保留详细 message；其余步骤只放标题/状态，不丢步骤清单
+DETAIL_STEP_RADIUS = 5
+MAX_OUTLINE_KEYWORD = 80
+MAX_DETAIL_MESSAGE = 600
 
 
 def _truncate(value: Any, max_len: int) -> str:
@@ -34,6 +67,41 @@ def _truncate(value: Any, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 20] + "\n…（已截断）"
+
+
+def _step_title(step: dict[str, Any]) -> str:
+    return str(step.get("keyword") or step.get("name") or "")[:MAX_OUTLINE_KEYWORD]
+
+
+def _build_step_summaries(
+    steps: list[Any],
+    failed_idx: int,
+    *,
+    extra_keys: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    """全量步骤标题 + 失败邻域详述。不因条数丢掉中间步骤。"""
+    if not isinstance(steps, list) or not steps:
+        return []
+    step_summaries: list[dict[str, Any]] = []
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        near = failed_idx < 0 or abs(i - failed_idx) <= DETAIL_STEP_RADIUS
+        item: dict[str, Any] = {
+            "index": i + 1,
+            "keyword": _step_title(step),
+            "status": step.get("status") or "",
+        }
+        if near:
+            item["detail"] = True
+            item["message"] = str(
+                step.get("message") or step.get("desc") or step.get("content") or ""
+            )[:MAX_DETAIL_MESSAGE]
+            for key in extra_keys:
+                if step.get(key) is not None:
+                    item[key] = step.get(key)
+        step_summaries.append(item)
+    return step_summaries
 
 
 def _mask_headers(headers: Any) -> dict:
@@ -230,23 +298,11 @@ async def build_ui_failure_context(
     failed_idx, failed_step = find_failed_step(steps)
     screenshot_url = _pick_failure_screenshot(result_data, failed_step)
 
-    step_summaries = []
-    for i, step in enumerate(steps):
-        if not isinstance(step, dict):
-            continue
-        item = {
-            "index": i + 1,
-            "keyword": step.get("keyword") or step.get("name") or "",
-            "status": step.get("status") or "",
-            "message": step.get("message") or step.get("desc") or step.get("content") or "",
-        }
-        if step.get("locator_healed"):
-            item["locator_healed"] = step.get("locator_healed")
-        if step.get("ai_act"):
-            item["ai_act"] = step.get("ai_act")
-        if step.get("heal_retry_status"):
-            item["heal_retry_status"] = step.get("heal_retry_status")
-        step_summaries.append(item)
+    step_summaries = _build_step_summaries(
+        steps,
+        failed_idx,
+        extra_keys=("locator_healed", "ai_act", "heal_retry_status"),
+    )
 
     error_msg = summary.get("error_hint") or ""
     if not error_msg and summary.get("log_error_excerpt"):
@@ -308,7 +364,7 @@ async def build_ui_failure_context(
         "response_body": "",
         "error_msg": _truncate(error_msg, 2000),
         "logs": _truncate(log_text, MAX_LOG_CHARS),
-        "steps": _truncate(json.dumps(step_summaries, ensure_ascii=False), MAX_STEPS_JSON_CHARS),
+        "steps": _serialize_steps_for_prompt(step_summaries),
         "failed_step_index": str(failed_idx + 1 if failed_idx >= 0 else ""),
         "screenshot_desc": screenshot_desc,
         "record_status": execution.status or "",
@@ -338,25 +394,16 @@ async def build_app_failure_context(
         or ""
     )
 
-    step_summaries = []
-    for i, step in enumerate(steps):
-        if not isinstance(step, dict):
-            continue
-        item = {
-            "index": i + 1,
-            "keyword": step.get("keyword") or step.get("name") or "",
-            "status": step.get("status") or "",
-            "message": step.get("message") or step.get("desc") or step.get("content") or "",
-        }
-        if step.get("locator_type"):
-            item["locator_type"] = step.get("locator_type")
-        if step.get("execution_context"):
-            item["execution_context"] = step.get("execution_context")
-        if step.get("webview_page_url"):
-            item["webview_page_url"] = step.get("webview_page_url")
-        if step.get("match_score") is not None:
-            item["match_score"] = step.get("match_score")
-        step_summaries.append(item)
+    step_summaries = _build_step_summaries(
+        steps,
+        failed_idx,
+        extra_keys=(
+            "locator_type",
+            "execution_context",
+            "webview_page_url",
+            "match_score",
+        ),
+    )
 
     error_msg = summary.get("error_hint") or ""
     if not error_msg and summary.get("log_error_excerpt"):
@@ -405,7 +452,7 @@ async def build_app_failure_context(
         "response_body": "",
         "error_msg": _truncate(error_msg, 2000),
         "logs": _truncate(log_text, MAX_LOG_CHARS),
-        "steps": _truncate(json.dumps(step_summaries, ensure_ascii=False), MAX_STEPS_JSON_CHARS),
+        "steps": _serialize_steps_for_prompt(step_summaries),
         "failed_step_index": str(failed_idx + 1 if failed_idx >= 0 else ""),
         "screenshot_desc": screenshot_desc,
         "record_status": execution.status or "",
@@ -417,3 +464,27 @@ async def build_app_failure_context(
         "failure_bucket": failure_bucket,
     }
     return prompt_vars, image_payload, screenshot_url
+
+
+def slim_prompt_vars_for_batch(prompt_vars: dict[str, Any]) -> dict[str, Any]:
+    """分批汇总用：去掉超大 body，保留错误与步骤结构。"""
+    steps_raw = prompt_vars.get("steps") or ""
+    steps_obj: Any = steps_raw
+    if isinstance(steps_raw, str) and steps_raw.strip().startswith("["):
+        try:
+            steps_obj = json.loads(steps_raw)
+        except json.JSONDecodeError:
+            steps_obj = steps_raw[:4000]
+    return {
+        "target_type": prompt_vars.get("target_type"),
+        "case_name": prompt_vars.get("case_name") or "",
+        "error_msg": (prompt_vars.get("error_msg") or "")[:800],
+        "record_status": prompt_vars.get("record_status") or "",
+        "failed_step_index": prompt_vars.get("failed_step_index") or "",
+        "failure_code": prompt_vars.get("failure_code") or "",
+        "failure_bucket": prompt_vars.get("failure_bucket") or "",
+        "request_method": prompt_vars.get("request_method") or "",
+        "request_url": (prompt_vars.get("request_url") or "")[:300],
+        "response_status": prompt_vars.get("response_status") or "",
+        "steps": steps_obj,
+    }

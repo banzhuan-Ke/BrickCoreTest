@@ -5,7 +5,7 @@
         v-if="!isEnv"
         v-model="enabled"
         @change="onEnabledChange"
-      >经执行机发送</el-checkbox>
+      >{{ checkboxLabel }}</el-checkbox>
       <el-select
         :model-value="modelValue"
         :placeholder="isEnv ? '不选则执行时由平台本机发送' : '选择在线空闲执行机'"
@@ -51,8 +51,6 @@ import { ProjectStore } from '@/stores/module/ProjectStore'
 import { httpExecApi } from '@/api/modules/http'
 import { getEnvDefaultPerfWorkerId } from '@/utils/caseDescription.js'
 
-const MIN_ENGINE = '1.0.0'
-
 const props = defineProps({
   modelValue: { type: [Number, String], default: null },
   envId: { type: [Number, String], default: null },
@@ -60,6 +58,11 @@ const props = defineProps({
   forceSerialHint: { type: Boolean, default: false },
   autoPrefill: { type: Boolean, default: true },
   size: { type: String, default: 'default' },
+  checkboxLabel: { type: String, default: '经执行机发送' },
+  hintText: { type: String, default: '' },
+  minEngine: { type: String, default: '1.0.0' },
+  /** 仅列出 supports_df_proxy 的执行机（数据工厂代发） */
+  requireDfProxy: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue'])
@@ -71,17 +74,26 @@ const enabled = ref(!!props.modelValue)
 const prefilledWorkerId = ref(null)
 
 const isEnv = computed(() => props.variant === 'env')
-const hint = computed(() => (
-  isEnv.value
-    ? '接口用例 / 套件 / 计划 / 定时执行弹窗会预填此执行机，仍可改。不选则由平台本机发送。引擎需 ≥ 1.0.0；form-data 文件与套件整包需 ≥ 1.6.2。'
+const minEngine = computed(() => props.minEngine || '1.0.0')
+const hint = computed(() => {
+  if (props.hintText) return props.hintText
+  return isEnv.value
+    ? '接口执行弹窗会预填此执行机，仍可改。数据工厂的 UI/App 库断言、套件前后 SQL、小测查库在选了此项后走该执行机（引擎 ≥ 1.8.2），失败不改回平台本机。不选则这些仍由平台本机连接。普通 HTTP 引擎 ≥ 1.0.0；form-data 与套件整包 ≥ 1.6.2。'
     : '平台服务器访问不到被测系统时，勾选后由执行机代发。默认仍本机发送。普通 HTTP ≥ 1.0.0；form-data 文件与套件/计划/定时整包 ≥ 1.6.2（单文件 ≤ 10MB、合计 ≤ 15MB）。失败不会静默改回本机，可取消勾选后本机重跑。'
-))
+})
 
+const capableWorkers = computed(() => {
+  let list = (workers.value || []).filter((w) => w && w.id)
+  if (props.requireDfProxy) {
+    list = list.filter((w) => w.supports_df_proxy !== false)
+  }
+  return list
+})
 const idleWorkers = computed(() =>
-  (workers.value || []).filter((w) => w && w.id && !w.current_record_id)
+  capableWorkers.value.filter((w) => !w.current_record_id)
 )
 const busyWorkers = computed(() =>
-  (workers.value || []).filter((w) => w && w.id && w.current_record_id)
+  capableWorkers.value.filter((w) => w.current_record_id)
 )
 const emptyHint = computed(() => {
   if (idleWorkers.value.length) return ''
@@ -89,7 +101,8 @@ const emptyHint = computed(() => {
     const ids = busyWorkers.value.map((w) => `#${w.current_record_id}`).join('、')
     return `执行机忙碌（${ids}），完成后请刷新再勾选`
   }
-  return `暂无在线可用执行机（需引擎 ≥ ${MIN_ENGINE}）`
+  const extra = props.requireDfProxy ? '，且需支持数据工厂代发' : ''
+  return `暂无在线可用执行机（需引擎 ≥ ${minEngine.value}${extra}）`
 })
 
 function workerOptionLabel(w) {
@@ -100,6 +113,9 @@ function workerOptionLabel(w) {
   }
   if (props.forceSerialHint && w.supports_api_suite === false) {
     label += ' · 不含套件整包'
+  }
+  if (props.requireDfProxy && w.supports_df_proxy === false) {
+    label += ' · 不含数据工厂代发'
   }
   return label
 }
@@ -158,7 +174,7 @@ async function onEnabledChange(checked) {
   await loadWorkers()
   if (!idleWorkers.value.length) {
     enabled.value = false
-    ElMessage.warning(emptyHint.value || `暂无在线可用执行机（需引擎 ≥ ${MIN_ENGINE}）`)
+    ElMessage.warning(emptyHint.value || `暂无在线可用执行机（需引擎 ≥ ${minEngine.value}）`)
     return
   }
   if (!props.modelValue) {
@@ -174,6 +190,29 @@ async function onEnabledChange(checked) {
 function applyEnvDefault(envId) {
   if (isEnv.value || !props.autoPrefill) return
   const def = getEnvDefaultPerfWorkerId(findEnv(envId)?.global_vars)
+  if (!def) {
+    prefilledWorkerId.value = null
+    enabled.value = false
+    emitId(null)
+    return
+  }
+  if (props.requireDfProxy) {
+    // 数据工厂代发：环境默认机若引擎不足，勿自动勾选
+    void (async () => {
+      await loadWorkers()
+      const ok = idleWorkers.value.some((w) => Number(w.id) === Number(def))
+      if (ok) {
+        prefilledWorkerId.value = def
+        enabled.value = true
+        emitId(def)
+      } else {
+        prefilledWorkerId.value = null
+        enabled.value = false
+        emitId(null)
+      }
+    })()
+    return
+  }
   prefilledWorkerId.value = def
   enabled.value = !!def
   emitId(def)

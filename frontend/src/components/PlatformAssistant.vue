@@ -23,9 +23,18 @@
           <div class="header-left">
             <AssistantMascot size="small" />
             <span class="panel-title">{{ ASSISTANT_NAME }} · 平台助手</span>
-            <el-tag size="small" type="success">Phase 4</el-tag>
           </div>
           <div class="header-actions" @mousedown.stop>
+            <el-tooltip content="项目记忆" placement="bottom">
+              <button
+                type="button"
+                class="icon-btn"
+                :disabled="!projectId"
+                @click="openMemoryDrawer"
+              >
+                <el-icon><Notebook /></el-icon>
+              </button>
+            </el-tooltip>
             <el-tooltip :content="isMaximized ? '还原窗口' : '放大窗口'" placement="bottom">
               <button type="button" class="icon-btn" @click="toggleMaximize">
                 <el-icon><FullScreen v-if="!isMaximized" /><CopyDocument v-else /></el-icon>
@@ -57,7 +66,7 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="rename">重命名</el-dropdown-item>
-                  <el-dropdown-item command="clear">清空消息</el-dropdown-item>
+                  <el-dropdown-item command="clear">清空会话（含摘要与钉住）</el-dropdown-item>
                   <el-dropdown-item command="delete" divided>删除会话</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -81,7 +90,39 @@
             </el-tag>
           </div>
 
+          <AssistantPinBar
+            :items="pinnedItems"
+            :pin-candidate="pinCandidate"
+            :disabled="loading || !projectId"
+            @unpin="handleUnpin"
+            @pin-page="handlePinPage"
+          />
+
+          <div v-if="sessionJobs.length" class="session-jobs">
+            <div class="session-jobs-title">进行中的任务</div>
+            <AssistantJobProgressCard
+              v-for="job in sessionJobs"
+              :key="job.link_id || job.id"
+              :card="job.card || job"
+              :cancelling="cancellingLinkId === (job.link_id || job.id)"
+              @cancel="handleJobCancel"
+            />
+          </div>
+
           <div class="quick-chips">
+            <span v-if="skillChips.length" class="quick-chips-label">技能快捷入口</span>
+            <el-button
+              v-for="item in skillChips"
+              :key="item.key"
+              size="small"
+              round
+              type="warning"
+              plain
+              :disabled="loading"
+              @click="sendSkillChip(item)"
+            >
+              {{ item.label }}
+            </el-button>
             <el-button
               v-for="item in quickPrompts"
               :key="item.key"
@@ -105,7 +146,15 @@
               :class="[msg.role, msg.streaming ? 'streaming' : '']"
             >
               <div class="message-role">{{ msg.role === 'user' ? '我' : ASSISTANT_NAME }}</div>
+              <div v-if="msg.role === 'assistant'" class="message-path" v-show="msg.mode || msg.skills?.length">
+                <el-tag v-if="msg.mode" size="small" type="info">Agent · {{ msg.mode }}</el-tag>
+                <el-tag v-for="s in (msg.skills || [])" :key="s" size="small" type="warning">{{ s }}</el-tag>
+              </div>
               <div v-if="msg.role === 'assistant'" class="message-content assistant-md">
+                <details v-if="msg.thinking" class="assistant-thinking">
+                  <summary>思考过程</summary>
+                  <pre class="thinking-body">{{ msg.thinking }}</pre>
+                </details>
                 <MarkdownReport compact :content="linkifyAssistantContent(msg.content)" />
                 <span v-if="msg.streaming" class="cursor">▍</span>
               </div>
@@ -113,25 +162,77 @@
               <div v-if="msg.tools?.length" class="message-tools">
                 <el-tag v-for="t in msg.tools" :key="t" size="small" type="success">{{ t }}</el-tag>
               </div>
-              <div v-if="msg.pending_confirm && !msg.confirm_done" class="confirm-card">
+              <div
+                v-if="msg.role === 'assistant' && msg.message_id && !msg.streaming"
+                class="message-feedback"
+              >
+                <el-button
+                  size="small"
+                  text
+                  :type="msg.feedbackScore === 1 ? 'success' : 'default'"
+                  :disabled="!!msg.feedbackScore || feedbackLoadingId === msg.message_id"
+                  @click="handleFeedback(msg, 1)"
+                >
+                  有用
+                </el-button>
+                <el-button
+                  size="small"
+                  text
+                  :type="msg.feedbackScore === -1 ? 'danger' : 'default'"
+                  :disabled="!!msg.feedbackScore || feedbackLoadingId === msg.message_id"
+                  @click="handleFeedback(msg, -1)"
+                >
+                  不准
+                </el-button>
+              </div>
+              <div
+                v-if="effectivePendingConfirm(msg) && !msg.confirm_done && !hasOpenAsk(msg)"
+                class="confirm-card"
+              >
                 <div class="confirm-title">待确认操作</div>
                 <div class="confirm-impact assistant-md">
-                  <MarkdownReport compact :content="linkifyAssistantContent(formatImpact(msg.pending_confirm))" />
+                  <MarkdownReport
+                    compact
+                    :content="linkifyAssistantContent(formatImpact(effectivePendingConfirm(msg)))"
+                  />
                 </div>
                 <div class="confirm-actions">
                   <el-button
                     type="primary"
                     size="small"
-                    :loading="confirmLoading === idx"
+                    :loading="confirmLoading === idx || loading"
+                    :disabled="loading"
                     @click="handleConfirm(msg, idx)"
                   >
                     确认执行
                   </el-button>
-                  <el-button size="small" :disabled="confirmLoading === idx" @click="cancelConfirm(msg)">
+                  <el-button
+                    size="small"
+                    :disabled="confirmLoading === idx || loading"
+                    @click="cancelConfirm(msg)"
+                  >
                     取消
                   </el-button>
                 </div>
               </div>
+              <AssistantCardList
+                v-if="msg.role === 'assistant' && visibleCards(msg).length"
+                :cards="visibleCards(msg)"
+                :ask-done="!!msg.ask_user_done"
+                :ask-loading="askLoading === idx"
+                :skill-labels="SKILL_LABELS"
+                :cancelling-link-id="cancellingLinkId"
+                @ask-submit="(card, answers) => handleAskSubmit(msg, idx, card, answers)"
+                @ask-cancel="() => cancelAskUser(msg)"
+                @job-cancel="handleJobCancel"
+              />
+              <AssistantAskUserCard
+                v-else-if="msg.pending_ask_user && !msg.ask_user_done"
+                :card="msg.pending_ask_user"
+                :loading="askLoading === idx"
+                @submit="(answers) => handleAskSubmit(msg, idx, msg.pending_ask_user, answers)"
+                @cancel="() => cancelAskUser(msg)"
+              />
             </div>
             <div v-if="loading" class="message-item assistant loading-item">
               <div class="message-role">{{ ASSISTANT_NAME }}</div>
@@ -157,28 +258,86 @@
 
         <div v-if="!isMaximized" class="resize-handle" @mousedown="onResizeStart" />
       </div>
+
+      <el-drawer
+        v-model="memoryDrawerOpen"
+        title="项目记忆"
+        size="360px"
+        append-to-body
+        :close-on-click-modal="true"
+      >
+        <p class="memory-hint">
+          仅对当前账号 + 当前项目生效，会注入标准模式对话上下文。不要写入密码、Token 等敏感信息。
+        </p>
+        <div class="memory-form">
+          <el-input v-model="memoryForm.key" size="small" maxlength="64" placeholder="键，如：默认环境" />
+          <el-input
+            v-model="memoryForm.value"
+            type="textarea"
+            :rows="2"
+            size="small"
+            maxlength="2000"
+            show-word-limit
+            placeholder="值，如：测试环境 A"
+          />
+          <div class="memory-form-actions">
+            <el-button size="small" type="primary" :loading="memorySaving" @click="saveMemoryItem">
+              保存
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :disabled="!memoryItems.length || memoryLoading"
+              @click="clearAllMemory"
+            >
+              全部清空
+            </el-button>
+          </div>
+        </div>
+        <div v-loading="memoryLoading" class="memory-list">
+          <el-empty v-if="!memoryItems.length" description="暂无记忆" :image-size="64" />
+          <div v-for="item in memoryItems" :key="item.key" class="memory-item" @click="editMemoryItem(item)">
+            <div class="memory-item-head">
+              <span class="memory-key">{{ item.key }}</span>
+              <el-button size="small" text type="danger" @click.stop="removeMemoryItem(item.key)">删除</el-button>
+            </div>
+            <div class="memory-value">{{ item.value }}</div>
+          </div>
+        </div>
+      </el-drawer>
     </Teleport>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Close, CopyDocument, FullScreen } from '@element-plus/icons-vue'
+import { Close, CopyDocument, FullScreen, Notebook } from '@element-plus/icons-vue'
 import { aiAssistantApi } from '@/api/modules/ai_assistant.js'
 import { UserStore } from '@/stores/module/UserStore.js'
 import { ProjectStore } from '@/stores/module/ProjectStore.js'
 import AssistantMascot from '@/components/AssistantMascot.vue'
 import MarkdownReport from '@/components/MarkdownReport.vue'
-import { buildAssistantPageContext, formatPageContextLabel } from '@/utils/assistantPageContext.js'
+import AssistantPinBar from '@/components/assistant/AssistantPinBar.vue'
+import AssistantCardList from '@/components/assistant/AssistantCardList.vue'
+import AssistantAskUserCard from '@/components/assistant/AssistantAskUserCard.vue'
+import AssistantJobProgressCard from '@/components/assistant/AssistantJobProgressCard.vue'
+import {
+  buildAssistantPageContext,
+  formatPageContextLabel,
+  pinCandidateFromPageContext
+} from '@/utils/assistantPageContext.js'
 import { linkifyAssistantContent } from '@/utils/assistantLinkify.js'
+import { ASSISTANT_OPEN_SKILL_EVENT } from '@/utils/assistantBridge.js'
 
 const ASSISTANT_NAME = '小测'
 
 const uStore = UserStore()
 const proStore = ProjectStore()
 const route = useRoute()
+const router = useRouter()
 
 const panelOpen = ref(false)
 const isMaximized = ref(false)
@@ -191,8 +350,19 @@ const inputText = ref('')
 const messages = ref([])
 const loading = ref(false)
 const confirmLoading = ref(-1)
+const feedbackLoadingId = ref('')
+const memoryDrawerOpen = ref(false)
+const memoryLoading = ref(false)
+const memorySaving = ref(false)
+const memoryItems = ref([])
+const memoryForm = ref({ key: '', value: '' })
+const askLoading = ref(-1)
 const statusText = ref('')
 const quickPrompts = ref([])
+const skillChips = ref([])
+const pinnedItems = ref([])
+const sessionJobs = ref([])
+const cancellingLinkId = ref(null)
 const messageBoxRef = ref(null)
 const sessionId = ref(null)
 const sessions = ref([])
@@ -211,6 +381,7 @@ const projectLabel = computed(() => {
 
 const pageContext = computed(() => buildAssistantPageContext(route))
 const pageContextLabel = computed(() => formatPageContextLabel(pageContext.value))
+const pinCandidate = computed(() => pinCandidateFromPageContext(pageContext.value))
 
 const panelStyle = computed(() => {
   if (isMaximized.value) {
@@ -322,41 +493,284 @@ const scrollToBottom = async () => {
   if (el) el.scrollTop = el.scrollHeight
 }
 
-const normalizeMessages = (items) => {
-  if (!Array.isArray(items)) return []
-  return items.map((m) => ({
-    role: m.role || 'assistant',
-    content: m.content || '',
-    tools: m.tools || [],
-    pending_confirm: m.pending_confirm || null,
-    confirm_done: m.confirm_done || false,
-    execution_follow_up: m.execution_follow_up || false,
-    streaming: false
-  }))
+const splitThinkingFromContent = (text) => {
+  const raw = String(text || '')
+  const parts = []
+  const open = '<' + 'think>'
+  const close = '</' + 'think>'
+  const openAlt = '<' + 'redacted_reasoning>'
+  const closeAlt = '</' + 'redacted_reasoning>'
+  const closedRe = new RegExp(
+    `${open}([\\s\\S]*?)${close}|${openAlt}([\\s\\S]*?)${closeAlt}`,
+    'gi'
+  )
+  let m
+  while ((m = closedRe.exec(raw)) !== null) {
+    const inner = (m[1] || m[2] || '').trim()
+    if (inner) parts.push(inner)
+  }
+  let answer = raw
+    .replace(closedRe, '')
+    .replace(/<\/?result>/gi, '')
+    .trim()
+  // 未闭合思考（输出截断）：从 open 到文末整段归思考，勿进正文
+  const trailRe = new RegExp(`(${open}|${openAlt})([\\s\\S]*)$`, 'i')
+  const trail = trailRe.exec(answer)
+  if (trail) {
+    const inner = (trail[2] || '').trim()
+    if (inner) parts.push(inner)
+    answer = answer.slice(0, trail.index).trim()
+  }
+  return { thinking: parts.join('\n\n'), answer }
 }
 
+const SKILL_LABELS = {
+  ui_failure_analysis: '失败分析',
+  knowledge_qa: '资料库问答',
+  project_health_digest: '项目健康摘要',
+  requirement_to_test_points: '需求→测试点',
+  api_definition_to_cases: '接口→用例',
+  test_points_to_functional_cases: '测试点→用例',
+  mock_response_generate: '生成 Mock',
+  nl_to_sql_template: 'NL→SQL模板',
+  perf_scene_from_nl: '一句话压测',
+  browser_lab_to_ui_case: '浏览器→用例',
+  ui_steps_from_nl: '自然语言 UI',
+  report_narrative: '报告叙事',
+  qa_eval_assist: '问答评测',
+  curl_to_cases: 'curl→用例',
+  ui_locator_suggest: '元素→定位'
+}
+
+const skillLabelsFromMsg = (m) => {
+  const used = m.skills_used || m.skills || []
+  const codes = []
+  if (Array.isArray(used)) {
+    used.forEach((item) => {
+      if (typeof item === 'string' && item) codes.push(item)
+      else if (item && typeof item === 'object' && (item.skill_code || item.code)) {
+        codes.push(item.skill_code || item.code)
+      }
+    })
+  }
+  return [...new Set(codes)].map((c) => SKILL_LABELS[c] || c)
+}
+
+const normalizeAssistantPayload = (content, thinking) => {
+  const split = splitThinkingFromContent(content)
+  let answer = split.answer
+  if (!answer) {
+    answer = split.thinking
+      ? '（回答未完成：模型输出在思考阶段被截断。请重试或换更短的问题。）'
+      : (content || '')
+    // 仍含 think 开标签时绝不回落原文
+    if (/<(?:think|redacted_reasoning)>/i.test(answer)) {
+      answer = '（模型未返回正文）'
+    }
+  }
+  return {
+    content: answer,
+    thinking: (thinking || '').trim() || split.thinking
+  }
+}
+
+const normalizeMessages = (items) => {
+  if (!Array.isArray(items)) return []
+  const mapped = items.map((m) => {
+    const payload = normalizeAssistantPayload(m.content || '', m.thinking || '')
+    return {
+      role: m.role || 'assistant',
+      content: payload.content,
+      thinking: payload.thinking,
+      tools: m.tools || [],
+      skills: skillLabelsFromMsg(m),
+      mode: m.mode || '',
+      cards: Array.isArray(m.cards) ? m.cards : [],
+      pending_confirm: m.pending_confirm || null,
+      confirm_done: m.confirm_done || false,
+      confirm_result: m.confirm_result || null,
+      pending_ask_user: m.pending_ask_user || null,
+      ask_user_done: m.ask_user_done || false,
+      page_context: m.page_context || null,
+      execution_follow_up: m.execution_follow_up || false,
+      message_id: m.message_id || '',
+      feedbackScore: m.feedbackScore || m.feedback_score || 0,
+      streaming: false
+    }
+  })
+  // 若后续消息带 confirm_result.confirm_token，反推同 token 的卡已完成（兼容旧会话）
+  const doneTokens = new Set()
+  for (const m of mapped) {
+    const cr = m.confirm_result
+    if (cr?.confirm_token) doneTokens.add(String(cr.confirm_token))
+  }
+  for (const m of mapped) {
+    if (m.confirm_done || !m.pending_confirm?.confirm_token) continue
+    if (doneTokens.has(String(m.pending_confirm.confirm_token))) {
+      m.confirm_done = true
+    }
+  }
+  return mapped
+}
+
+const hasOpenAsk = (msg) =>
+  !!(msg?.pending_ask_user && !msg.ask_user_done) ||
+  (!msg?.ask_user_done && (msg?.cards || []).some((c) => c?.type === 'ask_user'))
+
+/** 兼容仅 cards 含 confirm、无 pending_confirm 的历史 */
+const effectivePendingConfirm = (msg) => {
+  if (msg?.pending_confirm) return msg.pending_confirm
+  const card = (msg?.cards || []).find((c) => c?.type === 'confirm')
+  return card || null
+}
+
+/** 组装展示用 cards：缺 ask 时用 pending_ask_user 补上；有未完成 ask 时隐藏 confirm 卡避免双交互 */
+const visibleCards = (msg) => {
+  const cards = Array.isArray(msg?.cards) ? [...msg.cards] : []
+  if (
+    msg?.pending_ask_user &&
+    !msg.ask_user_done &&
+    !cards.some((c) => c?.type === 'ask_user')
+  ) {
+    // 复用同一对象引用，避免每次渲染 spread 新对象触发 AskUser 表单重建
+    const ask = msg.pending_ask_user
+    if (ask.type !== 'ask_user') ask.type = 'ask_user'
+    cards.unshift(ask)
+  }
+  if (hasOpenAsk(msg)) {
+    return cards.filter((c) => c?.type !== 'confirm')
+  }
+  return cards
+}
+
+const applyPinnedFromPayload = (data) => {
+  const pinned = data?.pinned_context
+  if (pinned && Array.isArray(pinned.items)) {
+    pinnedItems.value = pinned.items
+  }
+}
+
+const sameGeneration = (reqSessionId, reqProjectId) =>
+  sessionId.value === reqSessionId && projectId.value === reqProjectId
+
 let executionWatchTimer = null
+let executionWatchBound = null
 
 const stopExecutionWatch = () => {
   if (executionWatchTimer) {
     clearInterval(executionWatchTimer)
     executionWatchTimer = null
   }
+  executionWatchBound = null
 }
 
-const startExecutionWatch = (baselineCount) => {
+let jobPollTimer = null
+let jobPollBound = null
+
+const JOB_ACTIVE = new Set(['pending', 'running'])
+
+const stopJobPoll = () => {
+  if (jobPollTimer) {
+    clearInterval(jobPollTimer)
+    jobPollTimer = null
+  }
+  jobPollBound = null
+}
+
+const refreshSessionJobs = async (boundSessionId, boundProjectId, { reloadMessages = false } = {}) => {
+  if (!boundSessionId) {
+    sessionJobs.value = []
+    return []
+  }
+  try {
+    const res = await aiAssistantApi.listJobs(boundSessionId, boundProjectId, true)
+    if (!sameGeneration(boundSessionId, boundProjectId)) return []
+    if (res.data?.code !== 200) return []
+    const items = res.data.data?.items || []
+    const canCancel = uStore.hasPermission('ai_test:execute')
+    sessionJobs.value = items
+      .filter((j) => JOB_ACTIVE.has(String(j.status || '').toLowerCase()))
+      .map((j) => {
+        const card = { ...(j.card || j) }
+        card.can_cancel = Boolean(card.can_cancel) && canCancel
+        return { ...j, card }
+      })
+    if (reloadMessages) {
+      await loadSessionFromServer()
+    }
+    return items
+  } catch {
+    return []
+  }
+}
+
+const startJobPoll = (boundSessionId, boundProjectId) => {
+  stopJobPoll()
+  if (!boundSessionId) return
+  jobPollBound = { sessionId: boundSessionId, projectId: boundProjectId }
+  let attempts = 0
+  const tick = async () => {
+    attempts += 1
+    const bound = jobPollBound
+    if (
+      attempts > 200 ||
+      !bound ||
+      !sameGeneration(bound.sessionId, bound.projectId)
+    ) {
+      stopJobPoll()
+      return
+    }
+    const baseline = messages.value.length
+    const items = await refreshSessionJobs(bound.sessionId, bound.projectId)
+    if (!sameGeneration(bound.sessionId, bound.projectId)) {
+      stopJobPoll()
+      return
+    }
+    const active = (items || []).some((j) => JOB_ACTIVE.has(String(j.status || '').toLowerCase()))
+    if (!active) {
+      // 终态可能已写入 follow-up，刷新消息
+      if (items?.length) {
+        await loadSessionFromServer()
+        if (messages.value.length > baseline) {
+          statusText.value = ''
+          ElMessage.success('任务结果已更新')
+          scrollToBottom()
+        }
+      }
+      stopJobPoll()
+      return
+    }
+    statusText.value = statusText.value || '智能浏览器任务执行中…'
+  }
+  tick()
+  jobPollTimer = setInterval(tick, 3000)
+}
+
+const startExecutionWatch = (baselineCount, boundSessionId, boundProjectId) => {
   stopExecutionWatch()
+  executionWatchBound = { sessionId: boundSessionId, projectId: boundProjectId }
   statusText.value = '任务执行中，完成后将自动更新结果…'
   let attempts = 0
   executionWatchTimer = setInterval(async () => {
     attempts += 1
-    if (attempts > 120 || !sessionId.value || !projectId.value) {
+    const bound = executionWatchBound
+    if (
+      attempts > 120 ||
+      !bound ||
+      !sameGeneration(bound.sessionId, bound.projectId)
+    ) {
       stopExecutionWatch()
-      statusText.value = ''
+      if (bound && sameGeneration(bound.sessionId, bound.projectId)) {
+        statusText.value = ''
+      }
       return
     }
     try {
-      const res = await aiAssistantApi.getSession(projectId.value, sessionId.value)
+      const res = await aiAssistantApi.getSession(bound.projectId, bound.sessionId)
+      if (!sameGeneration(bound.sessionId, bound.projectId)) {
+        stopExecutionWatch()
+        return
+      }
       if (res.data?.code !== 200) return
       const serverMsgs = normalizeMessages(res.data.data?.messages || [])
       const follow = serverMsgs.find((m) => m.execution_follow_up)
@@ -403,11 +817,15 @@ const loadSessionFromServer = async () => {
     messages.value = []
     sessionId.value = null
     sessions.value = []
+    pinnedItems.value = []
+    sessionJobs.value = []
     return
   }
   await loadSessions(sessionId.value)
   if (!sessionId.value) {
     messages.value = []
+    pinnedItems.value = []
+    sessionJobs.value = []
     return
   }
   try {
@@ -416,19 +834,200 @@ const loadSessionFromServer = async () => {
       const d = res.data.data || {}
       sessionId.value = d.session_id || sessionId.value
       messages.value = normalizeMessages(d.messages)
+      applyPinnedFromPayload(d)
+    } else {
+      messages.value = []
+      pinnedItems.value = []
     }
   } catch {
     messages.value = []
+    pinnedItems.value = []
   }
 }
 
 const switchSession = async () => {
+  stopExecutionWatch()
+  stopJobPoll()
+  statusText.value = ''
+  loading.value = false
+  askLoading.value = -1
+  confirmLoading.value = -1
+  sessionJobs.value = []
   await loadSessionFromServer()
+  if (sessionId.value) {
+    startJobPoll(sessionId.value, projectId.value)
+  }
   scrollToBottom()
+}
+
+const handleJobCancel = async (card) => {
+  const linkId = card?.link_id || card?.id
+  if (!linkId) return
+  cancellingLinkId.value = linkId
+  try {
+    const res = await aiAssistantApi.cancelJob(linkId)
+    if (res.data?.code === 200) {
+      ElMessage.success('已请求停止')
+      await refreshSessionJobs(sessionId.value, projectId.value, { reloadMessages: true })
+    } else {
+      throw new Error(res.data?.message || '停止失败')
+    }
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.message || '停止失败'
+    ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  } finally {
+    cancellingLinkId.value = null
+  }
+}
+
+const handleFeedback = async (msg, score) => {
+  const mid = msg?.message_id
+  if (!mid || !sessionId.value || msg.feedbackScore) return
+  feedbackLoadingId.value = mid
+  try {
+    const res = await aiAssistantApi.postFeedback({
+      sessionId: sessionId.value,
+      messageId: mid,
+      score,
+      projectId: projectId.value
+    })
+    if (res.data?.code === 200) {
+      const i = messages.value.findIndex((m) => m.message_id === mid)
+      if (i >= 0) {
+        messages.value[i] = { ...messages.value[i], feedbackScore: score }
+      }
+      ElMessage.success(score === 1 ? '已标记有用' : '已记录反馈')
+    } else {
+      throw new Error(res.data?.message || '反馈失败')
+    }
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.data?.message || e?.message || '反馈失败'
+    ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  } finally {
+    feedbackLoadingId.value = ''
+  }
+}
+
+const openMemoryDrawer = async () => {
+  if (!projectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  memoryDrawerOpen.value = true
+  await loadMemoryItems()
+}
+
+const editMemoryItem = (item) => {
+  if (!item) return
+  memoryForm.value = {
+    key: item.key || '',
+    value: item.value || ''
+  }
+}
+
+const loadMemoryItems = async () => {
+  if (!projectId.value) {
+    memoryItems.value = []
+    return
+  }
+  memoryLoading.value = true
+  try {
+    const res = await aiAssistantApi.listMemory(projectId.value)
+    if (res.data?.code === 200) {
+      memoryItems.value = res.data.data?.items || []
+    } else {
+      memoryItems.value = []
+    }
+  } catch {
+    memoryItems.value = []
+    ElMessage.error('加载记忆失败')
+  } finally {
+    memoryLoading.value = false
+  }
+}
+
+const saveMemoryItem = async () => {
+  const key = (memoryForm.value.key || '').trim()
+  const value = (memoryForm.value.value || '').trim()
+  if (!key || !value) {
+    ElMessage.warning('请填写键和值')
+    return
+  }
+  if (!projectId.value) return
+  memorySaving.value = true
+  try {
+    const res = await aiAssistantApi.putMemory({
+      projectId: projectId.value,
+      key,
+      value
+    })
+    if (res.data?.code === 200) {
+      ElMessage.success('已保存')
+      memoryForm.value = { key: '', value: '' }
+      await loadMemoryItems()
+    } else {
+      throw new Error(res.data?.message || '保存失败')
+    }
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.message || '保存失败'
+    ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  } finally {
+    memorySaving.value = false
+  }
+}
+
+const removeMemoryItem = async (key) => {
+  if (!projectId.value || !key) return
+  try {
+    await ElMessageBox.confirm(`删除记忆「${key}」？`, '确认', { type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    const res = await aiAssistantApi.deleteMemory(projectId.value, key)
+    if (res.data?.code === 200) {
+      ElMessage.success('已删除')
+      await loadMemoryItems()
+    } else {
+      throw new Error(res.data?.message || '删除失败')
+    }
+  } catch (e) {
+    if (e === 'cancel' || e === 'close') return
+    const detail = e?.response?.data?.detail || e?.message || '删除失败'
+    ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+}
+
+const clearAllMemory = async () => {
+  if (!projectId.value) return
+  try {
+    await ElMessageBox.confirm('清空当前项目下全部记忆？此操作不可恢复。', '确认清空', {
+      type: 'warning',
+      confirmButtonText: '清空'
+    })
+  } catch {
+    return
+  }
+  try {
+    const res = await aiAssistantApi.clearMemory(projectId.value)
+    if (res.data?.code === 200) {
+      ElMessage.success('已清空')
+      memoryItems.value = []
+    } else {
+      throw new Error(res.data?.message || '清空失败')
+    }
+  } catch (e) {
+    if (e === 'cancel' || e === 'close') return
+    const detail = e?.response?.data?.detail || e?.message || '清空失败'
+    ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
 }
 
 const handleNewSession = async () => {
   if (!projectId.value) return
+  stopExecutionWatch()
+  stopJobPoll()
+  sessionJobs.value = []
   try {
     const res = await aiAssistantApi.createSession(projectId.value)
     if (res.data?.code === 200) {
@@ -436,6 +1035,7 @@ const handleNewSession = async () => {
       await loadSessions(item?.id)
       sessionId.value = item?.id || sessionId.value
       messages.value = []
+      pinnedItems.value = []
       ElMessage.success('已创建新会话')
     }
   } catch {
@@ -465,7 +1065,17 @@ const handleSessionCommand = async (cmd) => {
     return
   }
   if (cmd === 'clear') {
+    try {
+      await ElMessageBox.confirm(
+        '将清空本会话的消息、摘要与钉住实体，下次对话不再带入旧上下文。',
+        '清空会话',
+        { type: 'warning', confirmButtonText: '清空' }
+      )
+    } catch {
+      return
+    }
     await clearChat()
+    ElMessage.success('已清空会话')
     return
   }
   if (cmd === 'delete') {
@@ -493,8 +1103,10 @@ const loadQuickPrompts = async () => {
     const res = await aiAssistantApi.getQuickPrompts()
     if (res.data?.code === 200) {
       quickPrompts.value = res.data.data?.items || []
+      skillChips.value = res.data.data?.skill_chips || []
     }
   } catch {
+    skillChips.value = []
     quickPrompts.value = [
       { key: 'overview', label: '项目概览', message: '请总结当前项目的完整情况，包括环境、模块、需求和用例库规模。' },
       {
@@ -549,8 +1161,45 @@ const formatImpact = (pending) => {
   if (impact.requirement_name || impact.requirement_id != null) {
     lines.push(`需求：${impact.requirement_name || '未命名'} (requirement_id=${impact.requirement_id})`)
   }
+  if (
+    impact.api_name ||
+    impact.api_definition_id != null ||
+    impact.reuse_api_definition_id != null ||
+    (impact.method && impact.path)
+  ) {
+    const methodPath = [impact.method, impact.path].filter(Boolean).join(' ')
+    const reuseId = impact.reuse_api_definition_id
+    const apiId = impact.api_definition_id ?? reuseId
+    let idPart = ''
+    if (reuseId != null && reuseId !== '') {
+      idPart = ` (api_definition_id=${reuseId}，复用已有)`
+    } else if (apiId != null && apiId !== '') {
+      idPart = ` (api_definition_id=${apiId})`
+    } else {
+      idPart = ' （确认后新建接口定义）'
+    }
+    lines.push(
+      `接口：${impact.api_name || '未命名'}${methodPath ? ` ${methodPath}` : ''}${idPart}`
+    )
+  }
+  if (impact.preview_count != null) lines.push(`预览条数：${impact.preview_count}`)
+  if (Array.isArray(impact.sample_titles) && impact.sample_titles.length) {
+    lines.push(`测试点示例：${impact.sample_titles.slice(0, 5).join('；')}`)
+  }
+  if (Array.isArray(impact.sample_names) && impact.sample_names.length) {
+    lines.push(`用例示例：${impact.sample_names.slice(0, 5).join('；')}`)
+  }
+  if (impact.navigate) lines.push(`确认后将打开：${impact.navigate}`)
   if (impact.env_name) lines.push(`环境：${impact.env_name}`)
-  if (impact.device_id) lines.push(`Runner 设备：${impact.device_id}`)
+  if (impact.task_text) lines.push(`探索任务：${impact.task_text}`)
+  if (impact.start_url) lines.push(`起始 URL：${impact.start_url}`)
+  if (impact.device_name || impact.device_id) {
+    lines.push(
+      `Runner 设备：${impact.device_name || impact.device_id}${
+        impact.device_online === false ? '（当前不在线）' : ''
+      }`
+    )
+  }
   if (impact.case_count != null) lines.push(`用例数：${impact.case_count}`)
   if (impact.case_name || impact.case_id != null) {
     let prefix = '接口用例'
@@ -607,8 +1256,181 @@ const sendQuick = (text) => {
   sendMessage()
 }
 
+const sendSkillChip = async (item) => {
+  if (!item?.key && !item?.message) return
+  if (!projectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  if (item.direct_form) {
+    if (item.hint) ElMessage.info(item.hint)
+    loading.value = true
+    statusText.value = '正在打开补充信息…'
+    let prepared = false
+    try {
+      await ensureSession()
+      const reqSessionId = sessionId.value
+      const reqProjectId = projectId.value
+      const res = await aiAssistantApi.prepareSkillChipForm({
+        chipKey: item.key,
+        projectId: reqProjectId,
+        sessionId: reqSessionId,
+        chipLabel: item.label || '',
+        chipMessage: item.message || '',
+        pageContext: pageContext.value || null
+      })
+      if (!sameGeneration(reqSessionId, reqProjectId)) return
+      if (res.data?.code !== 200) {
+        throw new Error(res.data?.message || '打开表单失败')
+      }
+      prepared = true
+      const d = res.data.data || {}
+      if (d.session_id) sessionId.value = d.session_id
+      try {
+        await loadSessionFromServer()
+      } catch (loadErr) {
+        // prepare 已落库：用返回体补齐，避免再走快捷消息造成双份意图
+        if (d.user_message || d.assistant_message) {
+          const extras = []
+          if (d.user_message) extras.push(d.user_message)
+          if (d.assistant_message) extras.push(d.assistant_message)
+          messages.value = normalizeMessages([...(messages.value || []), ...extras])
+        } else {
+          throw loadErr
+        }
+      }
+      await loadSessions(sessionId.value)
+      await scrollToBottom()
+    } catch (e) {
+      const detail = e?.response?.data?.detail || e?.message || '打开表单失败'
+      ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+      // 仅 prepare 未成功时降级原快捷消息，避免已落库后再空转一轮
+      if (!prepared && item.message) sendQuick(item.message)
+    } finally {
+      loading.value = false
+      statusText.value = ''
+    }
+    return
+  }
+  if (!item?.message) return
+  if (item.hint) ElMessage.info(item.hint)
+  sendQuick(item.message)
+}
+
+/** skill_code → Chip；无 Chip 时降级话术（清单「快速使用」） */
+const SKILL_CODE_FALLBACK_MESSAGE = {
+  knowledge_qa: '',
+  platform_how_to: '',
+  project_health_digest:
+    '请调用 run_skill(skill_code=project_health_digest) 生成当前项目健康摘要（环境、需求/用例规模、近期失败与定时任务）。'
+}
+
+const openPanel = () => {
+  panelOpen.value = true
+  if (!posInitialized.value) initPanelPosition()
+}
+
+const handleAssistantOpenSkill = async (ev) => {
+  if (!visible.value) return
+  const skillCode = String(ev?.detail?.skillCode || '').trim()
+  if (!skillCode) return
+  if (!projectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  if (loading.value) {
+    ElMessage.warning('小测正在处理中，请稍后再试')
+    return
+  }
+  openPanel()
+  if (!skillChips.value.length) {
+    await loadQuickPrompts()
+  }
+  const chip = (skillChips.value || []).find((c) => c.skill_code === skillCode)
+  if (chip) {
+    await sendSkillChip(chip)
+    return
+  }
+  if (skillCode === 'knowledge_qa') {
+    inputText.value = ''
+    ElMessage.info('请输入要向资料库提问的内容后发送；小测将优先走资料库问答。')
+    await nextTick()
+    return
+  }
+  if (skillCode === 'platform_how_to') {
+    inputText.value = ''
+    ElMessage.info('请输入想了解的平台功能或技能（例如：失败分析怎么用），发送后将优先走「平台怎么用」。')
+    await nextTick()
+    return
+  }
+  const fallback = SKILL_CODE_FALLBACK_MESSAGE[skillCode]
+  if (fallback) {
+    sendQuick(fallback)
+    return
+  }
+  const name = ev?.detail?.skillName || skillCode
+  sendQuick(`请使用技能「${name}」（skill_code=${skillCode}）继续，缺参数时用选择卡让我补充。`)
+}
+
+const handlePinPage = async (candidate) => {
+  if (!candidate || !projectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  try {
+    await ensureSession()
+    if (!sessionId.value) {
+      ElMessage.error('无法创建会话')
+      return
+    }
+    const reqSessionId = sessionId.value
+    const reqProjectId = projectId.value
+    const res = await aiAssistantApi.pinContext({
+      sessionId: reqSessionId,
+      projectId: reqProjectId,
+      entityType: candidate.type,
+      entityId: candidate.id,
+      label: candidate.label
+    })
+    if (!sameGeneration(reqSessionId, reqProjectId)) return
+    if (res.data?.code === 200) {
+      applyPinnedFromPayload(res.data.data)
+      ElMessage.success('已钉住当前页实体')
+    } else {
+      throw new Error(res.data?.message || '钉住失败')
+    }
+  } catch (e) {
+    const msg = e?.response?.data?.detail || e?.message || '钉住失败'
+    ElMessage.error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+  }
+}
+
+const handleUnpin = async (item) => {
+  if (!item || !sessionId.value) return
+  const reqSessionId = sessionId.value
+  const reqProjectId = projectId.value
+  try {
+    const res = await aiAssistantApi.unpinContext({
+      sessionId: reqSessionId,
+      projectId: reqProjectId,
+      entityType: item.type,
+      entityId: item.id
+    })
+    if (!sameGeneration(reqSessionId, reqProjectId)) return
+    if (res.data?.code === 200) {
+      applyPinnedFromPayload(res.data.data)
+    }
+  } catch (e) {
+    const msg = e?.response?.data?.detail || e?.message || '取消钉住失败'
+    ElMessage.error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+  }
+}
+
 const clearChat = async () => {
+  stopJobPoll()
+  sessionJobs.value = []
   messages.value = []
+  pinnedItems.value = []
   statusText.value = ''
   try {
     await aiAssistantApi.clearSession(projectId.value, sessionId.value)
@@ -641,6 +1463,9 @@ const sendMessage = async () => {
     return
   }
 
+  const reqSessionId = sessionId.value
+  const reqProjectId = projectId.value
+
   messages.value.push({ role: 'user', content: text })
   inputText.value = ''
   loading.value = true
@@ -649,75 +1474,125 @@ const sendMessage = async () => {
 
   try {
     const res = await aiAssistantApi.chat(text, {
-      projectId: projectId.value,
-      sessionId: sessionId.value,
+      projectId: reqProjectId,
+      sessionId: reqSessionId,
       useServerHistory: true,
       pageContext: pageContext.value
     })
+    if (sessionId.value !== reqSessionId || projectId.value !== reqProjectId) {
+      return
+    }
     if (res.data?.code === 200) {
       const d = res.data.data || {}
       sessionId.value = d.session_id || sessionId.value
+      const payload = normalizeAssistantPayload(d.content || '（无内容）', d.thinking || '')
       const msg = {
         role: 'assistant',
-        content: d.content || '（无内容）',
+        content: payload.content || '（无内容）',
+        thinking: payload.thinking,
         tools: d.tools_used || [],
+        skills: skillLabelsFromMsg(d),
+        mode: d.mode || '',
+        cards: Array.isArray(d.cards) ? d.cards : [],
         pending_confirm: d.pending_confirm || null,
         confirm_done: false,
+        pending_ask_user: d.pending_ask_user || null,
+        ask_user_done: false,
+        page_context: d.page_context || pageContext.value || null,
+        message_id: d.message_id || '',
+        feedbackScore: 0,
         streaming: false
       }
       messages.value.push(msg)
+      applyPinnedFromPayload(d)
       const idx = messages.value.length - 1
-      if (d.content && !d.pending_confirm) {
-        await revealStreaming(idx, d.content)
+      if (payload.content && !d.pending_confirm && !d.pending_ask_user) {
+        await revealStreaming(idx, payload.content)
       }
       await loadSessions(sessionId.value)
     } else {
       throw new Error(res.data?.message || '请求失败')
     }
   } catch (e) {
+    if (sessionId.value !== reqSessionId || projectId.value !== reqProjectId) {
+      return
+    }
     const msg = e?.response?.data?.detail || e?.data?.detail || e?.message || '助手请求失败'
     ElMessage.error(typeof msg === 'string' ? msg : JSON.stringify(msg))
     messages.value.push({ role: 'assistant', content: `请求失败：${msg}` })
   } finally {
+    // 世代不匹配时也必须清 loading，否则切会话后永久卡死
     loading.value = false
-    statusText.value = ''
-    scrollToBottom()
+    if (sameGeneration(reqSessionId, reqProjectId)) {
+      statusText.value = ''
+      scrollToBottom()
+    }
   }
 }
 
 const handleConfirm = async (msg, idx) => {
-  const pending = msg.pending_confirm
-  if (!pending?.confirm_token) return
+  const pending = effectivePendingConfirm(msg)
+  if (!pending?.confirm_token || loading.value) return
+  const reqSessionId = sessionId.value
+  const reqProjectId = projectId.value
   confirmLoading.value = idx
   try {
     const res = await aiAssistantApi.confirm({
       action: pending.action,
       confirmToken: pending.confirm_token,
       confirmArgs: pending.confirm_args || {},
-      projectId: projectId.value,
-      sessionId: sessionId.value
+      projectId: reqProjectId,
+      sessionId: reqSessionId
     })
+    if (!sameGeneration(reqSessionId, reqProjectId)) return
     if (res.data?.code === 200) {
       const d = res.data.data || {}
       sessionId.value = d.session_id || sessionId.value
-      msg.confirm_done = true
-      msg.pending_confirm = null
-      const baselineCount = messages.value.length + 1
-      messages.value.push({
-        role: 'assistant',
-        content: d.content || '操作已完成',
-        tools: [`confirm:${pending.action}`],
-        streaming: false
-      })
+      await loadSessionFromServer()
       if (d.execution_watch) {
-        startExecutionWatch(baselineCount)
+        startExecutionWatch(
+          messages.value.length,
+          sessionId.value,
+          projectId.value
+        )
       }
-      ElMessage.success('操作已执行')
+      if (d.job) {
+        startJobPoll(sessionId.value, projectId.value)
+      }
+      const navActions = new Set([
+        'skill_requirement_to_test_points',
+        'skill_api_definition_to_cases',
+        'skill_test_points_to_functional_cases',
+        'skill_mock_response_generate',
+        'skill_nl_to_sql_template',
+        'skill_perf_scene_from_nl',
+        'skill_browser_lab_to_ui_case',
+        'skill_ui_steps_from_nl',
+        'skill_report_narrative',
+        'skill_qa_eval_assist',
+        'skill_curl_to_cases',
+        'skill_functional_case_to_ui_case',
+        'skill_functional_case_to_app_case',
+        'skill_perf_journey_from_suite',
+        'skill_failure_to_defect_draft'
+      ])
+      const nav =
+        navActions.has(pending?.action) &&
+        (d.navigate || d.result?.navigate || pending?.impact?.navigate || '')
+      if (typeof nav === 'string' && nav.startsWith('/')) {
+        try {
+          await router.push(nav)
+        } catch (_) {
+          /* ignore navigation errors */
+        }
+      }
+      ElMessage.success(d.result?.message || d.result?.summary || '操作已执行')
       await scrollToBottom()
     } else {
       throw new Error(res.data?.message || '确认失败')
     }
   } catch (e) {
+    if (!sameGeneration(reqSessionId, reqProjectId)) return
     const detail = e?.response?.data?.detail || e?.message || '确认执行失败'
     ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
   } finally {
@@ -725,27 +1600,126 @@ const handleConfirm = async (msg, idx) => {
   }
 }
 
-const cancelConfirm = (msg) => {
-  msg.confirm_done = true
-  msg.pending_confirm = null
-  messages.value.push({
-    role: 'assistant',
-    content: '已取消该操作。',
-    streaming: false
-  })
-  scrollToBottom()
+const cancelConfirm = async (msg) => {
+  const pending = effectivePendingConfirm(msg)
+  const reqSessionId = sessionId.value
+  const reqProjectId = projectId.value
+  if (!pending?.confirm_token || !reqSessionId) {
+    msg.confirm_done = true
+    return
+  }
+  try {
+    const res = await aiAssistantApi.cancelConfirm({
+      action: pending.action,
+      confirmToken: pending.confirm_token,
+      projectId: reqProjectId,
+      sessionId: reqSessionId
+    })
+    if (!sameGeneration(reqSessionId, reqProjectId)) return
+    if (res.data?.code === 200) {
+      msg.confirm_done = true
+      await loadSessionFromServer()
+    } else {
+      throw new Error(res.data?.message || '取消失败')
+    }
+  } catch (e) {
+    if (!sameGeneration(reqSessionId, reqProjectId)) return
+    const detail = e?.response?.data?.detail || e?.message || '取消失败'
+    ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+}
+
+const handleAskSubmit = async (msg, idx, card, answers) => {
+  const askId = card?.ask_id || msg.pending_ask_user?.ask_id
+  if (!askId || !sessionId.value) return
+  const reqSessionId = sessionId.value
+  const reqProjectId = projectId.value
+  askLoading.value = idx
+  loading.value = true
+  statusText.value = '已提交补充信息，继续处理…'
+  try {
+    const res = await aiAssistantApi.answerAskUser({
+      sessionId: reqSessionId,
+      projectId: reqProjectId,
+      askId,
+      answers,
+      continueChat: true,
+      pageContext: msg.page_context || pageContext.value || null
+    })
+    if (!sameGeneration(reqSessionId, reqProjectId)) return
+    if (res.data?.code === 200) {
+      const d = res.data.data || {}
+      sessionId.value = d.session_id || sessionId.value
+      await loadSessionFromServer()
+      await loadSessions(sessionId.value)
+    } else {
+      throw new Error(res.data?.message || '提交失败')
+    }
+  } catch (e) {
+    if (!sameGeneration(reqSessionId, reqProjectId)) return
+    const detail = e?.response?.data?.detail || e?.message || '提交提问失败'
+    ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  } finally {
+    askLoading.value = -1
+    loading.value = false
+    if (sameGeneration(reqSessionId, reqProjectId)) {
+      statusText.value = ''
+      scrollToBottom()
+    }
+  }
+}
+
+const cancelAskUser = async (msg) => {
+  const askId =
+    msg?.pending_ask_user?.ask_id ||
+    (msg.cards || []).find((c) => c?.type === 'ask_user')?.ask_id
+  const reqSessionId = sessionId.value
+  const reqProjectId = projectId.value
+  if (!askId || !reqSessionId) return
+  try {
+    await aiAssistantApi.answerAskUser({
+      sessionId: reqSessionId,
+      projectId: reqProjectId,
+      askId,
+      answers: { cancelled: '1' },
+      continueChat: false
+    })
+    if (sameGeneration(reqSessionId, reqProjectId)) {
+      msg.ask_user_done = true
+      await loadSessionFromServer()
+    }
+  } catch (e) {
+    if (sameGeneration(reqSessionId, reqProjectId)) {
+      msg.ask_user_done = false
+      const detail = e?.response?.data?.detail || e?.message || '取消失败，请重试'
+      ElMessage.error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+    }
+  }
 }
 
 watch(panelOpen, (open) => {
   if (open) {
     if (!posInitialized.value) initPanelPosition()
     scrollToBottom()
+  } else {
+    memoryDrawerOpen.value = false
   }
 })
 
 watch(projectId, () => {
+  memoryDrawerOpen.value = false
+  memoryItems.value = []
+  memoryForm.value = { key: '', value: '' }
+  stopExecutionWatch()
+  stopJobPoll()
+  loading.value = false
+  askLoading.value = -1
+  confirmLoading.value = -1
+  statusText.value = ''
   sessionId.value = null
   sessionKeyword.value = ''
+  pinnedItems.value = []
+  sessionJobs.value = []
   loadSessionFromServer()
   scrollToBottom()
 })
@@ -759,17 +1733,24 @@ watch(sessionKeyword, () => {
 
 onMounted(() => {
   window.addEventListener('resize', onWindowResize)
+  window.addEventListener(ASSISTANT_OPEN_SKILL_EVENT, handleAssistantOpenSkill)
   if (visible.value) {
     loadQuickPrompts()
-    loadSessionFromServer()
+    loadSessionFromServer().then(() => {
+      if (sessionId.value) {
+        startJobPoll(sessionId.value, projectId.value)
+      }
+    })
   }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onWindowResize)
+  window.removeEventListener(ASSISTANT_OPEN_SKILL_EVENT, handleAssistantOpenSkill)
   onDragEnd()
   onResizeEnd()
   stopExecutionWatch()
+  stopJobPoll()
 })
 </script>
 
@@ -871,12 +1852,17 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: center;
 
-    &:hover {
+    &:hover:not(:disabled) {
       background: var(--el-fill-color);
       color: var(--el-color-primary);
     }
 
-    &.close-btn:hover {
+    &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    &.close-btn:hover:not(:disabled) {
       color: var(--el-color-danger);
     }
   }
@@ -939,6 +1925,19 @@ onBeforeUnmount(() => {
   }
 }
 
+.session-jobs {
+  margin-bottom: 10px;
+  flex-shrink: 0;
+  max-height: 160px;
+  overflow-y: auto;
+
+  .session-jobs-title {
+    font-size: 12px;
+    color: #909399;
+    margin-bottom: 6px;
+  }
+}
+
 .quick-chips {
   display: flex;
   flex-wrap: wrap;
@@ -947,6 +1946,14 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   max-height: 72px;
   overflow-y: auto;
+  align-items: center;
+}
+
+.quick-chips-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-right: 2px;
+  flex-shrink: 0;
 }
 
 .message-box {
@@ -978,6 +1985,47 @@ onBeforeUnmount(() => {
   &.assistant .assistant-md {
     background: #f4f4f5;
     border-radius: 8px;
+  }
+}
+
+.assistant-thinking {
+  margin: 4px 6px 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #eef1f6;
+  color: #606266;
+  font-size: 12px;
+
+  summary {
+    cursor: pointer;
+    user-select: none;
+    color: #909399;
+    list-style: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &::before {
+      content: '▸ ';
+      color: #c0c4cc;
+    }
+  }
+
+  &[open] summary::before {
+    content: '▾ ';
+  }
+
+  .thinking-body {
+    margin: 6px 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #606266;
+    max-height: 240px;
+    overflow: auto;
   }
 }
 
@@ -1017,11 +2065,24 @@ onBeforeUnmount(() => {
   }
 }
 
+.message-path {
+  margin: 0 0 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .message-tools {
   margin-top: 4px;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.message-feedback {
+  margin-top: 2px;
+  display: flex;
+  gap: 2px;
 }
 
 .confirm-card {
@@ -1106,5 +2167,61 @@ html.dark {
   .assistant-md :deep(.md-table tr:nth-child(even) td) {
     background: #262626;
   }
+}
+
+.memory-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}
+
+.memory-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.memory-form-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.memory-list {
+  min-height: 120px;
+}
+
+.memory-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--el-fill-color-lighter);
+  }
+}
+
+.memory-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.memory-key {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+  word-break: break-all;
+}
+
+.memory-value {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--el-text-color-regular);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

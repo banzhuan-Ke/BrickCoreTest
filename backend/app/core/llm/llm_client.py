@@ -224,10 +224,10 @@ class LLMClientFactory:
 
     @staticmethod
     def is_likely_vision_model(model: str) -> bool:
-        """启发式判断模型是否可能支持 Vision"""
-        m = (model or "").lower()
-        vision_hints = ("vl", "vision", "gpt-4o", "gpt-4-turbo", "claude-3", "gemini")
-        return any(h in m for h in vision_hints)
+        """启发式判断模型是否可能支持 Vision（配置以 supports_vision 为准）。"""
+        from app.modules.ai.vision_capability import is_likely_vision_model
+
+        return is_likely_vision_model(model)
 
 
     @staticmethod

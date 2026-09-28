@@ -710,6 +710,16 @@ const routes = [
                 }
             },
             {
+                path: '/ai-case-review',
+                name: 'aiCaseReview',
+                component: () => import('../views/AI/AiCaseReviewQueue.vue'),
+                meta: {
+                    title: '生成用例审核',
+                    icon: 'Checked',
+                    permission: 'ai_test:view'
+                }
+            },
+            {
                 path: '/test-releases',
                 name: 'testReleases',
                 component: () => import('../views/TestManagement/ReleaseList.vue'),
@@ -841,6 +851,26 @@ const routes = [
                     title: '模型使用情况',
                     icon: 'DataLine',
                     permission: 'ai_test:view'
+                }
+            },
+            {
+                path: '/ai-skills',
+                name: 'aiSkills',
+                component: () => import('../views/AI/AiSkills.vue'),
+                meta: {
+                    title: '技能与助手',
+                    icon: 'Collection',
+                    permission: 'ai_test:view'
+                }
+            },
+            {
+                path: '/ai-assistant-traces',
+                name: 'aiAssistantTraces',
+                component: () => import('../views/AI/AiAssistantTraces.vue'),
+                meta: {
+                    title: '小测回合追踪',
+                    icon: 'List',
+                    permission: 'ai_config:view'
                 }
             },
             {
